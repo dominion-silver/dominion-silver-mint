@@ -1,0 +1,69 @@
+/**
+ * Lifts every soft-cap to a high value for testing. Devnet only.
+ * REVERSE BEFORE MAINNET (or simply re-init at mainnet with prod values).
+ *
+ * Run: npx tsx scripts/bump-all-caps.ts
+ */
+import { AnchorProvider, BN, Program, Idl, Wallet } from "@coral-xyz/anchor";
+import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import fs from "fs";
+import os from "os";
+
+const PID = new PublicKey("J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5");
+const MAX_USDC = new BN("1000000000000"); // 1M USDC raw (6 decimals)
+
+async function main() {
+  const c = new Connection("https://api.devnet.solana.com", "confirmed");
+  const admin = Keypair.fromSecretKey(
+    Uint8Array.from(JSON.parse(fs.readFileSync(os.homedir()+"/.config/solana/dominion-dev.json","utf8"))),
+  );
+  console.log("Admin:", admin.publicKey.toBase58());
+
+  const wallet: Wallet = {
+    publicKey: admin.publicKey,
+    signTransaction: async (tx: any) => { tx.partialSign(admin); return tx; },
+    signAllTransactions: async (txs: any) => { txs.forEach((t: any) => t.partialSign(admin)); return txs; },
+    payer: admin,
+  };
+  const provider = new AnchorProvider(c, wallet, { commitment: "confirmed" });
+  const idl = JSON.parse(fs.readFileSync("target/idl/dominion_silver_mint.json", "utf8"));
+  const program = new Program(idl as Idl, provider);
+  const [cfgPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], PID);
+
+  // Mint caps: min=1 USDC, max=1M USDC, daily=1M USDC.
+  console.log("\n[1/3] set_mint_caps(1, 1M, 1M)...");
+  const sigMint = await (program.methods as any)
+    .setMintCaps(new BN(1_000_000), MAX_USDC, MAX_USDC)
+    .accounts({ config: cfgPda, admin: admin.publicKey })
+    .signers([admin]).rpc();
+  console.log("  ", sigMint);
+
+  // Redeem caps: min=1 USDC, max=1M USDC, daily=1M USDC.
+  console.log("\n[2/3] set_redeem_caps(1, 1M, 1M)...");
+  const sigRedeem = await (program.methods as any)
+    .setRedeemCaps(new BN(1_000_000), MAX_USDC, MAX_USDC)
+    .accounts({ config: cfgPda, admin: admin.publicKey })
+    .signers([admin]).rpc();
+  console.log("  ", sigRedeem);
+
+  // Hourly redeem cap already at 10000 bps from earlier. Re-confirm.
+  console.log("\n[3/3] set_hourly_redeem_cap(10000)...");
+  const sigHourly = await (program.methods as any)
+    .setHourlyRedeemCap(10000)
+    .accounts({ config: cfgPda, admin: admin.publicKey })
+    .signers([admin]).rpc();
+  console.log("  ", sigHourly);
+
+  // Verify.
+  const cfg: any = await (program.account as any).configAccount.fetch(cfgPda);
+  console.log("\nPost-bump config:");
+  console.log("  min_mint_amount_usdc:           ", cfg.minMintAmountUsdc.toString());
+  console.log("  max_mint_amount_per_tx_usdc:    ", cfg.maxMintAmountPerTxUsdc.toString());
+  console.log("  daily_mint_cap_usdc:            ", cfg.dailyMintCapUsdc.toString());
+  console.log("  min_redeem_amount_usdc:         ", cfg.minRedeemAmountUsdc.toString());
+  console.log("  max_redeem_amount_per_tx_usdc:  ", cfg.maxRedeemAmountPerTxUsdc.toString());
+  console.log("  daily_redeem_cap_usdc:          ", cfg.dailyRedeemCapUsdc.toString());
+  console.log("  hourly_redeem_cap_bps_of_snapshot:", cfg.hourlyRedeemCapBpsOfSnapshot);
+  console.log("\nOK. Caps lifted. Tests should run freely now.");
+}
+main().catch(e => { console.error("FAIL:", e.message ?? e); process.exit(1); });

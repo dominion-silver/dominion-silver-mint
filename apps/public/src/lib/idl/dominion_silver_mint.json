@@ -1,0 +1,4758 @@
+{
+  "address": "J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5",
+  "metadata": {
+    "name": "dominion_silver_mint",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Dominion Silver mint/redeem on Solana"
+  },
+  "instructions": [
+    {
+      "name": "accept_admin_transfer",
+      "discriminator": [
+        89,
+        211,
+        96,
+        212,
+        233,
+        0,
+        251,
+        7
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "new_admin",
+          "signer": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "add_guardian",
+      "discriminator": [
+        167,
+        189,
+        170,
+        27,
+        74,
+        240,
+        201,
+        241
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "guardian_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  117,
+                  97,
+                  114,
+                  100,
+                  105,
+                  97,
+                  110
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "guardian_pubkey"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "guardian_pubkey",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "cancel_admin_transfer",
+      "discriminator": [
+        38,
+        131,
+        157,
+        31,
+        240,
+        137,
+        44,
+        215
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "cancel_timelocked_action",
+      "discriminator": [
+        3,
+        222,
+        82,
+        96,
+        103,
+        255,
+        65,
+        112
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_recipient",
+          "writable": true
+        },
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "guardian",
+          "docs": [
+            "Optional guardian PDA tied to `signer` via PDA seeds (no spoofing). Required when signer != admin."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  117,
+                  97,
+                  114,
+                  100,
+                  105,
+                  97,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "signer"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "close_daily_counter",
+      "discriminator": [
+        249,
+        192,
+        104,
+        176,
+        217,
+        27,
+        68,
+        38
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "daily",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  97,
+                  105,
+                  108,
+                  121
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "day_epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_recipient",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "day_epoch",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "close_hourly_counter",
+      "discriminator": [
+        138,
+        210,
+        152,
+        198,
+        221,
+        160,
+        186,
+        200
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "hourly",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  111,
+                  117,
+                  114,
+                  108,
+                  121
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "hour_epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_recipient",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "hour_epoch",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "close_timelock_account",
+      "discriminator": [
+        157,
+        176,
+        62,
+        226,
+        77,
+        88,
+        128,
+        77
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_recipient",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "deposit_usdc",
+      "discriminator": [
+        184,
+        148,
+        250,
+        169,
+        224,
+        213,
+        34,
+        126
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "usdc_mint",
+          "writable": true
+        },
+        {
+          "name": "usdc_treasury",
+          "writable": true
+        },
+        {
+          "name": "user_usdc_ata",
+          "writable": true
+        },
+        {
+          "name": "classic_token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "execute_set_admin_timelock",
+      "discriminator": [
+        82,
+        15,
+        87,
+        19,
+        128,
+        210,
+        126,
+        118
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_recipient",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "execute_set_compliance_mode",
+      "discriminator": [
+        127,
+        1,
+        27,
+        111,
+        34,
+        57,
+        0,
+        0
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_recipient",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "execute_set_oracle_guards",
+      "discriminator": [
+        158,
+        190,
+        161,
+        160,
+        38,
+        211,
+        9,
+        163
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_recipient",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "execute_set_premium_mint",
+      "discriminator": [
+        197,
+        72,
+        207,
+        40,
+        118,
+        110,
+        8,
+        125
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_recipient",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "execute_set_premium_redeem",
+      "discriminator": [
+        205,
+        6,
+        13,
+        40,
+        238,
+        236,
+        4,
+        225
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_recipient",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "execute_set_pyth_feed",
+      "discriminator": [
+        118,
+        164,
+        9,
+        52,
+        56,
+        74,
+        136,
+        127
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_recipient",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "execute_set_treasury_min_reserve",
+      "discriminator": [
+        216,
+        157,
+        55,
+        239,
+        121,
+        80,
+        157,
+        212
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_recipient",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "execute_update_metadata",
+      "discriminator": [
+        69,
+        107,
+        246,
+        43,
+        131,
+        85,
+        53,
+        81
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_recipient",
+          "writable": true
+        },
+        {
+          "name": "silv_mint",
+          "writable": true
+        },
+        {
+          "name": "metadata_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  105,
+                  108,
+                  118,
+                  95,
+                  109,
+                  101,
+                  116,
+                  97,
+                  100,
+                  97,
+                  116,
+                  97,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "execute_withdraw_usdc",
+      "discriminator": [
+        200,
+        78,
+        12,
+        190,
+        91,
+        137,
+        84,
+        75
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_recipient",
+          "writable": true
+        },
+        {
+          "name": "usdc_mint",
+          "writable": true
+        },
+        {
+          "name": "silv_mint"
+        },
+        {
+          "name": "usdc_treasury",
+          "writable": true
+        },
+        {
+          "name": "recipient_ata",
+          "docs": [
+            "Recipient USDC ATA. Owner is asserted manually in handler against action_data.recipient.",
+            "Anchor `token::authority` constraint cannot reference action_data, so we deserialize",
+            "and check manually with a dedicated error."
+          ],
+          "writable": true
+        },
+        {
+          "name": "treasury_pda",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "price_update"
+        },
+        {
+          "name": "classic_token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "initialize",
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "deployer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "treasury_pda",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "silv_mint"
+        },
+        {
+          "name": "usdc_treasury",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "treasury_pda"
+              },
+              {
+                "kind": "account",
+                "path": "classic_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "classic_token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "InitializeArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "mint_silv",
+      "discriminator": [
+        46,
+        151,
+        223,
+        192,
+        195,
+        208,
+        14,
+        127
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "daily",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  97,
+                  105,
+                  108,
+                  121
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "day_epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "usdc_mint",
+          "writable": true
+        },
+        {
+          "name": "silv_mint",
+          "writable": true
+        },
+        {
+          "name": "usdc_treasury",
+          "writable": true
+        },
+        {
+          "name": "user_usdc_ata",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "classic_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "user_silv_ata",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "silv_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "silv_mint_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  105,
+                  108,
+                  118,
+                  95,
+                  109,
+                  105,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "price_update"
+        },
+        {
+          "name": "classic_token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_usdc",
+          "type": "u64"
+        },
+        {
+          "name": "min_silv_out",
+          "type": "u64"
+        },
+        {
+          "name": "day_epoch",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "pause",
+      "discriminator": [
+        211,
+        22,
+        221,
+        251,
+        74,
+        121,
+        193,
+        47
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "guardian",
+          "docs": [
+            "Optional guardian PDA tied to `signer` via PDA seeds. Required when signer != admin.",
+            "The seeds constraint forces the PDA to belong to the signer (no spoofing)."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  117,
+                  97,
+                  114,
+                  100,
+                  105,
+                  97,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "signer"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "propose_admin_transfer",
+      "discriminator": [
+        218,
+        178,
+        115,
+        190,
+        80,
+        107,
+        95,
+        158
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_admin",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "propose_set_admin_timelock",
+      "discriminator": [
+        230,
+        255,
+        160,
+        0,
+        155,
+        146,
+        128,
+        1
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config.next_timelock_nonce",
+                "account": "ConfigAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_seconds",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "propose_set_compliance_mode",
+      "discriminator": [
+        37,
+        210,
+        187,
+        108,
+        75,
+        52,
+        105,
+        30
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config.next_timelock_nonce",
+                "account": "ConfigAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_value",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "propose_set_oracle_guards",
+      "discriminator": [
+        60,
+        248,
+        92,
+        230,
+        179,
+        159,
+        11,
+        106
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config.next_timelock_nonce",
+                "account": "ConfigAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "OracleGuardsArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "propose_set_premium_mint",
+      "discriminator": [
+        50,
+        163,
+        106,
+        137,
+        151,
+        81,
+        87,
+        207
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config.next_timelock_nonce",
+                "account": "ConfigAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "propose_set_premium_redeem",
+      "discriminator": [
+        205,
+        100,
+        54,
+        150,
+        252,
+        252,
+        80,
+        209
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config.next_timelock_nonce",
+                "account": "ConfigAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "propose_set_pyth_feed",
+      "discriminator": [
+        188,
+        213,
+        35,
+        80,
+        5,
+        156,
+        255,
+        78
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config.next_timelock_nonce",
+                "account": "ConfigAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_feed_id",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "new_receiver_program",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "propose_set_treasury_min_reserve",
+      "discriminator": [
+        109,
+        193,
+        200,
+        62,
+        22,
+        71,
+        148,
+        220
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config.next_timelock_nonce",
+                "account": "ConfigAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "propose_update_metadata",
+      "discriminator": [
+        131,
+        224,
+        185,
+        230,
+        18,
+        134,
+        132,
+        119
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config.next_timelock_nonce",
+                "account": "ConfigAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "name",
+          "type": "string"
+        },
+        {
+          "name": "symbol",
+          "type": "string"
+        },
+        {
+          "name": "uri",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "name": "propose_withdraw_usdc",
+      "discriminator": [
+        34,
+        16,
+        2,
+        63,
+        64,
+        91,
+        114,
+        163
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config.next_timelock_nonce",
+                "account": "ConfigAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        },
+        {
+          "name": "recipient",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "redeem_silv",
+      "discriminator": [
+        149,
+        105,
+        245,
+        111,
+        151,
+        120,
+        234,
+        31
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "daily",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  100,
+                  97,
+                  105,
+                  108,
+                  121
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "day_epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "hourly",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  104,
+                  111,
+                  117,
+                  114,
+                  108,
+                  121
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "hour_epoch"
+              }
+            ]
+          }
+        },
+        {
+          "name": "user",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "usdc_mint",
+          "writable": true
+        },
+        {
+          "name": "silv_mint",
+          "writable": true
+        },
+        {
+          "name": "usdc_treasury",
+          "writable": true
+        },
+        {
+          "name": "user_usdc_ata",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "classic_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "user_silv_ata",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "silv_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "treasury_pda",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
+                  117,
+                  114,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "price_update"
+        },
+        {
+          "name": "classic_token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_silv",
+          "type": "u64"
+        },
+        {
+          "name": "min_usdc_out",
+          "type": "u64"
+        },
+        {
+          "name": "day_epoch",
+          "type": "u32"
+        },
+        {
+          "name": "hour_epoch",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "remove_guardian",
+      "discriminator": [
+        72,
+        117,
+        160,
+        244,
+        155,
+        185,
+        71,
+        18
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "guardian_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  117,
+                  97,
+                  114,
+                  100,
+                  105,
+                  97,
+                  110
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "guardian_pubkey"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "guardian_pubkey",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_hourly_redeem_cap",
+      "discriminator": [
+        254,
+        239,
+        176,
+        208,
+        143,
+        219,
+        14,
+        20
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "bps",
+          "type": "u16"
+        }
+      ]
+    },
+    {
+      "name": "set_mint_caps",
+      "discriminator": [
+        153,
+        151,
+        45,
+        96,
+        181,
+        190,
+        134,
+        59
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "min_tx_usdc",
+          "type": "u64"
+        },
+        {
+          "name": "max_tx_usdc",
+          "type": "u64"
+        },
+        {
+          "name": "daily_cap_usdc",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_redeem_caps",
+      "discriminator": [
+        252,
+        46,
+        219,
+        169,
+        193,
+        14,
+        114,
+        44
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "min_tx_usdc",
+          "type": "u64"
+        },
+        {
+          "name": "max_tx_usdc",
+          "type": "u64"
+        },
+        {
+          "name": "daily_cap_usdc",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "thaw_account",
+      "discriminator": [
+        115,
+        152,
+        79,
+        213,
+        213,
+        169,
+        184,
+        35
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "silv_mint",
+          "writable": true
+        },
+        {
+          "name": "silv_account",
+          "writable": true
+        },
+        {
+          "name": "permanent_delegate_authority",
+          "docs": [
+            "(Ops Squads vault PDA). Caller arranges signing externally via Squads."
+          ],
+          "signer": true
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "unpause",
+      "discriminator": [
+        169,
+        144,
+        4,
+        38,
+        10,
+        141,
+        188,
+        255
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "ConfigAccount",
+      "discriminator": [
+        189,
+        255,
+        97,
+        70,
+        186,
+        189,
+        24,
+        102
+      ]
+    },
+    {
+      "name": "DailyCountersAccount",
+      "discriminator": [
+        213,
+        96,
+        38,
+        114,
+        230,
+        210,
+        127,
+        75
+      ]
+    },
+    {
+      "name": "GuardianAccount",
+      "discriminator": [
+        161,
+        115,
+        219,
+        82,
+        127,
+        201,
+        28,
+        142
+      ]
+    },
+    {
+      "name": "HourlyCountersAccount",
+      "discriminator": [
+        40,
+        72,
+        195,
+        24,
+        157,
+        73,
+        125,
+        173
+      ]
+    },
+    {
+      "name": "PriceUpdateV2",
+      "discriminator": [
+        34,
+        241,
+        35,
+        99,
+        157,
+        126,
+        244,
+        205
+      ]
+    },
+    {
+      "name": "TimelockQueueAccount",
+      "discriminator": [
+        168,
+        218,
+        242,
+        37,
+        149,
+        142,
+        153,
+        245
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "AccountThawed",
+      "discriminator": [
+        49,
+        63,
+        73,
+        105,
+        129,
+        190,
+        40,
+        119
+      ]
+    },
+    {
+      "name": "AdminActionCancelled",
+      "discriminator": [
+        111,
+        10,
+        164,
+        149,
+        101,
+        77,
+        101,
+        139
+      ]
+    },
+    {
+      "name": "AdminActionExecuted",
+      "discriminator": [
+        166,
+        30,
+        59,
+        79,
+        198,
+        153,
+        64,
+        78
+      ]
+    },
+    {
+      "name": "AdminActionProposed",
+      "discriminator": [
+        21,
+        150,
+        129,
+        125,
+        249,
+        117,
+        19,
+        14
+      ]
+    },
+    {
+      "name": "AdminTransferAccepted",
+      "discriminator": [
+        79,
+        229,
+        204,
+        202,
+        134,
+        43,
+        177,
+        26
+      ]
+    },
+    {
+      "name": "AdminTransferProposed",
+      "discriminator": [
+        203,
+        168,
+        175,
+        51,
+        239,
+        104,
+        20,
+        85
+      ]
+    },
+    {
+      "name": "ComplianceModeChanged",
+      "discriminator": [
+        32,
+        83,
+        116,
+        15,
+        185,
+        224,
+        225,
+        164
+      ]
+    },
+    {
+      "name": "GuardianAdded",
+      "discriminator": [
+        151,
+        0,
+        228,
+        5,
+        239,
+        58,
+        162,
+        18
+      ]
+    },
+    {
+      "name": "GuardianRemoved",
+      "discriminator": [
+        225,
+        27,
+        117,
+        56,
+        241,
+        196,
+        5,
+        56
+      ]
+    },
+    {
+      "name": "MetadataUpdated",
+      "discriminator": [
+        132,
+        36,
+        215,
+        246,
+        166,
+        90,
+        189,
+        44
+      ]
+    },
+    {
+      "name": "MintEvent",
+      "discriminator": [
+        197,
+        144,
+        146,
+        149,
+        66,
+        164,
+        95,
+        16
+      ]
+    },
+    {
+      "name": "MintPausedUntilSet",
+      "discriminator": [
+        114,
+        150,
+        13,
+        54,
+        19,
+        190,
+        34,
+        129
+      ]
+    },
+    {
+      "name": "OracleRejected",
+      "discriminator": [
+        66,
+        243,
+        39,
+        205,
+        40,
+        63,
+        148,
+        224
+      ]
+    },
+    {
+      "name": "Paused",
+      "discriminator": [
+        172,
+        248,
+        5,
+        253,
+        49,
+        255,
+        255,
+        232
+      ]
+    },
+    {
+      "name": "PriceDeltaRejected",
+      "discriminator": [
+        55,
+        153,
+        157,
+        12,
+        125,
+        193,
+        231,
+        116
+      ]
+    },
+    {
+      "name": "RedeemEvent",
+      "discriminator": [
+        90,
+        114,
+        83,
+        146,
+        212,
+        26,
+        217,
+        59
+      ]
+    },
+    {
+      "name": "TreasuryDeposit",
+      "discriminator": [
+        176,
+        79,
+        3,
+        202,
+        180,
+        107,
+        127,
+        236
+      ]
+    },
+    {
+      "name": "TreasuryWithdraw",
+      "discriminator": [
+        164,
+        41,
+        149,
+        134,
+        248,
+        87,
+        41,
+        218
+      ]
+    },
+    {
+      "name": "Unpaused",
+      "discriminator": [
+        156,
+        150,
+        47,
+        174,
+        120,
+        216,
+        93,
+        117
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 12000,
+      "name": "Paused",
+      "msg": "Protocol is paused"
+    },
+    {
+      "code": 12001,
+      "name": "MintPaused",
+      "msg": "Mint is paused (premium proposal in flight)"
+    },
+    {
+      "code": 12002,
+      "name": "BelowMinimum",
+      "msg": "Amount below per-tx minimum"
+    },
+    {
+      "code": 12003,
+      "name": "AboveMaximum",
+      "msg": "Amount above per-tx maximum"
+    },
+    {
+      "code": 12004,
+      "name": "StaleOracle",
+      "msg": "Pyth price update is stale"
+    },
+    {
+      "code": 12005,
+      "name": "OracleLowConfidence",
+      "msg": "Pyth confidence interval too wide"
+    },
+    {
+      "code": 12006,
+      "name": "PriceOutOfBounds",
+      "msg": "Oracle price outside sanity bounds"
+    },
+    {
+      "code": 12007,
+      "name": "OracleScalingOutOfBounds",
+      "msg": "Pyth exponent scaling out of safe range"
+    },
+    {
+      "code": 12008,
+      "name": "WrongOracleFeed",
+      "msg": "Wrong Pyth feed id"
+    },
+    {
+      "code": 12009,
+      "name": "WrongOracleOwner",
+      "msg": "Pyth account owner does not match expected receiver program"
+    },
+    {
+      "code": 12010,
+      "name": "OracleNotFullyVerified",
+      "msg": "Pyth price update not Full verification level"
+    },
+    {
+      "code": 12011,
+      "name": "NegativeOraclePrice",
+      "msg": "Oracle returned a non-positive price"
+    },
+    {
+      "code": 12012,
+      "name": "PriceDeltaExceeded",
+      "msg": "Price moved too much vs last recorded"
+    },
+    {
+      "code": 12013,
+      "name": "Unauthorized",
+      "msg": "Caller not authorized for this instruction"
+    },
+    {
+      "code": 12014,
+      "name": "InsufficientTreasury",
+      "msg": "Treasury balance below requested payout"
+    },
+    {
+      "code": 12015,
+      "name": "TreasuryBelowReserve",
+      "msg": "Operation would breach treasury minimum reserve"
+    },
+    {
+      "code": 12016,
+      "name": "DailyCapExceeded",
+      "msg": "Daily cap exceeded"
+    },
+    {
+      "code": 12017,
+      "name": "HourlyRedeemCapExceeded",
+      "msg": "Hourly redeem cap exceeded"
+    },
+    {
+      "code": 12018,
+      "name": "ArithmeticOverflow",
+      "msg": "Arithmetic overflow"
+    },
+    {
+      "code": 12019,
+      "name": "ZeroAmount",
+      "msg": "Amount cannot be zero"
+    },
+    {
+      "code": 12020,
+      "name": "InvalidPendingAdmin",
+      "msg": "Pending admin pubkey does not match signer"
+    },
+    {
+      "code": 12021,
+      "name": "PendingAdminExpired",
+      "msg": "Pending admin transfer expired"
+    },
+    {
+      "code": 12022,
+      "name": "PremiumTooHigh",
+      "msg": "Premium above hard ceiling"
+    },
+    {
+      "code": 12023,
+      "name": "PremiumSpreadTooLow",
+      "msg": "Combined premium below minimum spread"
+    },
+    {
+      "code": 12024,
+      "name": "SlippageExceeded",
+      "msg": "Slippage check failed (output below min_out)"
+    },
+    {
+      "code": 12025,
+      "name": "WrongTokenProgram",
+      "msg": "Token program account does not match expected program id"
+    },
+    {
+      "code": 12026,
+      "name": "WrongMint",
+      "msg": "Mint account does not match config"
+    },
+    {
+      "code": 12027,
+      "name": "WrongTreasury",
+      "msg": "Treasury account does not match config"
+    },
+    {
+      "code": 12028,
+      "name": "TimelockNotElapsed",
+      "msg": "Timelock window has not yet elapsed"
+    },
+    {
+      "code": 12029,
+      "name": "TimelockActionCancelled",
+      "msg": "Timelock action was cancelled"
+    },
+    {
+      "code": 12030,
+      "name": "TimelockActionAlreadyExecuted",
+      "msg": "Timelock action already executed"
+    },
+    {
+      "code": 12031,
+      "name": "PermanentDelegateMismatch",
+      "msg": "SILV mint PermanentDelegate does not match expected"
+    },
+    {
+      "code": 12032,
+      "name": "TransferHookUnexpected",
+      "msg": "SILV mint must not have TransferHook enabled"
+    },
+    {
+      "code": 12033,
+      "name": "TransferFeeUnexpected",
+      "msg": "SILV mint must not have TransferFee enabled"
+    },
+    {
+      "code": 12034,
+      "name": "DayEpochMismatch",
+      "msg": "Provided day_epoch does not match current UTC day"
+    },
+    {
+      "code": 12035,
+      "name": "HourEpochMismatch",
+      "msg": "Provided hour_epoch does not match current UTC hour"
+    },
+    {
+      "code": 12036,
+      "name": "WithdrawBlockedWhilePaused",
+      "msg": "Withdraw blocked while protocol is paused"
+    },
+    {
+      "code": 12037,
+      "name": "TimelockTooShort",
+      "msg": "Timelock seconds below hard floor (3600)"
+    },
+    {
+      "code": 12038,
+      "name": "TimelockTooLong",
+      "msg": "Timelock seconds above hard ceiling (2592000)"
+    },
+    {
+      "code": 12039,
+      "name": "GuardianInCooldown",
+      "msg": "Guardian is in cooldown after recent removal"
+    },
+    {
+      "code": 12040,
+      "name": "GuardianCountExceeded",
+      "msg": "Guardian count would exceed max"
+    },
+    {
+      "code": 12041,
+      "name": "ComplianceModeUnchanged",
+      "msg": "Compliance mode value unchanged"
+    },
+    {
+      "code": 12042,
+      "name": "NonceMismatch",
+      "msg": "Provided nonce does not match expected timelock account"
+    },
+    {
+      "code": 12043,
+      "name": "ProposalNoOp",
+      "msg": "Proposed value is no-op (matches current config)"
+    },
+    {
+      "code": 12044,
+      "name": "ProposalAlreadyActive",
+      "msg": "Another proposal of the same kind is already active"
+    },
+    {
+      "code": 12045,
+      "name": "TooManyActiveProposals",
+      "msg": "Too many active proposals (max 10)"
+    },
+    {
+      "code": 12046,
+      "name": "OracleGuardsAllNone",
+      "msg": "All oracle guard fields are None; nothing to update"
+    },
+    {
+      "code": 12047,
+      "name": "InvalidFeedId",
+      "msg": "Pyth feed id is empty (all zeros)"
+    },
+    {
+      "code": 12048,
+      "name": "WithdrawRecipientMismatch",
+      "msg": "Withdraw recipient ATA owner does not match action_data recipient"
+    },
+    {
+      "code": 12049,
+      "name": "MalformedActionData",
+      "msg": "Action data is malformed (wrong length or content)"
+    },
+    {
+      "code": 12050,
+      "name": "SerializationFailure",
+      "msg": "Failed to serialize/deserialize action data"
+    },
+    {
+      "code": 12051,
+      "name": "PrevHourMismatch",
+      "msg": "Hourly counter previous-hour PDA mismatch"
+    }
+  ],
+  "types": [
+    {
+      "name": "AccountThawed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "silv_account",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AdminActionCancelled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "cancelled_by",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AdminActionExecuted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "action_disc",
+            "type": "u8"
+          },
+          {
+            "name": "executor",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AdminActionProposed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "action_disc",
+            "type": "u8"
+          },
+          {
+            "name": "executable_at",
+            "type": "i64"
+          },
+          {
+            "name": "proposer",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AdminTransferAccepted",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old",
+            "type": "pubkey"
+          },
+          {
+            "name": "new",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AdminTransferProposed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "current",
+            "type": "pubkey"
+          },
+          {
+            "name": "proposed",
+            "type": "pubkey"
+          },
+          {
+            "name": "expires_at",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ComplianceModeChanged",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "new_value",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ConfigAccount",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "pending_admin",
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "pending_admin_expires_at",
+            "type": "i64"
+          },
+          {
+            "name": "upgrade_authority_info",
+            "type": "pubkey"
+          },
+          {
+            "name": "permanent_delegate_expected",
+            "type": "pubkey"
+          },
+          {
+            "name": "compliance_mode",
+            "type": "bool"
+          },
+          {
+            "name": "premium_bps_mint",
+            "type": "u16"
+          },
+          {
+            "name": "premium_bps_redeem",
+            "type": "u16"
+          },
+          {
+            "name": "pyth_feed_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "pyth_receiver_program",
+            "type": "pubkey"
+          },
+          {
+            "name": "usdc_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "silv_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "usdc_treasury",
+            "type": "pubkey"
+          },
+          {
+            "name": "classic_token_program",
+            "type": "pubkey"
+          },
+          {
+            "name": "token_2022_program",
+            "type": "pubkey"
+          },
+          {
+            "name": "max_staleness_seconds",
+            "type": "u32"
+          },
+          {
+            "name": "max_confidence_bps",
+            "type": "u16"
+          },
+          {
+            "name": "min_price_usd_scaled",
+            "type": "u64"
+          },
+          {
+            "name": "max_price_usd_scaled",
+            "type": "u64"
+          },
+          {
+            "name": "last_recorded_price_scaled",
+            "type": "u128"
+          },
+          {
+            "name": "last_price_update_at",
+            "type": "i64"
+          },
+          {
+            "name": "max_price_delta_bps",
+            "type": "u16"
+          },
+          {
+            "name": "price_delta_decay_seconds",
+            "type": "u32"
+          },
+          {
+            "name": "price_update_min_amount_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "reserve_check_price_scaled",
+            "type": "u128"
+          },
+          {
+            "name": "reserve_check_price_max_increase_per_hour_bps",
+            "type": "u16"
+          },
+          {
+            "name": "reserve_check_price_last_update_at",
+            "type": "i64"
+          },
+          {
+            "name": "min_mint_amount_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "max_mint_amount_per_tx_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "min_redeem_amount_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "max_redeem_amount_per_tx_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "daily_mint_cap_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "daily_redeem_cap_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "hourly_redeem_cap_bps_of_snapshot",
+            "type": "u16"
+          },
+          {
+            "name": "treasury_min_reserve_bps",
+            "type": "u16"
+          },
+          {
+            "name": "admin_timelock_seconds",
+            "type": "u32"
+          },
+          {
+            "name": "max_guardian_count",
+            "type": "u8"
+          },
+          {
+            "name": "guardian_count",
+            "type": "u8"
+          },
+          {
+            "name": "mint_paused_until",
+            "type": "i64"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          },
+          {
+            "name": "next_timelock_nonce",
+            "type": "u64"
+          },
+          {
+            "name": "active_proposal_count",
+            "type": "u8"
+          },
+          {
+            "name": "pending_premium_mint_nonce",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "pending_premium_redeem_nonce",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "pending_withdraw_nonce",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "pending_min_reserve_nonce",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "pending_oracle_guards_nonce",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "pending_metadata_nonce",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "pending_compliance_nonce",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "pending_pyth_feed_nonce",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "pending_admin_timelock_nonce",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                64
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "DailyCountersAccount",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "day_epoch",
+            "type": "u32"
+          },
+          {
+            "name": "minted_today_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "redeemed_today_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "rent_payer",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GuardianAccount",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "guardian",
+            "type": "pubkey"
+          },
+          {
+            "name": "added_at",
+            "type": "i64"
+          },
+          {
+            "name": "cooldown_until",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GuardianAdded",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "guardian",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GuardianRemoved",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "guardian",
+            "type": "pubkey"
+          },
+          {
+            "name": "cooldown_until",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "HourlyCountersAccount",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "hour_epoch",
+            "type": "u32"
+          },
+          {
+            "name": "redeemed_this_hour_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "treasury_at_hour_start_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "rent_payer",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "InitializeArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "pubkey"
+          },
+          {
+            "name": "upgrade_authority_info",
+            "type": "pubkey"
+          },
+          {
+            "name": "permanent_delegate_expected",
+            "type": "pubkey"
+          },
+          {
+            "name": "compliance_mode",
+            "type": "bool"
+          },
+          {
+            "name": "premium_bps_mint",
+            "type": "u16"
+          },
+          {
+            "name": "premium_bps_redeem",
+            "type": "u16"
+          },
+          {
+            "name": "pyth_feed_id",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "pyth_receiver_program",
+            "type": "pubkey"
+          },
+          {
+            "name": "min_mint_amount_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "max_mint_amount_per_tx_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "min_redeem_amount_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "max_redeem_amount_per_tx_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "daily_mint_cap_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "daily_redeem_cap_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "hourly_redeem_cap_bps_of_snapshot",
+            "type": "u16"
+          },
+          {
+            "name": "treasury_min_reserve_bps",
+            "type": "u16"
+          },
+          {
+            "name": "admin_timelock_seconds",
+            "type": "u32"
+          },
+          {
+            "name": "max_guardian_count",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MetadataUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "new_name",
+            "type": "string"
+          },
+          {
+            "name": "new_symbol",
+            "type": "string"
+          },
+          {
+            "name": "new_uri",
+            "type": "string"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MintEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "amount_silv",
+            "type": "u64"
+          },
+          {
+            "name": "price_used_scaled",
+            "type": "u128"
+          },
+          {
+            "name": "premium_bps_used",
+            "type": "u16"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MintPausedUntilSet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "until",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "OracleGuardsArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "staleness",
+            "type": {
+              "option": "u32"
+            }
+          },
+          {
+            "name": "conf_bps",
+            "type": {
+              "option": "u16"
+            }
+          },
+          {
+            "name": "min_price_scaled",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "max_price_scaled",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "max_delta_bps",
+            "type": {
+              "option": "u16"
+            }
+          },
+          {
+            "name": "decay_seconds",
+            "type": {
+              "option": "u32"
+            }
+          },
+          {
+            "name": "dust_filter_min_usdc",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "reserve_price_ramp_bps",
+            "type": {
+              "option": "u16"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "OracleRejected",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "reason_code",
+            "type": "u32"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Paused",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "by",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PriceDeltaRejected",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "last_price_scaled",
+            "type": "u128"
+          },
+          {
+            "name": "new_price_scaled",
+            "type": "u128"
+          },
+          {
+            "name": "bps_delta",
+            "type": "u32"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PriceFeedMessage",
+      "repr": {
+        "kind": "c"
+      },
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "feed_id",
+            "docs": [
+              "`FeedId` but avoid the type alias because of compatibility issues with Anchor's `idl-build` feature."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "price",
+            "type": "i64"
+          },
+          {
+            "name": "conf",
+            "type": "u64"
+          },
+          {
+            "name": "exponent",
+            "type": "i32"
+          },
+          {
+            "name": "publish_time",
+            "docs": [
+              "The timestamp of this price update in seconds"
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "prev_publish_time",
+            "docs": [
+              "The timestamp of the previous price update. This field is intended to allow users to",
+              "identify the single unique price update for any moment in time:",
+              "for any time t, the unique update is the one such that prev_publish_time < t <= publish_time.",
+              "",
+              "Note that there may not be such an update while we are migrating to the new message-sending logic,",
+              "as some price updates on pythnet may not be sent to other chains (because the message-sending",
+              "logic may not have triggered). We can solve this problem by making the message-sending mandatory",
+              "(which we can do once publishers have migrated over).",
+              "",
+              "Additionally, this field may be equal to publish_time if the message is sent on a slot where",
+              "where the aggregation was unsuccesful. This problem will go away once all publishers have",
+              "migrated over to a recent version of pyth-agent."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "ema_price",
+            "type": "i64"
+          },
+          {
+            "name": "ema_conf",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PriceUpdateV2",
+      "docs": [
+        "A price update account. This account is used by the Pyth Receiver program to store a verified price update from a Pyth price feed.",
+        "It contains:",
+        "- `write_authority`: The write authority for this account. This authority can close this account to reclaim rent or update the account to contain a different price update.",
+        "- `verification_level`: The [`VerificationLevel`] of this price update. This represents how many Wormhole guardian signatures have been verified for this price update.",
+        "- `price_message`: The actual price update.",
+        "- `posted_slot`: The slot at which this price update was posted."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "write_authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "verification_level",
+            "type": {
+              "defined": {
+                "name": "VerificationLevel"
+              }
+            }
+          },
+          {
+            "name": "price_message",
+            "type": {
+              "defined": {
+                "name": "PriceFeedMessage"
+              }
+            }
+          },
+          {
+            "name": "posted_slot",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RedeemEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount_silv",
+            "type": "u64"
+          },
+          {
+            "name": "amount_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "price_used_scaled",
+            "type": "u128"
+          },
+          {
+            "name": "premium_bps_used",
+            "type": "u16"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TimelockQueueAccount",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "action_disc",
+            "type": "u8"
+          },
+          {
+            "name": "action_data",
+            "type": "bytes"
+          },
+          {
+            "name": "scheduled_at",
+            "type": "i64"
+          },
+          {
+            "name": "executable_at",
+            "type": "i64"
+          },
+          {
+            "name": "executed_at",
+            "type": {
+              "option": "i64"
+            }
+          },
+          {
+            "name": "cancelled",
+            "type": "bool"
+          },
+          {
+            "name": "proposer",
+            "type": "pubkey"
+          },
+          {
+            "name": "rent_payer",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TreasuryDeposit",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "from",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TreasuryWithdraw",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "recipient",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Unpaused",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VerificationLevel",
+      "docs": [
+        "Pyth price updates are bridged to all blockchains via Wormhole.",
+        "Using the price updates on another chain requires verifying the signatures of the Wormhole guardians.",
+        "The usual process is to check the signatures for two thirds of the total number of guardians, but this can be cumbersome on Solana because of the transaction size limits,",
+        "so we also allow for partial verification.",
+        "",
+        "This enum represents how much a price update has been verified:",
+        "- If `Full`, we have verified the signatures for two thirds of the current guardians.",
+        "- If `Partial`, only `num_signatures` guardian signatures have been checked.",
+        "",
+        "# Warning",
+        "Using partially verified price updates is dangerous, as it lowers the threshold of guardians that need to collude to produce a malicious price update."
+      ],
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Partial",
+            "fields": [
+              {
+                "name": "num_signatures",
+                "type": "u8"
+              }
+            ]
+          },
+          {
+            "name": "Full"
+          }
+        ]
+      }
+    }
+  ]
+}
