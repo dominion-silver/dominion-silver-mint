@@ -1,6 +1,7 @@
 import { Header } from "@/components/Header";
 import { PriceBanner } from "@/components/PriceBanner";
 import { MintRedeemCard } from "@/components/MintRedeemCard";
+import { ReservesPanel } from "@/components/ReservesPanel";
 import { TransactionHistory } from "@/components/TransactionHistory";
 import { PROGRAM_ID } from "@/lib/constants";
 
@@ -19,6 +20,7 @@ export default function HomePage() {
           </p>
         </div>
         <MintRedeemCard />
+        <ReservesPanel />
         <TransactionHistory />
         <footer className="mt-12 text-center text-xs text-muted">
           <p>

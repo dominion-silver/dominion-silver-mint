@@ -5,19 +5,21 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        // dominion.market palette
-        bg: "#0a0a0a",
-        card: "#111111",
-        border: "#222222",
-        accent: "#22c55e", // green-500
-        accentDim: "#16a34a",
+        // Exact dominion.market/why-silv palette (measured from the DOM).
+        bg: "#1a1a1a", // body background
+        card: "#292929", // card / panel
+        border: "#3b3b3b", // card border (used at /50 for the soft look)
+        accent: "#4ade80", // green-400 (price, CTA, positive)
+        accentDim: "#22c55e", // green-500 (hover/pressed)
         danger: "#ef4444",
         warning: "#f59e0b",
-        muted: "#94a3b8",
+        muted: "#b0b0b0", // body / secondary text (neutral grey)
       },
       fontFamily: {
-        sans: ["-apple-system", "BlinkMacSystemFont", "Segoe UI", "Roboto", "sans-serif"],
-        mono: ["SF Mono", "Monaco", "Consolas", "monospace"],
+        // Inter = body; Space Grotesk = display + tabular numbers.
+        sans: ["var(--font-inter)", "system-ui", "sans-serif"],
+        display: ["var(--font-space-grotesk)", "system-ui", "sans-serif"],
+        mono: ["var(--font-space-grotesk)", "ui-monospace", "monospace"],
       },
     },
   },
