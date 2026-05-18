@@ -18,25 +18,56 @@ const SECS_PER_DAY = 86_400;
 
 export function Dashboard() {
   const { connection } = useConnection();
+  // The public devnet RPC (api.devnet.solana.com) rate-limits heavy reads.
+  // Keep the lightweight snapshot resilient (retry + keep last good data) so
+  // a transient "Failed to fetch" auto-recovers instead of nuking the page.
   const { data, error, isLoading } = useSWR<DashboardSnapshot | null>(
     "dominion-dashboard",
     () => fetchDashboardSnapshot(connection),
-    { refreshInterval: 5_000, revalidateOnFocus: false },
+    {
+      refreshInterval: 10_000,
+      revalidateOnFocus: false,
+      keepPreviousData: true,
+      dedupingInterval: 4_000,
+      errorRetryCount: 10,
+      errorRetryInterval: 2_500,
+    },
   );
+  // STAGGER the heavy unfiltered getProgramAccounts: only fire it AFTER the
+  // snapshot has loaded (conditional key = null until then) and refresh it
+  // slowly. Firing it concurrently with the snapshot on mount is what was
+  // saturating the public RPC's per-IP limit and failing both. It already
+  // degrades to [] on error, so a failure only empties the queue panel.
   const { data: redemptions } = useSWR<RedemptionRequestView[]>(
-    "dominion-redemptions",
+    data ? "dominion-redemptions" : null,
     () => fetchAllRedemptionRequests(connection),
-    { refreshInterval: 10_000, revalidateOnFocus: false },
+    {
+      refreshInterval: 30_000,
+      revalidateOnFocus: false,
+      keepPreviousData: true,
+      dedupingInterval: 15_000,
+    },
   );
 
-  if (error) {
+  // Only hard-fail if we have NEVER gotten data. With keepPreviousData +
+  // retry, a blip is invisible; a sustained outage shows this with a note
+  // that it is auto-retrying (no user action needed, not an auth problem).
+  if (error && !data) {
     return (
       <div className="rounded-xl border border-danger bg-danger/10 p-6 text-danger">
         Failed to load dashboard: {String(error)}
+        <div className="mt-2 text-xs text-muted">
+          Retrying automatically. This is the public devnet RPC rate-limiting
+          heavy reads, not a wallet/permission issue (the dashboard is
+          read-only). It usually clears within a few seconds.
+        </div>
       </div>
     );
   }
-  if (isLoading || !data) {
+  if (isLoading && !data) {
+    return <div className="p-8 text-muted">Loading on-chain state…</div>;
+  }
+  if (!data) {
     return <div className="p-8 text-muted">Loading on-chain state…</div>;
   }
 

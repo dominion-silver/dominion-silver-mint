@@ -234,8 +234,18 @@ export async function fetchAllRedemptionRequests(
 ): Promise<RedemptionRequestView[]> {
   const program = getReadOnlyProgram(connection);
   try {
+    // getProgramAccounts is heavy and the public devnet RPC frequently
+    // rate-limits or blocks it. Bound it so a hung/blocked call degrades to
+    // [] fast (empty queue panel) instead of hanging the SWR forever.
+    const timeout = new Promise<never>((_, rej) =>
+      setTimeout(() => rej(new Error("redemptionRequest.all timed out")), 12_000),
+    );
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const all = await (program.account as any).redemptionRequest.all();
+    const all = (await Promise.race([
+      (program.account as any).redemptionRequest.all(),
+      timeout,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ])) as any[];
     return (
       all
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
