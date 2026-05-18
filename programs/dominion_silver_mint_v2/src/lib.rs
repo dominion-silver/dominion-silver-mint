@@ -1,0 +1,294 @@
+// Dominion Silver mint/redeem program.
+// 1 SILV = 1 troy oz physical LBMA silver.
+// USDC in (classic SPL Token) <-> SILV out (SPL Token-2022) at Pyth XAG/USD price + premium.
+// See PLAN.md in repo root for design rationale.
+
+use anchor_lang::prelude::*;
+
+pub mod assertions;
+pub mod cpi;
+pub mod errors;
+pub mod events;
+pub mod instructions;
+pub mod math;
+pub mod oracle;
+pub mod state;
+
+use instructions::*;
+
+// CODEX P0-01: V2 is a MANDATORY fresh deploy under a NEW program ID (the
+// V1/V2 ConfigAccount layout is incompatible; the whole "no stale V1 state"
+// safety hypothesis depends on this ID NOT being the V1 ID
+// J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5). Keypair:
+// target/deploy/dominion_silver_mint_v2-keypair.json (gitignored).
+declare_id!("GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX");
+
+#[program]
+pub mod dominion_silver_mint {
+    use super::*;
+    use crate::instructions::admin::execute::OracleGuardsArgs;
+
+    // === User instructions ===
+
+    pub fn mint_silv(ctx: Context<MintSilv>, amount_usdc: u64, min_silv_out: u64) -> Result<()> {
+        instructions::mint_silv::handler(ctx, amount_usdc, min_silv_out)
+    }
+
+    // Option B redeem = INSTANT path only (§4.3). A redeem that must queue
+    // reverts MustUseQueue; the client then calls `redeem_silv_queued`.
+    pub fn redeem_silv(
+        ctx: Context<RedeemSilv>,
+        amount_silv: u64,
+        min_usdc_out: u64,
+    ) -> Result<()> {
+        instructions::redeem_silv::handler(ctx, amount_silv, min_usdc_out)
+    }
+
+    // Option B queued-redemption lifecycle (§4.3 ENQUEUE + §4.4).
+    pub fn redeem_silv_queued(
+        ctx: Context<RedeemSilvQueued>,
+        amount_silv: u64,
+        request_nonce: u64,
+    ) -> Result<()> {
+        instructions::redeem_queued::queued_handler(ctx, amount_silv, request_nonce)
+    }
+
+    pub fn claim_redemption(ctx: Context<ClaimRedemption>) -> Result<()> {
+        instructions::redeem_queued::claim_handler(ctx)
+    }
+
+    pub fn admin_settle_redemption_offchain(
+        ctx: Context<AdminSettleRedemptionOffchain>,
+    ) -> Result<()> {
+        instructions::redeem_queued::settle_offchain_handler(ctx)
+    }
+
+    pub fn deposit_usdc(ctx: Context<DepositUsdc>, amount: u64) -> Result<()> {
+        instructions::deposit_usdc::handler(ctx, amount)
+    }
+
+    // === Initialize (one-shot) ===
+
+    pub fn initialize(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
+        instructions::initialize::handler(ctx, args)
+    }
+
+    // === Emergency ===
+
+    pub fn pause(ctx: Context<Pause>) -> Result<()> {
+        instructions::emergency::pause::pause_handler(ctx)
+    }
+
+    pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
+        instructions::emergency::pause::unpause_handler(ctx)
+    }
+
+    // === Admin: instant ===
+
+    // Option B instant param setters (§6, no timelock, bounded by compile-time
+    // ceilings - D14). Replaces the Option A per-tx/daily/hourly cap setters.
+
+    pub fn set_max_silv_supply(ctx: Context<SetParam>, new_max: u64) -> Result<()> {
+        instructions::admin::caps::set_max_silv_supply_handler(ctx, new_max)
+    }
+
+    pub fn set_redemptions_enabled(ctx: Context<SetParam>, enabled: bool) -> Result<()> {
+        instructions::admin::caps::set_redemptions_enabled_handler(ctx, enabled)
+    }
+
+    pub fn set_instant_redeem_budget(ctx: Context<SetParam>, new_budget_usdc: u64) -> Result<()> {
+        instructions::admin::caps::set_instant_redeem_budget_handler(ctx, new_budget_usdc)
+    }
+
+    pub fn set_instant_redeem_window(
+        ctx: Context<SetParam>,
+        new_window_seconds: u32,
+    ) -> Result<()> {
+        instructions::admin::caps::set_instant_redeem_window_handler(ctx, new_window_seconds)
+    }
+
+    pub fn set_large_redeem_threshold(
+        ctx: Context<SetParam>,
+        new_threshold_usdc: u64,
+    ) -> Result<()> {
+        instructions::admin::caps::set_large_redeem_threshold_handler(ctx, new_threshold_usdc)
+    }
+
+    pub fn set_redeem_queue_delay(ctx: Context<SetParam>, new_delay_seconds: u32) -> Result<()> {
+        instructions::admin::caps::set_redeem_queue_delay_handler(ctx, new_delay_seconds)
+    }
+
+    /// DEV ONLY: bumps max_staleness_seconds without timelock.
+    /// CODEX P0-02: compiled ONLY under the non-default `dev-hatch` feature -
+    /// absent from release/deploy builds + the generated IDL.
+    #[cfg(feature = "dev-hatch")]
+    pub fn dev_set_max_staleness(ctx: Context<DevSetOracleParam>, secs: u32) -> Result<()> {
+        instructions::admin::dev::dev_set_max_staleness_handler(ctx, secs)
+    }
+
+    /// DEV ONLY: sets premium_bps_mint + premium_bps_redeem without timelock.
+    /// CODEX P0-02: compiled ONLY under the non-default `dev-hatch` feature -
+    /// absent from release/deploy builds + the generated IDL.
+    #[cfg(feature = "dev-hatch")]
+    pub fn dev_set_premiums(
+        ctx: Context<DevSetOracleParam>,
+        mint_bps: u16,
+        redeem_bps: u16,
+    ) -> Result<()> {
+        instructions::admin::dev::dev_set_premiums_handler(ctx, mint_bps, redeem_bps)
+    }
+
+    pub fn add_guardian(ctx: Context<AddGuardian>, guardian_pubkey: Pubkey) -> Result<()> {
+        instructions::admin::guardian::add_handler(ctx, guardian_pubkey)
+    }
+
+    pub fn remove_guardian(ctx: Context<RemoveGuardian>, guardian_pubkey: Pubkey) -> Result<()> {
+        instructions::admin::guardian::remove_handler(ctx, guardian_pubkey)
+    }
+
+    pub fn propose_admin_transfer(
+        ctx: Context<ProposeAdminTransfer>,
+        new_admin: Pubkey,
+    ) -> Result<()> {
+        instructions::admin::transfer::propose_handler(ctx, new_admin)
+    }
+
+    pub fn accept_admin_transfer(ctx: Context<AcceptAdminTransfer>) -> Result<()> {
+        instructions::admin::transfer::accept_handler(ctx)
+    }
+
+    pub fn cancel_admin_transfer(ctx: Context<CancelAdminTransfer>) -> Result<()> {
+        instructions::admin::transfer::cancel_handler(ctx)
+    }
+
+    pub fn cancel_timelocked_action(ctx: Context<CancelTimelocked>, nonce: u64) -> Result<()> {
+        instructions::admin::timelock::cancel_handler(ctx, nonce)
+    }
+
+    // CODEX H-02 / Option B: thaw_account has NO #[program] entry point and
+    // the dead-code file (instructions/admin/thaw.rs) was DELETED in the
+    // Option B teardown. The original handler signed thaw_account with the
+    // PermanentDelegate authority, but SPL requires the mint's
+    // freeze_authority; the SILV mint is created with freeze_authority = None
+    // (CODEX C-02), so no working thaw path exists. PermanentDelegate is kept
+    // (D12) for transfer/burn-based compliance; a real freeze/thaw flow would
+    // require architectural redesign (a Squads-controlled freeze_authority).
+
+    // === Admin: timelocked propose/execute ===
+
+    pub fn propose_set_premium_mint(ctx: Context<ProposePremium>, new_bps: u16) -> Result<()> {
+        instructions::admin::propose::propose_set_premium_mint_handler(ctx, new_bps)
+    }
+
+    pub fn execute_set_premium_mint(ctx: Context<ExecutePremium>, nonce: u64) -> Result<()> {
+        instructions::admin::execute::execute_set_premium_mint_handler(ctx, nonce)
+    }
+
+    pub fn propose_set_premium_redeem(ctx: Context<ProposePremium>, new_bps: u16) -> Result<()> {
+        instructions::admin::propose::propose_set_premium_redeem_handler(ctx, new_bps)
+    }
+
+    pub fn execute_set_premium_redeem(ctx: Context<ExecutePremium>, nonce: u64) -> Result<()> {
+        instructions::admin::execute::execute_set_premium_redeem_handler(ctx, nonce)
+    }
+
+    pub fn propose_withdraw_usdc(
+        ctx: Context<ProposeWithdraw>,
+        amount: u64,
+        recipient: Pubkey,
+    ) -> Result<()> {
+        instructions::admin::propose::propose_withdraw_usdc_handler(ctx, amount, recipient)
+    }
+
+    pub fn execute_withdraw_usdc(ctx: Context<ExecuteWithdraw>, nonce: u64) -> Result<()> {
+        instructions::admin::execute::execute_withdraw_usdc_handler(ctx, nonce)
+    }
+
+    pub fn propose_set_compliance_mode(
+        ctx: Context<ProposeCompliance>,
+        new_value: bool,
+    ) -> Result<()> {
+        instructions::admin::propose::propose_set_compliance_mode_handler(ctx, new_value)
+    }
+
+    pub fn execute_set_compliance_mode(ctx: Context<ExecuteCompliance>, nonce: u64) -> Result<()> {
+        instructions::admin::execute::execute_set_compliance_mode_handler(ctx, nonce)
+    }
+
+    pub fn propose_set_oracle_guards(
+        ctx: Context<ProposeOracleGuards>,
+        args: OracleGuardsArgs,
+    ) -> Result<()> {
+        instructions::admin::propose::propose_set_oracle_guards_handler(ctx, args)
+    }
+
+    pub fn execute_set_oracle_guards(ctx: Context<ExecuteOracleGuards>, nonce: u64) -> Result<()> {
+        instructions::admin::execute::execute_set_oracle_guards_handler(ctx, nonce)
+    }
+
+    // Option B D7: treasury minimum FLOAT (replaces Option A min-reserve bps).
+    pub fn propose_set_treasury_min_float(
+        ctx: Context<ProposeTreasuryFloat>,
+        new_float_usdc: u64,
+    ) -> Result<()> {
+        instructions::admin::propose::propose_set_treasury_min_float_handler(ctx, new_float_usdc)
+    }
+
+    pub fn execute_set_treasury_min_float(
+        ctx: Context<ExecuteTreasuryFloat>,
+        nonce: u64,
+    ) -> Result<()> {
+        instructions::admin::execute::execute_set_treasury_min_float_handler(ctx, nonce)
+    }
+
+    pub fn propose_set_admin_timelock(
+        ctx: Context<ProposeAdminTimelock>,
+        new_seconds: u32,
+    ) -> Result<()> {
+        instructions::admin::propose::propose_set_admin_timelock_handler(ctx, new_seconds)
+    }
+
+    pub fn execute_set_admin_timelock(
+        ctx: Context<ExecuteAdminTimelock>,
+        nonce: u64,
+    ) -> Result<()> {
+        instructions::admin::execute::execute_set_admin_timelock_handler(ctx, nonce)
+    }
+
+    pub fn propose_set_pyth_feed(
+        ctx: Context<ProposePythFeed>,
+        new_feed_id: [u8; 32],
+        new_receiver_program: Pubkey,
+    ) -> Result<()> {
+        instructions::admin::propose::propose_set_pyth_feed_handler(
+            ctx,
+            new_feed_id,
+            new_receiver_program,
+        )
+    }
+
+    pub fn execute_set_pyth_feed(ctx: Context<ExecutePythFeed>, nonce: u64) -> Result<()> {
+        instructions::admin::execute::execute_set_pyth_feed_handler(ctx, nonce)
+    }
+
+    pub fn propose_update_metadata(
+        ctx: Context<ProposeUpdateMetadata>,
+        name: String,
+        symbol: String,
+        uri: String,
+    ) -> Result<()> {
+        instructions::admin::propose::propose_update_metadata_handler(ctx, name, symbol, uri)
+    }
+
+    pub fn execute_update_metadata(ctx: Context<ExecuteUpdateMetadata>, nonce: u64) -> Result<()> {
+        instructions::admin::execute::execute_update_metadata_handler(ctx, nonce)
+    }
+
+    // === Rent reclaim ===
+    // Option B: close_daily_counter / close_hourly_counter removed (the daily/
+    // hourly counter accounts no longer exist - Option A teardown).
+
+    pub fn close_timelock_account(ctx: Context<CloseTimelockAccount>, nonce: u64) -> Result<()> {
+        instructions::admin::close_accounts::close_timelock_account_handler(ctx, nonce)
+    }
+}

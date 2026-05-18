@@ -5,11 +5,16 @@ import { useConnection } from "@solana/wallet-adapter-react";
 import { BN } from "@coral-xyz/anchor";
 import {
   fetchDashboardSnapshot,
+  fetchAllRedemptionRequests,
   formatUsdc,
   formatSilv,
   formatPrice,
   type DashboardSnapshot,
+  type RedemptionRequestView,
+  type RedemptionStatusKind,
 } from "../lib/anchor-client";
+
+const SECS_PER_DAY = 86_400;
 
 export function Dashboard() {
   const { connection } = useConnection();
@@ -17,6 +22,11 @@ export function Dashboard() {
     "dominion-dashboard",
     () => fetchDashboardSnapshot(connection),
     { refreshInterval: 5_000, revalidateOnFocus: false },
+  );
+  const { data: redemptions } = useSWR<RedemptionRequestView[]>(
+    "dominion-redemptions",
+    () => fetchAllRedemptionRequests(connection),
+    { refreshInterval: 10_000, revalidateOnFocus: false },
   );
 
   if (error) {
@@ -30,10 +40,16 @@ export function Dashboard() {
     return <div className="p-8 text-muted">Loading on-chain state…</div>;
   }
 
-  const { cfg, treasuryUsdc, silvSupply, reserveRatioBps } = data;
-  const reserveFloorBps = cfg.treasuryMinReserveBps;
-  const reserveHealthy =
-    reserveRatioBps === null || reserveRatioBps >= reserveFloorBps * 1.1;
+  const {
+    cfg,
+    treasuryUsdc,
+    silvSupply,
+    supplyUtilizationBps,
+    instantBudgetRemainingUsdc,
+    instantWindowExpired,
+    instantWindowNeverStarted,
+    treasuryFloatOk,
+  } = data;
 
   const now = new BN(Math.floor(Date.now() / 1000));
   const mintPauseActive = cfg.mintPausedUntil.gt(now);
@@ -41,27 +57,49 @@ export function Dashboard() {
     ? cfg.mintPausedUntil.sub(now).toNumber()
     : 0;
 
-  // CODEX 2nd-pass M-03: corrected scale.
-  // SILV supply: 6 decimals. Price scale: 1e9 (PRICE_SCALE in oracle.rs).
-  //   total_atoms = supply_atoms * price_scaled  (units: 6dec * 1e9 = 1e15)
-  //   raw_USD     = total_atoms / 1e9            (units: 6dec USDC atoms)
-  //   USD_dollars = raw_USD / 1e6                (units: USD whole)
-  // Combined: divide by 1e9 + 1e6 = 1e15.
+  // SILV notional at the last on-chain recorded price.
+  // supply(6dec) * price(1e9) / 1e15 = whole USD.
   const silvValueUsd = (() => {
-    if (silvSupply.isZero() || cfg.lastRecordedPriceScaled.isZero()) return "$0";
-    const total = silvSupply.mul(cfg.lastRecordedPriceScaled); // 6dec * 1e9 -> 1e15
+    if (silvSupply.isZero() || cfg.lastRecordedPriceScaled.isZero())
+      return "n/a";
+    const total = silvSupply.mul(cfg.lastRecordedPriceScaled);
     const usd = total.div(new BN(10).pow(new BN(15))).toNumber();
     return `~$${usd.toLocaleString()}`;
   })();
 
+  const supplyUtilPct =
+    supplyUtilizationBps === null
+      ? "n/a"
+      : `${(supplyUtilizationBps / 100).toFixed(2)}%`;
+  const supplyHealthy =
+    supplyUtilizationBps === null || supplyUtilizationBps < 9_500; // <95% of cap
+
+  const pendingProposals: { label: string; nonce: BN | null }[] = [
+    { label: "premium mint", nonce: cfg.pendingPremiumMintNonce },
+    { label: "premium redeem", nonce: cfg.pendingPremiumRedeemNonce },
+    { label: "withdraw", nonce: cfg.pendingWithdrawNonce },
+    { label: "treasury float", nonce: cfg.pendingTreasuryFloatNonce },
+    { label: "oracle guards", nonce: cfg.pendingOracleGuardsNonce },
+    { label: "metadata", nonce: cfg.pendingMetadataNonce },
+    { label: "compliance", nonce: cfg.pendingComplianceNonce },
+    { label: "pyth feed", nonce: cfg.pendingPythFeedNonce },
+    { label: "admin timelock", nonce: cfg.pendingAdminTimelockNonce },
+  ];
+  const activePending = pendingProposals.filter((p) => p.nonce !== null);
+
   return (
     <div className="space-y-6">
       {/* Status strip */}
-      <div className="flex gap-4">
+      <div className="flex flex-wrap gap-4">
         <StatusTile
           label="Paused"
           value={cfg.paused ? "YES" : "No"}
           good={!cfg.paused}
+        />
+        <StatusTile
+          label="Redemptions"
+          value={cfg.redemptionsEnabled ? "Enabled" : "DISABLED"}
+          good={cfg.redemptionsEnabled}
         />
         <StatusTile
           label="Mint pause window"
@@ -70,106 +108,211 @@ export function Dashboard() {
         />
         <StatusTile
           label="Active proposals"
-          value={`${cfg.activeProposalCount} / 9`}
-          good={cfg.activeProposalCount < 9}
+          value={`${cfg.activeProposalCount} / 10`}
+          good={cfg.activeProposalCount < 10}
         />
         <StatusTile
-          label="Reserve ratio"
-          value={
-            reserveRatioBps === null
-              ? "N/A"
-              : `${(reserveRatioBps / 100).toFixed(1)}% (floor ${(reserveFloorBps / 100).toFixed(1)}%)`
-          }
-          good={reserveHealthy}
+          label="Treasury vs float"
+          value={treasuryFloatOk ? "OK" : "BELOW FLOOR"}
+          good={treasuryFloatOk}
+        />
+        <StatusTile
+          label="Supply vs cap"
+          value={supplyUtilPct}
+          good={supplyHealthy}
         />
       </div>
 
       {/* Treasury + supply */}
-      <div className="grid grid-cols-2 gap-4">
+      <Section title="Treasury & supply (Option B: 100% physical backing, no on-chain reserve)">
         <Metric title="Treasury USDC" value={`$${formatUsdc(treasuryUsdc)}`} />
         <Metric
           title="SILV supply"
-          value={`${formatSilv(silvSupply)} (${silvValueUsd})`}
+          value={`${formatSilv(silvSupply)} oz (${silvValueUsd})`}
         />
-      </div>
+        <Metric
+          title="Max SILV supply (hard cap)"
+          value={`${formatSilv(cfg.maxSilvSupply)} oz`}
+        />
+        <Metric
+          title="Treasury min float (admin-withdraw floor)"
+          value={`$${formatUsdc(cfg.treasuryMinFloatUsdc)}`}
+        />
+      </Section>
 
       {/* Premium + price */}
-      <div className="grid grid-cols-2 gap-4">
+      <Section title="Pricing">
         <Metric
           title="Mint premium"
-          value={`${(cfg.premiumBpsMint / 100).toFixed(1)}%`}
+          value={`${(cfg.premiumBpsMint / 100).toFixed(2)}%`}
         />
         <Metric
           title="Redeem fee"
-          value={`${(cfg.premiumBpsRedeem / 100).toFixed(1)}%`}
+          value={`${(cfg.premiumBpsRedeem / 100).toFixed(2)}%`}
         />
         <Metric
           title="Last recorded price (on-chain)"
           value={`$${formatPrice(cfg.lastRecordedPriceScaled)}/oz`}
         />
         <Metric
-          title="Reserve check price (slow-tracked)"
-          value={`$${formatPrice(cfg.reserveCheckPriceScaled)}/oz`}
+          title="Last price update"
+          value={
+            cfg.lastPriceUpdateAt.isZero()
+              ? "never"
+              : new Date(
+                  cfg.lastPriceUpdateAt.toNumber() * 1000,
+                ).toLocaleString()
+          }
         />
-      </div>
+      </Section>
 
-      {/* Caps - CODEX 2nd-pass M-03: corrected field names against IDL. */}
-      <div className="grid grid-cols-2 gap-4">
+      {/* Option B redemption routing */}
+      <Section title="Redemption routing & instant budget (D8/D10)">
         <Metric
-          title="Max mint per tx"
-          value={`$${formatUsdc(cfg.maxMintAmountPerTxUsdc)}`}
+          title="Large-redeem threshold (>= forces T+queue)"
+          value={`$${formatUsdc(cfg.largeRedeemThresholdUsdc)}`}
         />
         <Metric
-          title="Max redeem per tx"
-          value={`$${formatUsdc(cfg.maxRedeemAmountPerTxUsdc)}`}
+          title="Instant budget / window"
+          value={`$${formatUsdc(cfg.instantRedeemBudgetUsdc)}`}
         />
         <Metric
-          title="Daily mint cap"
-          value={`$${formatUsdc(cfg.dailyMintCapUsdc)}`}
+          title="Instant window length"
+          value={`${(cfg.instantRedeemWindowSeconds / 3600).toFixed(1)}h`}
         />
         <Metric
-          title="Daily redeem cap"
-          value={`$${formatUsdc(cfg.dailyRedeemCapUsdc)}`}
+          title="Instant used (current window)"
+          value={
+            instantWindowNeverStarted
+              ? "$0 (no instant redeems yet)"
+              : instantWindowExpired
+                ? "$0 (window reset)"
+                : `$${formatUsdc(cfg.instantUsedUsdc)}`
+          }
         />
         <Metric
-          title="Min mint amount"
-          value={`$${formatUsdc(cfg.minMintAmountUsdc)}`}
+          title="Instant budget remaining now"
+          value={`$${formatUsdc(instantBudgetRemainingUsdc)}`}
         />
         <Metric
-          title="Min redeem amount"
-          value={`$${formatUsdc(cfg.minRedeemAmountUsdc)}`}
+          title="Queue delay (T+N)"
+          value={`${(cfg.redeemQueueDelaySeconds / SECS_PER_DAY).toFixed(1)} days`}
+        />
+      </Section>
+
+      {/* Oracle guards */}
+      <Section title="Oracle guards">
+        <Metric
+          title="Max staleness"
+          value={`${cfg.maxStalenessSeconds}s`}
         />
         <Metric
-          title="Hourly redeem cap"
-          value={`${(cfg.hourlyRedeemCapBpsOfSnapshot / 100).toFixed(1)}% of treasury at hour start`}
+          title="Max confidence"
+          value={`${(cfg.maxConfidenceBps / 100).toFixed(2)}%`}
         />
-      </div>
+        <Metric
+          title="Price band"
+          value={`$${formatPrice(cfg.minPriceUsdScaled)} - $${formatPrice(cfg.maxPriceUsdScaled)}`}
+        />
+        <Metric
+          title="Max price delta / decay"
+          value={`${(cfg.maxPriceDeltaBps / 100).toFixed(2)}% / ${(cfg.priceDeltaDecaySeconds / 3600).toFixed(1)}h`}
+        />
+      </Section>
 
       {/* Governance */}
-      <div className="grid grid-cols-2 gap-4">
-        <Metric title="Admin" value={cfg.admin.toBase58().slice(0, 8) + "..."} />
+      <Section title="Governance">
+        <Metric
+          title="Admin (Ops Squads)"
+          value={cfg.admin.toBase58().slice(0, 8) + "…"}
+        />
+        <Metric
+          title="Pending admin"
+          value={
+            cfg.pendingAdmin
+              ? cfg.pendingAdmin.toBase58().slice(0, 8) + "…"
+              : "none"
+          }
+        />
         <Metric
           title="Timelock duration"
           value={`${Math.round(cfg.adminTimelockSeconds / 3600)}h`}
         />
-        <Metric title="Guardians" value={`${cfg.guardianCount}`} />
-        <Metric title="Version" value={`v${cfg.version}`} />
+        <Metric
+          title="Guardians"
+          value={`${cfg.guardianCount} / ${cfg.maxGuardianCount}`}
+        />
+        <Metric title="Schema version" value={`v${cfg.version}`} />
+        <Metric
+          title="Compliance mode"
+          value={cfg.complianceMode ? "ON" : "off"}
+        />
+      </Section>
+
+      {/* Pending timelocked proposals */}
+      <div className="rounded-xl border border-border bg-card p-6">
+        <h3 className="mb-3 text-sm uppercase tracking-wide text-muted">
+          Pending timelocked proposals ({activePending.length})
+        </h3>
+        {activePending.length === 0 ? (
+          <p className="text-sm text-muted">None pending.</p>
+        ) : (
+          <ul className="grid grid-cols-2 gap-2 text-sm md:grid-cols-3">
+            {activePending.map((p) => (
+              <li
+                key={p.label}
+                className="rounded-md border border-border px-3 py-2"
+              >
+                <span className="text-muted">{p.label}</span>{" "}
+                <span className="font-mono">#{p.nonce?.toString()}</span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
+
+      {/* Redemption queue / OTC settle */}
+      <RedemptionQueue requests={redemptions ?? []} />
 
       {/* Actions */}
       <div className="rounded-xl border border-border bg-card p-6">
-        <h3 className="mb-4 text-sm uppercase tracking-wide text-muted">
-          Admin actions (Squads)
+        <h3 className="mb-1 text-sm uppercase tracking-wide text-muted">
+          Admin actions
         </h3>
-        <div className="grid grid-cols-2 gap-2 text-sm">
-          <ActionButton label="Propose premium change" />
+        <p className="mb-4 text-xs text-muted">
+          Instant setters are direct admin txs; timelocked actions create a
+          Squads proposal (24h delay). Squads SDK wiring pending - buttons are
+          placeholders.
+        </p>
+        <div className="mb-2 text-xs uppercase tracking-wide text-muted">
+          Instant (no timelock)
+        </div>
+        <div className="mb-4 grid grid-cols-2 gap-2 text-sm md:grid-cols-3">
+          <ActionButton label="Set redemptions enabled" />
+          <ActionButton label="Set max SILV supply" />
+          <ActionButton label="Set instant redeem budget" />
+          <ActionButton label="Set instant redeem window" />
+          <ActionButton label="Set large-redeem threshold" />
+          <ActionButton label="Set redeem queue delay" />
+        </div>
+        <div className="mb-2 text-xs uppercase tracking-wide text-muted">
+          Timelocked (Squads proposal, 24h)
+        </div>
+        <div className="mb-4 grid grid-cols-2 gap-2 text-sm md:grid-cols-3">
+          <ActionButton label="Propose treasury min float" />
+          <ActionButton label="Propose premium mint" />
+          <ActionButton label="Propose premium redeem" />
           <ActionButton label="Propose withdraw" />
           <ActionButton label="Propose oracle guards" />
-          <ActionButton label="Propose reserve min" />
           <ActionButton label="Propose metadata update" />
           <ActionButton label="Propose compliance toggle" />
           <ActionButton label="Propose Pyth feed migration" />
           <ActionButton label="Propose timelock duration" />
+        </div>
+        <div className="mb-2 text-xs uppercase tracking-wide text-muted">
+          Emergency / ops
+        </div>
+        <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-3">
           <ActionButton label="Pause" danger />
           <ActionButton label="Unpause" />
           <ActionButton label="Add guardian" />
@@ -178,6 +321,139 @@ export function Dashboard() {
           <ActionButton label="Transfer admin" />
         </div>
       </div>
+    </div>
+  );
+}
+
+function RedemptionQueue({
+  requests,
+}: {
+  requests: RedemptionRequestView[];
+}) {
+  const nowSecs = Math.floor(Date.now() / 1000);
+  const pending = requests.filter((r) => r.status === "pending");
+  const claimableOverdue = pending.filter((r) => nowSecs >= r.claimableAt);
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-6">
+      <div className="mb-1 flex items-baseline justify-between">
+        <h3 className="text-sm uppercase tracking-wide text-muted">
+          Redemption queue ({pending.length} pending)
+        </h3>
+        {claimableOverdue.length > 0 && (
+          <span className="text-xs text-danger">
+            {claimableOverdue.length} past claimable - candidate OTC IOUs
+          </span>
+        )}
+      </div>
+      <p className="mb-4 text-xs text-muted">
+        T+N queued redemptions. SILV is already burned; USDC is priced at claim.
+        Requests past their claimable time that the treasury cannot cover are
+        OTC IOUs - settle via admin_settle_redemption_offchain after the desk
+        pays the user.
+      </p>
+      {requests.length === 0 ? (
+        <p className="text-sm text-muted">No redemption requests.</p>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="text-xs uppercase tracking-wide text-muted">
+              <tr>
+                <th className="py-2 pr-4">Owner</th>
+                <th className="py-2 pr-4">SILV</th>
+                <th className="py-2 pr-4">Requested</th>
+                <th className="py-2 pr-4">Claimable</th>
+                <th className="py-2 pr-4">Status</th>
+                <th className="py-2 pr-4">Action</th>
+              </tr>
+            </thead>
+            <tbody className="font-mono">
+              {requests.map((r) => {
+                const overdue =
+                  r.status === "pending" && nowSecs >= r.claimableAt;
+                const claimEta = r.claimableAt - nowSecs;
+                return (
+                  <tr
+                    key={r.pubkey.toBase58()}
+                    className="border-t border-border"
+                  >
+                    <td className="py-2 pr-4">
+                      {r.owner.toBase58().slice(0, 6)}…
+                      {r.owner.toBase58().slice(-4)}
+                    </td>
+                    <td className="py-2 pr-4">{formatSilv(r.amountSilv)}</td>
+                    <td className="py-2 pr-4">
+                      {new Date(r.requestedAt * 1000).toLocaleDateString()}
+                    </td>
+                    <td className="py-2 pr-4">
+                      {r.status !== "pending"
+                        ? "-"
+                        : overdue
+                          ? "now"
+                          : `${Math.ceil(claimEta / 3600)}h`}
+                    </td>
+                    <td className="py-2 pr-4">
+                      <StatusPill status={r.status} overdue={overdue} />
+                    </td>
+                    <td className="py-2 pr-4">
+                      {r.status === "pending" ? (
+                        <button
+                          onClick={() =>
+                            alert(
+                              `Settle offchain for ${r.owner.toBase58()} (nonce ${r.nonce.toString()}): ` +
+                                `builds admin_settle_redemption_offchain via Squads. SDK wiring pending.`,
+                            )
+                          }
+                          className="rounded border border-border px-2 py-1 text-xs transition hover:bg-bg/40"
+                        >
+                          Settle offchain
+                        </button>
+                      ) : (
+                        <span className="text-xs text-muted">-</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatusPill({
+  status,
+  overdue,
+}: {
+  status: RedemptionStatusKind;
+  overdue: boolean;
+}) {
+  if (status === "claimed")
+    return <span className="text-xs text-muted">claimed</span>;
+  if (status === "settledOffchain")
+    return <span className="text-xs text-accent">settled OTC</span>;
+  return (
+    <span className={`text-xs ${overdue ? "text-danger" : "text-white"}`}>
+      {overdue ? "pending (overdue)" : "pending"}
+    </span>
+  );
+}
+
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div>
+      <h3 className="mb-2 text-sm uppercase tracking-wide text-muted">
+        {title}
+      </h3>
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-3">{children}</div>
     </div>
   );
 }
@@ -196,7 +472,9 @@ function StatusTile({
       className={`flex-1 rounded-lg border ${good ? "border-border" : "border-danger"} bg-card p-4`}
     >
       <div className="text-xs uppercase tracking-wide text-muted">{label}</div>
-      <div className={`mt-1 text-lg font-semibold ${good ? "text-white" : "text-danger"}`}>
+      <div
+        className={`mt-1 text-lg font-semibold ${good ? "text-white" : "text-danger"}`}
+      >
         {value}
       </div>
     </div>
@@ -215,11 +493,12 @@ function Metric({ title, value }: { title: string; value: string }) {
 function ActionButton({ label, danger }: { label: string; danger?: boolean }) {
   return (
     <button
-      disabled
       onClick={() =>
-        alert(`${label}: opens modal + builds Squads proposal. Squads SDK integration pending.`)
+        alert(
+          `${label}: opens form + builds the tx (instant) or Squads proposal (timelocked). Squads SDK integration pending.`,
+        )
       }
-      className={`rounded-md border px-3 py-2 text-left transition hover:bg-bg/40 disabled:cursor-not-allowed disabled:opacity-60 ${
+      className={`rounded-md border px-3 py-2 text-left transition hover:bg-bg/40 ${
         danger ? "border-danger text-danger" : "border-border"
       }`}
     >

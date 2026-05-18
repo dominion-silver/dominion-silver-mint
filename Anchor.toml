@@ -7,13 +7,13 @@ resolution = true
 skip-lint = false
 
 [programs.localnet]
-dominion_silver_mint = "J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5"
+dominion_silver_mint = "GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX"
 
 [programs.devnet]
-dominion_silver_mint = "J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5"
+dominion_silver_mint = "GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX"
 
 [programs.mainnet]
-dominion_silver_mint = "J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5"
+dominion_silver_mint = "GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX"
 
 [registry]
 url = "https://api.apr.dev"

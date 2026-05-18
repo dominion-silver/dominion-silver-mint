@@ -1,36 +1,40 @@
 import { PublicKey } from "@solana/web3.js";
 
-// Program ID: replace post-deploy with the real keypair-derived ID.
-export const PROGRAM_ID = new PublicKey("J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5");
+// Program ID: V2 (Option B) fresh devnet deploy 2026-05-18. NOT the V1 id.
+export const PROGRAM_ID = new PublicKey("GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX");
 
 // Token programs.
 export const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 export const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 export const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
-// USDC on Solana mainnet.
-export const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
+// USDC on devnet (Circle's USDC devnet mint) - matches the live V2 devnet deploy.
+// For mainnet swap to: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
+export const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
 
-// SILV mint (to be set post-deploy).
-export const SILV_MINT = new PublicKey("AJxNZeX82pfDbiUXvbe442tX9Vz5XUnfsASvdvG3hNjn");
+// SILV mint - V2 fresh devnet init 2026-05-18 (target/devnet-deployment.json).
+export const SILV_MINT = new PublicKey("4bNYnE1d8XV1W4iJuWVqmxVi5qqvAopvxekifDVvB4Ew");
 
 // Pyth XAG/USD feed.
 export const PYTH_XAG_USD_FEED_ID = "0xf2fb02c32b055c805e7238d628e5e9dadef274376114eb1f012337cabe93871e";
 
 // RPC endpoints.
-export const HELIUS_RPC = process.env.NEXT_PUBLIC_HELIUS_RPC || "https://mainnet.helius-rpc.com/?api-key=YOUR_KEY";
-export const TRITON_RPC = process.env.NEXT_PUBLIC_TRITON_RPC || "https://rpc.triton.one/?api-key=YOUR_KEY";
+// Default = public devnet RPC (no API key required) so the console reads the
+// live V2 devnet deploy out of the box. For mainnet, set NEXT_PUBLIC_HELIUS_RPC.
+export const DEVNET_RPC = "https://api.devnet.solana.com";
+export const HELIUS_RPC = process.env.NEXT_PUBLIC_HELIUS_RPC || DEVNET_RPC;
+export const TRITON_RPC = process.env.NEXT_PUBLIC_TRITON_RPC || DEVNET_RPC;
 
 // PDA seeds.
+// V2 (Option B): daily/hourly seeds removed; redeem_request added.
 export const SEEDS = {
   config: "config",
   treasury: "treasury",
   silvMintAuthority: "silv_mint_authority",
   silvMetadataAuthority: "silv_metadata_authority",
-  daily: "daily",
-  hourly: "hourly",
   timelock: "timelock",
   guardian: "guardian",
+  redeemRequest: "redeem_request",
 } as const;
 
 // UI defaults.

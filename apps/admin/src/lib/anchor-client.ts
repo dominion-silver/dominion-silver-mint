@@ -1,7 +1,8 @@
 /**
- * Admin anchor client.
- * Read-only helpers for the Dominion Silver dashboard. Transaction construction
- * for admin actions routes through the Squads multisig proposer (see squads.ts).
+ * Admin anchor client (V2 / Option B).
+ * Read-only helpers for the Dominion Silver admin console. Transaction
+ * construction for admin actions routes through the Squads multisig proposer
+ * (see squads.ts) and is intentionally NOT built here.
  */
 import { AnchorProvider, Program, BN, Idl } from "@coral-xyz/anchor";
 import { Connection, PublicKey } from "@solana/web3.js";
@@ -10,60 +11,108 @@ import {
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
 import idl from "./idl/dominion_silver_mint.json";
-import { PROGRAM_ID, USDC_MINT, SILV_MINT, SEEDS } from "./constants";
+import { PROGRAM_ID, USDC_MINT, SILV_MINT } from "./constants";
+import { configPda, treasuryPda } from "./pdas";
 
 /**
- * Mirror programs/dominion_silver_mint/src/state/config.rs ConfigAccount.
- *
- * CODEX 2nd-pass M-03: previous version had wrong field names (mintCapPerTx,
- * redeemCapPerTx, dailyMintCap, hourlyRedeemCap) which don't exist on chain.
- * Anchor returned 0/undefined for them. Now uses the actual snake_case_to_camelCase
- * names from the IDL.
+ * Mirror programs/dominion_silver_mint_v2/src/state/config.rs ConfigAccount
+ * (Option B). snake_case -> camelCase exactly as Anchor decodes from the IDL.
+ * Option A fields (mint/redeem/daily/hourly caps, treasury_min_reserve_bps,
+ * reserve_check_price_scaled) are GONE in V2 and removed here.
  */
 export interface ConfigAccount {
+  // Authorities
   admin: PublicKey;
+  pendingAdmin: PublicKey | null;
+  pendingAdminExpiresAt: BN;
+  upgradeAuthorityInfo: PublicKey;
+  // Compliance
+  permanentDelegateExpected: PublicKey;
+  complianceMode: boolean;
+  // Premium
   premiumBpsMint: number;
   premiumBpsRedeem: number;
+  // Oracle
   pythFeedId: number[];
+  pythReceiverProgram: PublicKey;
+  // Pinned token program ids
   usdcMint: PublicKey;
   silvMint: PublicKey;
-  treasury: PublicKey;
-  pythReceiverProgram: PublicKey;
-  paused: boolean;
-  mintPausedUntil: BN;
-  // Caps
-  minMintAmountUsdc: BN;
-  maxMintAmountPerTxUsdc: BN;
-  minRedeemAmountUsdc: BN;
-  maxRedeemAmountPerTxUsdc: BN;
-  dailyMintCapUsdc: BN;
-  dailyRedeemCapUsdc: BN;
-  hourlyRedeemCapBpsOfSnapshot: number;
-  // Reserve + governance
-  treasuryMinReserveBps: number;
-  adminTimelockSeconds: number;
-  reserveCheckPriceScaled: BN;
-  lastRecordedPriceScaled: BN;
+  usdcTreasury: PublicKey;
+  classicTokenProgram: PublicKey;
+  token2022Program: PublicKey;
+  // Oracle guards
+  maxStalenessSeconds: number;
+  maxConfidenceBps: number;
+  minPriceUsdScaled: BN;
+  maxPriceUsdScaled: BN;
+  // Price-delta circuit breaker
+  lastRecordedPriceScaled: BN; // u128, scale 1e9
   lastPriceUpdateAt: BN;
+  maxPriceDeltaBps: number;
+  priceDeltaDecaySeconds: number;
+  priceUpdateMinAmountUsdc: BN;
+  // D2: hard supply cap (atomic SILV, oz * 1e6)
+  maxSilvSupply: BN;
+  // D7: admin-withdraw float floor (atomic USDC)
+  treasuryMinFloatUsdc: BN;
+  // D11: manual redemptions switch
+  redemptionsEnabled: boolean;
+  // D8/D10: routing + rolling-window instant budget
+  largeRedeemThresholdUsdc: BN;
+  instantRedeemBudgetUsdc: BN;
+  instantRedeemWindowSeconds: number;
+  redeemQueueDelaySeconds: number;
+  instantWindowStart: BN;
+  instantUsedUsdc: BN;
+  // D5/D9: queued-redemption nonce
+  nextRedeemRequestNonce: BN;
+  // Timelock + guardians
+  adminTimelockSeconds: number;
+  maxGuardianCount: number;
   guardianCount: number;
+  // Mint pause window
+  mintPausedUntil: BN;
+  // Global pause
+  paused: boolean;
+  // Timelock proposal tracking
+  nextTimelockNonce: BN;
   activeProposalCount: number;
+  // Single-active-per-kind pending nonces
+  pendingPremiumMintNonce: BN | null;
+  pendingPremiumRedeemNonce: BN | null;
+  pendingWithdrawNonce: BN | null;
+  pendingTreasuryFloatNonce: BN | null;
+  pendingOracleGuardsNonce: BN | null;
+  pendingMetadataNonce: BN | null;
+  pendingComplianceNonce: BN | null;
+  pendingPythFeedNonce: BN | null;
+  pendingAdminTimelockNonce: BN | null;
   version: number;
+}
+
+export type RedemptionStatusKind = "pending" | "claimed" | "settledOffchain";
+
+export interface RedemptionRequestView {
+  pubkey: PublicKey;
+  owner: PublicKey;
+  amountSilv: BN;
+  requestedAt: number;
+  claimableAt: number;
+  nonce: BN;
+  status: RedemptionStatusKind;
 }
 
 export interface DashboardSnapshot {
   cfg: ConfigAccount;
   treasuryUsdc: BN;
   silvSupply: BN;
-  // Derived:
-  reserveRatioBps: number | null; // null if supply == 0
-}
-
-function configPda(): PublicKey {
-  return PublicKey.findProgramAddressSync([Buffer.from(SEEDS.config)], PROGRAM_ID)[0];
-}
-
-function treasuryPda(): PublicKey {
-  return PublicKey.findProgramAddressSync([Buffer.from(SEEDS.treasury)], PROGRAM_ID)[0];
+  // Option B derived:
+  supplyUtilizationBps: number | null; // silvSupply / maxSilvSupply, bps
+  instantBudgetRemainingUsdc: BN; // window-aware remaining instant budget
+  instantWindowExpired: boolean; // true => budget effectively reset
+  instantWindowNeverStarted: boolean; // window_start == 0 (no instant redeem ever)
+  treasuryFloatOk: boolean; // treasury >= treasury_min_float_usdc
 }
 
 function getReadOnlyProgram(connection: Connection): Program {
@@ -93,7 +142,9 @@ export async function fetchDashboardSnapshot(
   const program = getReadOnlyProgram(connection);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const cfg = await (program.account as any).configAccount.fetchNullable(configPda());
+  const cfg = await (program.account as any).configAccount.fetchNullable(
+    configPda(),
+  );
   if (!cfg) return null;
 
   const treasuryAta = getAssociatedTokenAddressSync(
@@ -109,57 +160,127 @@ export async function fetchDashboardSnapshot(
   ]);
 
   const treasuryUsdc =
-    balanceInfo.status === "fulfilled" ? new BN(balanceInfo.value.value.amount) : new BN(0);
+    balanceInfo.status === "fulfilled"
+      ? new BN(balanceInfo.value.value.amount)
+      : new BN(0);
   const silvSupply =
-    supplyInfo.status === "fulfilled" ? new BN(supplyInfo.value.value.amount) : new BN(0);
+    supplyInfo.status === "fulfilled"
+      ? new BN(supplyInfo.value.value.amount)
+      : new BN(0);
 
-  // CODEX 2nd-pass M-03: corrected decimal scales.
-  //   SILV supply: 6 decimals (was incorrectly using 9 in this admin app).
-  //   Price scale: 1e9 in oracle.rs::PRICE_SCALE (was incorrectly using 1e6 here).
-  //   USDC: 6 decimals (correct).
-  //
-  // reserveRatioBps = treasuryUsdc_atoms / (silvSupply_atoms * priceScaled / 1e9) * 10_000
-  //   numerator: treasuryUsdc with 6 decimals
-  //   denominator: silvSupply (6dec) * priceScaled (1e9) / 1e9 = expected USDC backing in atomic 6-dec units.
-  let reserveRatioBps: number | null = null;
-  if (!silvSupply.isZero() && !cfg.reserveCheckPriceScaled.isZero()) {
-    const PRICE_SCALE = new BN(10).pow(new BN(9)); // matches oracle.rs PRICE_SCALE
-    const expectedBacking = silvSupply.mul(cfg.reserveCheckPriceScaled).div(PRICE_SCALE);
-    if (!expectedBacking.isZero()) {
-      reserveRatioBps = treasuryUsdc.mul(new BN(10_000)).div(expectedBacking).toNumber();
-    }
+  const c = cfg as ConfigAccount;
+
+  // Supply utilization vs the hard cap (Option B replaces the reserve ratio).
+  let supplyUtilizationBps: number | null = null;
+  if (!c.maxSilvSupply.isZero()) {
+    supplyUtilizationBps = silvSupply
+      .mul(new BN(10_000))
+      .div(c.maxSilvSupply)
+      .toNumber();
   }
 
+  // Window-aware instant budget remaining (mirrors the contract's rolling
+  // window: if now >= window_start + window_seconds the used counter is
+  // logically zero again). The contract bootstraps instant_window_start = 0
+  // and only sets it to `now` on the first instant redeem after expiry, so a
+  // never-redeemed config has start == 0 (treated as "no window yet", not a
+  // reset of a real window - budget is still logically full).
+  const nowSecs = Math.floor(Date.now() / 1000);
+  const instantWindowNeverStarted = c.instantWindowStart.isZero();
+  const windowEnd = c.instantWindowStart
+    .add(new BN(c.instantRedeemWindowSeconds))
+    .toNumber();
+  const instantWindowExpired =
+    !instantWindowNeverStarted && nowSecs >= windowEnd;
+  const usedThisWindow =
+    instantWindowNeverStarted || instantWindowExpired
+      ? new BN(0)
+      : c.instantUsedUsdc;
+  let instantBudgetRemainingUsdc = c.instantRedeemBudgetUsdc.sub(usedThisWindow);
+  if (instantBudgetRemainingUsdc.ltn(0)) {
+    instantBudgetRemainingUsdc = new BN(0);
+  }
+
+  const treasuryFloatOk = treasuryUsdc.gte(c.treasuryMinFloatUsdc);
+
   return {
-    cfg: cfg as ConfigAccount,
+    cfg: c,
     treasuryUsdc,
     silvSupply,
-    reserveRatioBps,
+    supplyUtilizationBps,
+    instantBudgetRemainingUsdc,
+    instantWindowExpired,
+    instantWindowNeverStarted,
+    treasuryFloatOk,
   };
 }
 
+function statusKind(s: unknown): RedemptionStatusKind {
+  const k = Object.keys(s as object)[0];
+  if (k === "claimed") return "claimed";
+  if (k === "settledOffchain") return "settledOffchain";
+  return "pending";
+}
+
 /**
- * Convert a raw u64 BN (6 decimals) into a display-ready USD string.
+ * ALL redemption requests across every user (admin OTC-queue view). The owner
+ * filter is intentionally absent: the admin needs the full Pending list,
+ * especially requests past claimable_at that the on-chain treasury cannot
+ * cover (those become OTC IOUs settled via admin_settle_redemption_offchain).
+ * Sorted oldest-requested first so the operator works the backlog in order.
  */
+export async function fetchAllRedemptionRequests(
+  connection: Connection,
+): Promise<RedemptionRequestView[]> {
+  const program = getReadOnlyProgram(connection);
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const all = await (program.account as any).redemptionRequest.all();
+    return (
+      all
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .map((a: any) => ({
+          pubkey: a.publicKey as PublicKey,
+          owner: a.account.owner as PublicKey,
+          amountSilv: a.account.amountSilv as BN,
+          requestedAt: (a.account.requestedAt as BN).toNumber(),
+          claimableAt: (a.account.claimableAt as BN).toNumber(),
+          nonce: a.account.nonce as BN,
+          status: statusKind(a.account.status),
+        }))
+        .sort(
+          (x: RedemptionRequestView, y: RedemptionRequestView) =>
+            x.requestedAt - y.requestedAt,
+        )
+    );
+  } catch (e) {
+    console.error("fetchAllRedemptionRequests error", e);
+    return [];
+  }
+}
+
+// ---- formatting ----
+
+/** Raw u64 BN (6 decimals) -> display USD string. */
 export function formatUsdc(raw: BN): string {
   const dollars = raw.div(new BN(1_000_000)).toNumber();
   return dollars.toLocaleString("en-US", { maximumFractionDigits: 2 });
 }
 
-/**
- * Convert a raw u64 BN (6 decimals) into a display-ready SILV count string.
- * CODEX 2nd-pass M-03: was 9 decimals, corrected to 6 (matches on-chain Token-2022 mint).
- */
+/** Raw u64 BN (6 decimals) -> display SILV/oz count string. */
 export function formatSilv(raw: BN): string {
-  // Use float division to preserve fractional SILV.
   const silv = raw.toNumber() / 1_000_000;
   return silv.toLocaleString("en-US", { maximumFractionDigits: 4 });
 }
 
 /**
- * Format a scaled price (1e9 = oracle.rs PRICE_SCALE) into "$/oz" display.
- * CODEX 2nd-pass M-03: was 1e6, corrected to 1e9 (matches on-chain oracle).
+ * Scaled price (1e9 = oracle.rs PRICE_SCALE) -> "$/oz" display.
+ * last_recorded_price_scaled is u128 on-chain; BN.toNumber() is safe here
+ * (a silver price ~ 3e10 scaled << 2^53).
  */
 export function formatPrice(scaled: BN): string {
+  if (scaled.isZero()) return "0.0000";
   return (scaled.toNumber() / 1_000_000_000).toFixed(4);
 }
+
+export const PROGRAM_ID_STR = PROGRAM_ID.toBase58();

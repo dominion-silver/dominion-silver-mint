@@ -1,5 +1,10 @@
+# V2 is the active build/deploy crate. V1 is a frozen reference copy of the
+# pre-Option-B contract (commit adeb894) kept for codex diff/review; it is
+# excluded so the `programs/*` set does not yield two crates with the same
+# package name. V1 stays fully readable and diffable.
 [workspace]
-members = ["programs/*"]
+members = ["programs/dominion_silver_mint_v2"]
+exclude = ["programs/dominion_silver_mint_v1"]
 resolver = "2"
 
 [profile.release]

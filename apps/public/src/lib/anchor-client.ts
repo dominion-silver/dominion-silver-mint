@@ -1,16 +1,17 @@
 /**
- * Anchor client wrapper.
- * Provides typed access to the Dominion Silver mint/redeem program.
+ * Anchor client wrapper - V2 (Option B).
  *
- * Anchor 0.31 supports IDL-driven auto-resolution of PDAs and ATAs, so
- * we only pass the accounts that cannot be derived (user wallet, mints,
- * price_update). The resolver fills config, daily, hourly, user_usdc_ata,
- * user_silv_ata, silv_mint_authority, treasury_pda, usdc_treasury, and
- * the token/system programs from IDL seed metadata.
- *
- * Usage:
- *   const tx = await buildMintTx(connection, wallet, { amountUsdc, minSilvOut, priceUpdate });
- *   await wallet.sendTransaction(tx, connection);
+ * Mint: pay USDC -> receive SILV at Pyth XAG/USD * (1 + premium_mint). Bounded
+ *   by a HARD supply cap (no daily/reserve).
+ * Redeem (§4.3): `redeem_silv` is the INSTANT path only. It reverts
+ *   `MustUseQueue` (amount >= large threshold OR rolling-window budget
+ *   exhausted) or `InsufficientTreasury` (treasury can't cover). The client
+ *   pre-flights via config to predict the path and routes:
+ *     - instant      -> buildRedeemTx (Pyth-priced, pays now)
+ *     - queue (T+3)   -> buildRedeemQueuedTx (burns SILV now, NO Pyth)
+ *     - OTC           -> InsufficientTreasury -> contact support
+ *   Queued requests are later claimed via buildClaimRedemptionTx (Pyth-priced
+ *   at claim time, D9).
  */
 import { AnchorProvider, Program, BN, Idl } from "@coral-xyz/anchor";
 import {
@@ -29,45 +30,56 @@ import {
 } from "@solana/spl-token";
 import type { WalletContextState } from "@solana/wallet-adapter-react";
 import idl from "./idl/dominion_silver_mint.json";
-import {
-  USDC_MINT,
-  SILV_MINT,
-  PYTH_XAG_USD_FEED_ID,
-  CU_LIMIT,
-} from "./constants";
+import { USDC_MINT, SILV_MINT, CU_LIMIT } from "./constants";
 import {
   configPda,
   treasuryPda,
-  currentDayEpoch,
-  currentHourEpoch,
+  silvMintAuthorityPda,
+  redemptionRequestPda,
 } from "./pdas";
 
-// ---- types ----
+// ---- types (mirror programs/dominion_silver_mint_v2/src/state/config.rs) ----
 
-// Mirror state/config.rs. Keep in sync if the Rust struct changes.
 export interface ConfigAccount {
   admin: PublicKey;
+  permanentDelegateExpected: PublicKey;
+  complianceMode: boolean;
   premiumBpsMint: number;
   premiumBpsRedeem: number;
-  pythFeedId: number[];
   usdcMint: PublicKey;
   silvMint: PublicKey;
-  treasury: PublicKey;
-  pythReceiver: PublicKey;
+  usdcTreasury: PublicKey;
+  maxStalenessSeconds: number;
+  // Option B economic params:
+  maxSilvSupply: BN;
+  treasuryMinFloatUsdc: BN;
+  redemptionsEnabled: boolean;
+  largeRedeemThresholdUsdc: BN;
+  instantRedeemBudgetUsdc: BN;
+  instantRedeemWindowSeconds: number;
+  redeemQueueDelaySeconds: number;
+  instantWindowStart: BN;
+  instantUsedUsdc: BN;
+  nextRedeemRequestNonce: BN;
   paused: boolean;
   mintPausedUntil: BN;
-  mintCapPerTx: BN;
-  redeemCapPerTx: BN;
-  dailyMintCap: BN;
-  dailyRedeemCap: BN;
-  hourlyRedeemCap: BN;
-  treasuryMinReserveBps: number;
-  adminTimelockSeconds: BN;
-  reserveCheckPriceScaled: BN;
-  lastPriceScaled: BN;
-  guardianCount: number;
+  pendingPremiumMintNonce: BN | null;
   version: number;
 }
+
+export type RedemptionStatusKind = "pending" | "claimed" | "settledOffchain";
+
+export interface RedemptionRequestView {
+  pubkey: PublicKey;
+  owner: PublicKey;
+  amountSilv: BN;
+  requestedAt: number;
+  claimableAt: number;
+  nonce: BN;
+  status: RedemptionStatusKind;
+}
+
+export type RedeemRoute = "instant" | "queue" | "otc" | "disabled";
 
 // ---- provider / program ----
 
@@ -93,11 +105,9 @@ export function getProgram(
   connection: Connection,
   wallet: WalletContextState,
 ): Program {
-  const provider = getAnchorProvider(connection, wallet);
-  return new Program(idl as Idl, provider);
+  return new Program(idl as Idl, getAnchorProvider(connection, wallet));
 }
 
-// Read-only provider for fetches that do not require a wallet.
 function getReadOnlyProgram(connection: Connection): Program {
   const provider = new AnchorProvider(
     connection,
@@ -148,9 +158,6 @@ export async function fetchTreasuryBalance(connection: Connection): Promise<BN> 
   }
 }
 
-/**
- * Total circulating SILV (raw u64 with 6 decimals). Reads the Token-2022 mint supply.
- */
 export async function fetchSilvSupply(connection: Connection): Promise<BN> {
   try {
     const info = await connection.getTokenSupply(SILV_MINT);
@@ -161,41 +168,171 @@ export async function fetchSilvSupply(connection: Connection): Promise<BN> {
 }
 
 /**
- * Compute max redeemable SILV from on-chain treasury and config.
- *   reserve_required = total_silv * price / 1e6 * reserveBps / 10_000
- *   spendable = treasury_usdc - reserve_required
- *   max_silv = spendable * 1e6 / effective_redeem_price
+ * Option B "what can I redeem RIGHT NOW, and how" preview (replaces the
+ * Option A reserve formula). Mirrors redeem_silv.rs §4.3:
+ *   - refresh window client-side (if expired, used = 0);
+ *   - instantBudgetRemaining = max(0, budget - usedThisWindow);
+ *   - a redeem of `usdcOut` is instant iff usdcOut < largeThreshold AND
+ *     usdcOut <= instantBudgetRemaining AND usdcOut <= treasuryBalance.
+ * Returns the max instantly-redeemable USDC. Everything above routes to the
+ * T+3 queue (or OTC if the treasury can't cover a small one).
  */
-export function computeMaxRedeemable(
+export function computeMaxInstantRedeemableUsdc(
+  cfg: ConfigAccount,
   treasuryBalanceUsdc: BN,
-  totalSilvSupply: BN,
-  cfg: Pick<ConfigAccount, "treasuryMinReserveBps" | "premiumBpsRedeem">,
-  silverPriceScaled: BN,
+  nowUnixSecs: number,
 ): BN {
-  const PRICE_DECIMALS = new BN(10).pow(new BN(6));
-  const BPS_DENOM = new BN(10_000);
-  const reserveBps = new BN(cfg.treasuryMinReserveBps);
+  if (!cfg.redemptionsEnabled) return new BN(0);
+  const windowEnd =
+    cfg.instantWindowStart.toNumber() + cfg.instantRedeemWindowSeconds;
+  const windowExpired = nowUnixSecs >= windowEnd;
+  const usedThisWindow = windowExpired ? new BN(0) : cfg.instantUsedUsdc;
+  let budgetRemaining = cfg.instantRedeemBudgetUsdc.sub(usedThisWindow);
+  if (budgetRemaining.ltn(0)) budgetRemaining = new BN(0);
+  // instant-eligible ceiling = min(threshold-1, budgetRemaining, treasury).
+  const thresholdCeil = cfg.largeRedeemThresholdUsdc.gtn(0)
+    ? cfg.largeRedeemThresholdUsdc.sub(new BN(1))
+    : new BN(0);
+  let m = thresholdCeil;
+  if (budgetRemaining.lt(m)) m = budgetRemaining;
+  if (treasuryBalanceUsdc.lt(m)) m = treasuryBalanceUsdc;
+  return m.ltn(0) ? new BN(0) : m;
+}
 
-  const totalUsdcValue = totalSilvSupply
-    .mul(silverPriceScaled)
-    .div(PRICE_DECIMALS);
-  const reserveRequired = totalUsdcValue.mul(reserveBps).div(BPS_DENOM);
+/** Effective redeem price scaled 1e9: oracle * (1 - premiumRedeem/1e4). */
+function effectiveRedeemPriceScaled(
+  silverPriceScaled: BN,
+  premiumBpsRedeem: number,
+): BN {
+  return silverPriceScaled
+    .mul(new BN(10_000 - premiumBpsRedeem))
+    .div(new BN(10_000));
+}
 
-  const spendable = treasuryBalanceUsdc.sub(reserveRequired);
-  if (spendable.ltn(0)) return new BN(0);
+/** usdc_out (6dec) = amount_silv * eff_redeem_price / 1e9 (floor). */
+export function redeemUsdcOut(
+  amountSilv: BN,
+  silverPriceScaled: BN,
+  premiumBpsRedeem: number,
+): BN {
+  const eff = effectiveRedeemPriceScaled(silverPriceScaled, premiumBpsRedeem);
+  return amountSilv.mul(eff).div(new BN(10).pow(new BN(9)));
+}
 
-  const redeemMult = BPS_DENOM.sub(new BN(cfg.premiumBpsRedeem));
-  const effectiveRedeemPrice = silverPriceScaled.mul(redeemMult).div(BPS_DENOM);
+/**
+ * Predict which redeem path a given amount will take, so the UI can tell the
+ * user up-front. The on-chain program is the source of truth (it re-checks);
+ * the client must still gracefully handle an on-send revert (parseRedeemError).
+ */
+export function classifyRedeem(
+  cfg: ConfigAccount,
+  treasuryBalanceUsdc: BN,
+  usdcOut: BN,
+  nowUnixSecs: number,
+): RedeemRoute {
+  if (cfg.paused || !cfg.redemptionsEnabled) return "disabled";
+  if (usdcOut.gte(cfg.largeRedeemThresholdUsdc)) return "queue";
+  const windowEnd =
+    cfg.instantWindowStart.toNumber() + cfg.instantRedeemWindowSeconds;
+  const used = nowUnixSecs >= windowEnd ? new BN(0) : cfg.instantUsedUsdc;
+  if (used.add(usdcOut).gt(cfg.instantRedeemBudgetUsdc)) return "queue";
+  if (treasuryBalanceUsdc.lt(usdcOut)) return "otc";
+  return "instant";
+}
 
-  return spendable.mul(PRICE_DECIMALS).div(effectiveRedeemPrice);
+/** Map an on-chain revert (logs/message) to the user-facing route. */
+export function parseRedeemError(errText: string): RedeemRoute | null {
+  if (/MustUseQueue/.test(errText)) return "queue";
+  if (/InsufficientTreasury/.test(errText)) return "otc";
+  if (/RedemptionsDisabled|Paused/.test(errText)) return "disabled";
+  return null;
+}
+
+/**
+ * Flatten an unknown error into one searchable string, INCLUDING program
+ * logs. Solana `SendTransactionError` carries the human-readable Anchor lines
+ * (`Program log: AnchorError ... Error Code: NonceMismatch ...`) in `.logs`,
+ * not always in `.message`. A nonce-race detector that only reads `.message`
+ * would miss the signal on the preflight-simulation-failure path.
+ */
+export function errorToText(e: unknown): string {
+  if (e == null) return "";
+  const parts: string[] = [];
+  if (e instanceof Error) parts.push(e.message);
+  else if (typeof e === "string") parts.push(e);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const anyE = e as any;
+  if (anyE && typeof anyE === "object") {
+    if (Array.isArray(anyE.logs)) parts.push(anyE.logs.join("\n"));
+    if (anyE.error?.errorCode?.code)
+      parts.push(String(anyE.error.errorCode.code));
+    if (anyE.error?.errorCode?.number != null)
+      parts.push(`number:${anyE.error.errorCode.number}`);
+    if (anyE.transactionMessage) parts.push(String(anyE.transactionMessage));
+    // confirmTransaction's `value.err` (and our attached `onChainErr`) is the
+    // structured `{ InstructionError: [idx, { Custom: <code> }] }` shape.
+    if (anyE.onChainErr != null) {
+      try {
+        parts.push(JSON.stringify(anyE.onChainErr));
+      } catch {
+        parts.push(String(anyE.onChainErr));
+      }
+    }
+  }
+  if (parts.length === 0) {
+    try {
+      parts.push(JSON.stringify(e));
+    } catch {
+      parts.push(String(e));
+    }
+  }
+  return parts.join(" | ");
+}
+
+/**
+ * Codex P2-02 race detector. The global `next_redeem_request_nonce` is shared
+ * by all users; if another user's `redeem_silv_queued` lands between our
+ * config read and our send, our `request_nonce` is stale.
+ *
+ * IMPORTANT (fund-safety): the ONLY safe retry signal is the contract's own
+ * `NonceMismatch`. In `redeem_queued.rs` the `require!(request_nonce ==
+ * config.next_redeem_request_nonce, NonceMismatch)` (lines 99-101) runs BEFORE
+ * the SILV burn (line 112), and `config` is `&mut` so Solana write-lock-
+ * serializes any two queued txs (a same-nonce `init` collision can't precede
+ * the nonce check). So a NonceMismatch revert PROVABLY means nothing was
+ * burned -> a fresh-nonce retry cannot double-burn. `NonceMismatch` is also
+ * this program's own error-variant NAME, so it cannot collide with a generic
+ * `0x0` / "already in use" string emitted by a DIFFERENT program or by a tx
+ * that actually landed+burned (those broad matches were removed: they could
+ * match a landed tx's downstream error and trigger a double-burn retry).
+ *
+ * The three patterns below are the three faithful encodings of the SAME
+ * specific program error (Anchor code 12042 = 0x2f0a = `NonceMismatch`):
+ *  - the symbolic NAME (program logs / AnchorError.message / errorCode.code),
+ *  - the hex `custom program error: 0x2f0a` (SendTransactionError.message on
+ *    the preflight-simulation-failure path, when `.logs` is not attached),
+ *  - the numeric `Custom: 12042` (confirmTransaction's structured `value.err`
+ *    / our attached `onChainErr`, and Anchor `errorCode.number`).
+ * 12042 is in Anchor's user-error range and is THIS program's unique code,
+ * so it cannot collide with a generic `0x0` from another program. All three
+ * denote the pre-burn nonce-check revert, so a fresh-nonce retry is safe.
+ */
+export function isQueuedNonceRaceError(err: unknown): boolean {
+  const t = errorToText(err);
+  return (
+    /\bNonceMismatch\b/.test(t) ||
+    /custom program error:\s*0x2f0a\b/i.test(t) ||
+    /\bCustom"?\s*[:=(]\s*12042\b/.test(t) ||
+    /\bnumber:12042\b/.test(t)
+  );
 }
 
 // ---- transaction builders ----
 
 export interface BuildMintTxArgs {
-  amountUsdc: BN; // 6 decimals (atomic USDC units)
-  minSilvOut: BN; // 6 decimals (atomic SILV units; matches on-chain Token-2022 mint config)
-  priceUpdate: PublicKey; // posted Pyth PriceUpdateV2 account
+  amountUsdc: BN;
+  minSilvOut: BN;
+  priceUpdate: PublicKey;
 }
 
 export async function buildMintTx(
@@ -206,18 +343,11 @@ export async function buildMintTx(
   if (!wallet.publicKey) throw new Error("Wallet not connected");
   const program = getProgram(connection, wallet);
   const user = wallet.publicKey;
-  const dayEpoch = currentDayEpoch();
 
-  // Pre-compute every account ourselves. Anchor 0.31's IDL resolver doesn't
-  // reliably resolve cross-PDA-derived accounts (e.g. usdc_treasury depends
-  // on treasury_pda which itself is a PDA), and silently fails as
-  // "Account `usdcTreasury` not provided".
-  const cfgPda = configPda();
-  const trPda = treasuryPda();
   const usdcTreasuryAta = getAssociatedTokenAddressSync(
     USDC_MINT,
-    trPda,
-    true, // allowOwnerOffCurve = true (PDA can't be on the curve)
+    treasuryPda(),
+    true,
     TOKEN_PROGRAM_ID,
   );
   const userUsdcAta = getAssociatedTokenAddressSync(
@@ -232,31 +362,19 @@ export async function buildMintTx(
     false,
     TOKEN_2022_PROGRAM_ID,
   );
-  // daily PDA: seeds = [b"daily", day_epoch_le_u32]
-  const dayBuf = Buffer.alloc(4);
-  dayBuf.writeUInt32LE(dayEpoch, 0);
-  const [dailyPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("daily"), dayBuf],
-    program.programId,
-  );
-  const [silvMintAuthorityPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("silv_mint_authority")],
-    program.programId,
-  );
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ix = await (program.methods as any)
-    .mintSilv(args.amountUsdc, args.minSilvOut, dayEpoch)
+    .mintSilv(args.amountUsdc, args.minSilvOut)
     .accounts({
-      config: cfgPda,
-      daily: dailyPda,
+      config: configPda(),
       user,
       usdcMint: USDC_MINT,
       silvMint: SILV_MINT,
       usdcTreasury: usdcTreasuryAta,
       userUsdcAta,
       userSilvAta,
-      silvMintAuthority: silvMintAuthorityPda,
+      silvMintAuthority: silvMintAuthorityPda(),
       priceUpdate: args.priceUpdate,
       classicTokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -265,9 +383,6 @@ export async function buildMintTx(
     })
     .instruction();
 
-  // Pre-create the user's SILV ATA (token-2022) and USDC ATA idempotently.
-  // Anchor won't auto-create these; init_if_needed is disabled on this program.
-  // userSilvAta + userUsdcAta were already computed above for the .accounts() call.
   const tx = new Transaction().add(
     ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
     createAssociatedTokenAccountIdempotentInstruction(
@@ -286,7 +401,8 @@ export async function buildMintTx(
     ),
     ix,
   );
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+  const { blockhash, lastValidBlockHeight } =
+    await connection.getLatestBlockhash("confirmed");
   tx.recentBlockhash = blockhash;
   tx.lastValidBlockHeight = lastValidBlockHeight;
   tx.feePayer = user;
@@ -294,11 +410,12 @@ export async function buildMintTx(
 }
 
 export interface BuildRedeemTxArgs {
-  amountSilv: BN; // 6 decimals (atomic SILV units)
-  minUsdcOut: BN; // 6 decimals (atomic USDC units)
+  amountSilv: BN;
+  minUsdcOut: BN;
   priceUpdate: PublicKey;
 }
 
+/** INSTANT redeem path (§4.3). Reverts MustUseQueue / InsufficientTreasury. */
 export async function buildRedeemTx(
   connection: Connection,
   wallet: WalletContextState,
@@ -307,15 +424,10 @@ export async function buildRedeemTx(
   if (!wallet.publicKey) throw new Error("Wallet not connected");
   const program = getProgram(connection, wallet);
   const user = wallet.publicKey;
-  const dayEpoch = currentDayEpoch();
-  const hourEpoch = currentHourEpoch();
 
-  // Pre-compute every account explicitly (same reasons as buildMintTx).
-  const cfgPda = configPda();
-  const trPda = treasuryPda();
   const usdcTreasuryAta = getAssociatedTokenAddressSync(
     USDC_MINT,
-    trPda,
+    treasuryPda(),
     true,
     TOKEN_PROGRAM_ID,
   );
@@ -331,33 +443,19 @@ export async function buildRedeemTx(
     false,
     TOKEN_2022_PROGRAM_ID,
   );
-  const dayBuf = Buffer.alloc(4);
-  dayBuf.writeUInt32LE(dayEpoch, 0);
-  const [dailyPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("daily"), dayBuf],
-    program.programId,
-  );
-  const hourBuf = Buffer.alloc(4);
-  hourBuf.writeUInt32LE(hourEpoch, 0);
-  const [hourlyPda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("hourly"), hourBuf],
-    program.programId,
-  );
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ix = await (program.methods as any)
-    .redeemSilv(args.amountSilv, args.minUsdcOut, dayEpoch, hourEpoch)
+    .redeemSilv(args.amountSilv, args.minUsdcOut)
     .accounts({
-      config: cfgPda,
-      daily: dailyPda,
-      hourly: hourlyPda,
+      config: configPda(),
       user,
       usdcMint: USDC_MINT,
       silvMint: SILV_MINT,
       usdcTreasury: usdcTreasuryAta,
       userUsdcAta,
       userSilvAta,
-      treasuryPda: trPda,
+      treasuryPda: treasuryPda(),
       priceUpdate: args.priceUpdate,
       classicTokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
@@ -385,19 +483,175 @@ export async function buildRedeemTx(
   return tx;
 }
 
+export interface BuildRedeemQueuedTxArgs {
+  amountSilv: BN;
+  /** read from config.nextRedeemRequestNonce immediately before building */
+  requestNonce: BN;
+}
+
+/**
+ * QUEUED redeem: burns SILV NOW, creates a RedemptionRequest PDA. No Pyth
+ * (priced at claim, D9). No USDC moves now. Single wallet popup.
+ */
+export async function buildRedeemQueuedTx(
+  connection: Connection,
+  wallet: WalletContextState,
+  args: BuildRedeemQueuedTxArgs,
+): Promise<Transaction> {
+  if (!wallet.publicKey) throw new Error("Wallet not connected");
+  const program = getProgram(connection, wallet);
+  const user = wallet.publicKey;
+
+  const userSilvAta = getAssociatedTokenAddressSync(
+    SILV_MINT,
+    user,
+    false,
+    TOKEN_2022_PROGRAM_ID,
+  );
+  const reqPda = redemptionRequestPda(
+    user,
+    BigInt(args.requestNonce.toString()),
+  );
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ix = await (program.methods as any)
+    .redeemSilvQueued(args.amountSilv, args.requestNonce)
+    .accounts({
+      config: configPda(),
+      user,
+      silvMint: SILV_MINT,
+      userSilvAta,
+      redemptionRequest: reqPda,
+      token2022Program: TOKEN_2022_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction();
+
+  const tx = new Transaction().add(
+    ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
+    ix,
+  );
+  const { blockhash, lastValidBlockHeight } =
+    await connection.getLatestBlockhash("confirmed");
+  tx.recentBlockhash = blockhash;
+  tx.lastValidBlockHeight = lastValidBlockHeight;
+  tx.feePayer = user;
+  return tx;
+}
+
+export interface BuildClaimRedemptionTxArgs {
+  request: RedemptionRequestView;
+  priceUpdate: PublicKey;
+}
+
+/**
+ * Claim a matured queued request. Priced at the CLAIM oracle (D9). Reverts
+ * InsufficientTreasury if the treasury can't cover (request stays Pending =
+ * on-chain IOU, admin settles OTC).
+ */
+export async function buildClaimRedemptionTx(
+  connection: Connection,
+  wallet: WalletContextState,
+  args: BuildClaimRedemptionTxArgs,
+): Promise<Transaction> {
+  if (!wallet.publicKey) throw new Error("Wallet not connected");
+  const program = getProgram(connection, wallet);
+  const owner = wallet.publicKey;
+
+  const usdcTreasuryAta = getAssociatedTokenAddressSync(
+    USDC_MINT,
+    treasuryPda(),
+    true,
+    TOKEN_PROGRAM_ID,
+  );
+  const ownerUsdcAta = getAssociatedTokenAddressSync(
+    USDC_MINT,
+    owner,
+    false,
+    TOKEN_PROGRAM_ID,
+  );
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ix = await (program.methods as any)
+    .claimRedemption()
+    .accounts({
+      config: configPda(),
+      owner,
+      redemptionRequest: args.request.pubkey,
+      usdcMint: USDC_MINT,
+      usdcTreasury: usdcTreasuryAta,
+      ownerUsdcAta,
+      treasuryPda: treasuryPda(),
+      priceUpdate: args.priceUpdate,
+      classicTokenProgram: TOKEN_PROGRAM_ID,
+      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction();
+
+  const tx = new Transaction().add(
+    ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
+    createAssociatedTokenAccountIdempotentInstruction(
+      owner,
+      ownerUsdcAta,
+      owner,
+      USDC_MINT,
+      TOKEN_PROGRAM_ID,
+    ),
+    ix,
+  );
+  const { blockhash, lastValidBlockHeight } =
+    await connection.getLatestBlockhash("confirmed");
+  tx.recentBlockhash = blockhash;
+  tx.lastValidBlockHeight = lastValidBlockHeight;
+  tx.feePayer = owner;
+  return tx;
+}
+
+function statusKind(s: unknown): RedemptionStatusKind {
+  const k = Object.keys(s as object)[0];
+  if (k === "claimed") return "claimed";
+  if (k === "settledOffchain") return "settledOffchain";
+  return "pending";
+}
+
+/** All of `owner`'s redemption requests (owner is the 1st field after the 8B disc). */
+export async function fetchRedemptionRequests(
+  connection: Connection,
+  owner: PublicKey,
+): Promise<RedemptionRequestView[]> {
+  const program = getReadOnlyProgram(connection);
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const all = await (program.account as any).redemptionRequest.all([
+      { memcmp: { offset: 8, bytes: owner.toBase58() } },
+    ]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return all.map((a: any) => ({
+      pubkey: a.publicKey as PublicKey,
+      owner: a.account.owner as PublicKey,
+      amountSilv: a.account.amountSilv as BN,
+      requestedAt: (a.account.requestedAt as BN).toNumber(),
+      claimableAt: (a.account.claimableAt as BN).toNumber(),
+      nonce: a.account.nonce as BN,
+      status: statusKind(a.account.status),
+    }));
+  } catch (e) {
+    console.error("fetchRedemptionRequests error", e);
+    return [];
+  }
+}
+
 // ---- parsing ----
 
 export function parseUsdcAmount(input: string): BN {
-  // USDC has 6 decimals
   const [whole = "0", frac = ""] = input.split(".");
   const fracPadded = (frac + "000000").slice(0, 6);
   return new BN(whole).mul(new BN(1_000_000)).add(new BN(fracPadded || "0"));
 }
 
 export function parseSilvAmount(input: string): BN {
-  // SILV has 6 decimals (matches math.rs assumption + on-chain mint).
   const [whole = "0", frac = ""] = input.split(".");
   const fracPadded = (frac + "000000").slice(0, 6);
   return new BN(whole).mul(new BN(1_000_000)).add(new BN(fracPadded || "0"));
 }
-

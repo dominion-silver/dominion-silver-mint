@@ -1,0 +1,30 @@
+[package]
+name = "dominion_silver_mint"
+version = "0.1.0"
+description = "Dominion Silver mint/redeem on Solana"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "dominion_silver_mint"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+# CODEX P0-02: dev-only timelock-bypass hatches (dev_set_max_staleness /
+# dev_set_premiums) are compiled ONLY under this feature. It is NOT in
+# `default`, so the standard `cargo-build-sbf` (release/deploy) build and the
+# generated IDL do NOT contain them. Devnet testing builds with
+# `--features dev-hatch`. Release/mainnet/CI builds MUST NOT pass it.
+dev-hatch = []
+default = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
+anchor-spl = { version = "0.31.1", features = ["token", "token_2022", "associated_token"] }
+pyth-solana-receiver-sdk = "0.6.0"
+spl-token-2022 = { version = "7.0", features = ["no-entrypoint"] }
+spl-token-metadata-interface = "0.6"

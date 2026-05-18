@@ -13,18 +13,29 @@ import { DEFAULT_SLIPPAGE_BPS, REFRESH_INTERVAL_MS } from "@/lib/constants";
 import {
   fetchConfig,
   fetchTreasuryBalance,
-  fetchSilvSupply,
-  computeMaxRedeemable,
+  computeMaxInstantRedeemableUsdc,
+  redeemUsdcOut,
+  classifyRedeem,
+  parseRedeemError,
+  isQueuedNonceRaceError,
+  errorToText,
+  fetchRedemptionRequests,
   buildMintTx,
   buildRedeemTx,
+  buildRedeemQueuedTx,
+  buildClaimRedemptionTx,
   parseUsdcAmount,
   parseSilvAmount,
+  type RedeemRoute,
+  type RedemptionRequestView,
 } from "@/lib/anchor-client";
 import { postPythAndExecuteConsumer } from "@/lib/pyth-posting";
 import { toast } from "@/components/Toaster";
 import { recordTxKind } from "@/components/TransactionHistory";
 
 type Mode = "mint" | "redeem";
+
+const OTC_EMAIL = "otc@dominion.market";
 
 export function MintRedeemCard() {
   const wallet = useWallet();
@@ -35,23 +46,23 @@ export function MintRedeemCard() {
     revalidateOnFocus: false,
   });
 
-  // On-chain config: premium bps, paused, reserve bps, etc.
   const { data: cfg } = useSWR("onchain-config", () => fetchConfig(connection), {
     refreshInterval: 30_000,
     revalidateOnFocus: false,
   });
 
-  // Treasury USDC + total SILV supply. Refreshed alongside config.
-  const { data: liquidity } = useSWR(
-    cfg ? "onchain-liquidity" : null,
-    async () => {
-      const [treasury, supply] = await Promise.all([
-        fetchTreasuryBalance(connection),
-        fetchSilvSupply(connection),
-      ]);
-      return { treasury, supply };
-    },
+  // Treasury USDC (Option B: drives instant-redeem availability, not a reserve).
+  const { data: treasury } = useSWR(
+    cfg ? "onchain-treasury" : null,
+    () => fetchTreasuryBalance(connection),
     { refreshInterval: 30_000, revalidateOnFocus: false },
+  );
+
+  // The user's queued redemption requests (Pending panel).
+  const { data: requests, mutate: refreshRequests } = useSWR(
+    wallet.publicKey ? `redemptions-${wallet.publicKey.toBase58()}` : null,
+    () => fetchRedemptionRequests(connection, wallet.publicKey!),
+    { refreshInterval: 15_000, revalidateOnFocus: false },
   );
 
   const [mode, setMode] = useState<Mode>("mint");
@@ -59,15 +70,8 @@ export function MintRedeemCard() {
   const [slippageBps, setSlippageBps] = useState<number>(DEFAULT_SLIPPAGE_BPS);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-
-  // FE-H10: useRef-backed in-flight guard. setSubmitting(true) only takes
-  // effect after React commits (microtask boundary), so a same-frame
-  // double-click can pass through. The ref is synchronous.
   const inFlight = useRef(false);
 
-  // Clear any stale error when the user switches mode. Tx-success indicator
-  // lives in the Toaster (transient) and TransactionHistory (persistent).
-  // M6 nit: skip on first mount where state already matches initial values.
   const isFirstRender = useRef(true);
   useEffect(() => {
     if (isFirstRender.current) {
@@ -78,17 +82,8 @@ export function MintRedeemCard() {
     setAmount("");
   }, [mode]);
 
-  // Premiums come from on-chain config when loaded. Fall back to conservative
-  // launch defaults (10% mint, 2% redeem) while we wait for the RPC round-trip.
   const premiumBpsMint = cfg?.premiumBpsMint ?? 1000;
   const premiumBpsRedeem = cfg?.premiumBpsRedeem ?? 200;
-
-  const maxRedeemableSilv = useMemo(() => {
-    if (!cfg || !liquidity || !price) return null;
-    // Pyth price in USD scaled to 1e6.
-    const priceScaled = new BN(Math.round(price.priceUsd * 1_000_000));
-    return computeMaxRedeemable(liquidity.treasury, liquidity.supply, cfg, priceScaled);
-  }, [cfg, liquidity, price]);
 
   const preview = useMemo(() => {
     if (!price || !amount) return null;
@@ -99,54 +94,73 @@ export function MintRedeemCard() {
       const out = num / effPrice;
       const minOut = out * (1 - slippageBps / 10_000);
       return { effPrice, out, minOut, inLabel: "USDC", outLabel: "SILV" };
-    } else {
-      const effPrice = effectiveRedeemPrice(price.priceUsd, premiumBpsRedeem);
-      const out = num * effPrice;
-      const minOut = out * (1 - slippageBps / 10_000);
-      return { effPrice, out, minOut, inLabel: "SILV", outLabel: "USDC" };
     }
+    const effPrice = effectiveRedeemPrice(price.priceUsd, premiumBpsRedeem);
+    const out = num * effPrice;
+    const minOut = out * (1 - slippageBps / 10_000);
+    return { effPrice, out, minOut, inLabel: "SILV", outLabel: "USDC" };
   }, [price, amount, mode, slippageBps, premiumBpsMint, premiumBpsRedeem]);
 
-  const maxRedeemableDisplay = useMemo(() => {
-    if (!maxRedeemableSilv) return null;
-    // SILV has 6 decimals (matches math.rs + on-chain mint config).
-    // Use float division to preserve fractional SILV.
-    return maxRedeemableSilv.toNumber() / 1_000_000;
-  }, [maxRedeemableSilv]);
+  // Option B: classify the redeem route (instant / queue / otc / disabled)
+  // for the entered amount, so the UI tells the user up-front.
+  const nowSecs = Math.floor(Date.now() / 1000);
+  const redeemUsdcOutBn = useMemo(() => {
+    if (mode !== "redeem" || !price || !amount) return null;
+    const n = parseFloat(amount);
+    if (isNaN(n) || n <= 0) return null;
+    const priceScaled1e9 = new BN(Math.round(price.priceUsd * 1e9));
+    return redeemUsdcOut(
+      parseSilvAmount(amount),
+      priceScaled1e9,
+      premiumBpsRedeem,
+    );
+  }, [mode, price, amount, premiumBpsRedeem]);
 
-  // User wallet balances (USDC + SILV) for display.
+  const redeemRoute: RedeemRoute | null = useMemo(() => {
+    if (mode !== "redeem" || !cfg || !treasury || !redeemUsdcOutBn) return null;
+    return classifyRedeem(cfg, treasury, redeemUsdcOutBn, nowSecs);
+  }, [mode, cfg, treasury, redeemUsdcOutBn, nowSecs]);
+
+  // Max instantly-redeemable, shown as USDC (and approx SILV via price).
+  const maxInstant = useMemo(() => {
+    if (!cfg || !treasury) return null;
+    const usdc = computeMaxInstantRedeemableUsdc(cfg, treasury, nowSecs);
+    const usdcNum = usdc.toNumber() / 1e6;
+    const silvApprox =
+      price && price.priceUsd > 0
+        ? usdcNum / effectiveRedeemPrice(price.priceUsd, premiumBpsRedeem)
+        : null;
+    return { usdcNum, silvApprox };
+  }, [cfg, treasury, nowSecs, price, premiumBpsRedeem]);
+
   const { data: balances } = useSWR(
     wallet.publicKey ? `wallet-balances-${wallet.publicKey.toBase58()}` : null,
     async () => {
       if (!wallet.publicKey) return null;
-      const usdcAta = (await import("@solana/spl-token")).getAssociatedTokenAddressSync(
-        (await import("@/lib/constants")).USDC_MINT,
+      const spl = await import("@solana/spl-token");
+      const consts = await import("@/lib/constants");
+      const usdcAta = spl.getAssociatedTokenAddressSync(
+        consts.USDC_MINT,
         wallet.publicKey,
         false,
-        (await import("@/lib/constants")).TOKEN_PROGRAM_ID,
+        consts.TOKEN_PROGRAM_ID,
       );
-      const silvAta = (await import("@solana/spl-token")).getAssociatedTokenAddressSync(
-        (await import("@/lib/constants")).SILV_MINT,
+      const silvAta = spl.getAssociatedTokenAddressSync(
+        consts.SILV_MINT,
         wallet.publicKey,
         false,
-        (await import("@/lib/constants")).TOKEN_2022_PROGRAM_ID,
+        consts.TOKEN_2022_PROGRAM_ID,
       );
-      // FE-L17: distinguish "ATA missing" (no balance, normal) from RPC error.
-      // We test the wallet's pubkey via getAccountInfo: if pubkey resolves
-      // but ATA fetch threw, that's an RPC error. If ATA returns an empty
-      // balance object, the user has no balance (still healthy).
       const settle = async (
         p: Promise<{ value: { uiAmountString?: string | null } }>,
-      ): Promise<{ value: string; missing: boolean }> => {
+      ): Promise<string> => {
         try {
           const r = await p;
-          return { value: r.value.uiAmountString ?? "0", missing: false };
+          return r.value.uiAmountString ?? "0";
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
-          // Token account not found = ATA doesn't exist yet; not an error.
-          if (msg.includes("could not find account") || msg.includes("not found")) {
-            return { value: "0", missing: true };
-          }
+          if (msg.includes("could not find account") || msg.includes("not found"))
+            return "0";
           throw e;
         }
       };
@@ -155,7 +169,7 @@ export function MintRedeemCard() {
           settle(connection.getTokenAccountBalance(usdcAta)),
           settle(connection.getTokenAccountBalance(silvAta)),
         ]);
-        return { usdc: u.value, silv: s.value, error: false };
+        return { usdc: u, silv: s, error: false };
       } catch {
         return { usdc: "0", silv: "0", error: true };
       }
@@ -163,117 +177,226 @@ export function MintRedeemCard() {
     { refreshInterval: REFRESH_INTERVAL_MS, revalidateOnFocus: false },
   );
 
-  // SOL balance for fee preflight. EE-H3: surface insufficient SOL early
-  // with a clear message instead of letting the first sendRawTransaction
-  // fail with a cryptic "Attempt to debit account" error.
   const { data: solBalance } = useSWR(
     wallet.publicKey ? `wallet-sol-${wallet.publicKey.toBase58()}` : null,
     async () => {
       if (!wallet.publicKey) return 0;
       try {
-        const lamports = await connection.getBalance(wallet.publicKey, "confirmed");
-        return lamports / 1_000_000_000;
+        return (
+          (await connection.getBalance(wallet.publicKey, "confirmed")) / 1e9
+        );
       } catch {
         return null;
       }
     },
     { refreshInterval: REFRESH_INTERVAL_MS, revalidateOnFocus: false },
   );
-  const SOL_FOR_FEES_MIN = 0.02; // 0.012 typical + headroom
-  const insufficientSol = solBalance !== null && solBalance !== undefined && solBalance < SOL_FOR_FEES_MIN;
+  const SOL_FOR_FEES_MIN = 0.02;
+  const insufficientSol =
+    solBalance !== null &&
+    solBalance !== undefined &&
+    solBalance < SOL_FOR_FEES_MIN;
 
-  // FE-H4: when config still loading (maxRedeemableDisplay === null), block
-  // the redeem submit. Otherwise the user can submit before we know the
-  // limit and the tx reverts on-chain.
-  const overRedeemable =
-    mode === "redeem" &&
-    !!amount &&
-    parseFloat(amount) > 0 &&
-    (maxRedeemableDisplay === null || parseFloat(amount) > maxRedeemableDisplay);
-
-  // FE-H3: explicit boolean coercion. The previous form returned the cfg
-  // object (truthy) instead of `true` when the second branch fired,
-  // which worked at runtime via !! but had a wrong intermediate type.
   const paused: boolean = !!(
     cfg?.paused ||
     (cfg &&
       mode === "mint" &&
       cfg.mintPausedUntil.gt(new BN(Math.floor(Date.now() / 1000))))
   );
+  const redemptionsOff = !!(mode === "redeem" && cfg && !cfg.redemptionsEnabled);
+
+  function afterTx(sig: string, label: string) {
+    recordTxKind(sig, mode);
+    setTimeout(() => {
+      if (typeof window !== "undefined") window.__dominionHistoryRefresh?.();
+    }, 1500);
+    toast({
+      message: `${label} confirmed`,
+      variant: "success",
+      href: `https://solscan.io/tx/${sig}?cluster=devnet`,
+      hrefLabel: "View on Solscan",
+    });
+    setAmount("");
+  }
 
   async function handleSubmit() {
-    if (inFlight.current) return; // FE-H10 same-frame double-click guard
+    if (inFlight.current) return;
     inFlight.current = true;
     setErrorMsg(null);
-    if (!wallet.publicKey || !preview) {
+    if (!wallet.publicKey || !preview || !cfg) {
       inFlight.current = false;
       return;
     }
     if (insufficientSol) {
       inFlight.current = false;
       setErrorMsg(
-        `Need at least ${SOL_FOR_FEES_MIN} SOL for transaction fees (you have ${(solBalance ?? 0).toFixed(4)}). Top up at faucet.solana.com (devnet).`,
+        `Need at least ${SOL_FOR_FEES_MIN} SOL for fees (you have ${(solBalance ?? 0).toFixed(4)}).`,
       );
       return;
     }
     setSubmitting(true);
     try {
-      // Single-popup flow: postPythAndExecuteConsumer batches the 1-2 Pyth
-      // post txs PLUS our mint/redeem tx into a single signAllTransactions
-      // call. Phantom shows ONE combined approval. User clicks once.
-      // We still submit 2-3 distinct on-chain txs (Pyth size limit forces
-      // splitting) but the human-facing friction drops from 3 clicks to 1.
-      setErrorMsg("Preparing transaction batch...");
-      const result = await postPythAndExecuteConsumer(
-        connection,
-        wallet,
-        async (priceUpdate) => {
-          if (mode === "mint") {
-            const amountUsdc = parseUsdcAmount(amount);
-            const minSilvOut = preview ? parseSilvAmount(preview.minOut.toFixed(6)) : new BN(0);
-            return buildMintTx(connection, wallet, { amountUsdc, minSilvOut, priceUpdate });
-          } else {
-            const amountSilv = parseSilvAmount(amount);
-            const minUsdcOut = preview ? parseUsdcAmount(preview.minOut.toFixed(6)) : new BN(0);
-            return buildRedeemTx(connection, wallet, { amountSilv, minUsdcOut, priceUpdate });
+      if (mode === "mint") {
+        setErrorMsg("Preparing transaction...");
+        const r = await postPythAndExecuteConsumer(
+          connection,
+          wallet,
+          (priceUpdate) =>
+            buildMintTx(connection, wallet, {
+              amountUsdc: parseUsdcAmount(amount),
+              minSilvOut: parseSilvAmount(preview.minOut.toFixed(6)),
+              priceUpdate,
+            }),
+        );
+        setErrorMsg(null);
+        afterTx(r.consumerSig, "Mint");
+      } else {
+        // Redeem routing (Option B §4.3).
+        const route = redeemRoute;
+        if (route === "disabled") {
+          throw new Error(
+            cfg.paused
+              ? "Protocol paused. Redemptions are temporarily halted."
+              : "Redemptions are currently disabled by the admin.",
+          );
+        }
+        if (route === "otc") {
+          throw new Error(
+            `Treasury can't cover this on-chain right now. For this size, redeem via the OTC desk: ${OTC_EMAIL} (physical-silver settlement).`,
+          );
+        }
+        if (route === "queue") {
+          // Burn SILV now, claim USDC after T+3 at the price then. 1 popup,
+          // no Pyth. Codex P2-02: next_redeem_request_nonce is global, so a
+          // concurrent queued redeem can stale our nonce. The ONLY safe retry
+          // signal is the contract's `NonceMismatch`, which provably reverts
+          // BEFORE any SILV burn (redeem_queued.rs:99-101 require! precedes
+          // the burn at :112; `config` is &mut so txs are write-serialized).
+          // Each attempt reads a FRESH config (never the stale preflight cfg).
+          // The amount is snapshotted ONCE so a mid-retry input edit cannot
+          // change what gets burned vs what the user approved.
+          const MAX_QUEUE_ATTEMPTS = 4;
+          const amountSilvToBurn = parseSilvAmount(amount);
+          let queued: { sig: string; delaySecs: number } | null = null;
+          let lastErr: unknown = null;
+          for (let attempt = 1; attempt <= MAX_QUEUE_ATTEMPTS; attempt++) {
+            const freshCfg = await fetchConfig(connection);
+            if (!freshCfg) throw new Error("Could not read protocol config.");
+            setErrorMsg(
+              attempt === 1
+                ? "Submitting queued redemption (burns SILV now)..."
+                : `Another redemption was queued first - retrying (${attempt}/${MAX_QUEUE_ATTEMPTS})...`,
+            );
+            try {
+              const tx = await buildRedeemQueuedTx(connection, wallet, {
+                amountSilv: amountSilvToBurn,
+                requestNonce: freshCfg.nextRedeemRequestNonce,
+              });
+              const signed = await wallet.signTransaction!(tx);
+              const sig = await connection.sendRawTransaction(
+                signed.serialize(),
+                { skipPreflight: false, maxRetries: 3 },
+              );
+              const conf = await connection.confirmTransaction(
+                {
+                  signature: sig,
+                  blockhash: tx.recentBlockhash!,
+                  lastValidBlockHeight: tx.lastValidBlockHeight!,
+                },
+                "confirmed",
+              );
+              // confirmTransaction resolves on INCLUSION, not success. A
+              // landed-but-reverted tx has a non-null err here. Never treat
+              // that as success: fetch the program logs (carry the
+              // `Error Code: NonceMismatch` line) and route it through the
+              // same retry/throw decision as a thrown error.
+              if (conf.value?.err != null) {
+                const txInfo = await connection
+                  .getTransaction(sig, {
+                    commitment: "confirmed",
+                    maxSupportedTransactionVersion: 0,
+                  })
+                  .catch(() => null);
+                const onChainErr = Object.assign(
+                  new Error("Queued redemption reverted on-chain"),
+                  {
+                    logs: txInfo?.meta?.logMessages ?? [],
+                    onChainErr: conf.value.err,
+                  },
+                );
+                throw onChainErr;
+              }
+              queued = {
+                sig,
+                delaySecs: freshCfg.redeemQueueDelaySeconds ?? 259200,
+              };
+              break;
+            } catch (qe) {
+              lastErr = qe;
+              // Only the contract's NonceMismatch is retryable (provably
+              // pre-burn). Anything else (user-rejected, insufficient SILV,
+              // paused mid-flight, any other on-chain revert) bubbles with
+              // its real message - never a false "queued" success.
+              if (
+                !isQueuedNonceRaceError(qe) ||
+                attempt === MAX_QUEUE_ATTEMPTS
+              ) {
+                throw qe;
+              }
+            }
           }
-        },
-      );
-      setErrorMsg(null);
-      const sig = result.consumerSig;
-
-      // Label this sig in localStorage so TransactionHistory shows MINT/REDEEM
-      // immediately without needing a follow-up getParsedTransaction RPC call.
-      recordTxKind(sig, mode);
-
-      // FE-C2: schedule a delayed second history refresh to catch the case
-      // where the new sig isn't yet indexed by getSignaturesForAddress
-      // immediately after confirmation (RPC index lag, ~500ms-1s).
-      setTimeout(() => {
-        if (typeof window !== "undefined") window.__dominionHistoryRefresh?.();
-      }, 1500);
-
-      // Surface success via toast (transient) + history component (persistent).
-      toast({
-        message: `${mode === "mint" ? "Mint" : "Redeem"} confirmed`,
-        variant: "success",
-        href: `https://solscan.io/tx/${sig}?cluster=devnet`,
-        hrefLabel: "View on Solscan",
-      });
-      setAmount("");
-
-      // We intentionally do NOT call result.close() here. Closing the
-      // priceUpdate account would require ANOTHER wallet popup (~0.008 SOL
-      // of rent reclaimed). Trade-off: 1 popup for the whole flow vs.
-      // ~$0.001 of leaked rent per op.
-      // TODO: bundle the close ix into the next mint/redeem so the rent is
-      // reclaimed for free, OR add a "Recover rent" admin button later.
+          if (!queued) {
+            throw lastErr instanceof Error
+              ? lastErr
+              : new Error("Queued redemption failed after retries.");
+          }
+          setErrorMsg(null);
+          recordTxKind(queued.sig, "redeem");
+          toast({
+            message: `Queued. Claimable in ~${Math.round(queued.delaySecs / 86400)} days.`,
+            variant: "success",
+            href: `https://solscan.io/tx/${queued.sig}?cluster=devnet`,
+            hrefLabel: "View on Solscan",
+          });
+          setAmount("");
+          refreshRequests();
+        } else {
+          // Instant path (Pyth-priced).
+          setErrorMsg("Preparing transaction...");
+          const r = await postPythAndExecuteConsumer(
+            connection,
+            wallet,
+            (priceUpdate) =>
+              buildRedeemTx(connection, wallet, {
+                amountSilv: parseSilvAmount(amount),
+                minUsdcOut: parseUsdcAmount(preview.minOut.toFixed(6)),
+                priceUpdate,
+              }),
+          );
+          setErrorMsg(null);
+          afterTx(r.consumerSig, "Redeem");
+        }
+      }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      setErrorMsg(msg);
-      // Surface a short error toast too (helpful when the user has scrolled).
+      // If an instant redeem reverted because the budget filled / treasury
+      // ran dry between preflight and send, guide the user to the right path.
+      // Classify on the FLATTENED text (message + program logs + structured
+      // err), not just `.message`: a confirmed-but-reverted tx carries the
+      // signal in logs/onChainErr, so the OTC/queue reroute hint still works.
+      const reroute =
+        mode === "redeem" ? parseRedeemError(errorToText(e)) : null;
+      const friendly =
+        reroute === "queue"
+          ? "Instant budget just filled. Re-submit: it will route to the T+3 queue."
+          : reroute === "otc"
+            ? `Treasury can't cover this now. Redeem via OTC: ${OTC_EMAIL}.`
+            : reroute === "disabled"
+              ? "Redemptions are disabled / paused."
+              : msg;
+      setErrorMsg(friendly);
       toast({
-        message: `${mode === "mint" ? "Mint" : "Redeem"} failed: ${msg.split("\n")[0].slice(0, 140)}`,
+        message: `${mode === "mint" ? "Mint" : "Redeem"} failed: ${friendly.split("\n")[0].slice(0, 140)}`,
         variant: "error",
       });
     } finally {
@@ -282,46 +405,76 @@ export function MintRedeemCard() {
     }
   }
 
+  async function handleClaim(req: RedemptionRequestView) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setErrorMsg(null);
+    try {
+      const r = await postPythAndExecuteConsumer(
+        connection,
+        wallet,
+        (priceUpdate) =>
+          buildClaimRedemptionTx(connection, wallet, {
+            request: req,
+            priceUpdate,
+          }),
+      );
+      toast({
+        message: "Redemption claimed",
+        variant: "success",
+        href: `https://solscan.io/tx/${r.consumerSig}?cluster=devnet`,
+        hrefLabel: "View on Solscan",
+      });
+      refreshRequests();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      const reroute = parseRedeemError(msg);
+      setErrorMsg(
+        reroute === "otc"
+          ? `Treasury can't cover this claim yet. It stays queued (on-chain IOU); contact ${OTC_EMAIL} for OTC settlement.`
+          : msg,
+      );
+      toast({ message: `Claim failed: ${msg.slice(0, 120)}`, variant: "error" });
+    } finally {
+      inFlight.current = false;
+    }
+  }
+
+  const pending = (requests ?? []).filter((r) => r.status === "pending");
+
   return (
     <div className="rounded-xl border border-border bg-card p-6">
-      {/* Paused banner */}
-      {paused && (
+      {(paused || redemptionsOff) && (
         <div className="mb-4 rounded-md border border-danger bg-danger/10 px-3 py-2 text-xs text-danger">
           {cfg?.paused
-            ? "Contract paused by guardian. Redemptions still processing."
-            : "Mint paused during premium update window. Retry soon."}
+            ? "Protocol paused by guardian."
+            : redemptionsOff
+              ? "Redemptions are currently disabled by the admin."
+              : "Mint paused during a premium-update window. Retry soon."}
         </div>
       )}
 
-      {/* Mode selector */}
       <div className="mb-6 grid grid-cols-2 gap-2 rounded-lg bg-bg p-1">
         <button
           onClick={() => setMode("mint")}
-          className={`rounded-md py-2 text-sm font-medium transition ${
-            mode === "mint" ? "bg-card text-white" : "text-muted hover:text-white"
-          }`}
+          className={`rounded-md py-2 text-sm font-medium transition ${mode === "mint" ? "bg-card text-white" : "text-muted hover:text-white"}`}
         >
           Mint SILV
         </button>
         <button
           onClick={() => setMode("redeem")}
-          className={`rounded-md py-2 text-sm font-medium transition ${
-            mode === "redeem" ? "bg-card text-white" : "text-muted hover:text-white"
-          }`}
+          className={`rounded-md py-2 text-sm font-medium transition ${mode === "redeem" ? "bg-card text-white" : "text-muted hover:text-white"}`}
         >
           Redeem SILV
         </button>
       </div>
 
-      {/* Input + balance display */}
       <div className="mb-2 flex items-center justify-between text-xs uppercase tracking-wide">
         <span className="text-muted">You pay</span>
         {wallet.publicKey && balances && (
           <button
             type="button"
-            onClick={() =>
-              setAmount(mode === "mint" ? balances.usdc : balances.silv)
-            }
+            onClick={() => setAmount(mode === "mint" ? balances.usdc : balances.silv)}
             className="text-muted normal-case hover:text-white"
           >
             Balance:{" "}
@@ -332,7 +485,7 @@ export function MintRedeemCard() {
           </button>
         )}
       </div>
-      <div className="mb-2 flex items-center gap-3 rounded-lg border border-border bg-bg px-4 py-3">
+      <div className="mb-4 flex items-center gap-3 rounded-lg border border-border bg-bg px-4 py-3">
         <input
           type="number"
           inputMode="decimal"
@@ -346,49 +499,6 @@ export function MintRedeemCard() {
         </span>
       </div>
 
-      {/* Quick-fill chips: 25 / 50 / 75 / 100 percent of EFFECTIVE max.
-          Mint: balance is the only constraint.
-          Redeem: bounded by min(balance, max_redeemable) so the chips
-          never put the user above the on-chain redemption-liquidity floor.
-          FE-M1+H9: chips are disabled when the resulting amount would
-          truncate to 0 (zero-balance or sub-atomic-unit at small pct). */}
-      {wallet.publicKey && balances && (() => {
-        // Compute the effective MAX (post-cap) for the current mode.
-        // Used to grey out chips that would yield 0.
-        const effMax = mode === "mint"
-          ? parseFloat(balances.usdc)
-          : Math.min(
-              parseFloat(balances.silv),
-              maxRedeemableDisplay ?? parseFloat(balances.silv),
-            );
-        const validMax = Number.isFinite(effMax) && effMax > 0;
-        return (
-          <div className="mb-4 grid grid-cols-4 gap-2">
-            {[25, 50, 75, 100].map((pct) => {
-              const v = validMax
-                ? Math.floor((effMax * pct) / 100 * 1_000_000) / 1_000_000
-                : 0;
-              const disabled = !validMax || v <= 0;
-              return (
-                <button
-                  key={pct}
-                  type="button"
-                  disabled={disabled}
-                  onClick={() => {
-                    if (disabled) return;
-                    setAmount(v.toString());
-                  }}
-                  className="rounded-md border border-border py-1 text-xs font-mono text-muted transition hover:border-accent hover:text-white disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:border-border disabled:hover:text-muted"
-                >
-                  {pct === 100 ? "MAX" : `${pct}%`}
-                </button>
-              );
-            })}
-          </div>
-        );
-      })()}
-
-      {/* Output preview */}
       <label className="mb-2 block text-xs uppercase tracking-wide text-muted">
         You receive (est.)
       </label>
@@ -401,44 +511,49 @@ export function MintRedeemCard() {
         </span>
       </div>
 
-      {/* Redemption liquidity hint. Explains why on-chain max can be lower
-          than the user's balance: the contract enforces a reserve floor
-          (treasury_min_reserve_bps) so a fraction of the SILV-equivalent
-          USDC value always stays locked in treasury for solvency. The
-          unlocked buffer accumulated from mint premiums (10% per mint)
-          is what's redeemable on-chain. Larger exits go OTC (physical). */}
+      {/* Option B redeem routing hint. */}
       {mode === "redeem" && (
         <div className="mb-4 space-y-1 rounded-md border border-border bg-bg/50 px-3 py-2 text-xs text-muted">
           <div>
-            Max redeemable now:{" "}
+            Max instant now:{" "}
             <span className="font-mono text-white">
-              {maxRedeemableDisplay !== null
-                ? maxRedeemableDisplay.toLocaleString(undefined, { maximumFractionDigits: 4 })
+              {maxInstant
+                ? `$${maxInstant.usdcNum.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
                 : "loading..."}
-            </span>{" "}
-            SILV
-          </div>
-          {maxRedeemableDisplay !== null && balances &&
-            parseFloat(balances.silv) > maxRedeemableDisplay && (
-              <div className="text-muted/80">
-                Your balance ({parseFloat(balances.silv).toLocaleString(undefined, { maximumFractionDigits: 4 })} SILV)
-                exceeds on-chain redemption liquidity. The reserve floor keeps a
-                portion of the treasury locked for solvency. Larger exits via{" "}
-                <a href="mailto:otc@dominion.market" className="text-accent underline">
-                  OTC desk
-                </a>{" "}
-                (physical silver).
-              </div>
+            </span>
+            {maxInstant?.silvApprox != null && (
+              <span>
+                {" "}
+                (≈{" "}
+                {maxInstant.silvApprox.toLocaleString(undefined, {
+                  maximumFractionDigits: 4,
+                })}{" "}
+                SILV)
+              </span>
             )}
-        </div>
-      )}
-      {overRedeemable && (
-        <div className="mb-4 rounded-md border border-danger bg-danger/10 px-3 py-2 text-xs text-danger">
-          Amount exceeds current redemption liquidity.
+          </div>
+          {redeemRoute && (
+            <div
+              className={
+                redeemRoute === "instant"
+                  ? "text-accent"
+                  : redeemRoute === "queue"
+                    ? "text-yellow-300"
+                    : "text-danger"
+              }
+            >
+              {redeemRoute === "instant" &&
+                "This amount redeems INSTANTLY from the treasury."}
+              {redeemRoute === "queue" &&
+                `This amount is above the instant limit -> T+3 QUEUE: SILV is burned now, you claim USDC in ~${Math.round((cfg?.redeemQueueDelaySeconds ?? 259200) / 86400)} days at the price then.`}
+              {redeemRoute === "otc" &&
+                `Treasury can't cover this on-chain now -> redeem via the OTC desk (${OTC_EMAIL}).`}
+              {redeemRoute === "disabled" && "Redemptions are disabled/paused."}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Slippage selector */}
       <div className="mb-6 flex items-center justify-between">
         <span className="text-xs uppercase tracking-wide text-muted">Slippage</span>
         <div className="flex gap-1">
@@ -446,11 +561,7 @@ export function MintRedeemCard() {
             <button
               key={bps}
               onClick={() => setSlippageBps(bps)}
-              className={`rounded-md px-2 py-1 text-xs font-mono ${
-                slippageBps === bps
-                  ? "bg-accent text-bg"
-                  : "border border-border text-muted hover:text-white"
-              }`}
+              className={`rounded-md px-2 py-1 text-xs font-mono ${slippageBps === bps ? "bg-accent text-bg" : "border border-border text-muted hover:text-white"}`}
             >
               {(bps / 100).toFixed(1)}%
             </button>
@@ -458,12 +569,13 @@ export function MintRedeemCard() {
         </div>
       </div>
 
-      {/* Details */}
       {preview && (
         <div className="mb-6 space-y-1 border-t border-border pt-4 text-xs text-muted">
           <div className="flex justify-between">
             <span>{mode === "mint" ? "Mint price" : "Redeem price"}</span>
-            <span className="font-mono text-white">${preview.effPrice.toFixed(4)}/oz</span>
+            <span className="font-mono text-white">
+              ${preview.effPrice.toFixed(4)}/oz
+            </span>
           </div>
           <div className="flex justify-between">
             <span>Min. received</span>
@@ -482,31 +594,35 @@ export function MintRedeemCard() {
         </div>
       )}
 
-      {/* Insufficient-SOL warning (EE-H3): preflight before submit. */}
       {wallet.publicKey && insufficientSol && (
         <div className="mb-4 rounded-md border border-yellow-500 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-300 break-words">
-          Low SOL balance ({(solBalance ?? 0).toFixed(4)} SOL). Need at least {SOL_FOR_FEES_MIN} SOL for transaction fees. Top up at{" "}
-          <a href="https://faucet.solana.com" target="_blank" rel="noreferrer" className="underline">
+          Low SOL ({(solBalance ?? 0).toFixed(4)}). Need ≥ {SOL_FOR_FEES_MIN} SOL
+          for fees. Top up at{" "}
+          <a
+            href="https://faucet.solana.com"
+            target="_blank"
+            rel="noreferrer"
+            className="underline"
+          >
             faucet.solana.com
-          </a>
-          {" "}(devnet).
+          </a>{" "}
+          (devnet).
         </div>
       )}
 
-      {/* Error display only. Success goes to Toaster + TransactionHistory. */}
       {errorMsg && (
         <div className="mb-4 rounded-md border border-danger bg-danger/10 px-3 py-2 text-xs text-danger break-words">
           {errorMsg}
         </div>
       )}
 
-      {/* Action */}
       <button
         disabled={
           !wallet.connected ||
           !preview ||
-          !!overRedeemable ||
           !!paused ||
+          redemptionsOff ||
+          redeemRoute === "otc" ||
           submitting ||
           insufficientSol
         }
@@ -516,15 +632,75 @@ export function MintRedeemCard() {
         {!wallet.connected
           ? "Connect wallet"
           : submitting
-          ? "Submitting..."
-          : paused
-          ? "Paused"
-          : !amount
-          ? "Enter an amount"
-          : mode === "mint"
-          ? "Mint SILV"
-          : "Redeem SILV"}
+            ? "Submitting..."
+            : paused
+              ? "Paused"
+              : redemptionsOff
+                ? "Redemptions disabled"
+                : !amount
+                  ? "Enter an amount"
+                  : mode === "mint"
+                    ? "Mint SILV"
+                    : redeemRoute === "queue"
+                      ? "Queue redemption (T+3)"
+                      : redeemRoute === "otc"
+                        ? "Use OTC desk"
+                        : "Redeem SILV"}
       </button>
+
+      {/* Pending queued redemptions. */}
+      {wallet.publicKey && pending.length > 0 && (
+        <div className="mt-6 border-t border-border pt-4">
+          <div className="mb-2 text-xs uppercase tracking-wide text-muted">
+            Pending redemptions ({pending.length})
+          </div>
+          <div className="space-y-2">
+            {pending.map((r) => {
+              const claimable = nowSecs >= r.claimableAt;
+              const inDays = Math.max(
+                0,
+                Math.ceil((r.claimableAt - nowSecs) / 86400),
+              );
+              return (
+                <div
+                  key={r.pubkey.toBase58()}
+                  className="flex items-center justify-between rounded-md border border-border bg-bg/50 px-3 py-2 text-xs"
+                >
+                  <div>
+                    <div className="font-mono text-white">
+                      {(r.amountSilv.toNumber() / 1e6).toLocaleString(undefined, {
+                        maximumFractionDigits: 4,
+                      })}{" "}
+                      SILV
+                    </div>
+                    <div className="text-muted">
+                      {claimable
+                        ? "Ready to claim (priced at claim)"
+                        : `Claimable in ~${inDays} day(s)`}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!claimable || submitting}
+                    onClick={() => handleClaim(r)}
+                    className="rounded-md bg-accent px-3 py-1 font-semibold text-bg transition hover:bg-accentDim disabled:cursor-not-allowed disabled:opacity-30"
+                  >
+                    Claim
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <div className="mt-2 text-[11px] text-muted/80">
+            If the treasury can&apos;t cover a claim, it stays queued (on-chain
+            IOU); contact{" "}
+            <a href={`mailto:${OTC_EMAIL}`} className="text-accent underline">
+              {OTC_EMAIL}
+            </a>{" "}
+            for OTC settlement.
+          </div>
+        </div>
+      )}
     </div>
   );
 }

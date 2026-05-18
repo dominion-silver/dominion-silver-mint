@@ -5,6 +5,17 @@
 
 set -euo pipefail
 
+# CODEX P0-01 HARD GUARD: V2 is a MANDATORY fresh deploy under a NEW program ID
+# (the V1/V2 ConfigAccount layout is incompatible). In-place upgrade is
+# UNSUPPORTED and would invalidate the core "no stale V1 state" safety
+# hypothesis. This V1 upgrade script is kept only as historical reference and
+# is hard-disabled. To deploy V2: fresh `solana program deploy` with
+# target/deploy/dominion_silver_mint_v2-keypair.json + fresh `initialize` +
+# fresh SILV mint. See private/CODEX_AUDIT_GUIDE_V2.md + CONFIRMED_SPEC.md.
+echo "REFUSING TO RUN: in-place upgrade is unsupported for V2 (fresh-deploy-only)." >&2
+echo "See private/CODEX_AUDIT_GUIDE_V2.md section 4." >&2
+exit 1
+
 WORKDIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$WORKDIR"
 

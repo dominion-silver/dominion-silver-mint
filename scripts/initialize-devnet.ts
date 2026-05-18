@@ -1,18 +1,35 @@
 /**
- * One-time devnet initialization script.
+ * One-time DEVNET initialization for the V2 (Option B) program.
  *
- * Steps:
- *   1. Create SILV Token-2022 mint with extensions:
- *      - PermanentDelegate = admin (Ops Squads vault)
- *      - MetadataPointer = mint itself (in-line metadata per Token-2022 pattern)
- *      - TokenMetadata (name/symbol/uri)
- *      - mint_authority = silv_mint_authority PDA
- *      - freeze_authority = silv_mint_authority PDA
- *   2. Call our program's initialize() to create ConfigAccount + USDC treasury ATA
+ * PREREQUISITES (CODEX P0-03 / deploy-prep):
+ *   - The program is FRESH-DEPLOYED under the V2 id
+ *     GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX (NEVER an in-place upgrade
+ *     over V1; the ConfigAccount layout is incompatible).
+ *   - `target/idl/dominion_silver_mint.json` MUST be the regenerated V2 IDL
+ *     (from the default-features build, dev-hatch EXCLUDED). The bundled IDLs
+ *     are still stale V1 until regenerated.
+ *   - IDL generation + `anchor`/`solana program deploy` MUST use the toolchain
+ *     pinned in Anchor.toml (anchor 0.31.1 / solana 3.x). A mismatched local
+ *     anchor-cli (e.g. 0.30.1) breaks IDL/deploy reproducibility.
  *
- * Run with:
+ * What it does (matches programs/dominion_silver_mint_v2/src/instructions/initialize.rs):
+ *   1. Create the SILV Token-2022 mint with EXACTLY these extensions
+ *      (V2 strict allowlist, CODEX P1-03): PermanentDelegate + MetadataPointer
+ *      + TokenMetadata. Nothing else.
+ *        - decimals            = 6           (V2 hard-pins 6)
+ *        - mint_authority      = silv_mint_authority PDA   (set in phase 2)
+ *        - freeze_authority    = None        (V2 requires None, NOT a PDA)
+ *        - PermanentDelegate   = admin / Ops Squads vault  (== permanent_delegate_expected)
+ *        - MetadataPointer.authority        = silv_metadata_authority PDA
+ *        - MetadataPointer.metadata_address = the mint itself (in-mint metadata)
+ *        - TokenMetadata.update_authority   = silv_metadata_authority PDA
+ *        - TokenMetadata.mint               = the mint itself
+ *   2. Call initialize() with the V2 InitializeArgs (Option A cap/reserve args
+ *      removed; all Option B economic params default on-chain).
+ *
+ * Run:
  *   DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json \
- *   npx tsx scripts/initialize-devnet.ts --admin <pk> --upgrade-squads <pk>
+ *   npx tsx scripts/initialize-devnet.ts --admin <ops_vault_pk> --upgrade-squads <upgrade_vault_pk>
  */
 import {
   Connection,
@@ -22,7 +39,7 @@ import {
   Transaction,
   sendAndConfirmTransaction,
 } from "@solana/web3.js";
-import { AnchorProvider, Program, BN, Idl, Wallet } from "@coral-xyz/anchor";
+import { AnchorProvider, Program, Idl, Wallet } from "@coral-xyz/anchor";
 import {
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
@@ -32,10 +49,11 @@ import {
   createInitializeMintInstruction,
   createInitializePermanentDelegateInstruction,
   createInitializeMetadataPointerInstruction,
+  createSetAuthorityInstruction,
+  AuthorityType,
   getMintLen,
   TYPE_SIZE,
   LENGTH_SIZE,
-  LENGTH,
 } from "@solana/spl-token";
 import {
   createInitializeInstruction,
@@ -47,8 +65,11 @@ import path from "path";
 import os from "os";
 
 const DEVNET_RPC = "https://api.devnet.solana.com";
-const PROGRAM_ID = new PublicKey("J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5");
+// CODEX P0-01: V2 program id (NOT the V1 id J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5).
+const PROGRAM_ID = new PublicKey("GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX");
+// Circle devnet USDC (in the V2 initialize allowlist).
 const DEVNET_USDC = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+// Official Pyth pull-oracle receiver (V2 hard-pins exactly this).
 const PYTH_RECEIVER_DEVNET = new PublicKey(
   "rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ",
 );
@@ -61,7 +82,7 @@ function parseArgs(): { admin: PublicKey; upgradeSquads: PublicKey } {
   const upgIdx = argv.indexOf("--upgrade-squads");
   if (adminIdx < 0 || upgIdx < 0) {
     console.error(
-      "usage: initialize-devnet.ts --admin <pk> --upgrade-squads <pk>",
+      "usage: initialize-devnet.ts --admin <ops_vault_pk> --upgrade-squads <upgrade_vault_pk>",
     );
     process.exit(1);
   }
@@ -76,14 +97,31 @@ function loadKeypair(p: string): Keypair {
   return Keypair.fromSecretKey(Uint8Array.from(raw));
 }
 
+/**
+ * Create the SILV Token-2022 mint exactly as V2 initialize.rs expects.
+ *
+ * Two phases because InitializeMetadata must be signed by the mint authority:
+ *   Phase 1 (payer + mint keypair sign): create account, init the 3 extensions
+ *     and the mint with mint_authority = payer TEMP and freeze_authority = None
+ *     (passed as `null`), then InitializeMetadata (payer signs as mint auth).
+ *     MetadataPointer.authority and TokenMetadata.update_authority are set
+ *     DIRECTLY to the silv_metadata_authority PDA here - the MetadataPointer
+ *     authority is NOT rotatable in Token-2022 (only its address is), so it
+ *     must be correct at init.
+ *   Phase 2 (payer signs): rotate ONLY the mint authority to the
+ *     silv_mint_authority PDA. Freeze authority is already None (nothing to
+ *     rotate; V2 rejects a non-None freeze authority). Metadata authorities
+ *     are already the metadata PDA.
+ */
 async function createSilvMint(
   connection: Connection,
   payer: Keypair,
   silvMintKeypair: Keypair,
-  mintAuthorityPda: PublicKey,
+  silvMintAuthorityPda: PublicKey,
+  silvMetadataAuthorityPda: PublicKey,
   permanentDelegate: PublicKey,
 ): Promise<void> {
-  const decimals = 9;
+  const decimals = 6; // V2 hard-pins 6 (math.rs assumes 6 for SILV + USDC).
   const metadata: TokenMetadata = {
     mint: silvMintKeypair.publicKey,
     name: "Dominion Silver",
@@ -91,104 +129,23 @@ async function createSilvMint(
     uri: "https://dominion.market/silv-metadata.json",
     additionalMetadata: [],
   };
-
-  // Compute sizes.
-  const extensions = [ExtensionType.PermanentDelegate, ExtensionType.MetadataPointer];
+  // EXACTLY the V2-allowlisted extensions, nothing else.
+  const extensions = [
+    ExtensionType.PermanentDelegate,
+    ExtensionType.MetadataPointer,
+  ];
   const mintLen = getMintLen(extensions);
   const metadataLen = TYPE_SIZE + LENGTH_SIZE + pack(metadata).length;
-  const rent = await connection.getMinimumBalanceForRentExemption(mintLen + metadataLen);
-
-  console.log(`  - mintLen: ${mintLen}, metadataLen: ${metadataLen}`);
-  console.log(`  - rent: ${rent / 1e9} SOL`);
-
-  const tx = new Transaction().add(
-    // 1. Create mint account (with room for metadata).
-    SystemProgram.createAccount({
-      fromPubkey: payer.publicKey,
-      newAccountPubkey: silvMintKeypair.publicKey,
-      space: mintLen,
-      lamports: rent,
-      programId: TOKEN_2022_PROGRAM_ID,
-    }),
-    // 2. PermanentDelegate extension - delegate = admin (Ops Squads vault).
-    createInitializePermanentDelegateInstruction(
-      silvMintKeypair.publicKey,
-      permanentDelegate,
-      TOKEN_2022_PROGRAM_ID,
-    ),
-    // 3. MetadataPointer extension - point at the mint itself (in-line metadata).
-    createInitializeMetadataPointerInstruction(
-      silvMintKeypair.publicKey,
-      mintAuthorityPda, // authority to update the pointer (rotatable)
-      silvMintKeypair.publicKey, // metadata lives on the mint account
-      TOKEN_2022_PROGRAM_ID,
-    ),
-    // 4. Initialize mint (decimals + mint_authority + freeze_authority).
-    createInitializeMintInstruction(
-      silvMintKeypair.publicKey,
-      decimals,
-      mintAuthorityPda, // mint authority = program's silv_mint_authority PDA
-      mintAuthorityPda, // freeze authority = same (for thaw_account ix)
-      TOKEN_2022_PROGRAM_ID,
-    ),
-    // 5. Initialize metadata (name/symbol/uri in-line on the mint).
-    createInitializeInstruction({
-      programId: TOKEN_2022_PROGRAM_ID,
-      metadata: silvMintKeypair.publicKey,
-      updateAuthority: mintAuthorityPda,
-      mint: silvMintKeypair.publicKey,
-      mintAuthority: mintAuthorityPda,
-      name: metadata.name,
-      symbol: metadata.symbol,
-      uri: metadata.uri,
-    }),
+  const rent = await connection.getMinimumBalanceForRentExemption(
+    mintLen + metadataLen,
+  );
+  console.log(
+    `  - extensions: PermanentDelegate + MetadataPointer (+ in-mint TokenMetadata)`,
+  );
+  console.log(
+    `  - decimals: ${decimals}, mintLen: ${mintLen}, metadataLen: ${metadataLen}, rent: ${rent / 1e9} SOL`,
   );
 
-  // NOTE: InitializeMetadata instruction requires mintAuthority to sign,
-  // but mintAuthority is a PDA. On first init the mint_authority is still
-  // the payer (set by createInitializeMintInstruction above). Actually wait:
-  // we set mint_authority = mintAuthorityPda directly in step 4. That means
-  // step 5 needs the PDA to sign, which requires an on-chain CPI.
-  //
-  // Fix: create the mint with payer as mint_authority first, init metadata
-  // (payer signs), then transfer mint_authority to PDA.
-
-  throw new Error(
-    "InitializeMetadata requires PDA signer; needs on-chain CPI. Restructuring...",
-  );
-}
-
-async function createSilvMintTwoPhase(
-  connection: Connection,
-  payer: Keypair,
-  silvMintKeypair: Keypair,
-  mintAuthorityPda: PublicKey,
-  permanentDelegate: PublicKey,
-): Promise<void> {
-  // IMPORTANT: SILV decimals MUST match the on-chain math assumption.
-  // programs/.../math.rs line 3: "USDC and SILV: 6 decimals"
-  // If this doesn't match, user sees wrong SILV amounts in their wallet
-  // (off by 10^(n-6)). PLAN.md Q6 default = 6.
-  const decimals = 6;
-  const metadata: TokenMetadata = {
-    mint: silvMintKeypair.publicKey,
-    name: "Dominion Silver",
-    symbol: "SILV",
-    uri: "https://dominion.market/silv-metadata.json",
-    additionalMetadata: [],
-  };
-  const extensions = [ExtensionType.PermanentDelegate, ExtensionType.MetadataPointer];
-  const mintLen = getMintLen(extensions);
-  const metadataLen = TYPE_SIZE + LENGTH_SIZE + pack(metadata).length;
-  const rent = await connection.getMinimumBalanceForRentExemption(mintLen + metadataLen);
-
-  console.log(`  - extensions: PermanentDelegate + MetadataPointer`);
-  console.log(`  - mintLen: ${mintLen}, metadataLen: ${metadataLen}, rent: ${rent / 1e9} SOL`);
-
-  // Phase 1: create account + all extensions + init mint with payer as authority
-  //   + init metadata (payer signs as mint authority)
-  //   + set mint authority to PDA at the end (within same tx if possible).
-  // Keep payer as freeze authority initially, then transfer to PDA.
   const tx = new Transaction().add(
     SystemProgram.createAccount({
       fromPubkey: payer.publicKey,
@@ -197,30 +154,37 @@ async function createSilvMintTwoPhase(
       lamports: rent,
       programId: TOKEN_2022_PROGRAM_ID,
     }),
+    // PermanentDelegate = Ops Squads vault (== initialize args.permanent_delegate_expected).
     createInitializePermanentDelegateInstruction(
       silvMintKeypair.publicKey,
       permanentDelegate,
       TOKEN_2022_PROGRAM_ID,
     ),
+    // MetadataPointer: authority = silv_metadata_authority PDA (NOT rotatable
+    // post-init), metadata_address = the mint itself (in-mint metadata).
     createInitializeMetadataPointerInstruction(
       silvMintKeypair.publicKey,
-      payer.publicKey, // pointer-update authority = payer (can rotate later)
+      silvMetadataAuthorityPda,
       silvMintKeypair.publicKey,
       TOKEN_2022_PROGRAM_ID,
     ),
+    // Mint: decimals 6, mint_authority = payer TEMP (rotated in phase 2),
+    // freeze_authority = None (V2 requires None - pass null, NOT a PDA).
     createInitializeMintInstruction(
       silvMintKeypair.publicKey,
       decimals,
-      payer.publicKey, // mint authority = payer TEMPORARILY
-      payer.publicKey, // freeze authority = payer TEMPORARILY
+      payer.publicKey,
+      null,
       TOKEN_2022_PROGRAM_ID,
     ),
+    // TokenMetadata: update_authority = silv_metadata_authority PDA, mint =
+    // the mint itself. mintAuthority (payer here) must sign this ix.
     createInitializeInstruction({
       programId: TOKEN_2022_PROGRAM_ID,
       metadata: silvMintKeypair.publicKey,
-      updateAuthority: payer.publicKey,
+      updateAuthority: silvMetadataAuthorityPda,
       mint: silvMintKeypair.publicKey,
-      mintAuthority: payer.publicKey, // payer signs the tx
+      mintAuthority: payer.publicKey,
       name: metadata.name,
       symbol: metadata.symbol,
       uri: metadata.uri,
@@ -233,65 +197,47 @@ async function createSilvMintTwoPhase(
     [payer, silvMintKeypair],
     { commitment: "confirmed" },
   );
-  console.log(`  ✅ Mint + extensions + metadata: ${sig1}`);
+  console.log(`  ✅ Phase 1 (mint + 3 extensions + metadata): ${sig1}`);
 
-  // Phase 2: transfer mint authority + freeze authority + metadata update
-  // authority to the program's PDA.
-  const { createSetAuthorityInstruction, AuthorityType } = await import(
-    "@solana/spl-token"
-  );
-  const { createUpdateAuthorityInstruction } = await import(
-    "@solana/spl-token-metadata"
-  );
-
+  // Phase 2: rotate ONLY the mint authority to the program PDA. Freeze is
+  // already None; metadata authorities are already the metadata PDA.
   const tx2 = new Transaction().add(
     createSetAuthorityInstruction(
       silvMintKeypair.publicKey,
       payer.publicKey,
       AuthorityType.MintTokens,
-      mintAuthorityPda,
+      silvMintAuthorityPda,
       [],
       TOKEN_2022_PROGRAM_ID,
     ),
-    createSetAuthorityInstruction(
-      silvMintKeypair.publicKey,
-      payer.publicKey,
-      AuthorityType.FreezeAccount,
-      mintAuthorityPda,
-      [],
-      TOKEN_2022_PROGRAM_ID,
-    ),
-    createUpdateAuthorityInstruction({
-      programId: TOKEN_2022_PROGRAM_ID,
-      metadata: silvMintKeypair.publicKey,
-      oldAuthority: payer.publicKey,
-      newAuthority: mintAuthorityPda,
-    }),
   );
-
   const sig2 = await sendAndConfirmTransaction(connection, tx2, [payer], {
     commitment: "confirmed",
   });
-  console.log(`  ✅ Authorities transferred to PDA: ${sig2}`);
+  console.log(`  ✅ Phase 2 (mint authority -> PDA): ${sig2}`);
 }
 
 async function main() {
   const { admin, upgradeSquads } = parseArgs();
   const connection = new Connection(DEVNET_RPC, "confirmed");
 
-  // Load deployer.
   const envKeypair = process.env.DOMINION_KEYPAIR;
   const solanaConfig = path.join(os.homedir(), ".config/solana/cli/config.yml");
   let configKeypair: string | undefined;
   if (fs.existsSync(solanaConfig)) {
-    const m = fs.readFileSync(solanaConfig, "utf8").match(/keypair_path:\s*(\S+)/);
+    const m = fs
+      .readFileSync(solanaConfig, "utf8")
+      .match(/keypair_path:\s*(\S+)/);
     if (m) configKeypair = m[1].replace(/^"|"$/g, "");
   }
   const deployerPath =
-    envKeypair || configKeypair || path.join(os.homedir(), ".config/solana/id.json");
+    envKeypair ||
+    configKeypair ||
+    path.join(os.homedir(), ".config/solana/id.json");
   const deployer = loadKeypair(deployerPath);
   console.log("Using keypair:", deployerPath);
   console.log("Deployer:", deployer.publicKey.toBase58());
+  console.log("Program (V2):", PROGRAM_ID.toBase58());
   console.log("Admin (Ops Squads vault):", admin.toBase58());
   console.log("Upgrade Squads vault:", upgradeSquads.toBase58());
 
@@ -313,11 +259,25 @@ async function main() {
     commitment: "confirmed",
   });
 
-  const idlPath = path.join(__dirname, "..", "target", "idl", "dominion_silver_mint.json");
+  const idlPath = path.join(
+    __dirname,
+    "..",
+    "target",
+    "idl",
+    "dominion_silver_mint.json",
+  );
   const idl = JSON.parse(fs.readFileSync(idlPath, "utf8")) as Idl;
+  // Guard: refuse to run against a stale V1 IDL (must be regenerated for V2).
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const idlAddr = (idl as any).address || (idl as any).metadata?.address;
+  if (idlAddr && idlAddr !== PROGRAM_ID.toBase58()) {
+    throw new Error(
+      `IDL address ${idlAddr} != V2 program ${PROGRAM_ID.toBase58()}. ` +
+        `Regenerate the V2 IDL (default-features build) before running.`,
+    );
+  }
   const program = new Program(idl, provider);
 
-  // PDAs
   const [configPda] = PublicKey.findProgramAddressSync(
     [Buffer.from("config")],
     PROGRAM_ID,
@@ -330,23 +290,29 @@ async function main() {
     [Buffer.from("silv_mint_authority")],
     PROGRAM_ID,
   );
+  // CODEX M-01: V2 requires the metadata authorities to be THIS distinct PDA.
+  const [silvMetadataAuthorityPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("silv_metadata_authority")],
+    PROGRAM_ID,
+  );
 
-  // Generate SILV mint keypair.
   const silvMintKeypair = Keypair.generate();
   const silvMint = silvMintKeypair.publicKey;
-  console.log("\n== Step 1: Create SILV Token-2022 mint ==");
+  console.log("\n== Step 1: Create SILV Token-2022 mint (V2 shape) ==");
   console.log("SILV mint:", silvMint.toBase58());
-  console.log("PermanentDelegate:", admin.toBase58());
-  console.log("Mint/Freeze authority (PDA):", silvMintAuthorityPda.toBase58());
-  await createSilvMintTwoPhase(
+  console.log("PermanentDelegate (Ops vault):", admin.toBase58());
+  console.log("Mint authority PDA:", silvMintAuthorityPda.toBase58());
+  console.log("Metadata authority PDA:", silvMetadataAuthorityPda.toBase58());
+  console.log("Freeze authority: None");
+  await createSilvMint(
     connection,
     deployer,
     silvMintKeypair,
     silvMintAuthorityPda,
+    silvMetadataAuthorityPda,
     admin,
   );
 
-  // Derived accounts for initialize.
   const usdcTreasuryAta = getAssociatedTokenAddressSync(
     DEVNET_USDC,
     treasuryPda,
@@ -359,9 +325,12 @@ async function main() {
     throw new Error("XAG/USD feed id must be 32 bytes");
   }
 
-  console.log("\n== Step 2: Call program.initialize() ==");
+  console.log("\n== Step 2: Call program.initialize() (V2 args) ==");
 
-  // Correct InitializeArgs per programs/.../instructions/initialize.rs
+  // V2 InitializeArgs ONLY (Option A per-tx/daily/hourly cap + reserve args
+  // were removed; all Option B economic params default on-chain and are
+  // admin-tunable post-deploy). premium 10%/2% within V2 ceilings (2000/1000);
+  // admin timelock 24h within [3600, 604800].
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ix = await (program.methods as any)
     .initialize({
@@ -373,15 +342,6 @@ async function main() {
       premiumBpsRedeem: 200, // 2%
       pythFeedId: feedIdBytes,
       pythReceiverProgram: PYTH_RECEIVER_DEVNET,
-      // Dollar amounts in USDC atomic (6 decimals)
-      minMintAmountUsdc: new BN(10_000_000), // $10 minimum mint
-      maxMintAmountPerTxUsdc: new BN(1_000_000_000_000), // $1M per tx
-      minRedeemAmountUsdc: new BN(10_000_000), // $10 minimum redeem
-      maxRedeemAmountPerTxUsdc: new BN(1_000_000_000_000), // $1M per tx
-      dailyMintCapUsdc: new BN(10_000_000_000_000), // $10M / day
-      dailyRedeemCapUsdc: new BN(10_000_000_000_000), // $10M / day
-      hourlyRedeemCapBpsOfSnapshot: 1000, // 10% of treasury per hour
-      treasuryMinReserveBps: 2000, // 20% floor
       adminTimelockSeconds: 24 * 3600, // 24h
       maxGuardianCount: 5,
     })
@@ -417,8 +377,11 @@ async function main() {
   console.log("  USDC_TREASURY_ATA:", usdcTreasuryAta.toBase58());
   console.log("  SILV_MINT:", silvMint.toBase58());
   console.log("  SILV_MINT_AUTHORITY_PDA:", silvMintAuthorityPda.toBase58());
+  console.log(
+    "  SILV_METADATA_AUTHORITY_PDA:",
+    silvMetadataAuthorityPda.toBase58(),
+  );
 
-  // Save SILV_MINT to a file so the UIs can pick it up.
   const out = {
     programId: PROGRAM_ID.toBase58(),
     configPda: configPda.toBase58(),
@@ -426,11 +389,17 @@ async function main() {
     usdcTreasuryAta: usdcTreasuryAta.toBase58(),
     silvMint: silvMint.toBase58(),
     silvMintAuthorityPda: silvMintAuthorityPda.toBase58(),
+    silvMetadataAuthorityPda: silvMetadataAuthorityPda.toBase58(),
     silvMintSecret: Array.from(silvMintKeypair.secretKey),
     initializeTx: sig,
     deployedAt: new Date().toISOString(),
   };
-  const outPath = path.join(__dirname, "..", "target", "devnet-deployment.json");
+  const outPath = path.join(
+    __dirname,
+    "..",
+    "target",
+    "devnet-deployment.json",
+  );
   fs.writeFileSync(outPath, JSON.stringify(out, null, 2));
   console.log(`\n📄 Deployment state saved to ${outPath}`);
 }

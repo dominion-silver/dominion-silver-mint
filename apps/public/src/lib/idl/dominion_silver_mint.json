@@ -1,5 +1,5 @@
 {
-  "address": "J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5",
+  "address": "GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX",
   "metadata": {
     "name": "dominion_silver_mint",
     "version": "0.1.0",
@@ -126,6 +126,84 @@
           "type": "pubkey"
         }
       ]
+    },
+    {
+      "name": "admin_settle_redemption_offchain",
+      "discriminator": [
+        205,
+        144,
+        123,
+        14,
+        204,
+        72,
+        20,
+        91
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "redemption_request",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  100,
+                  101,
+                  101,
+                  109,
+                  95,
+                  114,
+                  101,
+                  113,
+                  117,
+                  101,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "redemption_request.owner",
+                "account": "RedemptionRequest"
+              },
+              {
+                "kind": "account",
+                "path": "redemption_request.nonce",
+                "account": "RedemptionRequest"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
     },
     {
       "name": "cancel_admin_transfer",
@@ -271,20 +349,21 @@
       ]
     },
     {
-      "name": "close_daily_counter",
+      "name": "claim_redemption",
       "discriminator": [
-        249,
-        192,
-        104,
-        176,
+        109,
+        110,
+        9,
+        188,
+        195,
         217,
-        27,
-        68,
-        38
+        112,
+        83
       ],
       "accounts": [
         {
           "name": "config",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -302,118 +381,151 @@
           }
         },
         {
-          "name": "admin",
+          "name": "owner",
+          "writable": true,
           "signer": true,
           "relations": [
-            "config"
+            "redemption_request"
           ]
         },
         {
-          "name": "daily",
+          "name": "redemption_request",
           "writable": true,
           "pda": {
             "seeds": [
               {
                 "kind": "const",
                 "value": [
+                  114,
+                  101,
                   100,
-                  97,
-                  105,
-                  108,
-                  121
+                  101,
+                  101,
+                  109,
+                  95,
+                  114,
+                  101,
+                  113,
+                  117,
+                  101,
+                  115,
+                  116
                 ]
               },
               {
-                "kind": "arg",
-                "path": "day_epoch"
-              }
-            ]
-          }
-        },
-        {
-          "name": "rent_recipient",
-          "writable": true
-        }
-      ],
-      "args": [
-        {
-          "name": "day_epoch",
-          "type": "u32"
-        }
-      ]
-    },
-    {
-      "name": "close_hourly_counter",
-      "discriminator": [
-        138,
-        210,
-        152,
-        198,
-        221,
-        160,
-        186,
-        200
-      ],
-      "accounts": [
-        {
-          "name": "config",
-          "pda": {
-            "seeds": [
+                "kind": "account",
+                "path": "owner"
+              },
               {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
+                "kind": "account",
+                "path": "redemption_request.nonce",
+                "account": "RedemptionRequest"
               }
             ]
           }
         },
         {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "config"
-          ]
+          "name": "usdc_mint",
+          "writable": true
         },
         {
-          "name": "hourly",
+          "name": "usdc_treasury",
+          "writable": true
+        },
+        {
+          "name": "owner_usdc_ata",
           "writable": true,
           "pda": {
             "seeds": [
               {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "classic_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "treasury_pda",
+          "pda": {
+            "seeds": [
+              {
                 "kind": "const",
                 "value": [
-                  104,
-                  111,
+                  116,
+                  114,
+                  101,
+                  97,
+                  115,
                   117,
                   114,
-                  108,
                   121
                 ]
-              },
-              {
-                "kind": "arg",
-                "path": "hour_epoch"
               }
             ]
           }
         },
         {
-          "name": "rent_recipient",
-          "writable": true
+          "name": "price_update"
+        },
+        {
+          "name": "classic_token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "associated_token_program",
+          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
         }
       ],
-      "args": [
-        {
-          "name": "hour_epoch",
-          "type": "u32"
-        }
-      ]
+      "args": []
     },
     {
       "name": "close_timelock_account",
@@ -1007,16 +1119,16 @@
       ]
     },
     {
-      "name": "execute_set_treasury_min_reserve",
+      "name": "execute_set_treasury_min_float",
       "discriminator": [
-        216,
-        157,
-        55,
-        239,
-        121,
-        80,
-        157,
-        212
+        29,
+        0,
+        172,
+        224,
+        62,
+        127,
+        97,
+        192
       ],
       "accounts": [
         {
@@ -1274,9 +1386,6 @@
           "writable": true
         },
         {
-          "name": "silv_mint"
-        },
-        {
           "name": "usdc_treasury",
           "writable": true
         },
@@ -1308,9 +1417,6 @@
               }
             ]
           }
-        },
-        {
-          "name": "price_update"
         },
         {
           "name": "classic_token_program",
@@ -1505,28 +1611,6 @@
           }
         },
         {
-          "name": "daily",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  100,
-                  97,
-                  105,
-                  108,
-                  121
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "day_epoch"
-              }
-            ]
-          }
-        },
-        {
           "name": "user",
           "writable": true,
           "signer": true
@@ -1716,10 +1800,6 @@
         {
           "name": "min_silv_out",
           "type": "u64"
-        },
-        {
-          "name": "day_epoch",
-          "type": "u32"
         }
       ]
     },
@@ -2320,16 +2400,16 @@
       ]
     },
     {
-      "name": "propose_set_treasury_min_reserve",
+      "name": "propose_set_treasury_min_float",
       "discriminator": [
-        109,
-        193,
         200,
-        62,
-        22,
-        71,
-        148,
-        220
+        232,
+        59,
+        181,
+        53,
+        3,
+        224,
+        232
       ],
       "accounts": [
         {
@@ -2392,8 +2472,8 @@
       ],
       "args": [
         {
-          "name": "new_bps",
-          "type": "u16"
+          "name": "new_float_usdc",
+          "type": "u64"
         }
       ]
     },
@@ -2598,51 +2678,6 @@
           }
         },
         {
-          "name": "daily",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  100,
-                  97,
-                  105,
-                  108,
-                  121
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "day_epoch"
-              }
-            ]
-          }
-        },
-        {
-          "name": "hourly",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  104,
-                  111,
-                  117,
-                  114,
-                  108,
-                  121
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "hour_epoch"
-              }
-            ]
-          }
-        },
-        {
           "name": "user",
           "writable": true,
           "signer": true
@@ -2821,14 +2856,159 @@
         {
           "name": "min_usdc_out",
           "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "redeem_silv_queued",
+      "discriminator": [
+        185,
+        3,
+        84,
+        121,
+        188,
+        104,
+        44,
+        96
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
         },
         {
-          "name": "day_epoch",
-          "type": "u32"
+          "name": "user",
+          "writable": true,
+          "signer": true
         },
         {
-          "name": "hour_epoch",
-          "type": "u32"
+          "name": "silv_mint",
+          "writable": true
+        },
+        {
+          "name": "user_silv_ata",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "account",
+                "path": "token_2022_program"
+              },
+              {
+                "kind": "account",
+                "path": "silv_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "redemption_request",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  100,
+                  101,
+                  101,
+                  109,
+                  95,
+                  114,
+                  101,
+                  113,
+                  117,
+                  101,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              },
+              {
+                "kind": "arg",
+                "path": "request_nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount_silv",
+          "type": "u64"
+        },
+        {
+          "name": "request_nonce",
+          "type": "u64"
         }
       ]
     },
@@ -2905,177 +3085,21 @@
       ]
     },
     {
-      "name": "set_hourly_redeem_cap",
+      "name": "set_instant_redeem_budget",
       "discriminator": [
-        254,
-        239,
-        176,
-        208,
-        143,
-        219,
-        14,
-        20
-      ],
-      "accounts": [
-        {
-          "name": "config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        }
-      ],
-      "args": [
-        {
-          "name": "bps",
-          "type": "u16"
-        }
-      ]
-    },
-    {
-      "name": "set_mint_caps",
-      "discriminator": [
-        153,
-        151,
-        45,
-        96,
-        181,
-        190,
-        134,
-        59
-      ],
-      "accounts": [
-        {
-          "name": "config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        }
-      ],
-      "args": [
-        {
-          "name": "min_tx_usdc",
-          "type": "u64"
-        },
-        {
-          "name": "max_tx_usdc",
-          "type": "u64"
-        },
-        {
-          "name": "daily_cap_usdc",
-          "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "set_redeem_caps",
-      "discriminator": [
-        252,
-        46,
-        219,
-        169,
-        193,
-        14,
-        114,
-        44
-      ],
-      "accounts": [
-        {
-          "name": "config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        }
-      ],
-      "args": [
-        {
-          "name": "min_tx_usdc",
-          "type": "u64"
-        },
-        {
-          "name": "max_tx_usdc",
-          "type": "u64"
-        },
-        {
-          "name": "daily_cap_usdc",
-          "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "thaw_account",
-      "discriminator": [
-        115,
-        152,
-        79,
-        213,
-        213,
-        169,
+        53,
+        207,
+        8,
+        42,
         184,
-        35
+        57,
+        5,
+        72
       ],
       "accounts": [
         {
           "name": "config",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -3098,28 +3122,249 @@
           "relations": [
             "config"
           ]
-        },
-        {
-          "name": "silv_mint",
-          "writable": true
-        },
-        {
-          "name": "silv_account",
-          "writable": true
-        },
-        {
-          "name": "permanent_delegate_authority",
-          "docs": [
-            "(Ops Squads vault PDA). Caller arranges signing externally via Squads."
-          ],
-          "signer": true
-        },
-        {
-          "name": "token_2022_program",
-          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "new_budget_usdc",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_instant_redeem_window",
+      "discriminator": [
+        249,
+        16,
+        60,
+        33,
+        145,
+        40,
+        244,
+        197
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_window_seconds",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "set_large_redeem_threshold",
+      "discriminator": [
+        5,
+        76,
+        233,
+        55,
+        234,
+        78,
+        171,
+        56
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_threshold_usdc",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_max_silv_supply",
+      "discriminator": [
+        145,
+        117,
+        177,
+        52,
+        14,
+        91,
+        144,
+        179
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_max",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "set_redeem_queue_delay",
+      "discriminator": [
+        21,
+        161,
+        246,
+        247,
+        196,
+        9,
+        214,
+        143
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_delay_seconds",
+          "type": "u32"
+        }
+      ]
+    },
+    {
+      "name": "set_redemptions_enabled",
+      "discriminator": [
+        169,
+        39,
+        104,
+        68,
+        132,
+        153,
+        98,
+        213
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "enabled",
+          "type": "bool"
+        }
+      ]
     },
     {
       "name": "unpause",
@@ -3179,19 +3424,6 @@
       ]
     },
     {
-      "name": "DailyCountersAccount",
-      "discriminator": [
-        213,
-        96,
-        38,
-        114,
-        230,
-        210,
-        127,
-        75
-      ]
-    },
-    {
       "name": "GuardianAccount",
       "discriminator": [
         161,
@@ -3205,19 +3437,6 @@
       ]
     },
     {
-      "name": "HourlyCountersAccount",
-      "discriminator": [
-        40,
-        72,
-        195,
-        24,
-        157,
-        73,
-        125,
-        173
-      ]
-    },
-    {
       "name": "PriceUpdateV2",
       "discriminator": [
         34,
@@ -3228,6 +3447,19 @@
         126,
         244,
         205
+      ]
+    },
+    {
+      "name": "RedemptionRequest",
+      "discriminator": [
+        117,
+        157,
+        214,
+        214,
+        64,
+        160,
+        31,
+        58
       ]
     },
     {
@@ -3334,6 +3566,19 @@
         224,
         225,
         164
+      ]
+    },
+    {
+      "name": "DevParamSet",
+      "discriminator": [
+        239,
+        25,
+        253,
+        229,
+        142,
+        78,
+        195,
+        186
       ]
     },
     {
@@ -3451,6 +3696,45 @@
         26,
         217,
         59
+      ]
+    },
+    {
+      "name": "RedeemQueued",
+      "discriminator": [
+        186,
+        209,
+        22,
+        172,
+        152,
+        246,
+        125,
+        186
+      ]
+    },
+    {
+      "name": "RedemptionClaimed",
+      "discriminator": [
+        107,
+        251,
+        199,
+        213,
+        59,
+        173,
+        53,
+        189
+      ]
+    },
+    {
+      "name": "RedemptionSettledOffchain",
+      "discriminator": [
+        52,
+        137,
+        77,
+        80,
+        241,
+        189,
+        56,
+        174
       ]
     },
     {
@@ -3753,6 +4037,81 @@
       "code": 12051,
       "name": "PrevHourMismatch",
       "msg": "Hourly counter previous-hour PDA mismatch"
+    },
+    {
+      "code": 12052,
+      "name": "SilvMintHasPreexistingSupply",
+      "msg": "SILV mint already has non-zero supply at init (rug-by-init defense)"
+    },
+    {
+      "code": 12053,
+      "name": "SilvMintAuthorityMismatch",
+      "msg": "SILV mint authority must be the silv_mint_authority PDA"
+    },
+    {
+      "code": 12054,
+      "name": "SilvFreezeAuthorityMustBeNone",
+      "msg": "SILV mint freeze_authority must be None"
+    },
+    {
+      "code": 12055,
+      "name": "UsdcMintNotAllowed",
+      "msg": "USDC mint not in known-good allowlist (Circle mainnet/devnet/testnet)"
+    },
+    {
+      "code": 12056,
+      "name": "WrongPythReceiver",
+      "msg": "Pyth receiver program does not match the official deployment"
+    },
+    {
+      "code": 12057,
+      "name": "ReserveFloorBelowMinimum",
+      "msg": "treasury_min_reserve_bps cannot be reduced below the protocol floor"
+    },
+    {
+      "code": 12058,
+      "name": "SilvMetadataUpdateAuthorityMismatch",
+      "msg": "SILV mint metadata update_authority must be the silv_metadata_authority PDA"
+    },
+    {
+      "code": 12059,
+      "name": "SupplyCapExceeded",
+      "msg": "Mint would exceed the SILV supply cap"
+    },
+    {
+      "code": 12060,
+      "name": "RedemptionsDisabled",
+      "msg": "Redemptions are currently disabled by the admin switch"
+    },
+    {
+      "code": 12061,
+      "name": "MustUseQueue",
+      "msg": "This redemption must use the queued (T+3) path; call redeem_silv_queued"
+    },
+    {
+      "code": 12062,
+      "name": "FloorBreached",
+      "msg": "Withdrawal would breach the treasury minimum float"
+    },
+    {
+      "code": 12063,
+      "name": "QueueNotReady",
+      "msg": "Redemption queue delay has not elapsed yet"
+    },
+    {
+      "code": 12064,
+      "name": "RequestNotPending",
+      "msg": "Redemption request is not in Pending status"
+    },
+    {
+      "code": 12065,
+      "name": "RedeemRequestOwnerMismatch",
+      "msg": "Redemption request owner does not match signer"
+    },
+    {
+      "code": 12066,
+      "name": "DisallowedMintExtension",
+      "msg": "SILV mint has a disallowed Token-2022 extension"
     }
   ],
   "types": [
@@ -3985,48 +4344,44 @@
             "type": "u64"
           },
           {
-            "name": "reserve_check_price_scaled",
-            "type": "u128"
+            "name": "max_silv_supply",
+            "type": "u64"
           },
           {
-            "name": "reserve_check_price_max_increase_per_hour_bps",
-            "type": "u16"
+            "name": "treasury_min_float_usdc",
+            "type": "u64"
           },
           {
-            "name": "reserve_check_price_last_update_at",
+            "name": "redemptions_enabled",
+            "type": "bool"
+          },
+          {
+            "name": "large_redeem_threshold_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "instant_redeem_budget_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "instant_redeem_window_seconds",
+            "type": "u32"
+          },
+          {
+            "name": "redeem_queue_delay_seconds",
+            "type": "u32"
+          },
+          {
+            "name": "instant_window_start",
             "type": "i64"
           },
           {
-            "name": "min_mint_amount_usdc",
+            "name": "instant_used_usdc",
             "type": "u64"
           },
           {
-            "name": "max_mint_amount_per_tx_usdc",
+            "name": "next_redeem_request_nonce",
             "type": "u64"
-          },
-          {
-            "name": "min_redeem_amount_usdc",
-            "type": "u64"
-          },
-          {
-            "name": "max_redeem_amount_per_tx_usdc",
-            "type": "u64"
-          },
-          {
-            "name": "daily_mint_cap_usdc",
-            "type": "u64"
-          },
-          {
-            "name": "daily_redeem_cap_usdc",
-            "type": "u64"
-          },
-          {
-            "name": "hourly_redeem_cap_bps_of_snapshot",
-            "type": "u16"
-          },
-          {
-            "name": "treasury_min_reserve_bps",
-            "type": "u16"
           },
           {
             "name": "admin_timelock_seconds",
@@ -4075,7 +4430,7 @@
             }
           },
           {
-            "name": "pending_min_reserve_nonce",
+            "name": "pending_treasury_float_nonce",
             "type": {
               "option": "u64"
             }
@@ -4127,25 +4482,35 @@
       }
     },
     {
-      "name": "DailyCountersAccount",
+      "name": "DevParamSet",
+      "docs": [
+        "SC-M7: dev-only handler audit trail. Emitted on dev_set_max_staleness",
+        "and dev_set_premiums calls so devnet operators have a log of what",
+        "changed and when. param: 1 = max_staleness_seconds, 2 = premiums.",
+        "value_a/value_b are the new values (interpretation depends on param)."
+      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
-            "name": "day_epoch",
-            "type": "u32"
-          },
-          {
-            "name": "minted_today_usdc",
-            "type": "u64"
-          },
-          {
-            "name": "redeemed_today_usdc",
-            "type": "u64"
-          },
-          {
-            "name": "rent_payer",
+            "name": "admin",
             "type": "pubkey"
+          },
+          {
+            "name": "param",
+            "type": "u8"
+          },
+          {
+            "name": "value_a",
+            "type": "u64"
+          },
+          {
+            "name": "value_b",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
           }
         ]
       }
@@ -4199,30 +4564,6 @@
       }
     },
     {
-      "name": "HourlyCountersAccount",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "hour_epoch",
-            "type": "u32"
-          },
-          {
-            "name": "redeemed_this_hour_usdc",
-            "type": "u64"
-          },
-          {
-            "name": "treasury_at_hour_start_usdc",
-            "type": "u64"
-          },
-          {
-            "name": "rent_payer",
-            "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
       "name": "InitializeArgs",
       "type": {
         "kind": "struct",
@@ -4263,38 +4604,6 @@
           {
             "name": "pyth_receiver_program",
             "type": "pubkey"
-          },
-          {
-            "name": "min_mint_amount_usdc",
-            "type": "u64"
-          },
-          {
-            "name": "max_mint_amount_per_tx_usdc",
-            "type": "u64"
-          },
-          {
-            "name": "min_redeem_amount_usdc",
-            "type": "u64"
-          },
-          {
-            "name": "max_redeem_amount_per_tx_usdc",
-            "type": "u64"
-          },
-          {
-            "name": "daily_mint_cap_usdc",
-            "type": "u64"
-          },
-          {
-            "name": "daily_redeem_cap_usdc",
-            "type": "u64"
-          },
-          {
-            "name": "hourly_redeem_cap_bps_of_snapshot",
-            "type": "u16"
-          },
-          {
-            "name": "treasury_min_reserve_bps",
-            "type": "u16"
           },
           {
             "name": "admin_timelock_seconds",
@@ -4416,12 +4725,6 @@
             "name": "dust_filter_min_usdc",
             "type": {
               "option": "u64"
-            }
-          },
-          {
-            "name": "reserve_price_ramp_bps",
-            "type": {
-              "option": "u16"
             }
           }
         ]
@@ -4619,6 +4922,160 @@
           {
             "name": "timestamp",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RedeemQueued",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount_silv",
+            "type": "u64"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "claimable_at",
+            "type": "i64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RedemptionClaimed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount_silv",
+            "type": "u64"
+          },
+          {
+            "name": "amount_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "price_used_scaled",
+            "type": "u128"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RedemptionRequest",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount_silv",
+            "type": "u64"
+          },
+          {
+            "name": "requested_at",
+            "type": "i64"
+          },
+          {
+            "name": "claimable_at",
+            "type": "i64"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "status",
+            "type": {
+              "defined": {
+                "name": "RedemptionStatus"
+              }
+            }
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "RedemptionSettledOffchain",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount_silv",
+            "type": "u64"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RedemptionStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Pending"
+          },
+          {
+            "name": "Claimed"
+          },
+          {
+            "name": "SettledOffchain"
           }
         ]
       }
