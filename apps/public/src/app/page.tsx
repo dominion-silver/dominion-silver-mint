@@ -2,6 +2,7 @@ import { Header } from "@/components/Header";
 import { PriceBanner } from "@/components/PriceBanner";
 import { MintRedeemCard } from "@/components/MintRedeemCard";
 import { TransactionHistory } from "@/components/TransactionHistory";
+import { PROGRAM_ID } from "@/lib/constants";
 
 export default function HomePage() {
   return (
@@ -40,7 +41,7 @@ export default function HomePage() {
             </a>{" "}
             ·{" "}
             <a
-              href="https://solscan.io/account/J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5?cluster=devnet"
+              href={`https://solscan.io/account/${PROGRAM_ID.toBase58()}?cluster=devnet`}
               target="_blank"
               rel="noopener noreferrer"
               className="text-accent underline"
