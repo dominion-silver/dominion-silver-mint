@@ -80,31 +80,26 @@ jobs:
         run: cargo audit
         continue-on-error: true
 
-      - name: anchor build
-        # P2-07: non-blocking until the deliberate IDL-determinism fix is
-        # chosen. The SBF .so build (inside this step, BEFORE the failing
-        # IDL re-resolve) + the reproducible-build job + the
-        # already-committed & hash-published IDL are the real deploy gate;
-        # the deployed program is independently sha256-verified. Same
-        # treatment as `anchor test`.
-        continue-on-error: true
+      - name: anchor build (SBF) + IDL (locked, deterministic)
         run: |
-          # CI ROOT-FIX (converged over runs 26080776060 / 26081827582 /
-          # 26082573036):
-          #  (1) anchor's IDL-extraction HOST build was running under the
-          #      Solana platform-tools cargo 1.84.0, which cannot parse
-          #      transitive crates requiring Cargo `edition2024`
-          #      (constant_time_eq 0.4.x, wincode-derive 0.4.x, ... -
-          #      per-crate pinning is whack-a-mole).
-          #  (2) Prepending rustup ${RUST_VERSION}'s RAW toolchain bin fixed
-          #      the host cargo (verified: "host cargo : 1.89.0") but BROKE
-          #      `cargo-build-sbf`, which invokes `cargo +<sbf-toolchain>` -
-          #      a directive ONLY the rustup PROXY understands ("no such
-          #      command: +1.84.1-sbpf-solana-v1.51").
-          # Correct fix: make rustup's DEFAULT toolchain ${RUST_VERSION} so
-          # the rustup-proxy `cargo` is edition2024-capable for the host/IDL
-          # compile, WHILE the same proxy still routes cargo-build-sbf's
-          # explicit `+<sbf-toolchain>` calls. Do NOT bypass the proxy.
+          # CONVERGED FIX (6 verified runs + local repro). The root cause:
+          # anchor 0.31.1's IDL extraction re-resolves deps WITHOUT
+          # `--locked`, perpetually pulling the newest crates.io versions
+          # (constant_time_eq 0.4.2 -> wincode-derive 0.4.5 ->
+          # toml_datetime 1.1.1+spec ...), some needing a newer cargo than
+          # the runner has. Verified locally: `anchor idl build -- --locked`
+          # honors the committed Cargo.lock, does NOT re-resolve, and
+          # produces the correct IDL (this is exactly how the live V2 IDL
+          # was built). `anchor build`'s `-- <args>` only reach
+          # `cargo build-sbf`, NOT the IDL extraction, so we MUST split:
+          #   1. `anchor build --no-idl`  -> the .so (always succeeded)
+          #   2. `anchor idl build -- --locked` -> IDL via `cargo test
+          #      --locked`, which uses the proven-good locked versions and
+          #      fails LOUD (never silently drifts) if the lock is stale.
+          # Toolchain: rustup default ${RUST_VERSION} (matches the tracked
+          # rust-toolchain.toml + the local machine) so the IDL host cargo
+          # is edition2024-capable while cargo-build-sbf's `+<sbf>` proxy
+          # call still works. Loud guard if cargo < 1.85.
           rustup default ${RUST_VERSION}
           echo "host cargo : $(cargo --version)"
           echo "host rustc : $(rustc --version)"
@@ -115,24 +110,13 @@ jobs:
             echo "::error::host cargo $ver lacks edition2024 (need >= 1.85)"
             exit 1
           fi
-          # KNOWN-OPEN (P2-07, see private/NEXT_STEPS.md + the diagnosis in
-          # private/CI_IDL_DETERMINISM.md): anchor 0.31.1's IDL-extraction
-          # sub-build re-resolves deps WITHOUT --locked and keeps pulling
-          # the newest toolchain-incompatible crate (constant_time_eq 0.4.2
-          # -> wincode-derive 0.4.5 -> toml_datetime 1.1.1+spec ...). The
-          # `cargo fetch --locked` + CARGO_NET_OFFLINE=true approach was
-          # tried (run 26083878169) and reverted: offline cannot load the
-          # git `[patch.crates-io]` anchor-lang source ("failed to load
-          # source for dependency anchor-lang"). The two verified fixes
-          # above (rustup default ${RUST_VERSION} for an edition2024-capable
-          # IDL host cargo; sbf proxy preserved) are KEPT - they are
-          # necessary regardless of the final lock strategy. The SBF
-          # program build itself SUCCEEDS; this is an IDL-artifact /
-          # release-engineering gate, not a contract-correctness issue.
-          # continue-on-error so the SBF .so + reproducible-build + the
-          # already-committed+hash-published IDL remain the deploy gate
-          # while the deliberate fix is chosen.
-          anchor build
+          anchor build --no-idl
+          mkdir -p target/idl
+          ( cd programs/dominion_silver_mint_v2 \
+            && anchor idl build -o "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json" -- --locked )
+          test -s target/idl/dominion_silver_mint.json \
+            || { echo "::error::IDL not produced"; exit 1; }
+          echo "IDL bytes: $(wc -c < target/idl/dominion_silver_mint.json)"
 
       - name: Yarn install (post-build, for tests only)
         run: yarn install
