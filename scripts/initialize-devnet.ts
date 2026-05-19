@@ -66,7 +66,13 @@ import os from "os";
 
 const DEVNET_RPC = "https://api.devnet.solana.com";
 // CODEX P0-01: V2 program id (NOT the V1 id J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5).
-const PROGRAM_ID = new PublicKey("GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX");
+// DOMINION_PROGRAM_ID override exists ONLY for the isolated Squads E2E
+// (scripts/test-dominion-squads-e2e.ts) which deploys a throwaway instance
+// under a fresh id. Unset in all real deploys -> the canonical V2 id.
+const PROGRAM_ID = new PublicKey(
+  process.env.DOMINION_PROGRAM_ID ||
+    "GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX",
+);
 // Circle devnet USDC (in the V2 initialize allowlist).
 const DEVNET_USDC = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
 // Official Pyth pull-oracle receiver (V2 hard-pins exactly this).
@@ -270,7 +276,13 @@ async function main() {
   // Guard: refuse to run against a stale V1 IDL (must be regenerated for V2).
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const idlAddr = (idl as any).address || (idl as any).metadata?.address;
-  if (idlAddr && idlAddr !== PROGRAM_ID.toBase58()) {
+  if (process.env.DOMINION_PROGRAM_ID) {
+    // Isolated Squads E2E: the throwaway program id differs from the IDL's
+    // baked canonical id. Point Anchor at the override (Program() derives the
+    // program id from idl.address in Anchor 0.31). Safe: this branch is only
+    // reachable when the env override is explicitly set by the E2E harness.
+    (idl as any).address = PROGRAM_ID.toBase58();
+  } else if (idlAddr && idlAddr !== PROGRAM_ID.toBase58()) {
     throw new Error(
       `IDL address ${idlAddr} != V2 program ${PROGRAM_ID.toBase58()}. ` +
         `Regenerate the V2 IDL (default-features build) before running.`,
