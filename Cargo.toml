@@ -25,3 +25,13 @@ codegen-units = 1
 [patch.crates-io]
 anchor-lang = { git = "https://github.com/coral-xyz/anchor", tag = "v0.31.1" }
 anchor-spl = { git = "https://github.com/coral-xyz/anchor", tag = "v0.31.1" }
+# Vendored pyth-solana-receiver-sdk 0.6.1 (EXACT version the deployed +
+# codex-audited + 68/68-tested devnet program uses), with a minimal
+# 3-line patch so it compiles on modern Rust: upstream's bare-trait
+# `AnchorSerialize::try_to_vec` is an E0782 hard error >= rust ~1.84 and
+# pyth never fixed it through HEAD; `solana-program 2.3.0` needs rust
+# >= 1.79, so no single non-vendored toolchain can build this graph
+# (proven over 13 CI runs; see private/CI_IDL_DETERMINISM.md "DECISION").
+# Price logic is byte-identical to the audited program: ONLY the
+# try_to_vec call syntax + an explicit borsh dep changed.
+pyth-solana-receiver-sdk = { path = "vendor/pyth-solana-receiver-sdk" }

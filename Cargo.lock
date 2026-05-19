@@ -1158,10 +1158,9 @@ dependencies = [
 [[package]]
 name = "pyth-solana-receiver-sdk"
 version = "0.6.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb47105ed00f2ac09d9a297b5e4e1879981324d8633a177c4d6b0958a5a63d7b"
 dependencies = [
  "anchor-lang",
+ "borsh 0.10.4",
  "bytemuck_derive",
  "hex",
  "pythnet-sdk",
