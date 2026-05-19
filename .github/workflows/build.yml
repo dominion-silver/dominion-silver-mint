@@ -87,15 +87,33 @@ jobs:
         run: cargo audit
         continue-on-error: true
 
-      - name: anchor build
-        # REAL FIX (evidence-driven): the SBF-vs-host conflict was caused by
-        # Solana 3.1.13's older platform-tools toolchain. CI now pins 3.1.14
-        # (= the LOCAL toolchain that built the live V2 .so + IDL: rustc
-        # 1.89.0, edition2024-capable, compiles modern pyth-solana-receiver-
-        # sdk). One consistent modern toolchain for the SBF build AND the
-        # host IDL build -> blocking gate restored (no continue-on-error).
-        # rustup default ${RUST_VERSION} keeps cargo-build-sbf's `+<sbf>`
-        # proxy working; loud guard if the host cargo is < 1.85.
+      - name: anchor build (SBF unlocked) + IDL (locked)
+        # EVIDENCE-DRIVEN, two halves, each VERIFIED in CI:
+        #
+        # 1. SBF program build: plain `anchor build --no-idl`, UNLOCKED.
+        #    Run 26086567305 (Solana 3.1.14) proved this compiles clean
+        #    (`Finished release [optimized] in 11.59s`, pyth-sdk E0782
+        #    GONE). It MUST stay unlocked: locking the SBF build
+        #    re-introduces pyth-solana-receiver-sdk E0782 under the
+        #    platform-tools SBF rustc (private/CI_IDL_DETERMINISM.md
+        #    DEEPER FINDING). 3.1.14's unlocked re-resolve picks a
+        #    pyth-sdk that the SBF rustc can compile.
+        #
+        # 2. IDL extraction: split out as an EXPLICIT `anchor idl build
+        #    -- --locked`. The same run proved anchor's *implicit* IDL
+        #    sub-build re-resolves UNLOCKED and dies fetching
+        #    `cpufeatures 0.3.0` ("feature edition2024 is required ...
+        #    not stabilized in this version of Cargo (1.84.0)") because
+        #    the platform-tools cargo driving the IDL `cargo test` is
+        #    1.84. Forcing `--locked` makes it use the committed
+        #    Cargo.lock (cpufeatures 0.2.17 = edition2021, parseable by
+        #    cargo 1.84) instead of the newest crates.io. Locally
+        #    verified to honor the lock and emit the correct ~106 KB IDL
+        #    (private/CI_IDL_DETERMINISM.md Option A / DEEPER FINDING).
+        #
+        # Blocking gate (no continue-on-error). rustup default
+        # ${RUST_VERSION} keeps cargo-build-sbf's `+<sbf>` proxy working;
+        # loud guard if the host cargo is < 1.85.
         run: |
           rustup default ${RUST_VERSION}
           echo "host cargo : $(cargo --version)"
@@ -106,7 +124,20 @@ jobs:
             echo "::error::host cargo $ver lacks edition2024 (need >= 1.85)"
             exit 1
           fi
-          anchor build
+          # Half 1: SBF .so only, UNLOCKED (skip anchor's implicit IDL).
+          anchor build --no-idl
+          # Half 2: IDL via explicit cargo-test, LOCKED (no re-resolve).
+          mkdir -p target/idl target/types
+          anchor idl build \
+            --out target/idl/dominion_silver_mint.json \
+            --out-ts target/types/dominion_silver_mint.ts \
+            -- --locked
+          # Verify-before-claim: fail loudly if the IDL is missing/empty.
+          if [ ! -s target/idl/dominion_silver_mint.json ]; then
+            echo "::error::IDL not produced or empty"
+            exit 1
+          fi
+          echo "IDL bytes: $(wc -c < target/idl/dominion_silver_mint.json)"
 
       - name: Yarn install (post-build, for tests only)
         run: yarn install
