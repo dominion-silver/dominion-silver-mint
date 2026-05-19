@@ -70,6 +70,17 @@ export function MintRedeemCard() {
   const [slippageBps, setSlippageBps] = useState<number>(DEFAULT_SLIPPAGE_BPS);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  // Red is reserved for ERRORS. Progress/status text (e.g. "Preparing
+  // transaction...") renders neutral so normal flow doesn't look alarming.
+  const [msgIsError, setMsgIsError] = useState(false);
+  const showProgress = (t: string) => {
+    setErrorMsg(t);
+    setMsgIsError(false);
+  };
+  const showError = (t: string) => {
+    setErrorMsg(t);
+    setMsgIsError(true);
+  };
   const inFlight = useRef(false);
 
   const isFirstRender = useRef(true);
@@ -229,7 +240,7 @@ export function MintRedeemCard() {
     }
     if (insufficientSol) {
       inFlight.current = false;
-      setErrorMsg(
+      showError(
         `Need at least ${SOL_FOR_FEES_MIN} SOL for fees (you have ${(solBalance ?? 0).toFixed(4)}).`,
       );
       return;
@@ -237,7 +248,7 @@ export function MintRedeemCard() {
     setSubmitting(true);
     try {
       if (mode === "mint") {
-        setErrorMsg("Preparing transaction...");
+        showProgress("Preparing transaction...");
         const r = await postPythAndExecuteConsumer(
           connection,
           wallet,
@@ -282,7 +293,7 @@ export function MintRedeemCard() {
           for (let attempt = 1; attempt <= MAX_QUEUE_ATTEMPTS; attempt++) {
             const freshCfg = await fetchConfig(connection);
             if (!freshCfg) throw new Error("Could not read protocol config.");
-            setErrorMsg(
+            showProgress(
               attempt === 1
                 ? "Submitting queued redemption (burns SILV now)..."
                 : `Another redemption was queued first - retrying (${attempt}/${MAX_QUEUE_ATTEMPTS})...`,
@@ -362,7 +373,7 @@ export function MintRedeemCard() {
           refreshRequests();
         } else {
           // Instant path (Pyth-priced).
-          setErrorMsg("Preparing transaction...");
+          showProgress("Preparing transaction...");
           const r = await postPythAndExecuteConsumer(
             connection,
             wallet,
@@ -394,7 +405,7 @@ export function MintRedeemCard() {
             : reroute === "disabled"
               ? "Redemptions are disabled / paused."
               : msg;
-      setErrorMsg(friendly);
+      showError(friendly);
       toast({
         message: `${mode === "mint" ? "Mint" : "Redeem"} failed: ${friendly.split("\n")[0].slice(0, 140)}`,
         variant: "error",
@@ -433,7 +444,7 @@ export function MintRedeemCard() {
       // in logs/onChainErr, so the InsufficientTreasury -> OTC hint works
       // (CODEX P1-01).
       const reroute = parseRedeemError(errorToText(e));
-      setErrorMsg(
+      showError(
         reroute === "otc"
           ? `Treasury can't cover this claim yet. It stays queued (on-chain IOU); contact ${OTC_EMAIL} for OTC settlement.`
           : msg,
@@ -623,7 +634,13 @@ export function MintRedeemCard() {
       )}
 
       {errorMsg && (
-        <div className="mb-4 rounded-md border border-danger bg-danger/10 px-3 py-2 text-xs text-danger break-words">
+        <div
+          className={`mb-4 rounded-md border px-3 py-2 text-xs break-words ${
+            msgIsError
+              ? "border-danger bg-danger/10 text-danger"
+              : "border-border bg-bg/50 text-muted"
+          }`}
+        >
           {errorMsg}
         </div>
       )}
