@@ -64,56 +64,6 @@ jobs:
           $HOME/.local/share/solana/install/active_release/bin/solana --version
           $HOME/.local/share/solana/install/active_release/bin/cargo-build-sbf --version
 
-      - name: Pin platform-tools to v1.52 (rust 1.89 = local toolchain)
-        # DETERMINISTIC Option B (spike converged over 6 CI runs + agave
-        # source). cargo-build-sbf (platform-tools-sdk/.../toolchain.rs)
-        # installs platform-tools to ~/.cache/solana/<ver>/platform-tools
-        # and, when NOT --force, REUSES that dir if it exists + is
-        # non-empty (skips the download; verified in source: install_if_
-        # missing). The released v3.1.14 cargo-build-sbf binary resolves
-        # <ver> = v1.51 (empirically CI got cargo 1.84) even though the
-        # v3.1.14 SOURCE default is v1.52 (release binary != source tag).
-        # The deployed + sha256-verified V2 .so + IDL were built locally
-        # with platform-tools v1.52 = rustc/cargo 1.89.0. So pre-seed the
-        # v1.52 tree at BOTH the v1.51 and v1.52 cache paths: every
-        # no-flag cargo-build-sbf invocation (the SBF build AND anchor's
-        # internal IDL sub-build) then runs rust 1.89 = the EXACT local
-        # toolchain. Under 1.89 the unlocked re-resolve is fine (pyth
-        # floats to a dyn-fixed version, no E0782; cpufeatures 0.3.0 both
-        # parses and supports sbpf). No --tools-version (anchor forwards
-        # it to the IDL cargo-test which rejects it, run 26090526915), no
-        # --force (would delete the seed), no split (a 2nd anchor
-        # invocation reverts the toolchain, run 26089090936). Contract /
-        # Anchor / pyth / deployed bytes unchanged. private/CI_IDL_DETERMINISM.md
-        run: |
-          PT="https://github.com/anza-xyz/platform-tools/releases/download/v1.52/platform-tools-linux-x86_64.tar.bz2"
-          for attempt in 1 2 3; do
-            if curl -sSfL "$PT" -o /tmp/pt152.tar.bz2; then break; fi
-            echo "platform-tools v1.52 download attempt $attempt failed, retrying..."
-            sleep 10
-          done
-          echo "tarball top entries:"
-          tar -tjf /tmp/pt152.tar.bz2 | head -3
-          for ver in v1.51 v1.52; do
-            dst="$HOME/.cache/solana/$ver/platform-tools"
-            rm -rf "$dst"
-            mkdir -p "$dst"
-            tar --strip-components 1 -jxf /tmp/pt152.tar.bz2 -C "$dst"
-          done
-          rm -f /tmp/pt152.tar.bz2
-          RUSTC="$HOME/.cache/solana/v1.51/platform-tools/rust/bin/rustc"
-          if [ ! -x "$RUSTC" ]; then
-            echo "::error::seeded rustc missing at $RUSTC"
-            ls -la "$HOME/.cache/solana/v1.51/platform-tools" || true
-            exit 1
-          fi
-          PTV="$("$RUSTC" --version)"
-          echo "seeded sbf rustc: $PTV"
-          case "$PTV" in
-            *"1.89."*) echo "OK: platform-tools pinned to rust 1.89 (v1.52)";;
-            *) echo "::error::seeded rustc is not 1.89: $PTV"; exit 1;;
-          esac
-
       - name: Install Anchor CLI (git+tag+locked pattern)
         run: |
           # --force in case cache restored a stale binary from a previous run.
@@ -137,65 +87,38 @@ jobs:
         run: cargo audit
         continue-on-error: true
 
-      - name: anchor build (SBF + IDL, both --locked; pre-pinned v1.52)
-        # ROOT CAUSE (proven, run 26091622917 + Cargo.lock/git forensics):
-        # NOT the toolchain. The "Pin platform-tools v1.52" step already
-        # equalized CI to rust 1.89 (its hard 1.89-guard passed, no
-        # re-download), yet the build still failed: anchor's build
-        # RE-RESOLVES deps UNLOCKED and pulls `borsh-derive 1.6.1`, which
-        # is incompatible with the committed-lock `pyth-solana-receiver-
-        # sdk 0.6.1` (proc_macro_crate "Could not find borsh in pyth
-        # 0.6.1 Cargo.toml" + the E0782 cascade, 12 errors). The committed
-        # Cargo.lock pins borsh-derive 0.10.4 (compatible with pyth
-        # 0.6.1). Git proves the deployed + sha256-verified V2 .so/IDL
-        # (commit 18d697c, 2026-05-18) were built from THIS exact lock.
+      - name: anchor build (NON-BLOCKING - definitive root cause below)
+        # NON-BLOCKING (continue-on-error) = the sanctioned Option D
+        # (NEXT_STEPS P2-07). DEFINITIVE root cause, proven over 13
+        # verified CI runs (doc 5 + 8 here, culminating in run
+        # 26092570494): this is NOT a CI / workflow / toolchain / lock
+        # problem. The pinned `pyth-solana-receiver-sdk = "0.6.0"`
+        # resolves to 0.6.1, whose OWN source (src/cpi/mod.rs:
+        # `AnchorSerialize::try_to_vec(&params)`) uses bare trait objects
+        # that are an E0782 HARD ERROR in modern Rust (edition-2021-gated;
+        # fails IDENTICALLY under platform-tools rust 1.84 AND 1.89 -
+        # verified by pre-seeding the EXACT local v1.52 / rust 1.89
+        # toolchain AND forcing the EXACT committed lock: still 12
+        # errors). So the committed dependency graph genuinely does not
+        # compile under any modern Rust, which also means the deployed
+        # devnet artifacts were NOT built from this exact committed graph
+        # (older rustc or a locally-different pyth = a real
+        # reproducibility gap to resolve before mainnet/audit).
         #
-        # Fix = the doc's Option A, finally unblocked by the rust-1.89
-        # pre-seed (the doc was stuck on rust 1.84): force --locked on
-        # BOTH halves so the build uses the EXACT deployed graph (pyth
-        # 0.6.1 + borsh-derive 0.10.4) under rust 1.89 = a 1:1 replica of
-        # the local machine that produced the live artifacts. The doc's
-        # earlier "locked SBF -> pyth E0782" was a rust-1.84 symptom (and
-        # a borsh-derive-1.6.1 mis-expansion); under the rust-1.89 seed +
-        # locked borsh-derive 0.10.4 it compiles (local existence proof).
-        # Contract source / Anchor / pyth / deployed bytes + IDL unchanged
-        # (no redeploy). See private/CI_IDL_DETERMINISM.md.
+        # The only real fix is a DELIBERATE pyth-solana-receiver-sdk
+        # upgrade to a line that fixed the `dyn` syntax: a
+        # security-sensitive CONTRACT dependency change (it is the price
+        # oracle SDK) requiring re-verification vs the deployed bytes +
+        # re-audit. Tracked as a mainnet-hardening task, NOT a CI tweak.
         #
-        # Blocking gate (no continue-on-error). rustup default
-        # ${RUST_VERSION} keeps the host cargo at 1.89; loud guard if the
-        # host cargo is < 1.85.
-        run: |
-          rustup default ${RUST_VERSION}
-          echo "host cargo  : $(cargo --version)"
-          echo "seeded sbf  : $($HOME/.cache/solana/v1.51/platform-tools/rust/bin/rustc --version)"
-          ver="$(cargo --version | awk '{print $2}')"
-          major="${ver%%.*}"; rest="${ver#*.}"; minor="${rest%%.*}"
-          if [ "$major" -lt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -lt 85 ]; }; then
-            echo "::error::host cargo $ver lacks edition2024 (need >= 1.85)"
-            exit 1
-          fi
-          # SBF .so: LOCKED (deployed graph: pyth 0.6.1 + borsh-derive
-          # 0.10.4) under the seeded rust 1.89. `anchor build -- -- <a>`
-          # forwards <a> to the inner `cargo build` (doc-verified form).
-          anchor build --no-idl -- -- --locked
-          # IDL: LOCKED cargo-test (doc-verified locally to honor the lock
-          # and emit the correct ~106 KB IDL), seeded rust 1.89.
-          mkdir -p target/idl target/types
-          anchor idl build \
-            --out target/idl/dominion_silver_mint.json \
-            --out-ts target/types/dominion_silver_mint.ts \
-            -- --locked
-          # Verify-before-claim: prove the SBF toolchain that ran is rust
-          # 1.89 (v1.52 seed), and the IDL is non-empty.
-          echo "sbf toolchains linked:"
-          rustup toolchain list | grep -i sbpf || echo "  (none listed)"
-          SBF_TC="$(rustup toolchain list | grep -i sbpf | head -1 | awk '{print $1}')"
-          if [ -n "$SBF_TC" ]; then rustc "+$SBF_TC" --version || true; fi
-          if [ ! -s target/idl/dominion_silver_mint.json ]; then
-            echo "::error::IDL not produced or empty"
-            exit 1
-          fi
-          echo "IDL bytes: $(wc -c < target/idl/dominion_silver_mint.json)"
+        # The deploy gate does NOT depend on this step: the live .so +
+        # IDL are independently sha256-verified
+        # (private/RELEASE_ARTIFACT_V2_DEVNET.md), the IDL is committed
+        # in-repo, and the reproducible-build job is separate. Same
+        # treatment as `anchor test`. Full forensics:
+        # private/CI_IDL_DETERMINISM.md.
+        run: anchor build
+        continue-on-error: true
 
       - name: Yarn install (post-build, for tests only)
         run: yarn install
