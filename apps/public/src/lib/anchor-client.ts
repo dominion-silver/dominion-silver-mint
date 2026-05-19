@@ -4,7 +4,7 @@
  * Mint: pay USDC -> receive SILV at Pyth XAG/USD * (1 + premium_mint). Bounded
  *   by a HARD supply cap (no daily/reserve).
  * Redeem (§4.3): `redeem_silv` is the INSTANT path only. It reverts
- *   `MustUseQueue` (amount >= large threshold OR rolling-window budget
+ *   `MustUseQueue` (amount >= large threshold OR fixed-window budget
  *   exhausted) or `InsufficientTreasury` (treasury can't cover). The client
  *   pre-flights via config to predict the path and routes:
  *     - instant      -> buildRedeemTx (Pyth-priced, pays now)
@@ -240,11 +240,34 @@ export function classifyRedeem(
   return "instant";
 }
 
-/** Map an on-chain revert (logs/message) to the user-facing route. */
+/**
+ * Map an on-chain revert (logs/message/structured err) to the user-facing
+ * route. Matches BOTH the symbolic Anchor error name (present in program
+ * logs) AND the numeric code (Anchor `Custom:<dec>` / `custom program
+ * error: 0x<hex>` / `number:<dec>`). The numeric forms matter because when
+ * `getTransaction` returns null right after inclusion (common RPC lag at
+ * "confirmed"), the only signal left is the structured `value.err`
+ * (`{InstructionError:[i,{Custom:<code>}]}`) - no symbolic name. Codes from
+ * the IDL: InsufficientTreasury=12014/0x2eee, MustUseQueue=12061/0x2f1d,
+ * RedemptionsDisabled=12060/0x2f1c, Paused=12000/0x2ee0.
+ */
+function anchorErr(t: string, name: string, codeDec: number): boolean {
+  const hex = "0x" + codeDec.toString(16);
+  return (
+    new RegExp("\\b" + name + "\\b").test(t) ||
+    new RegExp("custom program error:\\s*" + hex + "\\b", "i").test(t) ||
+    new RegExp('\\bCustom"?\\s*[:=(]\\s*' + codeDec + "\\b").test(t) ||
+    new RegExp("\\bnumber:" + codeDec + "\\b").test(t)
+  );
+}
 export function parseRedeemError(errText: string): RedeemRoute | null {
-  if (/MustUseQueue/.test(errText)) return "queue";
-  if (/InsufficientTreasury/.test(errText)) return "otc";
-  if (/RedemptionsDisabled|Paused/.test(errText)) return "disabled";
+  if (anchorErr(errText, "MustUseQueue", 12061)) return "queue";
+  if (anchorErr(errText, "InsufficientTreasury", 12014)) return "otc";
+  if (
+    anchorErr(errText, "RedemptionsDisabled", 12060) ||
+    anchorErr(errText, "Paused", 12000)
+  )
+    return "disabled";
   return null;
 }
 

@@ -58,7 +58,7 @@ export interface ConfigAccount {
   treasuryMinFloatUsdc: BN;
   // D11: manual redemptions switch
   redemptionsEnabled: boolean;
-  // D8/D10: routing + rolling-window instant budget
+  // routing + fixed-reset-window instant budget
   largeRedeemThresholdUsdc: BN;
   instantRedeemBudgetUsdc: BN;
   instantRedeemWindowSeconds: number;
@@ -179,7 +179,7 @@ export async function fetchDashboardSnapshot(
       .toNumber();
   }
 
-  // Window-aware instant budget remaining (mirrors the contract's rolling
+  // Window-aware instant budget remaining (mirrors the contract's fixed-reset
   // window: if now >= window_start + window_seconds the used counter is
   // logically zero again). The contract bootstraps instant_window_start = 0
   // and only sets it to `now` on the first instant redeem after expiry, so a
@@ -229,14 +229,35 @@ function statusKind(s: unknown): RedemptionStatusKind {
  * cover (those become OTC IOUs settled via admin_settle_redemption_offchain).
  * Sorted oldest-requested first so the operator works the backlog in order.
  */
+/**
+ * CODEX P2-01 (+ review-of-fixes): the UI must distinguish "genuinely empty
+ * queue" from "the read failed / RPC degraded" - a queued redemption already
+ * burned SILV and is a durable on-chain IOU that must NOT be hidden.
+ *
+ * IMPORTANT: this fetcher THROWS on failure (it does NOT resolve with a
+ * degraded-empty object). A resolved value is treated by SWR as success and
+ * BYPASSES `keepPreviousData`, which would overwrite the last good queue
+ * with empty and HIDE real IOUs (the exact P2-01 bug). By throwing, SWR
+ * keeps the last successful `data` and exposes `error`; the Dashboard then
+ * shows the last-known queue WITH a degraded banner, instead of an empty
+ * one. `RedemptionQueueResult` remains the prop shape the Dashboard builds
+ * from (last-good requests + degraded = SWR error state).
+ */
+export interface RedemptionQueueResult {
+  requests: RedemptionRequestView[];
+  degraded: boolean; // derived from SWR error; requests may be last-good/stale
+  error?: string;
+}
+
 export async function fetchAllRedemptionRequests(
   connection: Connection,
 ): Promise<RedemptionRequestView[]> {
   const program = getReadOnlyProgram(connection);
   try {
     // getProgramAccounts is heavy and the public devnet RPC frequently
-    // rate-limits or blocks it. Bound it so a hung/blocked call degrades to
-    // [] fast (empty queue panel) instead of hanging the SWR forever.
+    // rate-limits or blocks it. Bound it so a hung/blocked call fails fast
+    // (-> SWR error -> keepPreviousData retains the last good queue)
+    // instead of hanging the SWR forever.
     const timeout = new Promise<never>((_, rej) =>
       setTimeout(() => rej(new Error("redemptionRequest.all timed out")), 12_000),
     );
@@ -246,26 +267,26 @@ export async function fetchAllRedemptionRequests(
       timeout,
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ])) as any[];
-    return (
-      all
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .map((a: any) => ({
-          pubkey: a.publicKey as PublicKey,
-          owner: a.account.owner as PublicKey,
-          amountSilv: a.account.amountSilv as BN,
-          requestedAt: (a.account.requestedAt as BN).toNumber(),
-          claimableAt: (a.account.claimableAt as BN).toNumber(),
-          nonce: a.account.nonce as BN,
-          status: statusKind(a.account.status),
-        }))
-        .sort(
-          (x: RedemptionRequestView, y: RedemptionRequestView) =>
-            x.requestedAt - y.requestedAt,
-        )
-    );
+    return all
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .map((a: any) => ({
+        pubkey: a.publicKey as PublicKey,
+        owner: a.account.owner as PublicKey,
+        amountSilv: a.account.amountSilv as BN,
+        requestedAt: (a.account.requestedAt as BN).toNumber(),
+        claimableAt: (a.account.claimableAt as BN).toNumber(),
+        nonce: a.account.nonce as BN,
+        status: statusKind(a.account.status),
+      }))
+      .sort(
+        (x: RedemptionRequestView, y: RedemptionRequestView) =>
+          x.requestedAt - y.requestedAt,
+      );
   } catch (e) {
     console.error("fetchAllRedemptionRequests error", e);
-    return [];
+    throw e instanceof Error
+      ? e
+      : new Error(String(e));
   }
 }
 

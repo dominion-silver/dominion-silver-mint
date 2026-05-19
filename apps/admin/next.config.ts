@@ -1,7 +1,11 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // CODEX P3-01: pin the file-tracing root to this app (the repo has
+  // multiple lockfiles; Next would otherwise warn/guess a workspace root).
+  outputFileTracingRoot: path.join(__dirname),
   async headers() {
     return [
       {

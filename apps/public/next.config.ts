@@ -1,7 +1,12 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // CODEX P3-01: pin the file-tracing root to this app so Next does not
+  // warn/guess a workspace root from the multiple lockfiles in the repo
+  // (apps/public + apps/admin each have their own). Deterministic builds.
+  outputFileTracingRoot: path.join(__dirname),
   // Workaround: jito-ts (transitively pulled by @pythnetwork/pyth-solana-receiver)
   // has a stale rpc-websockets import path that breaks Next.js webpack 5.
   // We don't actually use jito here; mark these as externals so they don't

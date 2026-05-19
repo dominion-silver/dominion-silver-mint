@@ -12,8 +12,10 @@ import {
   formatPrice,
   type DashboardSnapshot,
   type RedemptionRequestView,
+  type RedemptionQueueResult,
   type RedemptionStatusKind,
 } from "../lib/anchor-client";
+
 
 const SECS_PER_DAY = 86_400;
 
@@ -47,7 +49,13 @@ export function Dashboard() {
   );
   // Only fire the heavy redemption-list query AFTER the snapshot loads, and
   // refresh it slowly, so the two don't saturate the RPC together.
-  const { data: redemptions } = useSWR<RedemptionRequestView[]>(
+  // The fetcher THROWS on failure (P2-01 review-of-fixes). With
+  // keepPreviousData, SWR then keeps the last successful `redemptions`
+  // array AND sets `redemptionsError`, so the operator keeps seeing the
+  // real burned-SILV IOUs with a degraded banner instead of an empty queue.
+  const { data: redemptions, error: redemptionsError } = useSWR<
+    RedemptionRequestView[]
+  >(
     data ? "dominion-redemptions" : null,
     () => fetchAllRedemptionRequests(connection),
     {
@@ -57,6 +65,16 @@ export function Dashboard() {
       dedupingInterval: 15_000,
     },
   );
+  const queue: RedemptionQueueResult = {
+    requests: redemptions ?? [],
+    // degraded iff the latest fetch errored. requests may be last-good/stale.
+    degraded: !!redemptionsError,
+    error: redemptionsError
+      ? redemptionsError instanceof Error
+        ? redemptionsError.message
+        : String(redemptionsError)
+      : undefined,
+  };
 
   if (error && !data) {
     return (
@@ -94,7 +112,7 @@ export function Dashboard() {
 
       {tab === "overview" && <OverviewTab data={data} />}
       {tab === "redemptions" && (
-        <RedemptionsTab data={data} requests={redemptions ?? []} />
+        <RedemptionsTab data={data} queue={queue} />
       )}
       {tab === "governance" && <GovernanceTab data={data} />}
       {tab === "actions" && <ActionsTab />}
@@ -231,10 +249,10 @@ function OverviewTab({ data }: { data: DashboardSnapshot }) {
 
 function RedemptionsTab({
   data,
-  requests,
+  queue,
 }: {
   data: DashboardSnapshot;
-  requests: RedemptionRequestView[];
+  queue: RedemptionQueueResult;
 }) {
   const {
     cfg,
@@ -253,12 +271,12 @@ function RedemptionsTab({
         <Metric
           title="Instant budget per window"
           value={`$${formatUsdc(cfg.instantRedeemBudgetUsdc)}`}
-          tip="Maximum total value of instant redemptions allowed within each rolling time window, across all users combined."
+          tip="Maximum total value of instant redemptions allowed within each fixed reset window, across all users combined."
         />
         <Metric
           title="Window length"
           value={`${(cfg.instantRedeemWindowSeconds / 3600).toFixed(1)}h`}
-          tip="Length of the rolling window over which the instant budget resets."
+          tip="Length of the fixed window after which the instant budget fully resets (not a continuous sliding limiter)."
         />
         <Metric
           title="Instant used this window"
@@ -283,16 +301,13 @@ function RedemptionsTab({
         />
       </Section>
 
-      <RedemptionQueue requests={requests} />
+      <RedemptionQueue queue={queue} />
     </div>
   );
 }
 
-function RedemptionQueue({
-  requests,
-}: {
-  requests: RedemptionRequestView[];
-}) {
+function RedemptionQueue({ queue }: { queue: RedemptionQueueResult }) {
+  const { requests, degraded } = queue;
   const nowSecs = Math.floor(Date.now() / 1000);
   const pending = requests.filter((r) => r.status === "pending");
   const overdueCount = pending.filter((r) => nowSecs >= r.claimableAt).length;
@@ -301,12 +316,17 @@ function RedemptionQueue({
     <div className="rounded-xl border border-border bg-card p-6">
       <div className="mb-1 flex items-baseline justify-between">
         <h3 className="flex items-center text-sm uppercase tracking-wide text-muted">
-          Redemption queue ({pending.length} pending)
+          Redemption queue{" "}
+          {degraded
+            ? requests.length > 0
+              ? `(${pending.length} pending - STALE)`
+              : "(unavailable)"
+            : `(${pending.length} pending)`}
           <Tip text="Redemptions waiting out the queue delay. The user's SILV is already burned; their USDC amount is set at claim time. If the treasury cannot cover a claim, the request stays open and is settled off-chain by the admin." />
         </h3>
         {overdueCount > 0 && (
           <span className="text-xs text-danger">
-            {overdueCount} past claimable time
+            {overdueCount} past claimable time{degraded ? " (stale)" : ""}
           </span>
         )}
       </div>
@@ -315,8 +335,26 @@ function RedemptionQueue({
         paid off-chain, then marked settled here so they cannot be claimed
         again.
       </p>
+      {/* P2-01 (review-of-fixes): on RPC failure SWR keepPreviousData
+          retains the last good queue. Show a degraded banner AND keep
+          rendering the last-known table so real burned-SILV IOUs are never
+          hidden - only show "no data yet" when there is genuinely none. */}
+      {degraded && (
+        <div className="mb-4 rounded-md border border-warning bg-warning/10 p-4 text-sm text-warning">
+          {requests.length > 0
+            ? "Live queue read failed / RPC rate-limiting (retrying). Showing the LAST KNOWN state below - it may be STALE. Do not treat it as current truth until this clears."
+            : 'Queue read failed / RPC rate-limiting (retrying) and no snapshot has loaded yet. This is NOT "no redemptions": there may be pending/overdue IOUs not shown.'}
+          {queue.error ? (
+            <div className="mt-1 font-mono text-xs text-muted">
+              {queue.error}
+            </div>
+          ) : null}
+        </div>
+      )}
       {requests.length === 0 ? (
-        <p className="text-sm text-muted">No redemption requests.</p>
+        degraded ? null : (
+          <p className="text-sm text-muted">No redemption requests.</p>
+        )
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full text-left text-sm">
@@ -455,7 +493,7 @@ function GovernanceTab({ data }: { data: DashboardSnapshot }) {
         <Metric
           title="Compliance mode"
           value={cfg.complianceMode ? "ON" : "off"}
-          tip="When ON, transfer-restriction and freeze controls on the SILV token are active."
+          tip="Operator compliance flag for off-chain procedures. It does NOT add token freeze or transfer-restriction controls - this contract has no freeze path. Turning it ON only flips this flag and auto-pauses the protocol. Enforcement (seize/burn) is done via the permanent-delegate authority, not this switch."
         />
       </Section>
 
@@ -531,11 +569,11 @@ function ActionsTab() {
           />
           <ActionButton
             label="Set instant budget"
-            tip="Change the total value of instant redemptions allowed per rolling window."
+            tip="Change the total value of instant redemptions allowed per fixed reset window."
           />
           <ActionButton
             label="Set instant window"
-            tip="Change the length of the rolling window the instant budget resets over."
+            tip="Change the length of the fixed window after which the instant budget resets."
           />
           <ActionButton
             label="Set large-redeem threshold"
@@ -574,7 +612,7 @@ function ActionsTab() {
           />
           <ActionButton
             label="Propose compliance toggle"
-            tip="Turn the transfer-restriction / freeze controls on or off. Takes effect after the delay."
+            tip="Flip the operator compliance flag (also auto-pauses the protocol). It does NOT add token freeze/transfer controls - this contract has no freeze path; enforcement is via the permanent-delegate authority. Takes effect after the timelock delay."
           />
           <ActionButton
             label="Propose price-feed source"

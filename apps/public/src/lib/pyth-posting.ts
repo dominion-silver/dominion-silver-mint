@@ -393,14 +393,36 @@ async function _postPythAndExecuteConsumerImpl(
     const msg = e instanceof Error ? e.message : String(e);
     if (!msg.includes("already been processed") && !msg.includes("AlreadyProcessed")) throw e;
   }
-  // Confirm with modern form.
+  // Confirm with modern form. CODEX P1-01: confirmTransaction resolves on
+  // INCLUSION, not success. A consumer tx that lands and then reverts
+  // (stale oracle, pause, slippage, budget/treasury race after the
+  // pre-send simulate) would otherwise be reported as a successful
+  // mint/redeem/claim. Inspect value.err; on a non-null err fetch the
+  // program logs and throw a structured error so the caller surfaces the
+  // real failure (and instant-redeem races still route to queue/OTC via
+  // parseRedeemError(errorToText(e))).
   const consumerBlockhash = consumerSigned.recentBlockhash!;
   const consumerLastValid = consumerSigned.lastValidBlockHeight
     ?? (await connection.getLatestBlockhash("confirmed")).lastValidBlockHeight;
-  await connection.confirmTransaction(
+  const conf = await connection.confirmTransaction(
     { signature: consumerSig, blockhash: consumerBlockhash, lastValidBlockHeight: consumerLastValid },
     "confirmed",
   );
+  if (conf.value?.err != null) {
+    const txInfo = await connection
+      .getTransaction(consumerSig, {
+        commitment: "confirmed",
+        maxSupportedTransactionVersion: 0,
+      })
+      .catch(() => null);
+    throw Object.assign(
+      new Error("Transaction reverted on-chain"),
+      {
+        logs: txInfo?.meta?.logMessages ?? [],
+        onChainErr: conf.value.err,
+      },
+    );
+  }
 
   // 8. Build close callback (intentionally NOT auto-fired; saves another
   // popup + ~$0.001 of rent leaks per op for now).

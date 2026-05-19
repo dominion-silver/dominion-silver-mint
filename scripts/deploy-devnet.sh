@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 #
-# Deploy the Dominion Silver Mint program to devnet.
-# Uses the .so binary from GitHub Actions (or a local anchor build).
+# Deploy the Dominion Silver Mint program to devnet (V1-era helper).
+
+# CODEX P2-05 HARD GUARD: this script is V1-era and unsafe for V2. It defaults
+# to the V1 keypair/.so/crate path (target/deploy/dominion_silver_mint-
+# keypair.json, programs/dominion_silver_mint/src/lib.rs) and runs an ad-hoc
+# `solana program deploy` - exactly the stale-program-id footgun in a
+# fresh-deploy-only architecture (same P0 class as upgrade-devnet.sh). Kept
+# only as historical reference; hard-disabled.
 #
-# Prereqs:
-#   - solana CLI installed and configured for devnet: `solana config set --url devnet`
-#   - ~/.config/solana/id.json funded with at least 5 SOL (devnet faucet: solana airdrop 2)
-#   - gh CLI authenticated (for --from-ci mode)
-#
-# Usage:
-#   ./scripts/deploy-devnet.sh              # uses target/deploy/dominion_silver_mint.so (local anchor build)
-#   ./scripts/deploy-devnet.sh --from-ci    # downloads latest successful CI artifact
-#   ./scripts/deploy-devnet.sh --keypair <path>  # custom program keypair (default: target/deploy/dominion_silver_mint-keypair.json)
+# To (re)deploy V2 follow the governed runbook (private/NEXT_STEPS.md C):
+#   build -> sha256-verify -> FRESH program keypair
+#   (target/deploy/dominion_silver_mint_v2-keypair.json, NEVER reuse an id)
+#   -> solana program deploy -> scripts/initialize-devnet.ts
+#   -> update constants + bundled IDL -> redeploy frontends.
+echo "REFUSING TO RUN: deploy-devnet.sh is V1-era and unsafe for V2 (fresh-deploy-only). Use the governed deploy runbook in private/NEXT_STEPS.md." >&2
+exit 1
 
 set -euo pipefail
 

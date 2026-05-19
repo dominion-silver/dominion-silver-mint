@@ -428,7 +428,11 @@ export function MintRedeemCard() {
       refreshRequests();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      const reroute = parseRedeemError(msg);
+      // Classify on the FLATTENED text (message + program logs +
+      // structured err): a landed-but-reverted claim carries the signal
+      // in logs/onChainErr, so the InsufficientTreasury -> OTC hint works
+      // (CODEX P1-01).
+      const reroute = parseRedeemError(errorToText(e));
       setErrorMsg(
         reroute === "otc"
           ? `Treasury can't cover this claim yet. It stays queued (on-chain IOU); contact ${OTC_EMAIL} for OTC settlement.`
@@ -590,6 +594,14 @@ export function MintRedeemCard() {
                 ? `${(premiumBpsMint / 100).toFixed(1)}%`
                 : `${(premiumBpsRedeem / 100).toFixed(1)}%`}
             </span>
+          </div>
+          {/* CODEX P2-02: this flow posts a temporary on-chain Pyth price
+              account; its small rent (~0.001-0.01 SOL) is not auto-reclaimed
+              in this version. Disclosed so the behavior is deliberate and
+              observable; an automated reclaim is a tracked follow-up. */}
+          <div className="pt-1 text-[11px] text-muted/80">
+            A small one-time Solana rent (~0.001-0.01 SOL) is paid to post the
+            live oracle price and is not auto-reclaimed yet.
           </div>
         </div>
       )}
