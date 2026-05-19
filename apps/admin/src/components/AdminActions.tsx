@@ -236,8 +236,12 @@ const ACTIONS: ActionDesc[] = [
       const opt = (v?: string, max?: number, label?: string) => {
         const t = (v ?? "").trim();
         if (t.length === 0) return null;
-        if (max && t.length > max)
-          throw new Error(`${label} exceeds ${max} characters`);
+        // Contract caps are UTF-8 BYTES (Rust String::len), not JS UTF-16
+        // code units - measure bytes so a multi-byte input is rejected
+        // here, not as an opaque on-chain MetadataFieldTooLong revert.
+        const bytes = new TextEncoder().encode(t).length;
+        if (max && bytes > max)
+          throw new Error(`${label} exceeds ${max} bytes`);
         return t;
       };
       const name = opt(p.name, 32, "Name");
