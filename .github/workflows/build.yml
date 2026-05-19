@@ -82,19 +82,23 @@ jobs:
 
       - name: anchor build
         run: |
-          # CI ROOT-FIX (verified on run 26081827582): anchor's IDL-extraction
-          # host build was running under the Solana platform-tools cargo
-          # 1.84.0, which cannot parse transitive crates that require Cargo
-          # `edition2024` (constant_time_eq 0.4.x, wincode-derive 0.4.x, and
-          # any future one - per-crate pinning is whack-a-mole). rustup
-          # ${RUST_VERSION} (installed above, edition2024-capable) is shadowed
-          # because the Solana bin is prepended to PATH. Put rustup's bin
-          # FIRST so the host/IDL cargo+rustc are edition2024-capable;
-          # `cargo-build-sbf` (uniquely named, Solana) stays on PATH for the
-          # SBF target build. Fail LOUD if the host cargo is still too old
-          # (no more silent wrong-toolchain).
-          RUSTUP_BIN="$(dirname "$(rustup which --toolchain ${RUST_VERSION} cargo)")"
-          export PATH="$RUSTUP_BIN:$PATH"
+          # CI ROOT-FIX (converged over runs 26080776060 / 26081827582 /
+          # 26082573036):
+          #  (1) anchor's IDL-extraction HOST build was running under the
+          #      Solana platform-tools cargo 1.84.0, which cannot parse
+          #      transitive crates requiring Cargo `edition2024`
+          #      (constant_time_eq 0.4.x, wincode-derive 0.4.x, ... -
+          #      per-crate pinning is whack-a-mole).
+          #  (2) Prepending rustup ${RUST_VERSION}'s RAW toolchain bin fixed
+          #      the host cargo (verified: "host cargo : 1.89.0") but BROKE
+          #      `cargo-build-sbf`, which invokes `cargo +<sbf-toolchain>` -
+          #      a directive ONLY the rustup PROXY understands ("no such
+          #      command: +1.84.1-sbpf-solana-v1.51").
+          # Correct fix: make rustup's DEFAULT toolchain ${RUST_VERSION} so
+          # the rustup-proxy `cargo` is edition2024-capable for the host/IDL
+          # compile, WHILE the same proxy still routes cargo-build-sbf's
+          # explicit `+<sbf-toolchain>` calls. Do NOT bypass the proxy.
+          rustup default ${RUST_VERSION}
           echo "host cargo : $(cargo --version)"
           echo "host rustc : $(rustc --version)"
           echo "sbf builder: $(cargo-build-sbf --version)"
