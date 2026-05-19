@@ -87,40 +87,41 @@ jobs:
         run: cargo audit
         continue-on-error: true
 
-      - name: anchor build (SBF unlocked) + IDL (locked)
-        # EVIDENCE-DRIVEN (full ground-truth converged over CI runs
-        # 26086567305 / 26087219838 / 26088175606 + local inspection):
+      - name: anchor build (full, platform-tools v1.52 = local toolchain)
+        # OPTION B SPIKE (evidence converged over CI runs 26086567305 /
+        # 26087219838 / 26088175606 / 26089090936 + local ground truth).
         #
-        # The real root cause is the platform-tools (SBF) cargo VERSION,
-        # not Solana 3.1.13-vs-3.1.14 and not a lock flag. EVERY Anchor-
-        # 0.31.1-compatible Solana release ships its `cargo-build-sbf`
-        # defaulting to platform-tools v1.51 = cargo/rustc 1.84. cargo
-        # 1.84 cannot PARSE an `edition2024` manifest. But on the SBF
-        # target there is NO single cpufeatures that works under 1.84:
-        #   - cpufeatures 0.2.x: parses (edition2018) but has a hard
-        #     `compile_error!` for non-x86/aarch64 targets (SBF = sbpf,
-        #     so it fails to COMPILE) [run 26088175606].
-        #   - cpufeatures 0.3.0: supports the SBF target but is
-        #     `edition2024` (1.84 cannot PARSE it) [run 26087219838].
-        # The build must stay UNLOCKED (a locked graph hits
-        # pyth-solana-receiver-sdk E0782 under the SBF rustc).
+        # The genuine bind on the SBF target under the platform-tools
+        # cargo 1.84 (= platform-tools v1.51, what CI kept getting):
+        #   - locked graph  -> pyth-solana-receiver-sdk E0782 (12 errs),
+        #     the SBF rustc 1.84 cannot compile the locked pyth.
+        #   - unlocked graph -> floats cpufeatures to 0.3.0 which is
+        #     edition2024 (cargo 1.84 cannot even PARSE it); the older
+        #     cpufeatures 0.2.x instead `compile_error!`s on sbpf.
+        # No flag escapes this under cargo 1.84.
         #
-        # Local FACT: the deployed + sha256-verified V2 .so + IDL were
-        # built with platform-tools **v1.52 = rustc/cargo 1.89.0**
-        # (edition2024-capable). Under v1.52 the unlocked re-resolve
-        # picks cpufeatures 0.3.0, which 1.89 PARSES and which DOES
-        # support the SBF target. So: force `cargo-build-sbf` to
-        # platform-tools v1.52 via its documented `--tools-version`
-        # lever (anchor forwards `-- <args>` to cargo-build-sbf). This
-        # makes CI use the EXACT toolchain that produced the live
-        # artifacts: contract source / Anchor / pyth unchanged, deployed
-        # bytes + IDL unaffected (no redeploy). See
-        # private/CI_IDL_DETERMINISM.md.
+        # Local FACT (verified: ~/.cache/solana/v1.52/.../rustc =
+        # 1.89.0): the deployed + sha256-verified V2 .so + IDL were built
+        # with platform-tools **v1.52 = cargo/rustc 1.89.0**. Under 1.89
+        # the unlocked re-resolve is fine: pyth floats to a dyn-fixed
+        # version (no E0782) AND cpufeatures 0.3.0 both parses (1.89
+        # supports edition2024) and supports sbpf. Both failure modes
+        # vanish together. agave 3.1.14's cargo-build-sbf DEFAULT is
+        # already v1.52 (`--version` prints it; run 26089090936 proved
+        # `--tools-version v1.52 --force-tools-install` installs
+        # `1.89.0-sbpf-solana-v1.52`); CI only got v1.51 because the
+        # agave installer pre-seeds v1.51 and cargo-build-sbf reuses it.
         #
-        # IDL extraction stays an EXPLICIT `anchor idl build -- --locked`
-        # (deterministic): it builds for the HOST target (x86_64) where
-        # the committed-lock cpufeatures 0.2.17 compiles fine (no SBF
-        # compile_error) under the rustup-default 1.89 host cargo.
+        # The ONLY remaining bug in run 26089090936 was SPLITTING the
+        # build: `anchor build --no-idl` (v1.52) then a SEPARATE
+        # `anchor idl build` re-ran cargo-build-sbf setup WITHOUT the
+        # flag and reverted v1.52 -> v1.51 before the IDL compile. Fix:
+        # ONE full `anchor build` (SBF + its internal IDL sub-build in a
+        # single cargo-build-sbf toolchain context, exactly how the local
+        # machine builds), forced onto v1.52. Unlocked (full anchor build
+        # does not pass --locked). This replicates the local toolchain
+        # 1:1: contract source / Anchor / pyth unchanged, deployed bytes
+        # + IDL unaffected (no redeploy). See private/CI_IDL_DETERMINISM.md.
         #
         # Blocking gate (no continue-on-error). rustup default
         # ${RUST_VERSION} keeps the host cargo at 1.89; loud guard if the
@@ -135,19 +136,16 @@ jobs:
             echo "::error::host cargo $ver lacks edition2024 (need >= 1.85)"
             exit 1
           fi
-          # Half 1: SBF .so only, UNLOCKED, FORCED onto platform-tools
-          # v1.52 (cargo 1.89, edition2024-capable) = the local toolchain
-          # that built the live artifacts. --force-tools-install so a
-          # Solana-bundled v1.51 cache cannot shadow v1.52.
-          anchor build --no-idl -- --tools-version v1.52 --force-tools-install
-          # Half 2: IDL via explicit cargo-test, LOCKED (no re-resolve),
-          # host target under the 1.89 host cargo.
-          mkdir -p target/idl target/types
-          anchor idl build \
-            --out target/idl/dominion_silver_mint.json \
-            --out-ts target/types/dominion_silver_mint.ts \
-            -- --locked
-          # Verify-before-claim: fail loudly if the IDL is missing/empty.
+          # ONE full build (SBF + internal IDL sub-build), UNLOCKED,
+          # forced onto platform-tools v1.52 (cargo 1.89) = the exact
+          # local toolchain. --force-tools-install so the agave-installer
+          # pre-seeded v1.51 cannot shadow v1.52. NOT split: a second
+          # anchor invocation reverts the toolchain (run 26089090936).
+          anchor build -- --tools-version v1.52 --force-tools-install
+          # Verify-before-claim: prove which SBF toolchain actually ran
+          # (must be the 1.89.0 / v1.52 one, not 1.84.1 / v1.51).
+          echo "sbf toolchains linked:"
+          rustup toolchain list | grep -i sbpf || echo "  (none listed)"
           if [ ! -s target/idl/dominion_silver_mint.json ]; then
             echo "::error::IDL not produced or empty"
             exit 1
