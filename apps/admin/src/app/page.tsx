@@ -1,9 +1,17 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { Dashboard } from "@/components/Dashboard";
 import { WalletAuthGate } from "@/components/WalletAuthGate";
+
+// SSR-disabled (wallet state is client-only) -> avoids the React #418
+// hydration mismatch the static import caused.
+const WalletMultiButton = dynamic(
+  async () =>
+    (await import("@solana/wallet-adapter-react-ui")).WalletMultiButton,
+  { ssr: false },
+);
 
 export default function AdminPage() {
   const wallet = useWallet();

@@ -1,16 +1,32 @@
 "use client";
 
 import { ReactNode, useCallback, useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { useWallet } from "@solana/wallet-adapter-react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import { PublicKey } from "@solana/web3.js";
+
+// SSR-disabled (wallet state is client-only) -> no hydration mismatch.
+const WalletMultiButton = dynamic(
+  async () =>
+    (await import("@solana/wallet-adapter-react-ui")).WalletMultiButton,
+  { ssr: false },
+);
 import { ed25519 } from "@noble/curves/ed25519";
 
 const toHex = (b: Uint8Array) =>
   Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 function fromHex(h: string): Uint8Array {
+  if (
+    typeof h !== "string" ||
+    h.length === 0 ||
+    h.length % 2 !== 0 ||
+    !/^[0-9a-fA-F]+$/.test(h)
+  ) {
+    return new Uint8Array(0); // invalid -> empty -> ed25519.verify returns false
+  }
   const a = new Uint8Array(h.length / 2);
-  for (let i = 0; i < a.length; i++) a[i] = parseInt(h.substr(i * 2, 2), 16);
+  for (let i = 0; i < a.length; i++)
+    a[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
   return a;
 }
 
