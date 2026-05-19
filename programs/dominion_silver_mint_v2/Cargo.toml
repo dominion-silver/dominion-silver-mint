@@ -28,13 +28,27 @@ anchor-spl = { version = "0.31.1", features = ["token", "token_2022", "associate
 pyth-solana-receiver-sdk = "0.6.0"
 spl-token-2022 = { version = "7.0", features = ["no-entrypoint"] }
 spl-token-metadata-interface = "0.6"
-# CI HARD-PIN (not used in code): `constant_time_eq` is pulled transitively
-# (blake3 -> solana-blake3-hasher -> solana-program -> anchor-lang). Its
-# 0.4.x line requires Cargo `edition2024`. The committed Cargo.lock already
-# resolves it to 0.3.1, but `anchor build`'s IDL-extraction sub-build
-# re-resolves under the Solana platform-tools cargo (1.84, no edition2024)
-# and was selecting 0.4.2 -> "feature `edition2024` is required" CI failure
-# (since 2026-05-18 when 0.4.2 was published; independent of our code). An
-# explicit `=0.3.1` constraint in the workspace graph forbids 0.4.x on any
-# re-resolve. Remove only when the CI cargo natively supports edition2024.
+# CI EDITION2024-FORBID PINS (not used in code; pulled transitively).
+# Root cause (evidence: CI runs 26086567305 + 26087219838): Anchor's SBF
+# build AND its IDL-extraction sub-build both run under the Solana
+# platform-tools cargo, which is 1.84 for EVERY Anchor-0.31.1-compatible
+# Solana release (3.0.0 / 3.1.13 / 3.1.14 all link SBF rust 1.84.1).
+# cargo 1.84 cannot even PARSE a manifest that declares `edition2024`.
+# The build must stay UNLOCKED: a fully locked graph hits
+# pyth-solana-receiver-sdk E0782 under the 1.84 SBF rustc, and the
+# unlocked re-resolve is what floats that dep to a dyn-fixed version.
+# But the same unlocked re-resolve also floats these transitively-pulled
+# crates to their newest line, which flipped to `edition2024`:
+#   constant_time_eq 0.4.x  (blake3 -> solana-blake3-hasher -> ...)
+#   cpufeatures      0.3.0  (sha2/curve25519 -> solana-program -> ...)
+#   toml_datetime    1.1.x  (toml, anchor-cli IDL-extraction graph)
+# An explicit `=` constraint forbids the edition2024 line workspace-wide
+# on ANY re-resolve while leaving every other dep free to float (so the
+# E0782-fixing re-resolve still happens). Each pinned version is exactly
+# the one already in the committed Cargo.lock, so this does not change
+# resolution: it only forbids the newer unparseable line. Remove each
+# pin when the platform-tools cargo Anchor uses for SBF + IDL natively
+# supports edition2024 (cargo >= 1.85).
 constant_time_eq = "=0.3.1"
+cpufeatures = "=0.2.17"
+toml_datetime = "=0.6.11"
