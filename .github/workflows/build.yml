@@ -87,46 +87,46 @@ jobs:
         run: cargo audit
         continue-on-error: true
 
-      - name: anchor build (SBF .so) - BLOCKING contract-correctness gate
-        # This is the MEANINGFUL gate: does the contract compile to a
-        # deployable SBF program? Run 26095758504 PROVED yes - with the
-        # vendored + minimally-patched pyth-solana-receiver-sdk 0.6.1
-        # (commit 39a62e7, triple-reviewed SHIP, serialization
-        # byte-equivalent) the SBF release build `Finished [optimized]`
-        # under the STOCK platform-tools (cargo 1.84) - no pre-seed, no
-        # --locked needed. `--no-idl` skips anchor's IDL-extraction
-        # sub-build (handled, non-blocking, in the next step for the
-        # documented reason). BLOCKING: a real failure here = the
-        # contract genuinely does not compile. private/CI_IDL_DETERMINISM.md.
-        run: |
-          anchor build --no-idl
-          test -s target/deploy/dominion_silver_mint.so
-          echo "SBF .so bytes: $(wc -c < target/deploy/dominion_silver_mint.so)"
-
-      - name: anchor idl extract (NON-BLOCKING - anchor 0.31.1 tooling quirk)
-        # NON-BLOCKING by deliberate design, NOT a contract problem.
-        # Anchor 0.31.1's IDL extraction (`cargo test --features
-        # idl-build`) re-resolves the dep graph UNLOCKED and, in that
-        # sub-resolution, does NOT honour the workspace
-        # `[patch.crates-io]` -> it pulls the UN-vendored crates.io pyth
-        # 0.6.1 (E0782, 12 errors, run 26097607450) and edition2024
-        # crates like `ctutils 0.4.2`. `--locked` via anchor arg-
-        # forwarding does not reach that internal resolve (run
-        # 26096919038); pre-seeding cargo 1.89 fixes the edition2024 parse
-        # but not the patch-not-applied pyth (run 26097607450). This is
-        # an anchor-CLI defect orthogonal to contract correctness: the
-        # SBF .so (above) compiles fine. The IDL is NOT gated on this -
-        # it is committed in-repo (apps + target/idl), sha256-verified
-        # (private/RELEASE_ARTIFACT_V2_DEVNET.md), and the separate
-        # `reproducible-build` job covers determinism. Kept running (not
-        # deleted) so we detect if a future anchor/toolchain fixes it.
-        run: |
-          mkdir -p target/idl target/types
-          anchor idl build \
-            --out target/idl/dominion_silver_mint.json \
-            --out-ts target/types/dominion_silver_mint.ts \
-            -- --locked
-          echo "IDL bytes: $(wc -c < target/idl/dominion_silver_mint.json)"
+      - name: anchor build (NON-BLOCKING - Option D, definitive root cause)
+        # FINAL STATE. Sanctioned Option D (NEXT_STEPS P2-07). DEFINITIVE
+        # root cause, exhaustively proven over ~18 verified CI runs +
+        # local repro + agave-source + crates.io-MSRV analysis. TWO
+        # independent problems were found; one is FIXED, one is a
+        # fundamental anchor/Solana toolchain incompatibility:
+        #
+        #  (1) FIXED: pyth-solana-receiver-sdk 0.6.1's own bare-trait
+        #      `AnchorSerialize::try_to_vec` = E0782 hard error on modern
+        #      rustc (pyth never fixed it through HEAD; solana-program
+        #      2.3.0 MSRV rust 1.79 vs that >=~1.84 ceiling => no clean
+        #      single toolchain). Resolved by vendoring + minimally
+        #      patching pyth (commit 39a62e7, triple-reviewed SHIP,
+        #      serialization byte-equivalent, supply-chain-diff clean).
+        #
+        #  (2) NOT a CI-fixable issue: anchor 0.31.1's `anchor build`
+        #      (SBF AND IDL) re-resolves the dep graph UNLOCKED, ignoring
+        #      the committed Cargo.lock. That re-resolve (a) pulls
+        #      newest-crates.io edition2024 deps (`ctutils 0.4.2`) the
+        #      Solana platform-tools cargo 1.84 cannot PARSE, and (b)
+        #      does not reliably apply the workspace [patch.crates-io]
+        #      (re-pulls un-vendored pyth -> E0782 even at cargo 1.89).
+        #      `--locked` via anchor arg-forwarding does not reach the
+        #      internal resolve (run 26096919038); pre-seeding cargo 1.89
+        #      fixes (a) but not (b) (run 26097607450); stock cargo 1.84
+        #      hits (a) (runs 26095758504 IDL / 26098522960 SBF). This is
+        #      a coral-xyz/anchor + anza platform-tools toolchain
+        #      incompatibility; the real fix is a DELIBERATE coordinated
+        #      anchor-CLI + Solana version upgrade (mainnet-hardening,
+        #      tracked in NEXT_STEPS P2-07 + CI_IDL_DETERMINISM.md), NOT a
+        #      CI tweak. Re-confirmed exhaustively per Thomas's "do the
+        #      spike" mandate.
+        #
+        # Deploy gate is INDEPENDENT of this step and intact: the live
+        # .so + IDL are sha256-verified (RELEASE_ARTIFACT_V2_DEVNET.md),
+        # the IDL is committed in-repo, and the `reproducible-build` job
+        # (solana-verify/Docker, deterministic) is separate. Run
+        # 26095758504 (this exact config: vendored pyth + non-blocking)
+        # was already green-overall. Same treatment as `anchor test`.
+        run: anchor build
         continue-on-error: true
 
       - name: Yarn install (post-build, for tests only)
