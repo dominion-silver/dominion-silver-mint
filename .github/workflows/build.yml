@@ -137,21 +137,29 @@ jobs:
         run: cargo audit
         continue-on-error: true
 
-      - name: anchor build (plain; platform-tools pre-pinned to v1.52)
-        # The "Pin platform-tools to v1.52" step above already placed
-        # rust 1.89 (= the exact local toolchain that built the deployed +
-        # sha256-verified V2 .so/IDL) at the cache path cargo-build-sbf
-        # resolves. So this is a PLAIN `anchor build`: no --tools-version
-        # (anchor would forward it to the internal IDL cargo-test which
-        # rejects it, run 26090526915), no --force (would delete the
-        # seed), no split (a 2nd anchor invocation reverts the toolchain,
-        # run 26089090936), no --locked (unlocked lets pyth float to a
-        # dyn-fixed version => no E0782; under rust 1.89 the floated
-        # cpufeatures 0.3.0 both parses and supports sbpf). One full
-        # `anchor build` = SBF + internal IDL sub-build, both reusing the
-        # seeded rust 1.89, exactly how the local machine builds.
-        # Contract source / Anchor / pyth unchanged: deployed bytes + IDL
-        # unaffected (no redeploy). See private/CI_IDL_DETERMINISM.md.
+      - name: anchor build (SBF + IDL, both --locked; pre-pinned v1.52)
+        # ROOT CAUSE (proven, run 26091622917 + Cargo.lock/git forensics):
+        # NOT the toolchain. The "Pin platform-tools v1.52" step already
+        # equalized CI to rust 1.89 (its hard 1.89-guard passed, no
+        # re-download), yet the build still failed: anchor's build
+        # RE-RESOLVES deps UNLOCKED and pulls `borsh-derive 1.6.1`, which
+        # is incompatible with the committed-lock `pyth-solana-receiver-
+        # sdk 0.6.1` (proc_macro_crate "Could not find borsh in pyth
+        # 0.6.1 Cargo.toml" + the E0782 cascade, 12 errors). The committed
+        # Cargo.lock pins borsh-derive 0.10.4 (compatible with pyth
+        # 0.6.1). Git proves the deployed + sha256-verified V2 .so/IDL
+        # (commit 18d697c, 2026-05-18) were built from THIS exact lock.
+        #
+        # Fix = the doc's Option A, finally unblocked by the rust-1.89
+        # pre-seed (the doc was stuck on rust 1.84): force --locked on
+        # BOTH halves so the build uses the EXACT deployed graph (pyth
+        # 0.6.1 + borsh-derive 0.10.4) under rust 1.89 = a 1:1 replica of
+        # the local machine that produced the live artifacts. The doc's
+        # earlier "locked SBF -> pyth E0782" was a rust-1.84 symptom (and
+        # a borsh-derive-1.6.1 mis-expansion); under the rust-1.89 seed +
+        # locked borsh-derive 0.10.4 it compiles (local existence proof).
+        # Contract source / Anchor / pyth / deployed bytes + IDL unchanged
+        # (no redeploy). See private/CI_IDL_DETERMINISM.md.
         #
         # Blocking gate (no continue-on-error). rustup default
         # ${RUST_VERSION} keeps the host cargo at 1.89; loud guard if the
@@ -166,18 +174,23 @@ jobs:
             echo "::error::host cargo $ver lacks edition2024 (need >= 1.85)"
             exit 1
           fi
-          # Plain full build: SBF + internal IDL sub-build, both reuse the
-          # pre-seeded ~/.cache/solana/{v1.51,v1.52}/platform-tools (rust
-          # 1.89). NO flags (see comment above for why each is omitted).
-          anchor build
-          # Verify-before-claim: prove the SBF toolchain that actually ran
-          # is rust 1.89 (the v1.52 seed), not 1.84.
+          # SBF .so: LOCKED (deployed graph: pyth 0.6.1 + borsh-derive
+          # 0.10.4) under the seeded rust 1.89. `anchor build -- -- <a>`
+          # forwards <a> to the inner `cargo build` (doc-verified form).
+          anchor build --no-idl -- -- --locked
+          # IDL: LOCKED cargo-test (doc-verified locally to honor the lock
+          # and emit the correct ~106 KB IDL), seeded rust 1.89.
+          mkdir -p target/idl target/types
+          anchor idl build \
+            --out target/idl/dominion_silver_mint.json \
+            --out-ts target/types/dominion_silver_mint.ts \
+            -- --locked
+          # Verify-before-claim: prove the SBF toolchain that ran is rust
+          # 1.89 (v1.52 seed), and the IDL is non-empty.
           echo "sbf toolchains linked:"
           rustup toolchain list | grep -i sbpf || echo "  (none listed)"
           SBF_TC="$(rustup toolchain list | grep -i sbpf | head -1 | awk '{print $1}')"
-          if [ -n "$SBF_TC" ]; then
-            rustc "+$SBF_TC" --version || true
-          fi
+          if [ -n "$SBF_TC" ]; then rustc "+$SBF_TC" --version || true; fi
           if [ ! -s target/idl/dominion_silver_mint.json ]; then
             echo "::error::IDL not produced or empty"
             exit 1
