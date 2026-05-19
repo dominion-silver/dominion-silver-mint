@@ -81,7 +81,30 @@ jobs:
         continue-on-error: true
 
       - name: anchor build
-        run: anchor build
+        run: |
+          # CI ROOT-FIX (verified on run 26081827582): anchor's IDL-extraction
+          # host build was running under the Solana platform-tools cargo
+          # 1.84.0, which cannot parse transitive crates that require Cargo
+          # `edition2024` (constant_time_eq 0.4.x, wincode-derive 0.4.x, and
+          # any future one - per-crate pinning is whack-a-mole). rustup
+          # ${RUST_VERSION} (installed above, edition2024-capable) is shadowed
+          # because the Solana bin is prepended to PATH. Put rustup's bin
+          # FIRST so the host/IDL cargo+rustc are edition2024-capable;
+          # `cargo-build-sbf` (uniquely named, Solana) stays on PATH for the
+          # SBF target build. Fail LOUD if the host cargo is still too old
+          # (no more silent wrong-toolchain).
+          RUSTUP_BIN="$(dirname "$(rustup which --toolchain ${RUST_VERSION} cargo)")"
+          export PATH="$RUSTUP_BIN:$PATH"
+          echo "host cargo : $(cargo --version)"
+          echo "host rustc : $(rustc --version)"
+          echo "sbf builder: $(cargo-build-sbf --version)"
+          ver="$(cargo --version | awk '{print $2}')"
+          major="${ver%%.*}"; rest="${ver#*.}"; minor="${rest%%.*}"
+          if [ "$major" -lt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -lt 85 ]; }; then
+            echo "::error::host cargo $ver lacks edition2024 (need >= 1.85)"
+            exit 1
+          fi
+          anchor build
 
       - name: Yarn install (post-build, for tests only)
         run: yarn install
