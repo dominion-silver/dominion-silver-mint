@@ -231,14 +231,24 @@ const ACTIONS: ActionDesc[] = [
       { name: "symbol", label: "Symbol", kind: "text" },
       { name: "uri", label: "URI", kind: "text" },
     ],
-    tip: "Update SILV name / symbol / metadata URI.",
-    build: (c, p) =>
-      actions.proposeUpdateMetadata(
-        c,
-        (p.name ?? "").trim(),
-        (p.symbol ?? "").trim(),
-        (p.uri ?? "").trim(),
-      ),
+    tip: "Update SILV name / symbol / URI. Leave a field BLANK to keep its current value (only filled fields are changed; blank no longer wipes a field). Limits: name 32, symbol 10, URI 180 chars.",
+    build: (c, p) => {
+      const opt = (v?: string, max?: number, label?: string) => {
+        const t = (v ?? "").trim();
+        if (t.length === 0) return null;
+        if (max && t.length > max)
+          throw new Error(`${label} exceeds ${max} characters`);
+        return t;
+      };
+      const name = opt(p.name, 32, "Name");
+      const symbol = opt(p.symbol, 10, "Symbol");
+      const uri = opt(p.uri, 180, "URI");
+      if (name === null && symbol === null && uri === null)
+        throw new Error(
+          "Set at least one field (blank fields are left unchanged)",
+        );
+      return actions.proposeUpdateMetadata(c, name, symbol, uri);
+    },
   },
   {
     id: "propose-pyth",

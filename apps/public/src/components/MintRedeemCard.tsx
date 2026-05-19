@@ -26,6 +26,7 @@ import {
   buildRedeemTx,
   buildRedeemQueuedTx,
   buildClaimRedemptionTx,
+  buildCloseSettledRedemptionTx,
   parseUsdcAmount,
   parseSilvAmount,
   type RedeemRoute,
@@ -464,7 +465,56 @@ export function MintRedeemCard() {
     }
   }
 
+  // P2-03: the owner reclaims the PDA rent of a request the admin already
+  // settled OTC (status SettledOffchain). No funds move, no oracle, no Pyth.
+  async function handleCloseSettled(req: RedemptionRequestView) {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setErrorMsg(null);
+    try {
+      const tx = await buildCloseSettledRedemptionTx(connection, wallet, req);
+      const signed = await wallet.signTransaction!(tx);
+      const sig = await connection.sendRawTransaction(signed.serialize(), {
+        skipPreflight: false,
+        maxRetries: 3,
+      });
+      const conf = await connection.confirmTransaction(
+        {
+          signature: sig,
+          blockhash: tx.recentBlockhash!,
+          lastValidBlockHeight: tx.lastValidBlockHeight!,
+        },
+        "confirmed",
+      );
+      // confirmTransaction resolves on INCLUSION, not success: a
+      // landed-but-reverted tx has a non-null err. Never treat that as
+      // success (CODEX P1-01 pattern, mirrors the queued-redeem path).
+      if (conf.value?.err != null) {
+        throw new Error("Close reverted on-chain");
+      }
+      toast({
+        message: "Request closed, rent reclaimed",
+        variant: "success",
+        href: `https://solscan.io/tx/${sig}?cluster=devnet`,
+        hrefLabel: "View on Solscan",
+      });
+      refreshRequests();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      showError(msg);
+      toast({
+        message: `Close failed: ${msg.split("\n")[0].slice(0, 120)}`,
+        variant: "error",
+      });
+    } finally {
+      inFlight.current = false;
+    }
+  }
+
   const pending = (requests ?? []).filter((r) => r.status === "pending");
+  const settled = (requests ?? []).filter(
+    (r) => r.status === "settledOffchain",
+  );
 
   return (
     <div className="rounded-xl border border-border bg-card p-6">
@@ -736,6 +786,48 @@ export function MintRedeemCard() {
               {OTC_EMAIL}
             </a>{" "}
             for OTC settlement.
+          </div>
+        </div>
+      )}
+
+      {/* P2-03: requests settled OTC by the desk. The owner reclaims the
+          small PDA rent (no funds move, no oracle). */}
+      {wallet.publicKey && settled.length > 0 && (
+        <div className="mt-6 border-t border-border pt-4">
+          <div className="mb-2 text-xs uppercase tracking-wide text-muted">
+            Settled (reclaim rent) ({settled.length})
+          </div>
+          <div className="space-y-2">
+            {settled.map((r) => (
+              <div
+                key={r.pubkey.toBase58()}
+                className="flex items-center justify-between rounded-md border border-border bg-bg/50 px-3 py-2 text-xs"
+              >
+                <div>
+                  <div className="font-mono text-white">
+                    {(r.amountSilv.toNumber() / 1e6).toLocaleString(undefined, {
+                      maximumFractionDigits: 4,
+                    })}{" "}
+                    SILV
+                  </div>
+                  <div className="text-muted">
+                    Settled off-chain. You were paid by the OTC desk.
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={submitting}
+                  onClick={() => handleCloseSettled(r)}
+                  className="rounded-md bg-accent px-3 py-1 font-semibold text-bg transition hover:bg-accentDim disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  Close
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 text-[11px] text-muted/80">
+            This only frees the small Solana rent of the request account. Your
+            redemption was already settled by the desk.
           </div>
         </div>
       )}

@@ -11,7 +11,7 @@ use anchor_lang::prelude::*;
 
 use crate::errors::DominionError;
 use crate::events::{AdminActionProposed, MintPausedUntilSet};
-use crate::instructions::admin::execute::OracleGuardsArgs;
+use crate::instructions::admin::execute::{validate_metadata_args, MetadataArgs, OracleGuardsArgs};
 use crate::state::*;
 
 // === ProposePremium (mint or redeem) ===
@@ -723,17 +723,20 @@ pub struct ProposeUpdateMetadata<'info> {
 
 pub fn propose_update_metadata_handler(
     ctx: Context<ProposeUpdateMetadata>,
-    name: String,
-    symbol: String,
-    uri: String,
+    name: Option<String>,
+    symbol: Option<String>,
+    uri: Option<String>,
 ) -> Result<()> {
     let config = &mut ctx.accounts.config;
     let now = Clock::get()?.unix_timestamp;
 
-    require!(
-        !name.is_empty() || !symbol.is_empty() || !uri.is_empty(),
-        DominionError::ProposalNoOp
-    );
+    // P2-05: at least one field set; each PROVIDED field must be non-empty and
+    // within its cap. Blanking (Some("")) is rejected outright; "leave this
+    // field unchanged" is expressed as None (execute skips its CPI). The exact
+    // same validation runs again at execute (binding, defense in depth).
+    let args = MetadataArgs { name, symbol, uri };
+    validate_metadata_args(&args)?;
+
     require!(
         config.pending_metadata_nonce.is_none(),
         DominionError::ProposalAlreadyActive
@@ -746,10 +749,16 @@ pub fn propose_update_metadata_handler(
     let nonce = config.next_timelock_nonce;
     let executable_at = now + config.admin_timelock_seconds as i64;
 
-    let mut data = Vec::with_capacity(name.len() + symbol.len() + uri.len() + 12);
-    write_string(&mut data, &name);
-    write_string(&mut data, &symbol);
-    write_string(&mut data, &uri);
+    let mut data = Vec::with_capacity(TimelockQueueAccount::MAX_ACTION_DATA_BYTES);
+    args.serialize(&mut data)
+        .map_err(|_| error!(DominionError::SerializationFailure))?;
+    // Defense in depth: the per-field caps already guarantee this fits, but a
+    // write that exceeds the account's action_data budget would corrupt the
+    // timelock account, so reject it explicitly with a clear error.
+    require!(
+        data.len() <= TimelockQueueAccount::MAX_ACTION_DATA_BYTES,
+        DominionError::MetadataFieldTooLong
+    );
 
     let tl = &mut ctx.accounts.timelock;
     tl.nonce = nonce;
@@ -784,10 +793,4 @@ pub fn propose_update_metadata_handler(
 
 fn encode_u16(v: u16) -> Vec<u8> {
     v.to_le_bytes().to_vec()
-}
-
-fn write_string(buf: &mut Vec<u8>, s: &str) {
-    let bytes = s.as_bytes();
-    buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-    buf.extend_from_slice(bytes);
 }

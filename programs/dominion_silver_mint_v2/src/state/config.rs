@@ -33,16 +33,28 @@ pub const INSTANT_WINDOW_MIN_SECONDS: u32 = 60; // 1 min
 pub const INSTANT_WINDOW_MAX_SECONDS: u32 = 604_800; // 7 days
 pub const REDEEM_QUEUE_DELAY_MAX_SECONDS: u32 = 2_592_000; // 30 days
 
+// P2-05: per-field SILV metadata bounds (Token-2022 TokenMetadata extension).
+// Caps follow the Metaplex name/symbol convention (32/10). The URI cap is
+// chosen so the WORST-CASE borsh serialization of MetadataArgs (3x
+// Option<String>) fits TimelockQueueAccount::MAX_ACTION_DATA_BYTES (256):
+//   3 Option tags (1) + 3 length prefixes (4) + 32 + 10 + 180 = 237 <= 256
+// (19-byte margin). 180 chars is far beyond any real Arweave/IPFS/HTTPS
+// metadata-JSON URI (~60-90 chars). Empty (blank) values are rejected
+// outright - a None field is the way to "leave this field unchanged".
+pub const METADATA_NAME_MAX: usize = 32;
+pub const METADATA_SYMBOL_MAX: usize = 10;
+pub const METADATA_URI_MAX: usize = 180;
+
 // Default launch values.
 pub const DEFAULT_PREMIUM_MINT_BPS: u16 = 1000; // 10%
 pub const DEFAULT_PREMIUM_REDEEM_BPS: u16 = 200; // 2%
-// 60s (1 min). Thomas-decided 2026-05-19 (was 15s). Set at `initialize`
-// only, so this governs the MAINNET launch value; the already-deployed
-// devnet program keeps its baked 15s (NOT redeployed). 60s gives the
-// human two-popup mint flow (post Pyth price, sign, then sign mint)
-// comfortable headroom: the automated flow needs ~5s, a human clicking
-// two wallet prompts routinely exceeded the old 15s and hit StaleOracle.
-// Well within the propose-side oracle-guard ceiling of 300s.
+                                                 // 60s (1 min). Thomas-decided 2026-05-19 (was 15s). Set at `initialize`
+                                                 // only, so this governs the MAINNET launch value; the already-deployed
+                                                 // devnet program keeps its baked 15s (NOT redeployed). 60s gives the
+                                                 // human two-popup mint flow (post Pyth price, sign, then sign mint)
+                                                 // comfortable headroom: the automated flow needs ~5s, a human clicking
+                                                 // two wallet prompts routinely exceeded the old 15s and hit StaleOracle.
+                                                 // Well within the propose-side oracle-guard ceiling of 300s.
 pub const DEFAULT_MAX_STALENESS_SECONDS: u32 = 60;
 pub const DEFAULT_MAX_CONFIDENCE_BPS: u16 = 100; // 1%
 pub const DEFAULT_MIN_PRICE_USD_SCALED: u64 = 5_000_000_000; // $5 * 1e9

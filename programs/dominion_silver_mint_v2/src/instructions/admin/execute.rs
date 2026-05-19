@@ -441,6 +441,48 @@ pub struct OracleGuardsArgs {
     pub dust_filter_min_usdc: Option<u64>,
 }
 
+// === P2-05: per-field metadata args (Option<String> + bounds) ===
+// `None` for a field means "leave it unchanged" (the execute path skips the
+// CPI for that field, so it cannot be blanked). A provided field must be
+// non-empty (blanking is rejected outright) and within its size cap. Shared
+// by propose (pre-validate, fail fast) and execute (binding re-validate,
+// defense in depth - mirrors every other timelocked action).
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
+pub struct MetadataArgs {
+    pub name: Option<String>,
+    pub symbol: Option<String>,
+    pub uri: Option<String>,
+}
+
+pub fn validate_metadata_args(args: &MetadataArgs) -> Result<()> {
+    require!(
+        args.name.is_some() || args.symbol.is_some() || args.uri.is_some(),
+        DominionError::MetadataNoFields
+    );
+    if let Some(v) = &args.name {
+        require!(!v.is_empty(), DominionError::MetadataFieldEmpty);
+        require!(
+            v.len() <= METADATA_NAME_MAX,
+            DominionError::MetadataFieldTooLong
+        );
+    }
+    if let Some(v) = &args.symbol {
+        require!(!v.is_empty(), DominionError::MetadataFieldEmpty);
+        require!(
+            v.len() <= METADATA_SYMBOL_MAX,
+            DominionError::MetadataFieldTooLong
+        );
+    }
+    if let Some(v) = &args.uri {
+        require!(!v.is_empty(), DominionError::MetadataFieldEmpty);
+        require!(
+            v.len() <= METADATA_URI_MAX,
+            DominionError::MetadataFieldTooLong
+        );
+    }
+    Ok(())
+}
+
 // === Execute SetTreasuryFloat (Option B D7: replaces SetTreasuryMinReserve) ===
 
 #[derive(Accounts)]
@@ -679,63 +721,66 @@ pub fn execute_update_metadata_handler(
     );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
 
-    // Decode (name_len: u32, name, symbol_len: u32, symbol, uri_len: u32, uri).
-    let (name, symbol, uri) = decode_metadata(&tl.action_data)?;
+    // P2-05: decode the per-field args. `None` = leave unchanged (no CPI for
+    // that field, so it CANNOT be blanked). Re-validate the bounds at execute
+    // (binding; mirrors every other timelocked action - a stale over-long or
+    // now-empty proposal must still be rejected here, not just at propose).
+    let args = MetadataArgs::try_from_slice(&tl.action_data)
+        .map_err(|_| error!(DominionError::SerializationFailure))?;
+    validate_metadata_args(&args)?;
 
-    // Build update_field CPIs: name, symbol, uri.
-    // Token-2022 metadata interface CPI: spl_token_metadata_interface::instruction::update_field.
+    // Token-2022 metadata interface CPI: spl_token_metadata_interface::update_field.
     let bump = ctx.bumps.metadata_authority;
     let seeds: &[&[u8]] = &[SILV_METADATA_AUTHORITY_SEED, &[bump]];
     let signer_seeds: &[&[&[u8]]] = &[seeds];
+    let cpi_accounts = [
+        ctx.accounts.silv_mint.to_account_info(),
+        ctx.accounts.metadata_authority.to_account_info(),
+        ctx.accounts.token_2022_program.to_account_info(),
+    ];
 
-    update_metadata_field(
-        ctx.accounts.token_2022_program.key(),
-        ctx.accounts.silv_mint.key(),
-        ctx.accounts.metadata_authority.key(),
-        spl_token_metadata_interface::state::Field::Name,
-        name.clone(),
-        &[
-            ctx.accounts.silv_mint.to_account_info(),
-            ctx.accounts.metadata_authority.to_account_info(),
-            ctx.accounts.token_2022_program.to_account_info(),
-        ],
-        signer_seeds,
-    )?;
-    update_metadata_field(
-        ctx.accounts.token_2022_program.key(),
-        ctx.accounts.silv_mint.key(),
-        ctx.accounts.metadata_authority.key(),
-        spl_token_metadata_interface::state::Field::Symbol,
-        symbol.clone(),
-        &[
-            ctx.accounts.silv_mint.to_account_info(),
-            ctx.accounts.metadata_authority.to_account_info(),
-            ctx.accounts.token_2022_program.to_account_info(),
-        ],
-        signer_seeds,
-    )?;
-    update_metadata_field(
-        ctx.accounts.token_2022_program.key(),
-        ctx.accounts.silv_mint.key(),
-        ctx.accounts.metadata_authority.key(),
-        spl_token_metadata_interface::state::Field::Uri,
-        uri.clone(),
-        &[
-            ctx.accounts.silv_mint.to_account_info(),
-            ctx.accounts.metadata_authority.to_account_info(),
-            ctx.accounts.token_2022_program.to_account_info(),
-        ],
-        signer_seeds,
-    )?;
+    if let Some(name) = &args.name {
+        update_metadata_field(
+            ctx.accounts.token_2022_program.key(),
+            ctx.accounts.silv_mint.key(),
+            ctx.accounts.metadata_authority.key(),
+            spl_token_metadata_interface::state::Field::Name,
+            name.clone(),
+            &cpi_accounts,
+            signer_seeds,
+        )?;
+    }
+    if let Some(symbol) = &args.symbol {
+        update_metadata_field(
+            ctx.accounts.token_2022_program.key(),
+            ctx.accounts.silv_mint.key(),
+            ctx.accounts.metadata_authority.key(),
+            spl_token_metadata_interface::state::Field::Symbol,
+            symbol.clone(),
+            &cpi_accounts,
+            signer_seeds,
+        )?;
+    }
+    if let Some(uri) = &args.uri {
+        update_metadata_field(
+            ctx.accounts.token_2022_program.key(),
+            ctx.accounts.silv_mint.key(),
+            ctx.accounts.metadata_authority.key(),
+            spl_token_metadata_interface::state::Field::Uri,
+            uri.clone(),
+            &cpi_accounts,
+            signer_seeds,
+        )?;
+    }
 
     config.pending_metadata_nonce = None;
     config.active_proposal_count = config.active_proposal_count.saturating_sub(1);
     tl.executed_at = Some(now);
 
     emit!(MetadataUpdated {
-        new_name: name,
-        new_symbol: symbol,
-        new_uri: uri,
+        new_name: args.name,
+        new_symbol: args.symbol,
+        new_uri: args.uri,
     });
     emit!(AdminActionExecuted {
         nonce,
@@ -763,31 +808,6 @@ fn update_metadata_field(
     );
     anchor_lang::solana_program::program::invoke_signed(&ix, accounts, signer_seeds)
         .map_err(Into::into)
-}
-
-fn decode_metadata(data: &[u8]) -> Result<(String, String, String)> {
-    let mut cursor = 0usize;
-    let name = read_string(data, &mut cursor)?;
-    let symbol = read_string(data, &mut cursor)?;
-    let uri = read_string(data, &mut cursor)?;
-    Ok((name, symbol, uri))
-}
-
-fn read_string(data: &[u8], cursor: &mut usize) -> Result<String> {
-    require!(
-        data.len() >= *cursor + 4,
-        DominionError::MalformedActionData
-    );
-    let len = u32::from_le_bytes(data[*cursor..*cursor + 4].try_into().unwrap()) as usize;
-    *cursor += 4;
-    require!(
-        data.len() >= *cursor + len,
-        DominionError::MalformedActionData
-    );
-    let s = String::from_utf8(data[*cursor..*cursor + len].to_vec())
-        .map_err(|_| error!(DominionError::MalformedActionData))?;
-    *cursor += len;
-    Ok(s)
 }
 
 fn decode_u16(data: &[u8]) -> Result<u16> {

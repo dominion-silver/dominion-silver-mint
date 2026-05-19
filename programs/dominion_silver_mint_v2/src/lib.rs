@@ -63,6 +63,12 @@ pub mod dominion_silver_mint {
         instructions::redeem_queued::settle_offchain_handler(ctx)
     }
 
+    // P2-03: owner reclaims the rent of a request the admin already settled
+    // off-chain (SettledOffchain). Owner-gated, terminal-state only.
+    pub fn close_settled_redemption(ctx: Context<CloseSettledRedemption>) -> Result<()> {
+        instructions::redeem_queued::close_settled_redemption_handler(ctx)
+    }
+
     pub fn deposit_usdc(ctx: Context<DepositUsdc>, amount: u64) -> Result<()> {
         instructions::deposit_usdc::handler(ctx, amount)
     }
@@ -271,11 +277,14 @@ pub mod dominion_silver_mint {
         instructions::admin::execute::execute_set_pyth_feed_handler(ctx, nonce)
     }
 
+    // P2-05: per-field Option<String>. None = leave that field unchanged
+    // (execute skips its CPI, so it cannot be blanked). A provided field must
+    // be non-empty and within its size cap.
     pub fn propose_update_metadata(
         ctx: Context<ProposeUpdateMetadata>,
-        name: String,
-        symbol: String,
-        uri: String,
+        name: Option<String>,
+        symbol: Option<String>,
+        uri: Option<String>,
     ) -> Result<()> {
         instructions::admin::propose::propose_update_metadata_handler(ctx, name, symbol, uri)
     }

@@ -239,11 +239,15 @@ export const proposeSetAdminTimelock = (c: BuildCtx, secs: number): Ix =>
   propose(c, "proposeSetAdminTimelock", [secs]);
 export const proposeSetComplianceMode = (c: BuildCtx, on: boolean): Ix =>
   propose(c, "proposeSetComplianceMode", [on]);
+// P2-05: each field is Option<String>. Pass null to LEAVE A FIELD UNCHANGED
+// (Anchor encodes null as Rust Option::None; the contract skips that field's
+// CPI so it cannot be blanked). A provided field must be non-empty and within
+// its size cap (name<=32, symbol<=10, uri<=180) or the contract reverts.
 export const proposeUpdateMetadata = (
   c: BuildCtx,
-  name: string,
-  symbol: string,
-  uri: string,
+  name: string | null,
+  symbol: string | null,
+  uri: string | null,
 ): Ix => propose(c, "proposeUpdateMetadata", [name, symbol, uri]);
 export const proposeWithdrawUsdc = (
   c: BuildCtx,

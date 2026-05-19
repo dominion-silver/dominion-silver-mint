@@ -30,7 +30,7 @@ use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 use crate::assertions::assert_silv_mint_invariants;
 use crate::cpi::{silv_burn_from_user, usdc_transfer_treasury_to_user};
 use crate::errors::DominionError;
-use crate::events::{RedeemQueued, RedemptionClaimed, RedemptionSettledOffchain};
+use crate::events::{RedeemQueued, RedemptionClaimed, RedemptionClosed, RedemptionSettledOffchain};
 use crate::math::{effective_redeem_price_scaled, redeem_usdc_out, silv_to_usdc_at_oracle};
 use crate::oracle::{check_price_delta, maybe_update_last_price, read_silver_price};
 use crate::state::*;
@@ -305,6 +305,65 @@ pub fn settle_offchain_handler(ctx: Context<AdminSettleRedemptionOffchain>) -> R
         amount_silv: req.amount_silv,
         nonce: req.nonce,
         by: ctx.accounts.admin.key(),
+        timestamp: now,
+    });
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 4. close_settled_redemption (P2-03): the OWNER reclaims the rent of a
+//    request the admin already marked SettledOffchain.
+//
+//    `admin_settle_redemption_offchain` deliberately does NOT close the
+//    account: the SettledOffchain row is a durable on-chain record of an OTC
+//    settlement (audit trail) and the admin is not the rent payer. Once the
+//    owner has been paid off-chain, they no longer need the record and can
+//    reclaim their own rent. This is owner-gated and only valid in the
+//    terminal SettledOffchain state, so it cannot race a claim:
+//      - Pending  -> claim_redemption (close=owner) OR admin settle
+//      - Claimed  -> account already closed by claim_redemption
+//      - SettledOffchain -> THIS ix (close=owner)
+//    A double-close is impossible: Anchor `close` zeroes + reassigns the
+//    account, so a second call fails account validation.
+// ---------------------------------------------------------------------------
+
+#[derive(Accounts)]
+pub struct CloseSettledRedemption<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+
+    // Re-derive + verify the PDA from its own stored (owner, nonce, bump).
+    // `has_one = owner` binds the stored owner to the signer; `close = owner`
+    // refunds rent to the owner. The status constraint makes this callable
+    // ONLY in the terminal SettledOffchain state (a Pending request must go
+    // through claim or admin-settle first; a Claimed request is already gone).
+    #[account(
+        mut,
+        close = owner,
+        seeds = [REDEEM_REQUEST_SEED, owner.key().as_ref(), &redemption_request.nonce.to_le_bytes()],
+        bump = redemption_request.bump,
+        has_one = owner @ DominionError::RedeemRequestOwnerMismatch,
+        constraint = redemption_request.status == RedemptionStatus::SettledOffchain
+            @ DominionError::RequestNotSettled,
+    )]
+    pub redemption_request: Box<Account<'info, RedemptionRequest>>,
+}
+
+pub fn close_settled_redemption_handler(ctx: Context<CloseSettledRedemption>) -> Result<()> {
+    let now = Clock::get()?.unix_timestamp;
+    let req = &ctx.accounts.redemption_request;
+
+    // Belt-and-suspenders: the account `constraint` already enforces this, but
+    // re-checking in the handler keeps the invariant explicit and local.
+    require!(
+        req.status == RedemptionStatus::SettledOffchain,
+        DominionError::RequestNotSettled
+    );
+
+    emit!(RedemptionClosed {
+        owner: req.owner,
+        amount_silv: req.amount_silv,
+        nonce: req.nonce,
         timestamp: now,
     });
     Ok(())

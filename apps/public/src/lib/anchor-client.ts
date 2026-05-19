@@ -653,6 +653,41 @@ export async function buildClaimRedemptionTx(
   return tx;
 }
 
+/**
+ * P2-03: the OWNER closes a request the admin already settled OTC
+ * (status == SettledOffchain) and reclaims the PDA rent. No funds move, no
+ * oracle, no config. Only valid in the terminal SettledOffchain state.
+ */
+export async function buildCloseSettledRedemptionTx(
+  connection: Connection,
+  wallet: WalletContextState,
+  request: RedemptionRequestView,
+): Promise<Transaction> {
+  if (!wallet.publicKey) throw new Error("Wallet not connected");
+  const program = getProgram(connection, wallet);
+  const owner = wallet.publicKey;
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ix = await (program.methods as any)
+    .closeSettledRedemption()
+    .accounts({
+      owner,
+      redemptionRequest: request.pubkey,
+    })
+    .instruction();
+
+  const tx = new Transaction().add(
+    ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
+    ix,
+  );
+  const { blockhash, lastValidBlockHeight } =
+    await connection.getLatestBlockhash("confirmed");
+  tx.recentBlockhash = blockhash;
+  tx.lastValidBlockHeight = lastValidBlockHeight;
+  tx.feePayer = owner;
+  return tx;
+}
+
 function statusKind(s: unknown): RedemptionStatusKind {
   const k = Object.keys(s as object)[0];
   if (k === "claimed") return "claimed";

@@ -528,6 +528,66 @@
       "args": []
     },
     {
+      "name": "close_settled_redemption",
+      "discriminator": [
+        138,
+        129,
+        74,
+        95,
+        143,
+        29,
+        186,
+        193
+      ],
+      "accounts": [
+        {
+          "name": "owner",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "redemption_request"
+          ]
+        },
+        {
+          "name": "redemption_request",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  114,
+                  101,
+                  100,
+                  101,
+                  101,
+                  109,
+                  95,
+                  114,
+                  101,
+                  113,
+                  117,
+                  101,
+                  115,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "owner"
+              },
+              {
+                "kind": "account",
+                "path": "redemption_request.nonce",
+                "account": "RedemptionRequest"
+              }
+            ]
+          }
+        }
+      ],
+      "args": []
+    },
+    {
       "name": "close_timelock_account",
       "discriminator": [
         157,
@@ -2551,15 +2611,21 @@
       "args": [
         {
           "name": "name",
-          "type": "string"
+          "type": {
+            "option": "string"
+          }
         },
         {
           "name": "symbol",
-          "type": "string"
+          "type": {
+            "option": "string"
+          }
         },
         {
           "name": "uri",
-          "type": "string"
+          "type": {
+            "option": "string"
+          }
         }
       ]
     },
@@ -3725,6 +3791,19 @@
       ]
     },
     {
+      "name": "RedemptionClosed",
+      "discriminator": [
+        209,
+        114,
+        3,
+        28,
+        64,
+        67,
+        58,
+        156
+      ]
+    },
+    {
       "name": "RedemptionSettledOffchain",
       "discriminator": [
         52,
@@ -4112,6 +4191,26 @@
       "code": 12066,
       "name": "DisallowedMintExtension",
       "msg": "SILV mint has a disallowed Token-2022 extension"
+    },
+    {
+      "code": 12067,
+      "name": "RequestNotSettled",
+      "msg": "Redemption request is not in SettledOffchain status"
+    },
+    {
+      "code": 12068,
+      "name": "MetadataNoFields",
+      "msg": "Metadata update has no fields set (all None); nothing to update"
+    },
+    {
+      "code": 12069,
+      "name": "MetadataFieldEmpty",
+      "msg": "Metadata field is present but empty (blanking is not allowed)"
+    },
+    {
+      "code": 12070,
+      "name": "MetadataFieldTooLong",
+      "msg": "Metadata field exceeds its maximum length"
     }
   ],
   "types": [
@@ -4623,15 +4722,21 @@
         "fields": [
           {
             "name": "new_name",
-            "type": "string"
+            "type": {
+              "option": "string"
+            }
           },
           {
             "name": "new_symbol",
-            "type": "string"
+            "type": {
+              "option": "string"
+            }
           },
           {
             "name": "new_uri",
-            "type": "string"
+            "type": {
+              "option": "string"
+            }
           }
         ]
       }
@@ -4974,6 +5079,30 @@
           {
             "name": "price_used_scaled",
             "type": "u128"
+          },
+          {
+            "name": "nonce",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RedemptionClosed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "owner",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount_silv",
+            "type": "u64"
           },
           {
             "name": "nonce",

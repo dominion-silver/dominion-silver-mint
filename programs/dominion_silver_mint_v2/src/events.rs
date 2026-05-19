@@ -109,11 +109,13 @@ pub struct ComplianceModeChanged {
     pub new_value: bool,
 }
 
+// P2-05: each field is Option<String> - `None` means that field was left
+// unchanged by this update (only the Some(...) fields were rewritten).
 #[event]
 pub struct MetadataUpdated {
-    pub new_name: String,
-    pub new_symbol: String,
-    pub new_uri: String,
+    pub new_name: Option<String>,
+    pub new_symbol: Option<String>,
+    pub new_uri: Option<String>,
 }
 
 // Option B queued-redemption lifecycle (CONFIRMED_SPEC.md §4.3/§4.4).
@@ -142,6 +144,15 @@ pub struct RedemptionSettledOffchain {
     pub amount_silv: u64,
     pub nonce: u64,
     pub by: Pubkey,
+    pub timestamp: i64,
+}
+
+// P2-03: owner closed a SettledOffchain request and reclaimed the PDA rent.
+#[event]
+pub struct RedemptionClosed {
+    pub owner: Pubkey,
+    pub amount_silv: u64,
+    pub nonce: u64,
     pub timestamp: i64,
 }
 

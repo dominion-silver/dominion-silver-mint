@@ -145,4 +145,16 @@ pub enum DominionError {
     // allowlist {MetadataPointer, TokenMetadata, PermanentDelegate}.
     #[msg("SILV mint has a disallowed Token-2022 extension")]
     DisallowedMintExtension,
+    // Codex deferred batch (2026-05-19). APPEND ONLY - never reorder:
+    // discriminants are positional and external clients read the numeric code.
+    // P2-03: close_settled_redemption rent-reclaim guard.
+    #[msg("Redemption request is not in SettledOffchain status")]
+    RequestNotSettled,
+    // P2-05: per-field metadata bounds (Option<String> + size caps).
+    #[msg("Metadata update has no fields set (all None); nothing to update")]
+    MetadataNoFields,
+    #[msg("Metadata field is present but empty (blanking is not allowed)")]
+    MetadataFieldEmpty,
+    #[msg("Metadata field exceeds its maximum length")]
+    MetadataFieldTooLong,
 }
