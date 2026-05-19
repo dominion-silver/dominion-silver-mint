@@ -15,6 +15,7 @@ import {
   type RedemptionQueueResult,
   type RedemptionStatusKind,
 } from "../lib/anchor-client";
+import { AdminActions } from "./AdminActions";
 
 
 const SECS_PER_DAY = 86_400;
@@ -115,7 +116,7 @@ export function Dashboard() {
         <RedemptionsTab data={data} queue={queue} />
       )}
       {tab === "governance" && <GovernanceTab data={data} />}
-      {tab === "actions" && <ActionsTab />}
+      {tab === "actions" && <AdminActions />}
       {tab === "help" && <HelpTab />}
     </div>
   );
@@ -547,115 +548,6 @@ function GovernanceTab({ data }: { data: DashboardSnapshot }) {
 
 /* ---------------- Actions ---------------- */
 
-function ActionsTab() {
-  return (
-    <div className="space-y-6">
-      <div className="rounded-xl border border-border bg-card p-6">
-        <p className="mb-5 text-xs text-muted">
-          Instant actions take effect immediately. Delayed actions create a
-          proposal that can only be executed after the 24-hour change delay (a
-          guardian can cancel it before then). Action wiring is pending - the
-          buttons describe what each will do.
-        </p>
-
-        <ActionGroup title="Instant (immediate)">
-          <ActionButton
-            label="Set redemptions on/off"
-            tip="Master switch for user redemptions. Turning it off stops all new redemptions and queue entries immediately. Use with care."
-          />
-          <ActionButton
-            label="Set max SILV supply"
-            tip="Raise or lower the hard ceiling on total SILV. Only raise it after acquiring matching physical silver."
-          />
-          <ActionButton
-            label="Set instant budget"
-            tip="Change the total value of instant redemptions allowed per fixed reset window."
-          />
-          <ActionButton
-            label="Set instant window"
-            tip="Change the length of the fixed window after which the instant budget resets."
-          />
-          <ActionButton
-            label="Set large-redeem threshold"
-            tip="Change the size at or above which a single redemption is forced into the delayed queue."
-          />
-          <ActionButton
-            label="Set queue delay"
-            tip="Change how long a queued redemption waits before it can be claimed."
-          />
-        </ActionGroup>
-
-        <ActionGroup title="Delayed (24-hour change delay)">
-          <ActionButton
-            label="Propose treasury minimum"
-            tip="Change the minimum USDC balance the admin must leave in the treasury for redeemers. Takes effect after the delay."
-          />
-          <ActionButton
-            label="Propose mint premium"
-            tip="Change the markup users pay to mint. Used for launch discounts. Takes effect after the delay."
-          />
-          <ActionButton
-            label="Propose redeem fee"
-            tip="Change the discount applied when users redeem. Takes effect after the delay."
-          />
-          <ActionButton
-            label="Propose treasury withdraw"
-            tip="Withdraw USDC from the treasury to a chosen destination. Cannot go below the treasury minimum. Takes effect after the delay."
-          />
-          <ActionButton
-            label="Propose price-feed safety"
-            tip="Change the price age, uncertainty, band, and jump limits. Takes effect after the delay."
-          />
-          <ActionButton
-            label="Propose token metadata"
-            tip="Update the SILV token name, symbol, or metadata link. Takes effect after the delay."
-          />
-          <ActionButton
-            label="Propose compliance toggle"
-            tip="Flip the operator compliance flag (also auto-pauses the protocol). It does NOT add token freeze/transfer controls - this contract has no freeze path; enforcement is via the permanent-delegate authority. Takes effect after the timelock delay."
-          />
-          <ActionButton
-            label="Propose price-feed source"
-            tip="Migrate the silver price feed to a new source id. Takes effect after the delay."
-          />
-          <ActionButton
-            label="Propose change delay"
-            tip="Change how long the 24-hour delay itself lasts (within safe bounds). Takes effect after the delay."
-          />
-        </ActionGroup>
-
-        <ActionGroup title="Emergency & operations">
-          <ActionButton
-            label="Pause"
-            danger
-            tip="Immediately block all minting and redeeming. For emergencies only."
-          />
-          <ActionButton
-            label="Unpause"
-            tip="Resume normal operation after a pause."
-          />
-          <ActionButton
-            label="Add guardian"
-            tip="Add a trusted key that can pause and cancel pending changes."
-          />
-          <ActionButton
-            label="Remove guardian"
-            tip="Remove a guardian key."
-          />
-          <ActionButton
-            label="Deposit USDC"
-            tip="Add USDC into the treasury, for example after selling physical silver."
-          />
-          <ActionButton
-            label="Transfer admin"
-            tip="Begin handing control to a new admin wallet. The new wallet must accept to complete the transfer."
-          />
-        </ActionGroup>
-      </div>
-    </div>
-  );
-}
-
 /* ---------------- Help ---------------- */
 
 function HelpTab() {
@@ -816,61 +708,3 @@ function Metric({
   );
 }
 
-function ActionGroup({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="mb-5 last:mb-0">
-      <div className="mb-2 text-xs uppercase tracking-wide text-muted">
-        {title}
-      </div>
-      <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-3">
-        {children}
-      </div>
-    </div>
-  );
-}
-
-function ActionButton({
-  label,
-  danger,
-  tip,
-}: {
-  label: string;
-  danger?: boolean;
-  tip?: string;
-}) {
-  return (
-    <div className="group relative">
-      <button
-        onClick={() =>
-          alert(
-            `${label}: opens a form and submits the change (instant) or creates a delayed proposal. Action wiring pending.`,
-          )
-        }
-        className={`flex w-full items-center justify-between rounded-md border px-3 py-2 text-left transition hover:bg-bg/40 ${
-          danger ? "border-danger text-danger" : "border-border"
-        }`}
-      >
-        <span>{label}</span>
-        {tip && (
-          <span className="ml-2 grid h-4 w-4 shrink-0 place-items-center rounded-full border border-border text-[10px] font-bold text-muted">
-            i
-          </span>
-        )}
-      </button>
-      {tip && (
-        <span
-          role="tooltip"
-          className="pointer-events-none absolute left-1/2 top-full z-30 mt-1 w-64 -translate-x-1/2 rounded-md border border-border bg-bg p-3 text-left text-xs leading-relaxed text-muted opacity-0 shadow-xl transition group-hover:opacity-100 group-focus-within:opacity-100"
-        >
-          {tip}
-        </span>
-      )}
-    </div>
-  );
-}

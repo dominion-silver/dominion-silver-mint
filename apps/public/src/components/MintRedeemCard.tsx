@@ -37,7 +37,7 @@ import { recordTxKind } from "@/components/TransactionHistory";
 
 type Mode = "mint" | "redeem";
 
-const OTC_EMAIL = "otc@dominion.market";
+const OTC_EMAIL = "mark@dominion.market";
 
 export function MintRedeemCard() {
   const wallet = useWallet();
