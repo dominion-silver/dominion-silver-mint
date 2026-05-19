@@ -3,6 +3,7 @@ import { PriceBanner } from "@/components/PriceBanner";
 import { MintRedeemCard } from "@/components/MintRedeemCard";
 import { ReservesPanel } from "@/components/ReservesPanel";
 import { TransactionHistory } from "@/components/TransactionHistory";
+import { WalletAuthGate } from "@/components/WalletAuthGate";
 import { PROGRAM_ID } from "@/lib/constants";
 
 export default function HomePage() {
@@ -19,7 +20,9 @@ export default function HomePage() {
             1 SILV = 1 troy ounce LBMA silver, vaulted with Brink's. Priced via Pyth XAG/USD.
           </p>
         </div>
-        <MintRedeemCard />
+        <WalletAuthGate>
+          <MintRedeemCard />
+        </WalletAuthGate>
         <ReservesPanel />
         <TransactionHistory />
         <footer className="mt-12 text-center text-xs text-muted">
