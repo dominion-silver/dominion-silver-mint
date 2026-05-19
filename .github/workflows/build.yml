@@ -87,38 +87,43 @@ jobs:
         run: cargo audit
         continue-on-error: true
 
-      - name: anchor build (NON-BLOCKING - definitive root cause below)
-        # NON-BLOCKING (continue-on-error) = the sanctioned Option D
-        # (NEXT_STEPS P2-07). DEFINITIVE root cause, proven over 13
-        # verified CI runs (doc 5 + 8 here, culminating in run
-        # 26092570494): this is NOT a CI / workflow / toolchain / lock
-        # problem. The pinned `pyth-solana-receiver-sdk = "0.6.0"`
-        # resolves to 0.6.1, whose OWN source (src/cpi/mod.rs:
-        # `AnchorSerialize::try_to_vec(&params)`) uses bare trait objects
-        # that are an E0782 HARD ERROR in modern Rust (edition-2021-gated;
-        # fails IDENTICALLY under platform-tools rust 1.84 AND 1.89 -
-        # verified by pre-seeding the EXACT local v1.52 / rust 1.89
-        # toolchain AND forcing the EXACT committed lock: still 12
-        # errors). So the committed dependency graph genuinely does not
-        # compile under any modern Rust, which also means the deployed
-        # devnet artifacts were NOT built from this exact committed graph
-        # (older rustc or a locally-different pyth = a real
-        # reproducibility gap to resolve before mainnet/audit).
-        #
-        # The only real fix is a DELIBERATE pyth-solana-receiver-sdk
-        # upgrade to a line that fixed the `dyn` syntax: a
-        # security-sensitive CONTRACT dependency change (it is the price
-        # oracle SDK) requiring re-verification vs the deployed bytes +
-        # re-audit. Tracked as a mainnet-hardening task, NOT a CI tweak.
-        #
-        # The deploy gate does NOT depend on this step: the live .so +
-        # IDL are independently sha256-verified
-        # (private/RELEASE_ARTIFACT_V2_DEVNET.md), the IDL is committed
-        # in-repo, and the reproducible-build job is separate. Same
-        # treatment as `anchor test`. Full forensics:
-        # private/CI_IDL_DETERMINISM.md.
-        run: anchor build
-        continue-on-error: true
+      - name: anchor build (SBF + IDL, both --locked; vendored pyth)
+        # RESOLVED. The vendored + minimally-patched pyth-solana-receiver-
+        # sdk 0.6.1 (commit 39a62e7) fixed the E0782 root cause: run
+        # 26095758504 PROVED the SBF build `Finished release [optimized]`
+        # AND the IDL compile `Finished test [unoptimized]` both succeed
+        # under the STOCK platform-tools (cargo 1.84) - no pre-seed
+        # needed. The only residual failure in that run was anchor's IDL
+        # sub-build re-resolving UNLOCKED and pulling `ctutils 0.4.2`
+        # (edition2024, unparseable by cargo 1.84) - the classic unlocked
+        # re-resolve. `--locked` on BOTH halves pins the committed,
+        # edition2021-safe lock (no re-resolve) = deterministic. This was
+        # the doc's Option A, impossible before because the un-vendored
+        # pyth 0.6.1 failed E0782 even when locked; the vendor unblocks
+        # it. Blocking gate restored (continue-on-error removed): the
+        # contract now genuinely compiles + the IDL is deterministic.
+        # Contract behaviour byte-identical (pyth patch is serialization-
+        # equivalent, triple-reviewed SHIP). private/CI_IDL_DETERMINISM.md.
+        run: |
+          rustup default ${RUST_VERSION}
+          echo "host cargo : $(cargo --version)"
+          echo "sbf builder: $(cargo-build-sbf --version | tr '\n' ' ')"
+          # SBF .so, --locked = the exact committed graph (vendored pyth
+          # + edition2021-safe deps). `anchor build -- -- <a>` forwards
+          # <a> to the inner cargo build (doc-verified form).
+          anchor build --no-idl -- -- --locked
+          # IDL via explicit cargo-test, --locked so it does NOT
+          # re-resolve to edition2024 crates (ctutils 0.4.2 etc.).
+          mkdir -p target/idl target/types
+          anchor idl build \
+            --out target/idl/dominion_silver_mint.json \
+            --out-ts target/types/dominion_silver_mint.ts \
+            -- --locked
+          if [ ! -s target/idl/dominion_silver_mint.json ]; then
+            echo "::error::IDL not produced or empty"
+            exit 1
+          fi
+          echo "IDL bytes: $(wc -c < target/idl/dominion_silver_mint.json)"
 
       - name: Yarn install (post-build, for tests only)
         run: yarn install
