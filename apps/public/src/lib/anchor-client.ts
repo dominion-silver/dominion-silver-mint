@@ -272,6 +272,28 @@ export function parseRedeemError(errText: string): RedeemRoute | null {
 }
 
 /**
+ * StaleOracle = 12004 / 0x2ee4 (oracle.rs: get_price_no_older_than vs
+ * config.max_staleness_seconds). Hit on ANY Pyth-priced path (mint,
+ * redeem, claim) when too much wall-clock passes between posting the
+ * Pyth price and the consumer tx landing. max_staleness is 15s on the
+ * deployed devnet program (mainnet init value: 60s), so a human slow to
+ * approve the two wallet popups trips it. Detect it so the UI shows a
+ * clear "be faster / retry" message instead of the raw
+ * `Simulation reverted: {...Custom:12004...}` dump.
+ */
+export function isStaleOracleError(errText: string): boolean {
+  return anchorErr(errText, "StaleOracle", 12004);
+}
+
+/** Canonical user-facing copy for the StaleOracle case (single source). */
+// Action-first so the guidance survives the toast preview slice
+// (~120 chars): the user must "be faster", that is the actionable part.
+export const STALE_ORACLE_USER_MESSAGE =
+  "Please retry and approve both wallet prompts quickly. " +
+  "The oracle price expired before the transaction could confirm " +
+  "(too much time passed between the two wallet approvals).";
+
+/**
  * Flatten an unknown error into one searchable string, INCLUDING program
  * logs. Solana `SendTransactionError` carries the human-readable Anchor lines
  * (`Program log: AnchorError ... Error Code: NonceMismatch ...`) in `.logs`,

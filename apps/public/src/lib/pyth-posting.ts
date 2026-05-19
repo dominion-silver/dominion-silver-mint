@@ -27,6 +27,7 @@ import { Connection, PublicKey, Keypair, Transaction, VersionedTransaction, type
 import type { WalletContextState } from "@solana/wallet-adapter-react";
 import bs58 from "bs58";
 import { PYTH_XAG_USD_FEED_ID } from "./constants";
+import { isStaleOracleError, STALE_ORACLE_USER_MESSAGE } from "./anchor-client";
 
 const HERMES_URL = "https://hermes.pyth.network";
 const HERMES_TIMEOUT_MS = 10_000;
@@ -378,6 +379,13 @@ async function _postPythAndExecuteConsumerImpl(
       ? sim.value.err
       : JSON.stringify(sim.value.err);
     const lastLogs = logs.slice(-8).join("\n  ");
+    // StaleOracle (12004) is the common, self-inflicted case: surface a
+    // clear "be faster / retry" message instead of the raw revert dump.
+    // Flatten err + logs so the Custom:12004 / "StaleOracle" signal is
+    // matched whether it is in the structured err or only in the logs.
+    if (isStaleOracleError(`${errStr}\n${logs.join("\n")}`)) {
+      throw new Error(STALE_ORACLE_USER_MESSAGE);
+    }
     throw new Error(`Simulation reverted: ${errStr}\n  ${lastLogs}`);
   }
 

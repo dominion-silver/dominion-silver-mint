@@ -18,6 +18,8 @@ import {
   classifyRedeem,
   parseRedeemError,
   isQueuedNonceRaceError,
+  isStaleOracleError,
+  STALE_ORACLE_USER_MESSAGE,
   errorToText,
   fetchRedemptionRequests,
   buildMintTx,
@@ -390,21 +392,26 @@ export function MintRedeemCard() {
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      // If an instant redeem reverted because the budget filled / treasury
-      // ran dry between preflight and send, guide the user to the right path.
-      // Classify on the FLATTENED text (message + program logs + structured
-      // err), not just `.message`: a confirmed-but-reverted tx carries the
-      // signal in logs/onChainErr, so the OTC/queue reroute hint still works.
+      // Flatten once (message + program logs + structured err): a
+      // confirmed-but-reverted tx carries the signal in logs/onChainErr,
+      // not just `.message`.
+      const flat = errorToText(e);
+      // StaleOracle (12004) takes priority on EVERY Pyth path (mint /
+      // redeem / claim). pyth-posting already maps the simulation-revert
+      // case to this copy; this also covers the confirmed-on-chain-revert
+      // path (raw "Transaction reverted on-chain" + logs).
       const reroute =
-        mode === "redeem" ? parseRedeemError(errorToText(e)) : null;
+        mode === "redeem" ? parseRedeemError(flat) : null;
       const friendly =
-        reroute === "queue"
-          ? "Instant budget just filled. Re-submit: it will route to the T+3 queue."
-          : reroute === "otc"
-            ? `Treasury can't cover this now. Redeem via OTC: ${OTC_EMAIL}.`
-            : reroute === "disabled"
-              ? "Redemptions are disabled / paused."
-              : msg;
+        isStaleOracleError(flat)
+          ? STALE_ORACLE_USER_MESSAGE
+          : reroute === "queue"
+            ? "Instant budget just filled. Re-submit: it will route to the T+3 queue."
+            : reroute === "otc"
+              ? `Treasury can't cover this now. Redeem via OTC: ${OTC_EMAIL}.`
+              : reroute === "disabled"
+                ? "Redemptions are disabled / paused."
+                : msg;
       showError(friendly);
       toast({
         message: `${mode === "mint" ? "Mint" : "Redeem"} failed: ${friendly.split("\n")[0].slice(0, 140)}`,
@@ -443,13 +450,15 @@ export function MintRedeemCard() {
       // structured err): a landed-but-reverted claim carries the signal
       // in logs/onChainErr, so the InsufficientTreasury -> OTC hint works
       // (CODEX P1-01).
-      const reroute = parseRedeemError(errorToText(e));
-      showError(
-        reroute === "otc"
+      const flat = errorToText(e);
+      const reroute = parseRedeemError(flat);
+      const friendly = isStaleOracleError(flat)
+        ? STALE_ORACLE_USER_MESSAGE
+        : reroute === "otc"
           ? `Treasury can't cover this claim yet. It stays queued (on-chain IOU); contact ${OTC_EMAIL} for OTC settlement.`
-          : msg,
-      );
-      toast({ message: `Claim failed: ${msg.slice(0, 120)}`, variant: "error" });
+          : msg;
+      showError(friendly);
+      toast({ message: `Claim failed: ${friendly.split("\n")[0].slice(0, 120)}`, variant: "error" });
     } finally {
       inFlight.current = false;
     }
