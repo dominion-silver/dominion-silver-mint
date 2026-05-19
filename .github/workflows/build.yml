@@ -88,45 +88,60 @@ jobs:
         continue-on-error: true
 
       - name: anchor build (SBF unlocked) + IDL (locked)
-        # EVIDENCE-DRIVEN, two halves, each VERIFIED in CI:
+        # EVIDENCE-DRIVEN (full ground-truth converged over CI runs
+        # 26086567305 / 26087219838 / 26088175606 + local inspection):
         #
-        # 1. SBF program build: plain `anchor build --no-idl`, UNLOCKED.
-        #    Run 26086567305 (Solana 3.1.14) proved this compiles clean
-        #    (`Finished release [optimized] in 11.59s`, pyth-sdk E0782
-        #    GONE). It MUST stay unlocked: locking the SBF build
-        #    re-introduces pyth-solana-receiver-sdk E0782 under the
-        #    platform-tools SBF rustc (private/CI_IDL_DETERMINISM.md
-        #    DEEPER FINDING). 3.1.14's unlocked re-resolve picks a
-        #    pyth-sdk that the SBF rustc can compile.
+        # The real root cause is the platform-tools (SBF) cargo VERSION,
+        # not Solana 3.1.13-vs-3.1.14 and not a lock flag. EVERY Anchor-
+        # 0.31.1-compatible Solana release ships its `cargo-build-sbf`
+        # defaulting to platform-tools v1.51 = cargo/rustc 1.84. cargo
+        # 1.84 cannot PARSE an `edition2024` manifest. But on the SBF
+        # target there is NO single cpufeatures that works under 1.84:
+        #   - cpufeatures 0.2.x: parses (edition2018) but has a hard
+        #     `compile_error!` for non-x86/aarch64 targets (SBF = sbpf,
+        #     so it fails to COMPILE) [run 26088175606].
+        #   - cpufeatures 0.3.0: supports the SBF target but is
+        #     `edition2024` (1.84 cannot PARSE it) [run 26087219838].
+        # The build must stay UNLOCKED (a locked graph hits
+        # pyth-solana-receiver-sdk E0782 under the SBF rustc).
         #
-        # 2. IDL extraction: split out as an EXPLICIT `anchor idl build
-        #    -- --locked`. The same run proved anchor's *implicit* IDL
-        #    sub-build re-resolves UNLOCKED and dies fetching
-        #    `cpufeatures 0.3.0` ("feature edition2024 is required ...
-        #    not stabilized in this version of Cargo (1.84.0)") because
-        #    the platform-tools cargo driving the IDL `cargo test` is
-        #    1.84. Forcing `--locked` makes it use the committed
-        #    Cargo.lock (cpufeatures 0.2.17 = edition2021, parseable by
-        #    cargo 1.84) instead of the newest crates.io. Locally
-        #    verified to honor the lock and emit the correct ~106 KB IDL
-        #    (private/CI_IDL_DETERMINISM.md Option A / DEEPER FINDING).
+        # Local FACT: the deployed + sha256-verified V2 .so + IDL were
+        # built with platform-tools **v1.52 = rustc/cargo 1.89.0**
+        # (edition2024-capable). Under v1.52 the unlocked re-resolve
+        # picks cpufeatures 0.3.0, which 1.89 PARSES and which DOES
+        # support the SBF target. So: force `cargo-build-sbf` to
+        # platform-tools v1.52 via its documented `--tools-version`
+        # lever (anchor forwards `-- <args>` to cargo-build-sbf). This
+        # makes CI use the EXACT toolchain that produced the live
+        # artifacts: contract source / Anchor / pyth unchanged, deployed
+        # bytes + IDL unaffected (no redeploy). See
+        # private/CI_IDL_DETERMINISM.md.
+        #
+        # IDL extraction stays an EXPLICIT `anchor idl build -- --locked`
+        # (deterministic): it builds for the HOST target (x86_64) where
+        # the committed-lock cpufeatures 0.2.17 compiles fine (no SBF
+        # compile_error) under the rustup-default 1.89 host cargo.
         #
         # Blocking gate (no continue-on-error). rustup default
-        # ${RUST_VERSION} keeps cargo-build-sbf's `+<sbf>` proxy working;
-        # loud guard if the host cargo is < 1.85.
+        # ${RUST_VERSION} keeps the host cargo at 1.89; loud guard if the
+        # host cargo is < 1.85.
         run: |
           rustup default ${RUST_VERSION}
-          echo "host cargo : $(cargo --version)"
-          echo "sbf builder: $(cargo-build-sbf --version)"
+          echo "host cargo  : $(cargo --version)"
+          echo "sbf default : $(cargo-build-sbf --version | tr '\n' ' ')"
           ver="$(cargo --version | awk '{print $2}')"
           major="${ver%%.*}"; rest="${ver#*.}"; minor="${rest%%.*}"
           if [ "$major" -lt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -lt 85 ]; }; then
             echo "::error::host cargo $ver lacks edition2024 (need >= 1.85)"
             exit 1
           fi
-          # Half 1: SBF .so only, UNLOCKED (skip anchor's implicit IDL).
-          anchor build --no-idl
-          # Half 2: IDL via explicit cargo-test, LOCKED (no re-resolve).
+          # Half 1: SBF .so only, UNLOCKED, FORCED onto platform-tools
+          # v1.52 (cargo 1.89, edition2024-capable) = the local toolchain
+          # that built the live artifacts. --force-tools-install so a
+          # Solana-bundled v1.51 cache cannot shadow v1.52.
+          anchor build --no-idl -- --tools-version v1.52 --force-tools-install
+          # Half 2: IDL via explicit cargo-test, LOCKED (no re-resolve),
+          # host target under the 1.89 host cargo.
           mkdir -p target/idl target/types
           anchor idl build \
             --out target/idl/dominion_silver_mint.json \
