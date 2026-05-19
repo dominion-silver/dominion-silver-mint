@@ -624,6 +624,7 @@ version = "0.1.0"
 dependencies = [
  "anchor-lang",
  "anchor-spl",
+ "constant_time_eq",
  "pyth-solana-receiver-sdk",
  "spl-token-2022 7.0.0",
  "spl-token-metadata-interface",
