@@ -64,6 +64,56 @@ jobs:
           $HOME/.local/share/solana/install/active_release/bin/solana --version
           $HOME/.local/share/solana/install/active_release/bin/cargo-build-sbf --version
 
+      - name: Pin platform-tools to v1.52 (rust 1.89 = local toolchain)
+        # DETERMINISTIC Option B (spike converged over 6 CI runs + agave
+        # source). cargo-build-sbf (platform-tools-sdk/.../toolchain.rs)
+        # installs platform-tools to ~/.cache/solana/<ver>/platform-tools
+        # and, when NOT --force, REUSES that dir if it exists + is
+        # non-empty (skips the download; verified in source: install_if_
+        # missing). The released v3.1.14 cargo-build-sbf binary resolves
+        # <ver> = v1.51 (empirically CI got cargo 1.84) even though the
+        # v3.1.14 SOURCE default is v1.52 (release binary != source tag).
+        # The deployed + sha256-verified V2 .so + IDL were built locally
+        # with platform-tools v1.52 = rustc/cargo 1.89.0. So pre-seed the
+        # v1.52 tree at BOTH the v1.51 and v1.52 cache paths: every
+        # no-flag cargo-build-sbf invocation (the SBF build AND anchor's
+        # internal IDL sub-build) then runs rust 1.89 = the EXACT local
+        # toolchain. Under 1.89 the unlocked re-resolve is fine (pyth
+        # floats to a dyn-fixed version, no E0782; cpufeatures 0.3.0 both
+        # parses and supports sbpf). No --tools-version (anchor forwards
+        # it to the IDL cargo-test which rejects it, run 26090526915), no
+        # --force (would delete the seed), no split (a 2nd anchor
+        # invocation reverts the toolchain, run 26089090936). Contract /
+        # Anchor / pyth / deployed bytes unchanged. private/CI_IDL_DETERMINISM.md
+        run: |
+          PT="https://github.com/anza-xyz/platform-tools/releases/download/v1.52/platform-tools-linux-x86_64.tar.bz2"
+          for attempt in 1 2 3; do
+            if curl -sSfL "$PT" -o /tmp/pt152.tar.bz2; then break; fi
+            echo "platform-tools v1.52 download attempt $attempt failed, retrying..."
+            sleep 10
+          done
+          echo "tarball top entries:"
+          tar -tjf /tmp/pt152.tar.bz2 | head -3
+          for ver in v1.51 v1.52; do
+            dst="$HOME/.cache/solana/$ver/platform-tools"
+            rm -rf "$dst"
+            mkdir -p "$dst"
+            tar --strip-components 1 -jxf /tmp/pt152.tar.bz2 -C "$dst"
+          done
+          rm -f /tmp/pt152.tar.bz2
+          RUSTC="$HOME/.cache/solana/v1.51/platform-tools/rust/bin/rustc"
+          if [ ! -x "$RUSTC" ]; then
+            echo "::error::seeded rustc missing at $RUSTC"
+            ls -la "$HOME/.cache/solana/v1.51/platform-tools" || true
+            exit 1
+          fi
+          PTV="$("$RUSTC" --version)"
+          echo "seeded sbf rustc: $PTV"
+          case "$PTV" in
+            *"1.89."*) echo "OK: platform-tools pinned to rust 1.89 (v1.52)";;
+            *) echo "::error::seeded rustc is not 1.89: $PTV"; exit 1;;
+          esac
+
       - name: Install Anchor CLI (git+tag+locked pattern)
         run: |
           # --force in case cache restored a stale binary from a previous run.
@@ -87,41 +137,21 @@ jobs:
         run: cargo audit
         continue-on-error: true
 
-      - name: anchor build (full, platform-tools v1.52 = local toolchain)
-        # OPTION B SPIKE (evidence converged over CI runs 26086567305 /
-        # 26087219838 / 26088175606 / 26089090936 + local ground truth).
-        #
-        # The genuine bind on the SBF target under the platform-tools
-        # cargo 1.84 (= platform-tools v1.51, what CI kept getting):
-        #   - locked graph  -> pyth-solana-receiver-sdk E0782 (12 errs),
-        #     the SBF rustc 1.84 cannot compile the locked pyth.
-        #   - unlocked graph -> floats cpufeatures to 0.3.0 which is
-        #     edition2024 (cargo 1.84 cannot even PARSE it); the older
-        #     cpufeatures 0.2.x instead `compile_error!`s on sbpf.
-        # No flag escapes this under cargo 1.84.
-        #
-        # Local FACT (verified: ~/.cache/solana/v1.52/.../rustc =
-        # 1.89.0): the deployed + sha256-verified V2 .so + IDL were built
-        # with platform-tools **v1.52 = cargo/rustc 1.89.0**. Under 1.89
-        # the unlocked re-resolve is fine: pyth floats to a dyn-fixed
-        # version (no E0782) AND cpufeatures 0.3.0 both parses (1.89
-        # supports edition2024) and supports sbpf. Both failure modes
-        # vanish together. agave 3.1.14's cargo-build-sbf DEFAULT is
-        # already v1.52 (`--version` prints it; run 26089090936 proved
-        # `--tools-version v1.52 --force-tools-install` installs
-        # `1.89.0-sbpf-solana-v1.52`); CI only got v1.51 because the
-        # agave installer pre-seeds v1.51 and cargo-build-sbf reuses it.
-        #
-        # The ONLY remaining bug in run 26089090936 was SPLITTING the
-        # build: `anchor build --no-idl` (v1.52) then a SEPARATE
-        # `anchor idl build` re-ran cargo-build-sbf setup WITHOUT the
-        # flag and reverted v1.52 -> v1.51 before the IDL compile. Fix:
-        # ONE full `anchor build` (SBF + its internal IDL sub-build in a
-        # single cargo-build-sbf toolchain context, exactly how the local
-        # machine builds), forced onto v1.52. Unlocked (full anchor build
-        # does not pass --locked). This replicates the local toolchain
-        # 1:1: contract source / Anchor / pyth unchanged, deployed bytes
-        # + IDL unaffected (no redeploy). See private/CI_IDL_DETERMINISM.md.
+      - name: anchor build (plain; platform-tools pre-pinned to v1.52)
+        # The "Pin platform-tools to v1.52" step above already placed
+        # rust 1.89 (= the exact local toolchain that built the deployed +
+        # sha256-verified V2 .so/IDL) at the cache path cargo-build-sbf
+        # resolves. So this is a PLAIN `anchor build`: no --tools-version
+        # (anchor would forward it to the internal IDL cargo-test which
+        # rejects it, run 26090526915), no --force (would delete the
+        # seed), no split (a 2nd anchor invocation reverts the toolchain,
+        # run 26089090936), no --locked (unlocked lets pyth float to a
+        # dyn-fixed version => no E0782; under rust 1.89 the floated
+        # cpufeatures 0.3.0 both parses and supports sbpf). One full
+        # `anchor build` = SBF + internal IDL sub-build, both reusing the
+        # seeded rust 1.89, exactly how the local machine builds.
+        # Contract source / Anchor / pyth unchanged: deployed bytes + IDL
+        # unaffected (no redeploy). See private/CI_IDL_DETERMINISM.md.
         #
         # Blocking gate (no continue-on-error). rustup default
         # ${RUST_VERSION} keeps the host cargo at 1.89; loud guard if the
@@ -129,23 +159,25 @@ jobs:
         run: |
           rustup default ${RUST_VERSION}
           echo "host cargo  : $(cargo --version)"
-          echo "sbf default : $(cargo-build-sbf --version | tr '\n' ' ')"
+          echo "seeded sbf  : $($HOME/.cache/solana/v1.51/platform-tools/rust/bin/rustc --version)"
           ver="$(cargo --version | awk '{print $2}')"
           major="${ver%%.*}"; rest="${ver#*.}"; minor="${rest%%.*}"
           if [ "$major" -lt 1 ] || { [ "$major" -eq 1 ] && [ "$minor" -lt 85 ]; }; then
             echo "::error::host cargo $ver lacks edition2024 (need >= 1.85)"
             exit 1
           fi
-          # ONE full build (SBF + internal IDL sub-build), UNLOCKED,
-          # forced onto platform-tools v1.52 (cargo 1.89) = the exact
-          # local toolchain. --force-tools-install so the agave-installer
-          # pre-seeded v1.51 cannot shadow v1.52. NOT split: a second
-          # anchor invocation reverts the toolchain (run 26089090936).
-          anchor build -- --tools-version v1.52 --force-tools-install
-          # Verify-before-claim: prove which SBF toolchain actually ran
-          # (must be the 1.89.0 / v1.52 one, not 1.84.1 / v1.51).
+          # Plain full build: SBF + internal IDL sub-build, both reuse the
+          # pre-seeded ~/.cache/solana/{v1.51,v1.52}/platform-tools (rust
+          # 1.89). NO flags (see comment above for why each is omitted).
+          anchor build
+          # Verify-before-claim: prove the SBF toolchain that actually ran
+          # is rust 1.89 (the v1.52 seed), not 1.84.
           echo "sbf toolchains linked:"
           rustup toolchain list | grep -i sbpf || echo "  (none listed)"
+          SBF_TC="$(rustup toolchain list | grep -i sbpf | head -1 | awk '{print $1}')"
+          if [ -n "$SBF_TC" ]; then
+            rustc "+$SBF_TC" --version || true
+          fi
           if [ ! -s target/idl/dominion_silver_mint.json ]; then
             echo "::error::IDL not produced or empty"
             exit 1
