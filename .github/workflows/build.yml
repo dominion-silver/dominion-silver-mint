@@ -108,6 +108,22 @@ jobs:
             echo "::error::host cargo $ver lacks edition2024 (need >= 1.85)"
             exit 1
           fi
+          # CONVERGED ROOT FIX (runs 26080776060 / 26081827582 / 26082573036
+          # / 26083094436): the edition2024 + sbf-proxy issues are solved
+          # above; the SBF program build itself SUCCEEDS. The remaining
+          # failure is that anchor's IDL-extraction sub-build RE-RESOLVES
+          # dependencies fresh, IGNORING the committed Cargo.lock, so it
+          # perpetually pulls the newest toolchain-incompatible crate
+          # (constant_time_eq 0.4.2 -> wincode-derive 0.4.5 ->
+          # toml_datetime 1.1.1+spec-1.1.0 -> ...). Per-crate pins and
+          # cargo bumps are symptoms; the disease is the unlocked
+          # re-resolve. Pre-fetch EXACTLY the committed lock, then force
+          # the whole build offline so every cargo invocation (SBF + IDL)
+          # MUST use the proven-good locked set and can never re-resolve to
+          # newer crates. `cargo fetch --locked` fails loud if the lock is
+          # stale (a real, diagnosable signal, not a mystery).
+          cargo fetch --locked
+          export CARGO_NET_OFFLINE=true
           anchor build
 
       - name: Yarn install (post-build, for tests only)
