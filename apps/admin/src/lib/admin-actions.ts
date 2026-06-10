@@ -309,27 +309,28 @@ export interface OracleGuardsInput {
   dustFilterMinUsdc?: bigint;
   minPublishers?: number;
 }
-export const proposeSetOracleGuards = (
-  c: BuildCtx,
-  a: OracleGuardsInput,
-): Ix =>
-  propose(c, "proposeSetOracleGuards", [
-    {
-      staleness: a.stalenessSeconds ?? null,
-      confBps: a.confBps ?? null,
-      minPriceScaled:
-        a.minPriceScaled != null ? new BN(a.minPriceScaled.toString()) : null,
-      maxPriceScaled:
-        a.maxPriceScaled != null ? new BN(a.maxPriceScaled.toString()) : null,
-      maxDeltaBps: a.maxDeltaBps ?? null,
-      decaySeconds: a.decaySeconds ?? null,
-      dustFilterMinUsdc:
-        a.dustFilterMinUsdc != null
-          ? new BN(a.dustFilterMinUsdc.toString())
-          : null,
-      minPublishers: a.minPublishers ?? null,
-    },
-  ]);
+// Extracted + exported so the encoding regression test can assert every
+// provided field round-trips as Some. The keys MUST stay camelCase (Anchor
+// camelCases the IDL at runtime); a snake_case key silently encodes None.
+export function oracleGuardsArgsObject(a: OracleGuardsInput) {
+  return {
+    staleness: a.stalenessSeconds ?? null,
+    confBps: a.confBps ?? null,
+    minPriceScaled:
+      a.minPriceScaled != null ? new BN(a.minPriceScaled.toString()) : null,
+    maxPriceScaled:
+      a.maxPriceScaled != null ? new BN(a.maxPriceScaled.toString()) : null,
+    maxDeltaBps: a.maxDeltaBps ?? null,
+    decaySeconds: a.decaySeconds ?? null,
+    dustFilterMinUsdc:
+      a.dustFilterMinUsdc != null
+        ? new BN(a.dustFilterMinUsdc.toString())
+        : null,
+    minPublishers: a.minPublishers ?? null,
+  };
+}
+export const proposeSetOracleGuards = (c: BuildCtx, a: OracleGuardsInput): Ix =>
+  propose(c, "proposeSetOracleGuards", [oracleGuardsArgsObject(a)]);
 
 // 2-step admin transfer. accept = signed by the NEW admin = the Ops vault.
 export async function acceptAdminTransfer(c: BuildCtx): Ix {

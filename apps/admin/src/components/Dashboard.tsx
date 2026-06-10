@@ -522,6 +522,16 @@ function GovernanceTab({ data }: { data: DashboardSnapshot }) {
           value={`${(cfg.maxPriceDeltaBps / 100).toFixed(2)}% / ${(cfg.priceDeltaDecaySeconds / 3600).toFixed(1)}h`}
           tip="Largest allowed move versus the last recorded price, and how quickly that limit relaxes over time."
         />
+        <Metric
+          title="Min publishers"
+          value={`${cfg.minPublishers}`}
+          tip="Minimum Lazer publishers required in a price aggregate. The launch GO-gate requires raising this to at least 2 (via Propose price-feed safety) BEFORE unpausing. A value of 1 is the bare structural floor and is not safe to operate on."
+        />
+        <Metric
+          title="Lazer feed id"
+          value={`${cfg.pythLazerFeedId}`}
+          tip="The Pyth Lazer feed id the protocol prices from (SILV = 3304)."
+        />
       </Section>
 
       <div className="rounded-xl border border-border bg-card p-6">
