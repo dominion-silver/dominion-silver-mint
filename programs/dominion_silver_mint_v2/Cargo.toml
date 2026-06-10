@@ -19,6 +19,11 @@ cpi = ["no-entrypoint"]
 # generated IDL do NOT contain them. Devnet testing builds with
 # `--features dev-hatch`. Release/mainnet/CI builds MUST NOT pass it.
 dev-hatch = []
+# test-harness: a single read-only `probe_oracle_price` ix for the litesvm /
+# solana-program-test behavioral harness (tools/lazer-harness). Like dev-hatch,
+# NOT in `default`, so it is absent from the deploy build + the generated IDL.
+# Release/mainnet/CI builds MUST NOT pass it.
+test-harness = []
 default = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 

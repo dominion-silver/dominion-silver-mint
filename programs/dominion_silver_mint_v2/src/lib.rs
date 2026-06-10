@@ -10,17 +10,16 @@ pub mod cpi;
 pub mod errors;
 pub mod events;
 pub mod instructions;
-// Pyth Lazer (Pyth Pro) dependency-free payload parser. Not yet wired into the
-// oracle path; it is the verified foundation of the Core -> Lazer migration
-// (see private/PYTH_PRO_MIGRATION_PLAN.md). The official pyth-lazer-protocol
-// crate does not build for SBF (off-chain dep tree), hence this hand-roll.
+// Pyth Lazer (Pyth Pro) dependency-free payload parser, wired into the oracle
+// path via oracle.rs (the Core -> Lazer migration, private/PYTH_PRO_MIGRATION_
+// PLAN.md). The official pyth-lazer-protocol crate does not build for SBF
+// (off-chain dep tree), hence this hand-roll; it is machine-verified against
+// that crate's wire format in tools/lazer-verify.
 pub mod lazer;
 // Pyth Lazer verify_message CPI wrapper + isolated fee-payer PDA (Section 5.2).
-// Not yet wired into any instruction; behavioral verification is the
-// solana-program-test harness (mock + malicious Lazer).
+// Runtime-verified end-to-end by the litesvm harness (tools/lazer-harness).
 pub mod lazer_cpi;
-// Pyth Lazer oracle policy + pricing (Sections 5.4-5.6). Pure; wired by
-// oracle.rs at integration time.
+// Pyth Lazer oracle policy + pricing (Sections 5.4-5.6), wired by oracle.rs.
 pub mod lazer_price;
 pub mod math;
 pub mod oracle;
@@ -188,6 +187,24 @@ pub mod dominion_silver_mint {
         redeem_bps: u16,
     ) -> Result<()> {
         instructions::admin::dev::dev_set_premiums_handler(ctx, mint_bps, redeem_bps)
+    }
+
+    /// TEST-HARNESS ONLY (feature `test-harness`). Read-only: drives the Lazer
+    /// oracle read path in isolation + returns the price via return-data.
+    /// Absent from release/deploy builds + the generated IDL.
+    #[cfg(feature = "test-harness")]
+    pub fn probe_oracle_price(
+        ctx: Context<ProbeOraclePrice>,
+        message_data: Vec<u8>,
+        ed25519_instruction_index: u16,
+        signature_index: u8,
+    ) -> Result<()> {
+        instructions::probe::handler(
+            ctx,
+            message_data,
+            ed25519_instruction_index,
+            signature_index,
+        )
     }
 
     pub fn add_guardian(ctx: Context<AddGuardian>, guardian_pubkey: Pubkey) -> Result<()> {

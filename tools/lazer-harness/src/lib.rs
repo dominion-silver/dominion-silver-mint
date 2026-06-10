@@ -1,0 +1,344 @@
+//! Behavioral harness for the dominion Lazer oracle CPI path. See Cargo.toml.
+//! Empty lib; all logic lives in the #[cfg(test)] harness below.
+
+#[cfg(test)]
+mod harness {
+    use byteorder::{LittleEndian, WriteBytesExt};
+    use litesvm::LiteSVM;
+    use pyth_lazer_protocol::payload::{AggregatedPriceFeedData, PayloadData};
+    use pyth_lazer_protocol::time::TimestampUs;
+    use pyth_lazer_protocol::{ChannelId, Price, PriceFeedId, PriceFeedProperty};
+    use sha2::{Digest, Sha256};
+    use solana_sdk::account::Account;
+    use solana_sdk::instruction::{AccountMeta, Instruction};
+    use solana_sdk::pubkey::Pubkey;
+    use solana_sdk::signature::{Keypair, Signer};
+    use solana_sdk::transaction::Transaction;
+    use std::io::Write;
+    use std::str::FromStr;
+
+    // Pinned constants (must match the dominion source).
+    const DOMINION_ID: &str = "GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX";
+    const LAZER_PROGRAM_ID: &str = "pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt";
+    const LAZER_STORAGE: &str = "3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpPuSCQVyQL";
+    const LAZER_TREASURY: &str = "Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak";
+    const CONFIG_SEED: &[u8] = b"config";
+    const LAZER_FEE_PAYER_SEED: &[u8] = b"lazer_fee_payer";
+    const STORAGE_FEE_OFFSET: usize = 72;
+    const LAZER_FEE_CEILING: u64 = 10_000;
+    const LAZER_CHANNEL_ID: u8 = 4;
+    const SILV_FEED_ID: u32 = 3304;
+    const PRICE_SCALE: i32 = 9;
+    // Fixed wall clock for the harness (litesvm clock set to match), so feed
+    // timestamps land inside the staleness window deterministically.
+    const NOW_SECS: i64 = 1_700_000_000;
+    const NOW_US: u64 = (NOW_SECS as u64) * 1_000_000;
+
+    // Runtime DominionError codes (anchor base 6000 + 6000 offset = 12000-based).
+    const E_FEE_TOO_HIGH: &str = "12074";
+    const E_TOO_FEW_PUBLISHERS: &str = "12081";
+    const E_CARRIED_FORWARD: &str = "12082";
+
+    fn anchor_disc(preimage: &str) -> [u8; 8] {
+        let mut h = Sha256::new();
+        h.update(preimage.as_bytes());
+        h.finalize()[..8].try_into().unwrap()
+    }
+
+    fn pk(s: &str) -> Pubkey {
+        Pubkey::from_str(s).unwrap()
+    }
+
+    fn so_bytes(name: &str) -> Vec<u8> {
+        // tools/lazer-harness -> repo root -> target/deploy/<name>.so
+        let path = format!("{}/../../target/deploy/{}.so", env!("CARGO_MANIFEST_DIR"), name);
+        std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e} (build it first)"))
+    }
+
+    // --- ConfigAccount crafting (sequential append in struct order) ----------
+    // Only the oracle fields matter for the probe; the rest are zeroed/defaulted.
+    struct OracleCfg {
+        feed_id: u32,
+        min_publishers: u16,
+        last_used_feed_ts_us: u64,
+        max_staleness_seconds: u32,
+        max_confidence_bps: u16,
+        min_price_scaled: u64,
+        max_price_scaled: u64,
+    }
+
+    fn build_config_data(o: &OracleCfg) -> Vec<u8> {
+        let mut b: Vec<u8> = Vec::new();
+        b.extend_from_slice(&anchor_disc("account:ConfigAccount"));
+        // Authorities
+        b.extend_from_slice(&[0u8; 32]); // admin
+        b.push(0); // pending_admin: Option<Pubkey> = None
+        b.write_i64::<LittleEndian>(0).unwrap(); // pending_admin_expires_at
+        b.extend_from_slice(&[0u8; 32]); // upgrade_authority_info
+        // Compliance
+        b.extend_from_slice(&[0u8; 32]); // permanent_delegate_expected
+        b.push(0); // compliance_mode
+        // Premium
+        b.write_u16::<LittleEndian>(0).unwrap(); // premium_bps_mint
+        b.write_u16::<LittleEndian>(0).unwrap(); // premium_bps_redeem
+        // Oracle (SET)
+        b.write_u32::<LittleEndian>(o.feed_id).unwrap();
+        b.write_u16::<LittleEndian>(o.min_publishers).unwrap();
+        b.write_u64::<LittleEndian>(o.last_used_feed_ts_us).unwrap();
+        // Token program ids
+        for _ in 0..5 {
+            b.extend_from_slice(&[0u8; 32]);
+        }
+        // Oracle guards (SET)
+        b.write_u32::<LittleEndian>(o.max_staleness_seconds).unwrap();
+        b.write_u16::<LittleEndian>(o.max_confidence_bps).unwrap();
+        b.write_u64::<LittleEndian>(o.min_price_scaled).unwrap();
+        b.write_u64::<LittleEndian>(o.max_price_scaled).unwrap();
+        // Price-delta breaker
+        b.extend_from_slice(&[0u8; 16]); // last_recorded_price_scaled: u128
+        b.write_i64::<LittleEndian>(0).unwrap(); // last_price_update_at
+        b.write_u16::<LittleEndian>(0).unwrap(); // max_price_delta_bps
+        b.write_u32::<LittleEndian>(0).unwrap(); // price_delta_decay_seconds
+        b.write_u64::<LittleEndian>(0).unwrap(); // price_update_min_amount_usdc
+        // Option B economic
+        b.write_u64::<LittleEndian>(0).unwrap(); // max_silv_supply
+        b.write_u64::<LittleEndian>(0).unwrap(); // treasury_min_float_usdc
+        b.push(0); // redemptions_enabled
+        b.write_u64::<LittleEndian>(0).unwrap(); // large_redeem_threshold_usdc
+        b.write_u64::<LittleEndian>(0).unwrap(); // instant_redeem_budget_usdc
+        b.write_u32::<LittleEndian>(0).unwrap(); // instant_redeem_window_seconds
+        b.write_u32::<LittleEndian>(0).unwrap(); // redeem_queue_delay_seconds
+        b.write_i64::<LittleEndian>(0).unwrap(); // instant_window_start
+        b.write_u64::<LittleEndian>(0).unwrap(); // instant_used_usdc
+        b.write_u64::<LittleEndian>(0).unwrap(); // next_redeem_request_nonce
+        b.write_u32::<LittleEndian>(0).unwrap(); // admin_timelock_seconds
+        b.push(0); // max_guardian_count
+        b.push(0); // guardian_count
+        b.write_i64::<LittleEndian>(0).unwrap(); // mint_paused_until
+        b.push(0); // paused
+        b.write_u64::<LittleEndian>(0).unwrap(); // next_timelock_nonce
+        b.push(0); // active_proposal_count
+        for _ in 0..9 {
+            b.push(0); // 9 Option<u64> nonces = None
+        }
+        b.push(0); // version
+        b.extend_from_slice(&[0u8; 64]); // reserved
+        b
+    }
+
+    fn build_storage_data(fee: u64) -> Vec<u8> {
+        let mut d = vec![0u8; STORAGE_FEE_OFFSET + 8 + 8];
+        (&mut d[STORAGE_FEE_OFFSET..STORAGE_FEE_OFFSET + 8])
+            .write_u64::<LittleEndian>(fee)
+            .unwrap();
+        d
+    }
+
+    // Build a canonical Lazer PayloadData and return its LE serialization (this
+    // is the message_data the mock echoes back as the verified payload).
+    #[allow(clippy::too_many_arguments)]
+    fn build_payload(
+        global_ts_us: u64,
+        feed_ts_us: u64,
+        price: i64,
+        confidence: i64,
+        publisher_count: u16,
+        exponent: i16,
+    ) -> Vec<u8> {
+        let mut agg = AggregatedPriceFeedData::empty(
+            exponent,
+            pyth_lazer_protocol::api::MarketSession::Regular,
+            TimestampUs::from_micros(feed_ts_us),
+        );
+        agg.price = Some(Price::from_mantissa(price).unwrap());
+        agg.confidence = Some(Price::from_mantissa(confidence).unwrap());
+        agg.publisher_count = publisher_count;
+        let payload = PayloadData::new(
+            TimestampUs::from_micros(global_ts_us),
+            ChannelId(LAZER_CHANNEL_ID),
+            &[(PriceFeedId(SILV_FEED_ID), agg)],
+            &[
+                PriceFeedProperty::Price,
+                PriceFeedProperty::PublisherCount,
+                PriceFeedProperty::Exponent,
+                PriceFeedProperty::Confidence,
+                PriceFeedProperty::FeedUpdateTimestamp,
+            ],
+        );
+        let mut buf = Vec::new();
+        payload.serialize::<LittleEndian>(&mut buf).unwrap();
+        buf
+    }
+
+    fn probe_ix_data(message_data: &[u8]) -> Vec<u8> {
+        let mut d = Vec::new();
+        d.extend_from_slice(&anchor_disc("global:probe_oracle_price"));
+        d.write_u32::<LittleEndian>(message_data.len() as u32).unwrap();
+        d.write_all(message_data).unwrap();
+        d.write_u16::<LittleEndian>(0).unwrap(); // ed25519_instruction_index (mock ignores)
+        d.push(0); // signature_index (mock ignores)
+        d
+    }
+
+    struct Env {
+        svm: LiteSVM,
+        funder: Keypair,
+        config_pda: Pubkey,
+        fee_payer_pda: Pubkey,
+    }
+
+    fn setup(o: &OracleCfg, fee: u64) -> Env {
+        let dominion = pk(DOMINION_ID);
+        let lazer = pk(LAZER_PROGRAM_ID);
+        let mut svm = LiteSVM::new();
+        // Pin the clock so staleness/future checks are deterministic.
+        let mut clock: solana_sdk::clock::Clock = svm.get_sysvar();
+        clock.unix_timestamp = NOW_SECS;
+        svm.set_sysvar(&clock);
+        svm.add_program(dominion, &so_bytes("dominion_silver_mint")).unwrap();
+        svm.add_program(lazer, &so_bytes("mock_lazer")).unwrap();
+
+        let (config_pda, _) = Pubkey::find_program_address(&[CONFIG_SEED], &dominion);
+        let (fee_payer_pda, _) = Pubkey::find_program_address(&[LAZER_FEE_PAYER_SEED], &dominion);
+
+        let own_account = |owner: Pubkey, data: Vec<u8>, lamports: u64| Account {
+            lamports,
+            data,
+            owner,
+            executable: false,
+            rent_epoch: 0,
+        };
+        svm.set_account(config_pda, own_account(dominion, build_config_data(o), 5_000_000))
+            .unwrap();
+        svm.set_account(pk(LAZER_STORAGE), own_account(lazer, build_storage_data(fee), 5_000_000))
+            .unwrap();
+        // Treasury: a System-owned account that receives the drained fee.
+        svm.set_account(pk(LAZER_TREASURY), own_account(solana_sdk::system_program::ID, vec![], 5_000_000))
+            .unwrap();
+
+        let funder = Keypair::new();
+        svm.airdrop(&funder.pubkey(), 1_000_000_000).unwrap();
+        Env { svm, funder, config_pda, fee_payer_pda }
+    }
+
+    fn run_probe(env: &mut Env, message_data: &[u8]) -> Result<Vec<u8>, String> {
+        let dominion = pk(DOMINION_ID);
+        let ix = Instruction {
+            program_id: dominion,
+            accounts: vec![
+                AccountMeta::new_readonly(env.config_pda, false),
+                AccountMeta::new(env.funder.pubkey(), true),
+                AccountMeta::new_readonly(pk(LAZER_PROGRAM_ID), false),
+                AccountMeta::new_readonly(pk(LAZER_STORAGE), false),
+                AccountMeta::new(pk(LAZER_TREASURY), false),
+                AccountMeta::new(env.fee_payer_pda, false),
+                AccountMeta::new_readonly(solana_sdk::sysvar::instructions::ID, false),
+                AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
+            ],
+            data: probe_ix_data(message_data),
+        };
+        let tx = Transaction::new_signed_with_payer(
+            &[ix],
+            Some(&env.funder.pubkey()),
+            &[&env.funder],
+            env.svm.latest_blockhash(),
+        );
+        match env.svm.send_transaction(tx) {
+            Ok(meta) => Ok(meta.return_data.data),
+            Err(e) => Err(format!("{:?}", e.err)),
+        }
+    }
+
+    fn default_oracle() -> OracleCfg {
+        OracleCfg {
+            feed_id: SILV_FEED_ID,
+            min_publishers: 2,
+            last_used_feed_ts_us: 0,
+            max_staleness_seconds: 30,
+            max_confidence_bps: 500,
+            min_price_scaled: 5_000_000_000,    // $5
+            max_price_scaled: 200_000_000_000,  // $200
+        }
+    }
+
+    // expected normalized price = price_mantissa * 10^(PRICE_SCALE + exponent)
+    fn expected_normalized(price: i64, exponent: i16) -> u128 {
+        let e = PRICE_SCALE + exponent as i32;
+        if e >= 0 {
+            (price as u128) * 10u128.pow(e as u32)
+        } else {
+            (price as u128) / 10u128.pow((-e) as u32)
+        }
+    }
+
+    fn treasury_lamports(env: &Env) -> u64 {
+        env.svm.get_account(&pk(LAZER_TREASURY)).map(|a| a.lamports).unwrap_or(0)
+    }
+
+    // A fresh, in-band SILV print (feed ts == payload ts == now): the accepted
+    // happy case used by most scenarios.
+    fn fresh_payload(price: i64, conf: i64, publishers: u16) -> Vec<u8> {
+        build_payload(NOW_US, NOW_US, price, conf, publishers, -5)
+    }
+
+    #[test]
+    fn happy_path_price_flows_and_fee_isolated() {
+        let mut env = setup(&default_oracle(), 1);
+        let treas_before = treasury_lamports(&env);
+        // SILV ~ $28.00123 at exponent -5 -> mantissa 2_800_123.
+        let payload = fresh_payload(2_800_123, 1_500, 9);
+        let ret = run_probe(&mut env, &payload).expect("probe ok");
+        assert_eq!(ret.len(), 24);
+        let price = u128::from_le_bytes(ret[0..16].try_into().unwrap());
+        let fut = u64::from_le_bytes(ret[16..24].try_into().unwrap());
+        assert_eq!(price, expected_normalized(2_800_123, -5)); // 28.00123 * 1e9
+        assert_eq!(fut, NOW_US);
+        // Fee isolation: the mock drained EXACTLY the funded fee (1 lamport) to
+        // the treasury - the funder (not in the CPI) could not lose more.
+        assert_eq!(treasury_lamports(&env) - treas_before, 1);
+        // The fee-payer PDA ends drained.
+        assert_eq!(env.svm.get_account(&env.fee_payer_pda).map(|a| a.lamports).unwrap_or(0), 0);
+    }
+
+    #[test]
+    fn carried_forward_is_rejected() {
+        let mut env = setup(&default_oracle(), 1);
+        // feed_update_timestamp (5s older) != payload timestamp -> carried-forward.
+        let payload = build_payload(NOW_US, NOW_US - 5_000_000, 2_800_000, 1_500, 9, -5);
+        let err = run_probe(&mut env, &payload).expect_err("must reject carried-forward");
+        assert!(err.contains(E_CARRIED_FORWARD), "got: {err}");
+    }
+
+    #[test]
+    fn fee_zero_still_works() {
+        let mut env = setup(&default_oracle(), 0);
+        let treas_before = treasury_lamports(&env);
+        let ret = run_probe(&mut env, &fresh_payload(2_800_000, 1_500, 9)).expect("probe ok fee=0");
+        assert_eq!(ret.len(), 24);
+        assert_eq!(treasury_lamports(&env) - treas_before, 0); // nothing transferred
+    }
+
+    #[test]
+    fn fee_ceiling_works_and_is_isolated() {
+        let mut env = setup(&default_oracle(), LAZER_FEE_CEILING);
+        let treas_before = treasury_lamports(&env);
+        run_probe(&mut env, &fresh_payload(2_800_000, 1_500, 9)).expect("probe ok at ceiling");
+        assert_eq!(treasury_lamports(&env) - treas_before, LAZER_FEE_CEILING);
+    }
+
+    #[test]
+    fn fee_above_ceiling_is_rejected() {
+        let mut env = setup(&default_oracle(), LAZER_FEE_CEILING + 1);
+        let err = run_probe(&mut env, &fresh_payload(2_800_000, 1_500, 9))
+            .expect_err("must reject fee > ceiling");
+        assert!(err.contains(E_FEE_TOO_HIGH), "got: {err}");
+    }
+
+    #[test]
+    fn too_few_publishers_is_rejected() {
+        let mut env = setup(&default_oracle(), 1); // min_publishers = 2
+        let err = run_probe(&mut env, &fresh_payload(2_800_000, 1_500, 1)) // only 1 publisher
+            .expect_err("must reject < min publishers");
+        assert!(err.contains(E_TOO_FEW_PUBLISHERS), "got: {err}");
+    }
+}

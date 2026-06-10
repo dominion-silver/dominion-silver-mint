@@ -3,7 +3,10 @@
 # excluded so the `programs/*` set does not yield two crates with the same
 # package name. V1 stays fully readable and diffable.
 [workspace]
-members = ["programs/dominion_silver_mint_v2"]
+# tools/mock-lazer is a behavioral-harness-only mock program (NOT deployed; the
+# deploy build targets programs/dominion_silver_mint_v2 explicitly). It is a
+# member only so it shares this workspace's SBF-parseable dep lock.
+members = ["programs/dominion_silver_mint_v2", "tools/mock-lazer"]
 exclude = ["programs/dominion_silver_mint_v1"]
 resolver = "2"
 

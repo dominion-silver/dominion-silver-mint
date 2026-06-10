@@ -19,7 +19,7 @@
 // payload to `crate::lazer::extract_feed_price`, never the input.
 //
 // BEHAVIORAL verification (invoke_signed, the malicious-callee resistance, the
-// rent mechanics of the transient PDA) is covered by the solana-program-test
+// rent mechanics of the transient PDA) is covered by the litesvm
 // harness with a mock + malicious Lazer program (Section 9). The PURE helpers
 // here (instruction encoding, fee read, return-data parse) are host-unit-tested
 // below.
@@ -139,7 +139,7 @@ pub struct LazerVerifyAccounts<'a, 'info> {
 
 /// Verify a Lazer message via the upgradeable Lazer program and return the
 /// inner signed payload. RUNTIME (invoke); behavioral tests are in the
-/// solana-program-test harness.
+/// litesvm harness.
 pub fn verify_and_get_payload(
     accts: &LazerVerifyAccounts,
     fee_payer_bump: u8,
@@ -201,7 +201,7 @@ pub fn verify_and_get_payload(
     //    live config): no funding occurs and the PDA stays at zero. The
     //    behavior of `verify_message` with a zero-balance PDA payer + a
     //    zero-value internal transfer is a corner case verified explicitly by
-    //    the solana-program-test harness (fee = 0 / 1 / ceiling); do NOT add an
+    //    the litesvm harness (fee = 0 / 1 / ceiling); do NOT add an
     //    untested "fix" here without that harness.
     if fee > 0 {
         invoke(
