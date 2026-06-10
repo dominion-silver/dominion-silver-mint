@@ -510,7 +510,45 @@
           }
         },
         {
-          "name": "price_update"
+          "name": "lazer_program"
+        },
+        {
+          "name": "lazer_storage"
+        },
+        {
+          "name": "lazer_treasury",
+          "writable": true
+        },
+        {
+          "name": "lazer_fee_payer",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  97,
+                  122,
+                  101,
+                  114,
+                  95,
+                  102,
+                  101,
+                  101,
+                  95,
+                  112,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "instructions_sysvar"
         },
         {
           "name": "classic_token_program",
@@ -525,7 +563,20 @@
           "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "message_data",
+          "type": "bytes"
+        },
+        {
+          "name": "ed25519_instruction_index",
+          "type": "u16"
+        },
+        {
+          "name": "signature_index",
+          "type": "u8"
+        }
+      ]
     },
     {
       "name": "close_settled_redemption",
@@ -1833,7 +1884,45 @@
           }
         },
         {
-          "name": "price_update"
+          "name": "lazer_program"
+        },
+        {
+          "name": "lazer_storage"
+        },
+        {
+          "name": "lazer_treasury",
+          "writable": true
+        },
+        {
+          "name": "lazer_fee_payer",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  97,
+                  122,
+                  101,
+                  114,
+                  95,
+                  102,
+                  101,
+                  101,
+                  95,
+                  112,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "instructions_sysvar"
         },
         {
           "name": "classic_token_program",
@@ -1860,6 +1949,18 @@
         {
           "name": "min_silv_out",
           "type": "u64"
+        },
+        {
+          "name": "message_data",
+          "type": "bytes"
+        },
+        {
+          "name": "ed25519_instruction_index",
+          "type": "u16"
+        },
+        {
+          "name": "signature_index",
+          "type": "u8"
         }
       ]
     },
@@ -2445,17 +2546,8 @@
       ],
       "args": [
         {
-          "name": "new_feed_id",
-          "type": {
-            "array": [
-              "u8",
-              32
-            ]
-          }
-        },
-        {
-          "name": "new_receiver_program",
-          "type": "pubkey"
+          "name": "new_lazer_feed_id",
+          "type": "u32"
         }
       ]
     },
@@ -2895,7 +2987,45 @@
           }
         },
         {
-          "name": "price_update"
+          "name": "lazer_program"
+        },
+        {
+          "name": "lazer_storage"
+        },
+        {
+          "name": "lazer_treasury",
+          "writable": true
+        },
+        {
+          "name": "lazer_fee_payer",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  108,
+                  97,
+                  122,
+                  101,
+                  114,
+                  95,
+                  102,
+                  101,
+                  101,
+                  95,
+                  112,
+                  97,
+                  121,
+                  101,
+                  114
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "instructions_sysvar"
         },
         {
           "name": "classic_token_program",
@@ -2922,6 +3052,18 @@
         {
           "name": "min_usdc_out",
           "type": "u64"
+        },
+        {
+          "name": "message_data",
+          "type": "bytes"
+        },
+        {
+          "name": "ed25519_instruction_index",
+          "type": "u16"
+        },
+        {
+          "name": "signature_index",
+          "type": "u8"
         }
       ]
     },
@@ -3500,19 +3642,6 @@
         201,
         28,
         142
-      ]
-    },
-    {
-      "name": "PriceUpdateV2",
-      "discriminator": [
-        34,
-        241,
-        35,
-        99,
-        157,
-        126,
-        244,
-        205
       ]
     },
     {
@@ -4211,6 +4340,66 @@
       "code": 12070,
       "name": "MetadataFieldTooLong",
       "msg": "Metadata field exceeds its maximum length"
+    },
+    {
+      "code": 12071,
+      "name": "LazerWrongAccount",
+      "msg": "A pinned Lazer account (program/storage/treasury/sysvar/system) did not match"
+    },
+    {
+      "code": 12072,
+      "name": "LazerProgramNotExecutable",
+      "msg": "The Lazer program account is not executable"
+    },
+    {
+      "code": 12073,
+      "name": "LazerStorageMalformed",
+      "msg": "The Lazer Storage account is too small to read the fee"
+    },
+    {
+      "code": 12074,
+      "name": "LazerFeeTooHigh",
+      "msg": "The Lazer single-update fee exceeds the Dominion ceiling"
+    },
+    {
+      "code": 12075,
+      "name": "LazerFeePayerMismatch",
+      "msg": "The Lazer fee-payer PDA did not match the expected derivation"
+    },
+    {
+      "code": 12076,
+      "name": "LazerReturnDataMissing",
+      "msg": "verify_message returned no return-data"
+    },
+    {
+      "code": 12077,
+      "name": "LazerReturnDataWrongProgram",
+      "msg": "verify_message return-data came from the wrong program"
+    },
+    {
+      "code": 12078,
+      "name": "LazerReturnDataMalformed",
+      "msg": "verify_message return-data is malformed (length / trailing bytes)"
+    },
+    {
+      "code": 12079,
+      "name": "LazerPayloadInvalid",
+      "msg": "Lazer payload parse/extraction failed"
+    },
+    {
+      "code": 12080,
+      "name": "LazerMessageTooLarge",
+      "msg": "The inbound Lazer message exceeds the size cap"
+    },
+    {
+      "code": 12081,
+      "name": "LazerTooFewPublishers",
+      "msg": "Lazer publisher count below the required floor"
+    },
+    {
+      "code": 12082,
+      "name": "LazerCarriedForward",
+      "msg": "Lazer price is carried-forward (feedUpdateTimestamp mismatch / non-monotonic)"
     }
   ],
   "types": [
@@ -4374,17 +4563,16 @@
             "type": "u16"
           },
           {
-            "name": "pyth_feed_id",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
+            "name": "pyth_lazer_feed_id",
+            "type": "u32"
           },
           {
-            "name": "pyth_receiver_program",
-            "type": "pubkey"
+            "name": "min_publishers",
+            "type": "u16"
+          },
+          {
+            "name": "last_used_feed_update_timestamp_us",
+            "type": "u64"
           },
           {
             "name": "usdc_mint",
@@ -4692,17 +4880,8 @@
             "type": "u16"
           },
           {
-            "name": "pyth_feed_id",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "pyth_receiver_program",
-            "type": "pubkey"
+            "name": "pyth_lazer_feed_id",
+            "type": "u32"
           },
           {
             "name": "admin_timelock_seconds",
@@ -4831,6 +5010,12 @@
             "type": {
               "option": "u64"
             }
+          },
+          {
+            "name": "min_publishers",
+            "type": {
+              "option": "u16"
+            }
           }
         ]
       }
@@ -4887,114 +5072,6 @@
           {
             "name": "timestamp",
             "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "PriceFeedMessage",
-      "repr": {
-        "kind": "c"
-      },
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "feed_id",
-            "docs": [
-              "`FeedId` but avoid the type alias because of compatibility issues with Anchor's `idl-build` feature."
-            ],
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          },
-          {
-            "name": "price",
-            "type": "i64"
-          },
-          {
-            "name": "conf",
-            "type": "u64"
-          },
-          {
-            "name": "exponent",
-            "type": "i32"
-          },
-          {
-            "name": "publish_time",
-            "docs": [
-              "The timestamp of this price update in seconds"
-            ],
-            "type": "i64"
-          },
-          {
-            "name": "prev_publish_time",
-            "docs": [
-              "The timestamp of the previous price update. This field is intended to allow users to",
-              "identify the single unique price update for any moment in time:",
-              "for any time t, the unique update is the one such that prev_publish_time < t <= publish_time.",
-              "",
-              "Note that there may not be such an update while we are migrating to the new message-sending logic,",
-              "as some price updates on pythnet may not be sent to other chains (because the message-sending",
-              "logic may not have triggered). We can solve this problem by making the message-sending mandatory",
-              "(which we can do once publishers have migrated over).",
-              "",
-              "Additionally, this field may be equal to publish_time if the message is sent on a slot where",
-              "where the aggregation was unsuccesful. This problem will go away once all publishers have",
-              "migrated over to a recent version of pyth-agent."
-            ],
-            "type": "i64"
-          },
-          {
-            "name": "ema_price",
-            "type": "i64"
-          },
-          {
-            "name": "ema_conf",
-            "type": "u64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "PriceUpdateV2",
-      "docs": [
-        "A price update account. This account is used by the Pyth Receiver program to store a verified price update from a Pyth price feed.",
-        "It contains:",
-        "- `write_authority`: The write authority for this account. This authority can close this account to reclaim rent or update the account to contain a different price update.",
-        "- `verification_level`: The [`VerificationLevel`] of this price update. This represents how many Wormhole guardian signatures have been verified for this price update.",
-        "- `price_message`: The actual price update.",
-        "- `posted_slot`: The slot at which this price update was posted."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "write_authority",
-            "type": "pubkey"
-          },
-          {
-            "name": "verification_level",
-            "type": {
-              "defined": {
-                "name": "VerificationLevel"
-              }
-            }
-          },
-          {
-            "name": "price_message",
-            "type": {
-              "defined": {
-                "name": "PriceFeedMessage"
-              }
-            }
-          },
-          {
-            "name": "posted_slot",
-            "type": "u64"
           }
         ]
       }
@@ -5303,39 +5380,6 @@
           {
             "name": "timestamp",
             "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "VerificationLevel",
-      "docs": [
-        "Pyth price updates are bridged to all blockchains via Wormhole.",
-        "Using the price updates on another chain requires verifying the signatures of the Wormhole guardians.",
-        "The usual process is to check the signatures for two thirds of the total number of guardians, but this can be cumbersome on Solana because of the transaction size limits,",
-        "so we also allow for partial verification.",
-        "",
-        "This enum represents how much a price update has been verified:",
-        "- If `Full`, we have verified the signatures for two thirds of the current guardians.",
-        "- If `Partial`, only `num_signatures` guardian signatures have been checked.",
-        "",
-        "# Warning",
-        "Using partially verified price updates is dangerous, as it lowers the threshold of guardians that need to collude to produce a malicious price update."
-      ],
-      "type": {
-        "kind": "enum",
-        "variants": [
-          {
-            "name": "Partial",
-            "fields": [
-              {
-                "name": "num_signatures",
-                "type": "u8"
-              }
-            ]
-          },
-          {
-            "name": "Full"
           }
         ]
       }

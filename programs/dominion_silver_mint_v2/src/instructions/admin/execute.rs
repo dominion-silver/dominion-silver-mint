@@ -356,41 +356,50 @@ pub fn execute_set_oracle_guards_handler(
     let g = OracleGuardsArgs::try_from_slice(&tl.action_data)
         .map_err(|_| error!(DominionError::SerializationFailure))?;
 
-    // SC-C3: defense-in-depth bounds at execute time. If propose accepts
-    // a value (it does today, mostly), this layer rejects out-of-range
-    // values so a 24h-window attacker cannot fully disable oracle guards.
-    // Bounds chosen to match `dev_set_*` floors/ceilings + sane mainnet
-    // operating ranges (PLAN.md §3, §8).
-    // CODEX P1-01: bounds aligned to CONFIRMED_SPEC.md §6 (was 5..600 staleness,
-    // no conf/delta lower bound). Spec §6: staleness 5..300, conf_bps 1..1000,
-    // max_delta_bps 1..5000. The min on conf_bps / max_delta_bps prevents a
-    // value of 0 from silently bricking the oracle (conf_bps=0 => only an
-    // exactly-zero Pyth confidence passes; max_delta_bps=0 => any price move
-    // reverts). decay_seconds / dust_filter are spec-silent: defensive bounds
-    // added per D14 so the price-delta breaker cannot be neutered.
+    // Defense-in-depth bounds at execute time (re-validates propose), so a
+    // 24h-window attacker cannot disable the oracle guards. Lazer migration 5.5
+    // Tier A: these are the TIGHTENED structural ceilings (staleness <=30,
+    // conf_bps <=500, max_delta_bps <=1000, price band within the fat-finger
+    // rails), replacing the Core-era ranges (was 5..300 / 1..1000 / 1..5000).
+    // The min on conf_bps / max_delta_bps prevents a 0 from bricking the oracle
+    // (conf_bps=0 => only exactly-zero confidence passes; max_delta_bps=0 =>
+    // any price move reverts). Keep in lockstep with propose_set_oracle_guards.
     if let Some(v) = g.staleness {
-        require!(v >= 5 && v <= 300, DominionError::AboveMaximum);
+        // Lazer 5.5 Tier A: hard-capped well below the Core-era 60/300.
+        require!(
+            v >= 5 && v <= MAX_STALENESS_CEILING_SECONDS,
+            DominionError::AboveMaximum
+        );
         config.max_staleness_seconds = v;
     }
     if let Some(v) = g.conf_bps {
-        // Spec §6: 1..1000 bps. Min 1 so the oracle cannot be bricked.
-        require!(v >= 1 && v <= 1000, DominionError::AboveMaximum);
+        require!(
+            v >= 1 && v <= MAX_CONFIDENCE_BPS_CEILING,
+            DominionError::AboveMaximum
+        );
         config.max_confidence_bps = v;
     }
     if let Some(v) = g.min_price_scaled {
+        // 0 = lower-bound off-switch; otherwise within the fat-finger band.
+        require!(
+            v == 0 || (v >= PRICE_FATFINGER_MIN_SCALED && v <= PRICE_FATFINGER_MAX_SCALED),
+            DominionError::PriceOutOfBounds
+        );
         config.min_price_usd_scaled = v;
     }
     if let Some(v) = g.max_price_scaled {
         config.max_price_usd_scaled = v;
     }
-    // CODEX P1-01b: a zero UPPER price bound bricks every oracle read
-    // (read_silver_price requires `normalized <= max_price_usd_scaled`; any
-    // positive price then reverts). It is NOT a valid "off" sentinel - unlike
-    // `min_price == 0`, which legitimately disables the lower bound since
-    // `normalized` is u128 >= 0. Forbid max == 0 outright (the old
-    // `|| max == 0` escape allowed a 24h-timelocked admin to brick the oracle).
+    // A zero UPPER price bound bricks every oracle read (lazer_price's policy
+    // requires `normalized <= max_price_usd_scaled`; any positive price then
+    // reverts). It is NOT a valid "off" sentinel - unlike `min_price == 0`,
+    // which legitimately disables the lower bound since `normalized` is
+    // u128 >= 0. Forbid max == 0 outright.
+    // Lazer 5.5 Tier A fat-finger rail: 0 < max <= ceiling (no looser than the
+    // prior Core $200). A zero upper bound bricks every read.
     require!(
-        config.max_price_usd_scaled != 0,
+        config.max_price_usd_scaled != 0
+            && config.max_price_usd_scaled <= PRICE_FATFINGER_MAX_SCALED,
         DominionError::PriceOutOfBounds
     );
     // Cross-field: min must be 0 (lower bound off) or strictly below max.
@@ -400,8 +409,10 @@ pub fn execute_set_oracle_guards_handler(
         DominionError::PriceOutOfBounds
     );
     if let Some(v) = g.max_delta_bps {
-        // Spec §6: 1..5000 bps. Min 1 so a normal price move cannot brick.
-        require!(v >= 1 && v <= 5000, DominionError::AboveMaximum);
+        require!(
+            v >= 1 && v <= MAX_PRICE_DELTA_BPS_CEILING,
+            DominionError::AboveMaximum
+        );
         config.max_price_delta_bps = v;
     }
     if let Some(v) = g.decay_seconds {
@@ -415,6 +426,15 @@ pub fn execute_set_oracle_guards_handler(
         // set so high that last_recorded_price never updates (breaker stale).
         require!(v <= 1_000_000_000_000, DominionError::AboveMaximum);
         config.price_update_min_amount_usdc = v;
+    }
+    if let Some(v) = g.min_publishers {
+        // Lazer 5.5: the operating publisher floor; cannot be set below the
+        // Tier A hard floor. Lowering it is a timelocked + auto-paused action.
+        require!(
+            v >= crate::lazer_price::MIN_PUBLISHERS_FLOOR_HARD,
+            DominionError::LazerTooFewPublishers
+        );
+        config.min_publishers = v;
     }
     // Option B: reserve_price_ramp_bps removed (no reserve-check price).
 
@@ -439,6 +459,8 @@ pub struct OracleGuardsArgs {
     pub max_delta_bps: Option<u16>,
     pub decay_seconds: Option<u32>,
     pub dust_filter_min_usdc: Option<u64>,
+    // Lazer 5.5: operating publisher floor (timelocked-settable, >= hard floor).
+    pub min_publishers: Option<u16>,
 }
 
 // === P2-05: per-field metadata args (Option<String> + bounds) ===
@@ -634,24 +656,19 @@ pub fn execute_set_pyth_feed_handler(ctx: Context<ExecutePythFeed>, nonce: u64) 
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
 
     require!(
-        tl.action_data.len() >= 32 + 32,
+        tl.action_data.len() >= 4,
         DominionError::MalformedActionData
     );
-    let mut feed_id = [0u8; 32];
-    feed_id.copy_from_slice(&tl.action_data[..32]);
-    let receiver = Pubkey::try_from(&tl.action_data[32..64])
-        .map_err(|_| error!(DominionError::MalformedActionData))?;
-    require!(feed_id != [0u8; 32], DominionError::InvalidFeedId);
-    // CODEX P1-02: binding enforcement (defense in depth vs propose). Only the
-    // feed id is mutable; the Pyth receiver stays the official program forever,
-    // so a compromised/misused admin path cannot swap in a malicious receiver.
-    require!(
-        receiver == PYTH_RECEIVER_OFFICIAL,
-        DominionError::WrongPythReceiver
+    let new_feed_id = u32::from_le_bytes(
+        tl.action_data[..4]
+            .try_into()
+            .map_err(|_| error!(DominionError::MalformedActionData))?,
     );
+    // Binding re-validation at execute (defense in depth vs propose). The Lazer
+    // program is a compile-time constant, so only the numeric feed id moves.
+    require!(new_feed_id != 0, DominionError::InvalidFeedId);
 
-    config.pyth_feed_id = feed_id;
-    config.pyth_receiver_program = receiver;
+    config.pyth_lazer_feed_id = new_feed_id;
 
     // Atomic auto-pause (idempotent if already paused).
     if !config.paused {

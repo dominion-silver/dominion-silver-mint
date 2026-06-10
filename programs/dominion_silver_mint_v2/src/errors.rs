@@ -179,4 +179,8 @@ pub enum DominionError {
     LazerPayloadInvalid,
     #[msg("The inbound Lazer message exceeds the size cap")]
     LazerMessageTooLarge,
+    #[msg("Lazer publisher count below the required floor")]
+    LazerTooFewPublishers,
+    #[msg("Lazer price is carried-forward (feedUpdateTimestamp mismatch / non-monotonic)")]
+    LazerCarriedForward,
 }

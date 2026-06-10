@@ -19,20 +19,20 @@
 // back all events): the InsufficientTreasury error code + the durable Pending
 // status ARE the off-chain settlement signal.
 
+use crate::lazer_cpi::{LazerVerifyAccounts, LAZER_FEE_PAYER_SEED};
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::AssociatedToken;
 use anchor_spl::token::{Mint as ClassicMint, Token, TokenAccount};
 use anchor_spl::token_interface::{
     Mint as InterfaceMint, Token2022, TokenAccount as InterfaceTokenAccount,
 };
-use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 
 use crate::assertions::assert_silv_mint_invariants;
 use crate::cpi::{silv_burn_from_user, usdc_transfer_treasury_to_user};
 use crate::errors::DominionError;
 use crate::events::{RedeemQueued, RedemptionClaimed, RedemptionClosed, RedemptionSettledOffchain};
 use crate::math::{effective_redeem_price_scaled, redeem_usdc_out, silv_to_usdc_at_oracle};
-use crate::oracle::{check_price_delta, maybe_update_last_price, read_silver_price};
+use crate::oracle::{check_price_delta, maybe_update_last_price, read_silver_price_lazer};
 use crate::state::*;
 
 // ---------------------------------------------------------------------------
@@ -187,8 +187,19 @@ pub struct ClaimRedemption<'info> {
     #[account(seeds = [TREASURY_SEED], bump)]
     pub treasury_pda: AccountInfo<'info>,
 
-    #[account(owner = config.pyth_receiver_program)]
-    pub price_update: Box<Account<'info, PriceUpdateV2>>,
+    // Pyth Lazer verify accounts (all keys pinned + validated in the wrapper).
+    /// CHECK: pinned to LAZER_PROGRAM_ID + executable in verify_and_get_payload.
+    pub lazer_program: UncheckedAccount<'info>,
+    /// CHECK: pinned to LAZER_STORAGE in verify_and_get_payload.
+    pub lazer_storage: UncheckedAccount<'info>,
+    /// CHECK: pinned to LAZER_TREASURY in verify_and_get_payload.
+    #[account(mut)]
+    pub lazer_treasury: UncheckedAccount<'info>,
+    /// CHECK: System-owned isolated fee-payer PDA; derivation validated in the wrapper.
+    #[account(mut, seeds = [LAZER_FEE_PAYER_SEED], bump)]
+    pub lazer_fee_payer: UncheckedAccount<'info>,
+    /// CHECK: pinned to the instructions sysvar in verify_and_get_payload.
+    pub instructions_sysvar: UncheckedAccount<'info>,
 
     #[account(address = config.classic_token_program)]
     pub classic_token_program: Program<'info, Token>,
@@ -196,14 +207,18 @@ pub struct ClaimRedemption<'info> {
     pub system_program: Program<'info, System>,
 }
 
-pub fn claim_handler(ctx: Context<ClaimRedemption>) -> Result<()> {
+pub fn claim_handler(
+    ctx: Context<ClaimRedemption>,
+    message_data: Vec<u8>,
+    ed25519_instruction_index: u16,
+    signature_index: u8,
+) -> Result<()> {
     let clock = Clock::get()?;
     let now = clock.unix_timestamp;
-    let config = &mut ctx.accounts.config;
 
     // NOT gated by redemptions_enabled (§8: queued IOU stays claimable; SILV
     // already burned). Only the global pause stops a claim.
-    require!(!config.paused, DominionError::Paused);
+    require!(!ctx.accounts.config.paused, DominionError::Paused);
 
     {
         let req = &ctx.accounts.redemption_request;
@@ -218,7 +233,37 @@ pub fn claim_handler(ctx: Context<ClaimRedemption>) -> Result<()> {
     let owner_key = ctx.accounts.redemption_request.owner;
 
     // Oracle priced at CLAIM time (D9: the user bears price risk over the delay).
-    let oracle_price = read_silver_price(&ctx.accounts.price_update, config, &clock)?;
+    // Lazer verify CPI via the isolated fee-payer PDA (owner funds it, but is
+    // NEVER passed to the Lazer CPI) + the 5.4-5.6 policy.
+    let lazer_program_ai = ctx.accounts.lazer_program.to_account_info();
+    let lazer_storage_ai = ctx.accounts.lazer_storage.to_account_info();
+    let lazer_treasury_ai = ctx.accounts.lazer_treasury.to_account_info();
+    let lazer_fee_payer_ai = ctx.accounts.lazer_fee_payer.to_account_info();
+    let instructions_sysvar_ai = ctx.accounts.instructions_sysvar.to_account_info();
+    let system_program_ai = ctx.accounts.system_program.to_account_info();
+    let owner_ai = ctx.accounts.owner.to_account_info();
+    let lazer_accts = LazerVerifyAccounts {
+        lazer_program: &lazer_program_ai,
+        storage: &lazer_storage_ai,
+        treasury: &lazer_treasury_ai,
+        fee_payer: &lazer_fee_payer_ai,
+        instructions_sysvar: &instructions_sysvar_ai,
+        system_program: &system_program_ai,
+        funder: &owner_ai,
+    };
+    let price_result = read_silver_price_lazer(
+        &lazer_accts,
+        ctx.bumps.lazer_fee_payer,
+        &ctx.accounts.config,
+        &clock,
+        message_data,
+        ed25519_instruction_index,
+        signature_index,
+    )?;
+    let oracle_price = price_result.normalized_price_scaled;
+
+    let config = &mut ctx.accounts.config;
+    config.last_used_feed_update_timestamp_us = price_result.feed_update_timestamp_us;
     check_price_delta(config, oracle_price, now)?;
     let eff_price = effective_redeem_price_scaled(oracle_price, config.premium_bps_redeem)?;
     let usdc_out = redeem_usdc_out(amount_silv, eff_price)?;

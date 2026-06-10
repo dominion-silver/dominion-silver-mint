@@ -42,8 +42,22 @@ pub mod dominion_silver_mint {
 
     // === User instructions ===
 
-    pub fn mint_silv(ctx: Context<MintSilv>, amount_usdc: u64, min_silv_out: u64) -> Result<()> {
-        instructions::mint_silv::handler(ctx, amount_usdc, min_silv_out)
+    pub fn mint_silv(
+        ctx: Context<MintSilv>,
+        amount_usdc: u64,
+        min_silv_out: u64,
+        message_data: Vec<u8>,
+        ed25519_instruction_index: u16,
+        signature_index: u8,
+    ) -> Result<()> {
+        instructions::mint_silv::handler(
+            ctx,
+            amount_usdc,
+            min_silv_out,
+            message_data,
+            ed25519_instruction_index,
+            signature_index,
+        )
     }
 
     // Option B redeem = INSTANT path only (§4.3). A redeem that must queue
@@ -52,8 +66,18 @@ pub mod dominion_silver_mint {
         ctx: Context<RedeemSilv>,
         amount_silv: u64,
         min_usdc_out: u64,
+        message_data: Vec<u8>,
+        ed25519_instruction_index: u16,
+        signature_index: u8,
     ) -> Result<()> {
-        instructions::redeem_silv::handler(ctx, amount_silv, min_usdc_out)
+        instructions::redeem_silv::handler(
+            ctx,
+            amount_silv,
+            min_usdc_out,
+            message_data,
+            ed25519_instruction_index,
+            signature_index,
+        )
     }
 
     // Option B queued-redemption lifecycle (§4.3 ENQUEUE + §4.4).
@@ -65,8 +89,18 @@ pub mod dominion_silver_mint {
         instructions::redeem_queued::queued_handler(ctx, amount_silv, request_nonce)
     }
 
-    pub fn claim_redemption(ctx: Context<ClaimRedemption>) -> Result<()> {
-        instructions::redeem_queued::claim_handler(ctx)
+    pub fn claim_redemption(
+        ctx: Context<ClaimRedemption>,
+        message_data: Vec<u8>,
+        ed25519_instruction_index: u16,
+        signature_index: u8,
+    ) -> Result<()> {
+        instructions::redeem_queued::claim_handler(
+            ctx,
+            message_data,
+            ed25519_instruction_index,
+            signature_index,
+        )
     }
 
     pub fn admin_settle_redemption_offchain(
@@ -275,14 +309,9 @@ pub mod dominion_silver_mint {
 
     pub fn propose_set_pyth_feed(
         ctx: Context<ProposePythFeed>,
-        new_feed_id: [u8; 32],
-        new_receiver_program: Pubkey,
+        new_lazer_feed_id: u32,
     ) -> Result<()> {
-        instructions::admin::propose::propose_set_pyth_feed_handler(
-            ctx,
-            new_feed_id,
-            new_receiver_program,
-        )
+        instructions::admin::propose::propose_set_pyth_feed_handler(ctx, new_lazer_feed_id)
     }
 
     pub fn execute_set_pyth_feed(ctx: Context<ExecutePythFeed>, nonce: u64) -> Result<()> {

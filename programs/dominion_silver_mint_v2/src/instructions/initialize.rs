@@ -23,9 +23,9 @@ pub struct InitializeArgs {
     pub premium_bps_mint: u16,   // e.g. 1000 (10%)
     pub premium_bps_redeem: u16, // e.g. 200 (2%)
 
-    // Oracle
-    pub pyth_feed_id: [u8; 32], // raw 32 bytes
-    pub pyth_receiver_program: Pubkey,
+    // Oracle (Pyth Lazer). The program/storage/treasury are compile-time
+    // constants; only the numeric feed id is an init arg.
+    pub pyth_lazer_feed_id: u32, // SILV = 3304
 
     // Option B (CONFIRMED_SPEC.md): per-tx/daily/hourly caps + on-chain
     // reserve REMOVED. All Option B economic params default at init and are
@@ -81,15 +81,11 @@ pub struct Initialize<'info> {
 
 pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     // Validate args.
-    require!(args.pyth_feed_id != [0u8; 32], DominionError::InvalidFeedId);
+    require!(args.pyth_lazer_feed_id != 0, DominionError::InvalidFeedId);
     require!(args.admin != Pubkey::default(), DominionError::Unauthorized);
     require!(
         args.permanent_delegate_expected != Pubkey::default(),
         DominionError::PermanentDelegateMismatch
-    );
-    require!(
-        args.pyth_receiver_program != Pubkey::default(),
-        DominionError::WrongOracleOwner
     );
     require!(
         args.premium_bps_mint <= PREMIUM_BPS_MINT_CEILING,
@@ -140,13 +136,9 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
         DominionError::UsdcMintNotAllowed
     );
 
-    // CODEX M-02 / P1-02: hard-pin Pyth receiver program to the official
-    // deployment (shared const, also enforced on every set_pyth_feed so the
-    // receiver can never be swapped post-init - only the feed id is mutable).
-    require!(
-        args.pyth_receiver_program == PYTH_RECEIVER_OFFICIAL,
-        DominionError::WrongPythReceiver
-    );
+    // Pyth Lazer migration: the receiver-program pin is gone (the Lazer program
+    // is a compile-time constant in lazer_cpi.rs, validated on every verify
+    // CPI). Only the numeric feed id is configurable.
 
     // CODEX C-01: rug-by-init defense. Off-chain SILV mint creation is a
     // 2-phase script (deployer creates with their authority, then transfers
@@ -310,8 +302,9 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.premium_bps_mint = args.premium_bps_mint;
     config.premium_bps_redeem = args.premium_bps_redeem;
 
-    config.pyth_feed_id = args.pyth_feed_id;
-    config.pyth_receiver_program = args.pyth_receiver_program;
+    config.pyth_lazer_feed_id = args.pyth_lazer_feed_id;
+    config.min_publishers = DEFAULT_MIN_PUBLISHERS;
+    config.last_used_feed_update_timestamp_us = 0;
 
     config.usdc_mint = ctx.accounts.usdc_mint.key();
     config.silv_mint = ctx.accounts.silv_mint.key();
@@ -349,7 +342,11 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.guardian_count = 0;
 
     config.mint_paused_until = 0;
-    config.paused = false;
+    // Pyth Lazer migration (5.7): fresh deploy starts PAUSED. The operating
+    // Tier B oracle bounds (max_staleness, max_confidence_bps, min/max price,
+    // min_publishers) MUST be set from live SILV data + signed off BEFORE the
+    // admin unpauses; no mint/redeem/claim oracle read passes while paused.
+    config.paused = true;
 
     config.next_timelock_nonce = 0;
     config.active_proposal_count = 0;

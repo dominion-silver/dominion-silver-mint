@@ -343,23 +343,32 @@ pub fn propose_set_oracle_guards_handler(
             || args.max_price_scaled.is_some()
             || args.max_delta_bps.is_some()
             || args.decay_seconds.is_some()
-            || args.dust_filter_min_usdc.is_some(),
+            || args.dust_filter_min_usdc.is_some()
+            || args.min_publishers.is_some(),
         DominionError::OracleGuardsAllNone
     );
 
-    // CODEX P1-01a: pre-validate the §6 bounds on PROPOSE too (mirrors the
-    // execute-side checks). An out-of-bounds proposal is rejected immediately
-    // instead of consuming the single-active pending-oracle-guards nonce for
-    // 24h only to fail at execute. Execute still re-validates (binding,
-    // defense in depth). Keep these in lockstep with execute_set_oracle_guards.
+    // Pre-validate the Tier A structural ceilings on PROPOSE too (mirrors the
+    // execute-side checks; execute re-validates, defense in depth). Lazer
+    // migration 5.5: these REPLACE the Core-era ranges (staleness was 5..300).
+    // Keep in lockstep with execute_set_oracle_guards.
     if let Some(v) = args.staleness {
-        require!(v >= 5 && v <= 300, DominionError::AboveMaximum);
+        require!(
+            v >= 5 && v <= MAX_STALENESS_CEILING_SECONDS,
+            DominionError::AboveMaximum
+        );
     }
     if let Some(v) = args.conf_bps {
-        require!(v >= 1 && v <= 1000, DominionError::AboveMaximum);
+        require!(
+            v >= 1 && v <= MAX_CONFIDENCE_BPS_CEILING,
+            DominionError::AboveMaximum
+        );
     }
     if let Some(v) = args.max_delta_bps {
-        require!(v >= 1 && v <= 5000, DominionError::AboveMaximum);
+        require!(
+            v >= 1 && v <= MAX_PRICE_DELTA_BPS_CEILING,
+            DominionError::AboveMaximum
+        );
     }
     if let Some(v) = args.decay_seconds {
         require!(v >= 60 && v <= 7 * 86400, DominionError::AboveMaximum);
@@ -367,12 +376,30 @@ pub fn propose_set_oracle_guards_handler(
     if let Some(v) = args.dust_filter_min_usdc {
         require!(v <= 1_000_000_000_000, DominionError::AboveMaximum);
     }
-    // P1-01b symmetry: a zero upper price bound bricks the oracle sanity
-    // check (read_silver_price requires normalized <= max_price). Reject here
-    // and at execute. min_price == 0 stays allowed (legitimate "no lower
-    // bound" off-switch; normalized is u128 >= 0).
+    if let Some(v) = args.min_publishers {
+        // The Tier A hard floor cannot be undercut; the operating value (Tier
+        // B, set from live data) sits at or above it.
+        require!(
+            v >= crate::lazer_price::MIN_PUBLISHERS_FLOOR_HARD,
+            DominionError::LazerTooFewPublishers
+        );
+    }
+    // Fat-finger rails on the price band (Lazer 5.5): both settings bounded by
+    // the absolute ceiling; max != 0 (a zero upper bound bricks the sanity
+    // check). min == 0 stays allowed (legitimate "no lower bound"); the
+    // cross-field min < max is enforced at execute.
     if let Some(v) = args.max_price_scaled {
-        require!(v != 0, DominionError::PriceOutOfBounds);
+        require!(
+            v != 0 && v <= PRICE_FATFINGER_MAX_SCALED,
+            DominionError::PriceOutOfBounds
+        );
+    }
+    if let Some(v) = args.min_price_scaled {
+        // 0 = lower-bound off-switch; otherwise within the fat-finger band.
+        require!(
+            v == 0 || (v >= PRICE_FATFINGER_MIN_SCALED && v <= PRICE_FATFINGER_MAX_SCALED),
+            DominionError::PriceOutOfBounds
+        );
     }
 
     // Reject pure no-op (every Some matches current value).
@@ -409,6 +436,11 @@ pub fn propose_set_oracle_guards_handler(
     }
     if let Some(v) = args.dust_filter_min_usdc {
         if v != config.price_update_min_amount_usdc {
+            effective_change = true;
+        }
+    }
+    if let Some(v) = args.min_publishers {
+        if v != config.min_publishers {
             effective_change = true;
         }
     }
@@ -640,23 +672,19 @@ pub struct ProposePythFeed<'info> {
 
 pub fn propose_set_pyth_feed_handler(
     ctx: Context<ProposePythFeed>,
-    new_feed_id: [u8; 32],
-    new_receiver_program: Pubkey,
+    new_lazer_feed_id: u32,
 ) -> Result<()> {
     let config = &mut ctx.accounts.config;
     let now = Clock::get()?.unix_timestamp;
 
-    require!(new_feed_id != [0u8; 32], DominionError::InvalidFeedId);
-    // CODEX P1-02: only the feed id is mutable. The receiver program is
-    // hard-pinned to the official Pyth receiver, here (early reject) and again
-    // at execute (binding enforcement, defense in depth).
+    // Pyth Lazer migration: only the numeric feed id is mutable; the Lazer
+    // program is a compile-time constant (lazer_cpi.rs), so there is no
+    // receiver to pin here anymore.
+    require!(new_lazer_feed_id != 0, DominionError::InvalidFeedId);
     require!(
-        new_receiver_program == PYTH_RECEIVER_OFFICIAL,
-        DominionError::WrongPythReceiver
+        new_lazer_feed_id != config.pyth_lazer_feed_id,
+        DominionError::ProposalNoOp
     );
-    let unchanged =
-        new_feed_id == config.pyth_feed_id && new_receiver_program == config.pyth_receiver_program;
-    require!(!unchanged, DominionError::ProposalNoOp);
     require!(
         config.pending_pyth_feed_nonce.is_none(),
         DominionError::ProposalAlreadyActive
@@ -669,9 +697,8 @@ pub fn propose_set_pyth_feed_handler(
     let nonce = config.next_timelock_nonce;
     let executable_at = now + config.admin_timelock_seconds as i64;
 
-    let mut data = Vec::with_capacity(64);
-    data.extend_from_slice(&new_feed_id);
-    data.extend_from_slice(new_receiver_program.as_ref());
+    let mut data = Vec::with_capacity(4);
+    data.extend_from_slice(&new_lazer_feed_id.to_le_bytes());
 
     let tl = &mut ctx.accounts.timelock;
     tl.nonce = nonce;

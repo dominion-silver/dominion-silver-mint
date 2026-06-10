@@ -10,13 +10,9 @@ pub const PREMIUM_BPS_MINT_CEILING: u16 = 2000; // 20% (spec §6)
 pub const PREMIUM_BPS_REDEEM_CEILING: u16 = 1000; // 10% (spec §6)
 pub const PREMIUM_BPS_COMBINED_FLOOR: u16 = 500; // 5% combined min
 
-// CODEX P1-02 / M-02: the official Pyth Solana pull-oracle receiver program
-// (same address mainnet+devnet). Hard-pinned at init AND on every
-// set_pyth_feed propose/execute, so the timelocked admin can change only the
-// FEED ID, never swap the oracle to a malicious receiver. Single source of
-// truth, used by initialize.rs + admin/propose.rs + admin/execute.rs.
-pub const PYTH_RECEIVER_OFFICIAL: anchor_lang::prelude::Pubkey =
-    anchor_lang::solana_program::pubkey!("rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ");
+// Pyth Lazer migration: the Core receiver-program pin (PYTH_RECEIVER_OFFICIAL)
+// was removed. Lazer's program / storage / treasury are hard-pinned constants
+// in lazer_cpi.rs, validated on every verify CPI.
 pub const ADMIN_TIMELOCK_MIN_SECONDS: u32 = 3600; // 1 hour (spec §6)
                                                   // CODEX P1-01: spec §6 caps admin timelock at 604_800s (7 days). Was 30 days.
 pub const ADMIN_TIMELOCK_MAX_SECONDS: u32 = 604_800; // 7 days (spec §6)
@@ -45,17 +41,42 @@ pub const METADATA_NAME_MAX: usize = 32;
 pub const METADATA_SYMBOL_MAX: usize = 10;
 pub const METADATA_URI_MAX: usize = 180;
 
+// Pyth Lazer Tier A structural hard ceilings (plan 5.5). propose + execute MUST
+// reject any admin value above these. They REPLACE the Core-era ranges
+// (staleness was 5..300; far too loose for a 1-of-2-signer feed). The Tier B
+// OPERATING values (set from live data before unpause) sit at or below these.
+pub const MAX_STALENESS_CEILING_SECONDS: u32 = 30;
+pub const MAX_CONFIDENCE_BPS_CEILING: u16 = 500;
+pub const MAX_PRICE_DELTA_BPS_CEILING: u16 = 1000;
+// Absolute fat-finger rails on the min/max-price SETTINGS (9-dec scaled). NO
+// LOOSER than the prior Core values ($5 / $200); never raise them.
+pub const PRICE_FATFINGER_MIN_SCALED: u64 = 5_000_000_000; // $5
+pub const PRICE_FATFINGER_MAX_SCALED: u64 = 200_000_000_000; // $200
+                                                             // Allowed forward clock skew of the Lazer publisher vs the Solana clock (5.4).
+pub const LAZER_FUTURE_SKEW_US: u64 = 2_000_000; // 2s
+                                                 // The subscribed Lazer channel: fixed_rate@1000ms (ChannelId 4).
+pub const LAZER_CHANNEL_ID: u8 = 4;
+// Default operating publisher floor at init = the bare hard floor (1). This is
+// DECORATIVE on its own: a 1-of-N feed passes it. It is NOT meant to operate at
+// this value. The contract initializes PAUSED precisely so the operator MUST
+// raise `min_publishers` to the live-data-approved Tier B value (>= 2 for a
+// redeemable asset, per the GO gate in PYTH_PRO_MIGRATION_PLAN.md Section 12.2)
+// via the timelocked set_oracle_guards BEFORE unpausing. Reviewer-flagged
+// (2026-06-09): the floor is process-gated (paused launch + GO gate), not
+// code-gated at this default. Do NOT unpause without raising it.
+pub const DEFAULT_MIN_PUBLISHERS: u16 = 1;
+
 // Default launch values.
 pub const DEFAULT_PREMIUM_MINT_BPS: u16 = 1000; // 10%
 pub const DEFAULT_PREMIUM_REDEEM_BPS: u16 = 200; // 2%
-                                                 // 60s (1 min). Thomas-decided 2026-05-19 (was 15s). Set at `initialize`
-                                                 // only, so this governs the MAINNET launch value; the already-deployed
-                                                 // devnet program keeps its baked 15s (NOT redeployed). 60s gives the
-                                                 // human two-popup mint flow (post Pyth price, sign, then sign mint)
-                                                 // comfortable headroom: the automated flow needs ~5s, a human clicking
-                                                 // two wallet prompts routinely exceeded the old 15s and hit StaleOracle.
-                                                 // Well within the propose-side oracle-guard ceiling of 300s.
-pub const DEFAULT_MAX_STALENESS_SECONDS: u32 = 60;
+                                                 // Lazer migration (5.4): operating target ~15s, hard-capped at
+                                                 // MAX_STALENESS_CEILING_SECONDS (30). The "single-digit" idea was
+                                                 // retracted: this is a human-approved flow (proxy fetch -> build tx
+                                                 // -> wallet approval -> land) that routinely takes low-tens of
+                                                 // seconds. Carried-forward is rejected separately, so staleness only
+                                                 // bounds how old the FRESH print may be when it lands; the residual
+                                                 // same-print replay is economically bounded for a low-vol metal.
+pub const DEFAULT_MAX_STALENESS_SECONDS: u32 = 15;
 pub const DEFAULT_MAX_CONFIDENCE_BPS: u16 = 100; // 1%
 pub const DEFAULT_MIN_PRICE_USD_SCALED: u64 = 5_000_000_000; // $5 * 1e9
 pub const DEFAULT_MAX_PRICE_USD_SCALED: u64 = 200_000_000_000; // $200 * 1e9
@@ -97,9 +118,11 @@ pub struct ConfigAccount {
     pub premium_bps_mint: u16,
     pub premium_bps_redeem: u16,
 
-    // Oracle
-    pub pyth_feed_id: [u8; 32],
-    pub pyth_receiver_program: Pubkey,
+    // Oracle (Pyth Lazer / Pyth Pro). The Lazer program / storage / treasury are
+    // compile-time CONSTANTS (lazer_cpi.rs), not stored. Section 5.7.
+    pub pyth_lazer_feed_id: u32,                 // SILV = 3304
+    pub min_publishers: u16,                     // operating floor (>= MIN_PUBLISHERS_FLOOR_HARD)
+    pub last_used_feed_update_timestamp_us: u64, // 5.4 non-decreasing high-water mark
 
     // Token program ids (pinned)
     pub usdc_mint: Pubkey,
@@ -186,8 +209,7 @@ impl ConfigAccount {
         + 32                  // permanent_delegate_expected
         + 1                   // compliance_mode
         + 2 + 2               // premium_bps_mint + redeem
-        + 32                  // pyth_feed_id
-        + 32                  // pyth_receiver_program
+        + 4 + 2 + 8           // pyth_lazer_feed_id + min_publishers + last_used_feed_update_ts
         + 32 + 32 + 32 + 32 + 32 // mints, treasury, programs
         + 4 + 2 + 8 + 8       // staleness, conf_bps, min/max price
         + 16 + 8 + 2 + 4 + 8  // price-delta breaker
