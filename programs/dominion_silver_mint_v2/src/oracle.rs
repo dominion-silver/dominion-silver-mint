@@ -55,8 +55,16 @@ pub fn read_silver_price_lazer(
         .map_err(map_policy_err)
 }
 
-fn map_parse_err(_e: LazerError) -> Error {
-    error!(DominionError::LazerPayloadInvalid)
+fn map_parse_err(e: LazerError) -> Error {
+    // Fable audit P3-c: surface the three CONFIG-actionable parse failures with
+    // distinct codes (the operator can fix the configured channel / feed id, or
+    // the message is oversized); everything else is a generic corrupt payload.
+    match e {
+        LazerError::WrongChannel => error!(DominionError::LazerWrongChannel),
+        LazerError::FeedNotFound => error!(DominionError::WrongOracleFeed),
+        LazerError::PayloadTooLarge => error!(DominionError::LazerMessageTooLarge),
+        _ => error!(DominionError::LazerPayloadInvalid),
+    }
 }
 
 fn map_policy_err(e: LazerPolicyError) -> Error {
@@ -106,14 +114,20 @@ pub fn check_price_delta(config: &ConfigAccount, new_price: u128, now: i64) -> R
     Ok(())
 }
 
-/// D38 dust filter: only update last_recorded_price if amount is large enough.
+/// D38 dust filter: only update last_recorded_price if amount is large enough,
+/// EXCEPT the very first arming (last_recorded == 0) which always records so the
+/// delta breaker cannot be permanently disarmed by an all-sub-threshold flow
+/// (Fable audit P2-B). The first accepted price is oracle-verified + in-band, so
+/// arming on it is safe; the dust filter still governs every SUBSEQUENT update
+/// (preventing a tiny trade from moving the reference to a manipulated print).
 pub fn maybe_update_last_price(
     config: &mut ConfigAccount,
     new_price: u128,
     amount_usdc_equiv: u64,
     now: i64,
 ) {
-    if amount_usdc_equiv >= config.price_update_min_amount_usdc {
+    let arming = config.last_recorded_price_scaled == 0;
+    if arming || amount_usdc_equiv >= config.price_update_min_amount_usdc {
         config.last_recorded_price_scaled = new_price;
         config.last_price_update_at = now;
     }

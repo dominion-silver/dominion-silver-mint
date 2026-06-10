@@ -40,6 +40,12 @@ pub const LAZER_PROGRAM_ID: Pubkey =
     anchor_lang::solana_program::pubkey!("pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt");
 pub const LAZER_STORAGE: Pubkey =
     anchor_lang::solana_program::pubkey!("3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpPuSCQVyQL");
+// DEPLOY-CHECKLIST (Fable audit P3-a): unlike LAZER_PROGRAM_ID / LAZER_STORAGE,
+// the treasury is a Lazer runtime artifact not derivable from the SDK. Before
+// each deploy (devnet + mainnet), read the on-chain `Storage.treasury` and
+// confirm it equals this constant. A stale value is fail-closed DoS (the Lazer
+// program's own `has_one = treasury` rejects the CPI), never fund-loss, but it
+// would break every mint/redeem until corrected.
 pub const LAZER_TREASURY: Pubkey =
     anchor_lang::solana_program::pubkey!("Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak");
 
@@ -60,7 +66,9 @@ pub const LAZER_FEE_PAYER_SEED: &[u8] = b"lazer_fee_payer";
 // 8 (anchor disc) + 32 (top_authority) + 32 (treasury).
 const STORAGE_FEE_OFFSET: usize = 8 + 32 + 32;
 
-// Defensive cap on the returned payload size (the SILV payload is ~50 bytes).
+// Defensive cap on the returned payload size. The real ceiling is far lower
+// (Solana return-data is capped at 1024 B; the SILV payload is ~50 B); this is
+// a loose belt-and-suspenders bound, not the active limit (Fable audit P3-b).
 const MAX_RETURN_PAYLOAD: usize = 2048;
 
 // Defensive cap on the inbound SolanaMessage envelope (4 magic + 64 sig +

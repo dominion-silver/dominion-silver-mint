@@ -32,9 +32,12 @@ export interface ConfigAccount {
   // Premium
   premiumBpsMint: number;
   premiumBpsRedeem: number;
-  // Oracle
-  pythFeedId: number[];
-  pythReceiverProgram: PublicKey;
+  // Oracle (Pyth Lazer). The Core pythFeedId[32] + pythReceiverProgram were
+  // removed in the Lazer migration; these are the new fields the account
+  // actually carries (Fable audit P2-C).
+  pythLazerFeedId: number; // u32, SILV = 3304
+  minPublishers: number; // u16, operating publisher floor
+  lastUsedFeedUpdateTimestampUs: BN; // u64, non-decreasing high-water mark
   // Pinned token program ids
   usdcMint: PublicKey;
   silvMint: PublicKey;

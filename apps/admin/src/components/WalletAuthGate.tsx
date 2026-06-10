@@ -76,18 +76,23 @@ function verifySig(message: string, sigHex: string, pubkey: string): boolean {
 
 export function WalletAuthGate({ children }: { children: ReactNode }) {
   const { publicKey, signMessage, connected, disconnect } = useWallet();
-  const [verified, setVerified] = useState(false);
+  const [verifiedPk, setVerifiedPk] = useState<string | null>(null);
   const [signing, setSigning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const pk = publicKey?.toBase58() ?? null;
+  // Gate on the pubkey the verification belongs to, not a bare boolean, so a
+  // wallet SWITCH (A -> B) never flashes B's content as verified for one frame
+  // before the [pk] effect re-checks (Fable audit P3-i). First load is already
+  // fail-closed (verifiedPk starts null).
+  const verified = pk !== null && verifiedPk === pk;
 
   // Re-evaluate when the connected key changes. Honour a cached, still-valid,
   // still-cryptographically-correct proof for this exact pubkey.
   useEffect(() => {
     setErr(null);
     if (!pk) {
-      setVerified(false);
+      setVerifiedPk(null);
       return;
     }
     try {
@@ -103,7 +108,7 @@ export function WalletAuthGate({ children }: { children: ReactNode }) {
           Date.now() - p.at < TTL_MS &&
           verifySig(p.message, p.sig, pk)
         ) {
-          setVerified(true);
+          setVerifiedPk(pk);
           return;
         }
         sessionStorage.removeItem(storageKey(pk));
@@ -111,7 +116,7 @@ export function WalletAuthGate({ children }: { children: ReactNode }) {
     } catch {
       /* ignore corrupt cache */
     }
-    setVerified(false);
+    setVerifiedPk(null);
   }, [pk]);
 
   const doSign = useCallback(async () => {
@@ -129,7 +134,7 @@ export function WalletAuthGate({ children }: { children: ReactNode }) {
         storageKey(pk),
         JSON.stringify({ message, sig, at: Date.now() }),
       );
-      setVerified(true);
+      setVerifiedPk(pk);
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
       setErr(

@@ -724,14 +724,25 @@ export async function fetchRedemptionRequests(
 
 // ---- parsing ----
 
-export function parseUsdcAmount(input: string): BN {
+// Parse a plain non-negative decimal string to atomic units (6 decimals).
+// Fable audit P2-G: `<input type="number">` accepts scientific notation
+// ("2e3"), and these run inside a render-time useMemo, so a `new BN("2e3")`
+// throw would crash the whole page via the error boundary. Reject anything that
+// is not a plain decimal (no exponent, no sign) by returning 0 - the caller's
+// zero-amount guards then handle it cleanly, and the preview shows nothing.
+function parseDecimalToAtomic6(input: string): BN {
+  if (!/^\d*\.?\d*$/.test(input.trim())) return new BN(0);
   const [whole = "0", frac = ""] = input.split(".");
   const fracPadded = (frac + "000000").slice(0, 6);
-  return new BN(whole).mul(new BN(1_000_000)).add(new BN(fracPadded || "0"));
+  return new BN(whole || "0")
+    .mul(new BN(1_000_000))
+    .add(new BN(fracPadded || "0"));
+}
+
+export function parseUsdcAmount(input: string): BN {
+  return parseDecimalToAtomic6(input);
 }
 
 export function parseSilvAmount(input: string): BN {
-  const [whole = "0", frac = ""] = input.split(".");
-  const fracPadded = (frac + "000000").slice(0, 6);
-  return new BN(whole).mul(new BN(1_000_000)).add(new BN(fracPadded || "0"));
+  return parseDecimalToAtomic6(input);
 }

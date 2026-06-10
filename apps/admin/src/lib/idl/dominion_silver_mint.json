@@ -4400,6 +4400,11 @@
       "code": 12082,
       "name": "LazerCarriedForward",
       "msg": "Lazer price is carried-forward (feedUpdateTimestamp mismatch / non-monotonic)"
+    },
+    {
+      "code": 12083,
+      "name": "LazerWrongChannel",
+      "msg": "Lazer payload channel does not match the configured channel"
     }
   ],
   "types": [

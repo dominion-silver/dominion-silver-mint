@@ -400,11 +400,14 @@ function RedemptionQueue({ queue }: { queue: RedemptionQueueResult }) {
                     <td className="py-2 pr-4">
                       {r.status === "pending" ? (
                         <button
-                          onClick={() =>
+                          onClick={() => {
+                            navigator.clipboard
+                              ?.writeText(r.owner.toBase58())
+                              .catch(() => {});
                             alert(
-                              `Mark settled off-chain for ${r.owner.toBase58()}: confirms the user was paid off-chain so this request can no longer be claimed. Action wiring pending.`,
-                            )
-                          }
+                              `Settle off-chain (the user's SILV is already burned):\n\nowner: ${r.owner.toBase58()}  (copied to clipboard)\nnonce: ${r.nonce.toString()}\n\nUse the "Settle redemption off-chain" action in the Admin Actions panel below (paste owner + enter nonce). It submits via the Ops Squads multisig. Do this ONLY after the user has been paid off-chain, so the request can no longer be claimed on-chain.`,
+                            );
+                          }}
                           className="rounded border border-border px-2 py-1 text-xs transition hover:bg-bg/40"
                         >
                           Settle off-chain

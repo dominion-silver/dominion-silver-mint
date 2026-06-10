@@ -26,13 +26,23 @@ export type SquadsRole = "ops" | "upgrade";
 // Configured at deploy time (Mark provides the real multisig addresses).
 // Until then these are placeholders so the app builds; every flow that
 // needs a real multisig checks `isConfigured()` first.
-export const OPS_SQUADS_MULTISIG = new PublicKey(
-  process.env.NEXT_PUBLIC_OPS_SQUADS ||
-    "11111111111111111111111111111111",
+// Fable audit P3-h: parse defensively. A typo in the env value (the exact
+// moment Mark's real vaults get wired) must fall back to the placeholder so
+// `isConfigured()` shows the clean "not configured" banner, NEVER throw at
+// module load and white-screen the whole admin app.
+function configuredPk(envValue: string | undefined): PublicKey {
+  const PLACEHOLDER = "11111111111111111111111111111111";
+  try {
+    return new PublicKey(envValue || PLACEHOLDER);
+  } catch {
+    return new PublicKey(PLACEHOLDER);
+  }
+}
+export const OPS_SQUADS_MULTISIG = configuredPk(
+  process.env.NEXT_PUBLIC_OPS_SQUADS,
 );
-export const UPGRADE_SQUADS_MULTISIG = new PublicKey(
-  process.env.NEXT_PUBLIC_UPGRADE_SQUADS ||
-    "11111111111111111111111111111111",
+export const UPGRADE_SQUADS_MULTISIG = configuredPk(
+  process.env.NEXT_PUBLIC_UPGRADE_SQUADS,
 );
 
 export const SQUADS_V4_PROGRAM_ID = multisig.PROGRAM_ID;

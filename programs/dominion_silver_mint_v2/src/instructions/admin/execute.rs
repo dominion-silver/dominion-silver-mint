@@ -429,7 +429,7 @@ pub fn execute_set_oracle_guards_handler(
     }
     if let Some(v) = g.min_publishers {
         // Lazer 5.5: the operating publisher floor; cannot be set below the
-        // Tier A hard floor. Lowering it is a timelocked + auto-paused action.
+        // Tier A hard floor.
         require!(
             v >= crate::lazer_price::MIN_PUBLISHERS_FLOOR_HARD,
             DominionError::LazerTooFewPublishers
@@ -437,6 +437,20 @@ pub fn execute_set_oracle_guards_handler(
         config.min_publishers = v;
     }
     // Option B: reserve_price_ramp_bps removed (no reserve-check price).
+
+    // Atomic auto-pause on ANY oracle-guard change (Fable audit P2-A). Mirrors
+    // execute_set_pyth_feed + execute_set_compliance_mode: an oracle-config
+    // change (incl. WEAKENING staleness/conf/delta/price-band or LOWERING
+    // min_publishers) must never go live silently after the 24h window. The
+    // admin re-validates against live data, then unpauses. Idempotent if the
+    // contract is already paused (e.g. the pre-unpause launch sequence).
+    if !config.paused {
+        config.paused = true;
+        emit!(crate::events::Paused {
+            by: ctx.accounts.admin.key(),
+            timestamp: now,
+        });
+    }
 
     config.pending_oracle_guards_nonce = None;
     config.active_proposal_count = config.active_proposal_count.saturating_sub(1);

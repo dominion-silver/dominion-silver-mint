@@ -116,9 +116,11 @@ pub enum LazerError {
     PayloadTooLarge,
 }
 
-/// Defensive cap on the inner payload size (the SILV payload is ~50 bytes;
-/// the CPI return-data cap is 2048). Bounds the parser independently of its
-/// caller (it is `pub` + used by the host-only differential test).
+/// Defensive cap on the inner payload size. The real ceiling is far lower (the
+/// SILV payload is ~50 B; Solana return-data is capped at 1024 B), so this is a
+/// loose belt-and-suspenders bound, not the active limit (Fable audit P3-b). It
+/// is `pub` to bound the parser independently of its caller + for the host-only
+/// differential test.
 pub const MAX_PAYLOAD: usize = 4096;
 
 /// One feed's verified, extracted data. Raw values: the ORACLE applies the

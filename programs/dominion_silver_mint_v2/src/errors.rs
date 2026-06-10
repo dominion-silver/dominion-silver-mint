@@ -183,4 +183,6 @@ pub enum DominionError {
     LazerTooFewPublishers,
     #[msg("Lazer price is carried-forward (feedUpdateTimestamp mismatch / non-monotonic)")]
     LazerCarriedForward,
+    #[msg("Lazer payload channel does not match the configured channel")]
+    LazerWrongChannel,
 }

@@ -51,14 +51,6 @@ function parseBigUint(s: string): bigint {
 function pk(s: string): PublicKey {
   return new PublicKey((s ?? "").trim()); // throws on invalid base58
 }
-function parseHex32(s: string): Uint8Array {
-  const h = (s ?? "").trim().replace(/^0x/, "");
-  if (!/^[0-9a-fA-F]{64}$/.test(h))
-    throw new Error("Feed id must be 32 bytes (exactly 64 hex chars)");
-  const out = new Uint8Array(32);
-  for (let i = 0; i < 32; i++) out[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
-  return out;
-}
 const U32 = 4_294_967_295;
 const U16 = 65_535;
 
@@ -260,12 +252,10 @@ const ACTIONS: ActionDesc[] = [
     group: "Delayed (24h)",
     mode: "squads",
     fields: [
-      { name: "feed", label: "Feed id (hex32)", kind: "hex32" },
-      { name: "recv", label: "Receiver program", kind: "pubkey" },
+      { name: "feed", label: "Lazer feed id (u32, SILV = 3304)", kind: "int" },
     ],
-    tip: "Migrate the Pyth feed (must be the official receiver).",
-    build: (c, p) =>
-      actions.proposeSetPythFeed(c, parseHex32(p.feed), pk(p.recv)),
+    tip: "Change the Pyth Lazer feed id. The Lazer program is a fixed contract constant (no receiver arg).",
+    build: (c, p) => actions.proposeSetPythFeed(c, parseUint(p.feed, U32)),
   },
   {
     id: "propose-oracle-guards",
@@ -280,8 +270,9 @@ const ACTIONS: ActionDesc[] = [
       { name: "minp", label: "Min price 1e9 (blank=keep)", kind: "optbig" },
       { name: "maxp", label: "Max price 1e9 (blank=keep)", kind: "optbig" },
       { name: "dust", label: "Dust min USDC (blank=keep)", kind: "optbig" },
+      { name: "minpub", label: "Min publishers (blank=keep)", kind: "optint" },
     ],
-    tip: "Change oracle guards. Leave a field blank to keep its value.",
+    tip: "Change oracle guards. Leave a field blank to keep its value. Raising Min publishers (>=2) is the mandatory pre-unpause GO-gate step.",
     build: (c, p) =>
       actions.proposeSetOracleGuards(c, {
         stalenessSeconds: optNum(p.stale, U32),
@@ -291,7 +282,27 @@ const ACTIONS: ActionDesc[] = [
         minPriceScaled: optBig(p.minp),
         maxPriceScaled: optBig(p.maxp),
         dustFilterMinUsdc: optBig(p.dust),
+        minPublishers: optNum(p.minpub, U16),
       }),
+  },
+  {
+    id: "settle-offchain",
+    label: "Settle redemption off-chain",
+    group: "Emergency & ops",
+    mode: "squads",
+    fields: [
+      { name: "owner", label: "Request owner (pubkey)", kind: "pubkey" },
+      { name: "nonce", label: "Request nonce (u64)", kind: "optbig" },
+    ],
+    tip: "Mark a Pending queued redemption settled off-chain (paid via OTC) so it can no longer be claimed on-chain. Copy owner + nonce from the Redemptions table.",
+    build: (c, p) => {
+      if (!p.nonce || !p.nonce.trim()) throw new Error("Nonce is required");
+      return actions.settleRedemptionOffchain(
+        c,
+        pk(p.owner),
+        parseBigUint(p.nonce),
+      );
+    },
   },
   {
     id: "propose-admin-transfer",
@@ -600,6 +611,14 @@ export function AdminActions() {
             <div className="mb-2 text-xs uppercase tracking-wide text-muted">
               {g}
             </div>
+            {g === "Delayed (24h)" && (
+              <div className="mb-3 rounded-md border border-border bg-bg/40 p-2 text-xs text-muted">
+                Stage these one at a time: fully execute one proposal (create,
+                approve, then execute) before creating the next. Two delayed
+                proposals created together would both claim the same timelock
+                slot and the second would fail after the first executes.
+              </div>
+            )}
             <div className="grid gap-3 md:grid-cols-2">
               {ACTIONS.filter((a) => a.group === g).map((a) => (
                 <div

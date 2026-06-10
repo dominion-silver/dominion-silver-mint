@@ -32,6 +32,7 @@ import {
 import {
   configPda,
   guardianPda,
+  redemptionRequestPda,
   silvMetadataAuthorityPda,
   timelockPda,
   treasuryPda,
@@ -195,6 +196,24 @@ export async function unpause(c: BuildCtx): Ix {
     .instruction();
   return one(ix);
 }
+// Mark a Pending queued redemption as settled off-chain (OTC). The user's SILV
+// is already burned; this confirms they were paid off-chain so the request can
+// no longer be claimed on-chain (Fable audit P2-F: closes the double-pay risk).
+// owner + nonce identify the request PDA. Admin-signed (the Ops vault).
+export async function settleRedemptionOffchain(
+  c: BuildCtx,
+  owner: PublicKey,
+  nonce: bigint,
+): Ix {
+  const ix = await (getProgram(c.connection).methods as any)
+    .adminSettleRedemptionOffchain()
+    .accountsPartial({
+      admin: adminAuthority(),
+      redemptionRequest: redemptionRequestPda(owner, nonce),
+    })
+    .instruction();
+  return one(ix);
+}
 export async function cancelTimelockedAction(
   c: BuildCtx,
   nonce: bigint,
@@ -216,6 +235,17 @@ export async function cancelTimelockedAction(
 // ---------------------------------------------------------------------------
 // Timelocked propose_* : derive the timelock PDA from the CURRENT
 // config.next_timelock_nonce and pass it explicitly.
+//
+// OPERATIONAL CONSTRAINT (Fable audit P2-E): the nonce is read HERE, at build
+// time, but a Squads proposal executes LATER (after the multisig ceremony) and
+// its message is immutable. The contract `init`s the timelock PDA from the
+// nonce at EXECUTION time. So if you stage TWO timelocked proposals via Squads
+// before the first one executes, both bake the PDA for the same nonce N; after
+// the first executes, the second fails ConstraintSeeds forever (approved but
+// dead, needs a full re-propose). RULE: execute timelocked proposals SERIALLY -
+// complete one Squads ceremony (create -> approve -> execute the dominion
+// propose_*) before staging the next. A contract-level fix (client-provided
+// nonce) is deferred to the Lazer frontend phase.
 // ---------------------------------------------------------------------------
 async function propose(c: BuildCtx, method: string, args: any[]): Ix {
   const nonce = await nextTimelockNonce(c.connection);
@@ -255,17 +285,20 @@ export const proposeWithdrawUsdc = (
   recipient: PublicKey,
 ): Ix =>
   propose(c, "proposeWithdrawUsdc", [new BN(amount.toString()), recipient]);
-export const proposeSetPythFeed = (
-  c: BuildCtx,
-  feedId: Uint8Array,
-  receiverProgram: PublicKey,
-): Ix =>
-  propose(c, "proposeSetPythFeed", [Array.from(feedId), receiverProgram]);
+// Pyth Lazer migration: a single numeric feed id (u32). The Core receiver
+// program arg is gone (the Lazer program is a compile-time contract constant).
+export const proposeSetPythFeed = (c: BuildCtx, lazerFeedId: number): Ix =>
+  propose(c, "proposeSetPythFeed", [lazerFeedId]);
 export const proposeAdminTransfer = (c: BuildCtx, newAdmin: PublicKey): Ix =>
   propose(c, "proposeAdminTransfer", [newAdmin]);
 
 /** OracleGuardsArgs: every field is optional (null = leave unchanged).
- *  Keys are the IDL field names (the Borsh coder reads by IDL name). */
+ *  CRITICAL (Fable audit P1-A): the Borsh coder reads the CAMELCASED field
+ *  names. Anchor >=0.30 runs convertIdlToCamelCase at Program construction, so
+ *  the keys passed here MUST be camelCase (confBps, minPriceScaled, ...). Any
+ *  snake_case key is silently treated as `undefined` => encoded as None => the
+ *  field is dropped from the proposal with NO error. `min_publishers` is
+ *  included (Fable P1-B): the launch GO gate raises it via this instruction. */
 export interface OracleGuardsInput {
   stalenessSeconds?: number;
   confBps?: number;
@@ -274,6 +307,7 @@ export interface OracleGuardsInput {
   maxDeltaBps?: number;
   decaySeconds?: number;
   dustFilterMinUsdc?: bigint;
+  minPublishers?: number;
 }
 export const proposeSetOracleGuards = (
   c: BuildCtx,
@@ -282,17 +316,18 @@ export const proposeSetOracleGuards = (
   propose(c, "proposeSetOracleGuards", [
     {
       staleness: a.stalenessSeconds ?? null,
-      conf_bps: a.confBps ?? null,
-      min_price_scaled:
+      confBps: a.confBps ?? null,
+      minPriceScaled:
         a.minPriceScaled != null ? new BN(a.minPriceScaled.toString()) : null,
-      max_price_scaled:
+      maxPriceScaled:
         a.maxPriceScaled != null ? new BN(a.maxPriceScaled.toString()) : null,
-      max_delta_bps: a.maxDeltaBps ?? null,
-      decay_seconds: a.decaySeconds ?? null,
-      dust_filter_min_usdc:
+      maxDeltaBps: a.maxDeltaBps ?? null,
+      decaySeconds: a.decaySeconds ?? null,
+      dustFilterMinUsdc:
         a.dustFilterMinUsdc != null
           ? new BN(a.dustFilterMinUsdc.toString())
           : null,
+      minPublishers: a.minPublishers ?? null,
     },
   ]);
 

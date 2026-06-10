@@ -62,7 +62,9 @@ pub fn propose_set_premium_mint_handler(ctx: Context<ProposePremium>, new_bps: u
     );
 
     let nonce = config.next_timelock_nonce;
-    let executable_at = now + config.admin_timelock_seconds as i64;
+    let executable_at = now
+        .checked_add(config.admin_timelock_seconds as i64)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
 
     let tl = &mut ctx.accounts.timelock;
     tl.nonce = nonce;
@@ -128,7 +130,9 @@ pub fn propose_set_premium_redeem_handler(
     );
 
     let nonce = config.next_timelock_nonce;
-    let executable_at = now + config.admin_timelock_seconds as i64;
+    let executable_at = now
+        .checked_add(config.admin_timelock_seconds as i64)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
 
     let tl = &mut ctx.accounts.timelock;
     tl.nonce = nonce;
@@ -200,7 +204,9 @@ pub fn propose_withdraw_usdc_handler(
     );
 
     let nonce = config.next_timelock_nonce;
-    let executable_at = now + config.admin_timelock_seconds as i64;
+    let executable_at = now
+        .checked_add(config.admin_timelock_seconds as i64)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
 
     let mut data = Vec::with_capacity(40);
     data.extend_from_slice(&amount.to_le_bytes());
@@ -278,7 +284,9 @@ pub fn propose_set_compliance_mode_handler(
     );
 
     let nonce = config.next_timelock_nonce;
-    let executable_at = now + config.admin_timelock_seconds as i64;
+    let executable_at = now
+        .checked_add(config.admin_timelock_seconds as i64)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
 
     let tl = &mut ctx.accounts.timelock;
     tl.nonce = nonce;
@@ -401,6 +409,18 @@ pub fn propose_set_oracle_guards_handler(
             DominionError::PriceOutOfBounds
         );
     }
+    // Cross-field (Fable audit P3-e): resolve the effective band (the arg if
+    // Some, else the current config) and reject min >= max at PROPOSE too, so a
+    // doomed proposal cannot occupy the single oracle-guards slot for the full
+    // timelock. Execute re-checks against the applied values (defense in depth).
+    {
+        let eff_min = args.min_price_scaled.unwrap_or(config.min_price_usd_scaled);
+        let eff_max = args.max_price_scaled.unwrap_or(config.max_price_usd_scaled);
+        require!(
+            eff_min == 0 || eff_min < eff_max,
+            DominionError::PriceOutOfBounds
+        );
+    }
 
     // Reject pure no-op (every Some matches current value).
     let mut effective_change = false;
@@ -456,11 +476,21 @@ pub fn propose_set_oracle_guards_handler(
     );
 
     let nonce = config.next_timelock_nonce;
-    let executable_at = now + config.admin_timelock_seconds as i64;
+    let executable_at = now
+        .checked_add(config.admin_timelock_seconds as i64)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
 
-    let mut data = Vec::with_capacity(64);
+    let mut data = Vec::with_capacity(TimelockQueueAccount::MAX_ACTION_DATA_BYTES);
     args.serialize(&mut data)
         .map_err(|_| error!(DominionError::SerializationFailure))?;
+    // Defense in depth (Fable audit P3-d): an action_data write beyond the
+    // account budget would corrupt the timelock account. The worst-case borsh
+    // of OracleGuardsArgs (~46 B) is far under the cap, but guard it explicitly
+    // for parity with propose_update_metadata.
+    require!(
+        data.len() <= TimelockQueueAccount::MAX_ACTION_DATA_BYTES,
+        DominionError::MalformedActionData
+    );
 
     let tl = &mut ctx.accounts.timelock;
     tl.nonce = nonce;
@@ -541,7 +571,9 @@ pub fn propose_set_treasury_min_float_handler(
     );
 
     let nonce = config.next_timelock_nonce;
-    let executable_at = now + config.admin_timelock_seconds as i64;
+    let executable_at = now
+        .checked_add(config.admin_timelock_seconds as i64)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
 
     let tl = &mut ctx.accounts.timelock;
     tl.nonce = nonce;
@@ -620,7 +652,9 @@ pub fn propose_set_admin_timelock_handler(
     );
 
     let nonce = config.next_timelock_nonce;
-    let executable_at = now + config.admin_timelock_seconds as i64;
+    let executable_at = now
+        .checked_add(config.admin_timelock_seconds as i64)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
 
     let tl = &mut ctx.accounts.timelock;
     tl.nonce = nonce;
@@ -695,7 +729,9 @@ pub fn propose_set_pyth_feed_handler(
     );
 
     let nonce = config.next_timelock_nonce;
-    let executable_at = now + config.admin_timelock_seconds as i64;
+    let executable_at = now
+        .checked_add(config.admin_timelock_seconds as i64)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
 
     let mut data = Vec::with_capacity(4);
     data.extend_from_slice(&new_lazer_feed_id.to_le_bytes());
@@ -774,7 +810,9 @@ pub fn propose_update_metadata_handler(
     );
 
     let nonce = config.next_timelock_nonce;
-    let executable_at = now + config.admin_timelock_seconds as i64;
+    let executable_at = now
+        .checked_add(config.admin_timelock_seconds as i64)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
 
     let mut data = Vec::with_capacity(TimelockQueueAccount::MAX_ACTION_DATA_BYTES);
     args.serialize(&mut data)
