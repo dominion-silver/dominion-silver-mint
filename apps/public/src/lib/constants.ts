@@ -19,6 +19,14 @@ export const SILV_MINT = new PublicKey("4bNYnE1d8XV1W4iJuWVqmxVi5qqvAopvxekifDVv
 // Pyth XAG/USD feed.
 export const PYTH_XAG_USD_FEED_ID = "0xf2fb02c32b055c805e7238d628e5e9dadef274376114eb1f012337cabe93871e";
 
+// Pyth Lazer (Pyth Pro) on-chain accounts (mainnet == devnet). Hard-pinned in
+// the contract (lazer_cpi.rs); the dominion oracle ix passes them.
+export const LAZER_PROGRAM_ID = new PublicKey("pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt");
+export const LAZER_STORAGE = new PublicKey("3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpPuSCQVyQL");
+export const LAZER_TREASURY = new PublicKey("Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak");
+// SILV's Pyth Lazer feed id.
+export const LAZER_SILV_FEED_ID = 3304;
+
 // RPC endpoints.
 // Default = public devnet RPC (no API key required, rate-limited but fine for testing).
 // For mainnet production, set NEXT_PUBLIC_HELIUS_RPC or NEXT_PUBLIC_TRITON_RPC in env.
@@ -37,6 +45,7 @@ export const SEEDS = {
   timelock: "timelock",
   guardian: "guardian",
   redeemRequest: "redeem_request",
+  lazerFeePayer: "lazer_fee_payer",
 } as const;
 
 // UI defaults.

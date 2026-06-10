@@ -22,6 +22,15 @@ export function silvMintAuthorityPda(): PublicKey {
   )[0];
 }
 
+// The isolated System-owned Lazer fee-payer PDA (the dominion oracle ix funds
+// it with the capped Lazer fee; the user wallet is never in the Lazer CPI).
+export function lazerFeePayerPda(): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from(SEEDS.lazerFeePayer)],
+    PROGRAM_ID,
+  )[0];
+}
+
 export function silvMetadataAuthorityPda(): PublicKey {
   return PublicKey.findProgramAddressSync(
     [Buffer.from(SEEDS.silvMetadataAuthority)],
