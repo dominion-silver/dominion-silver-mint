@@ -1,0 +1,25 @@
+# Host-only verification crate (NOT a member of the main workspace, NOT built
+# for SBF). Closes the Fable/Codex P2-01 machine-verification gap:
+#   1. The dominion hand-rolled Lazer parser (programs/.../src/lazer.rs) is
+#      DIFFERENTIALLY tested against the canonical pyth-lazer-protocol 0.34.0
+#      wire format (the same crate the on-chain Lazer program locks).
+#   2. The verify_message anchor discriminator pinned in lazer_cpi.rs is
+#      re-derived from the sha256("global:verify_message")[..8] formula and
+#      checked against the source constant.
+# Run: cd tools/lazer-verify && cargo test
+[package]
+name = "lazer-verify"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+pyth-lazer-protocol = "=0.34.0"
+byteorder = "1"
+sha2 = "0.10"
+
+# Detach from the main workspace so cargo-build-sbf never tries to build this
+# (pyth-lazer-protocol pulls off-chain deps that fail the SBF target).
+[workspace]
