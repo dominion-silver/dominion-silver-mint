@@ -95,7 +95,10 @@ function indexOfSubarray(haystack: Uint8Array, needle: Uint8Array): number {
 
 /**
  * The dominion instruction's `message_data` argument: the WHOLE envelope (NOT
- * the inner payload). Validates it parses.
+ * the inner payload). Validates it parses. Pass exactly the bytes the Pyth proxy
+ * returned, with NO trailing bytes beyond `102 + payload_len`: the on-chain
+ * `slice_eq(envelope, message_data)` compares lengths, so any trailing slack
+ * would revert (InvalidMessageData). Fail-closed, never a silent bad price.
  */
 export function lazerMessageData(envelope: Uint8Array): Uint8Array {
   parseSolanaMessage(envelope);

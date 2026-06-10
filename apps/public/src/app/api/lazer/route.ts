@@ -72,7 +72,7 @@ export async function POST(req: NextRequest) {
     });
   } catch (e) {
     return NextResponse.json(
-      { error: "lazer_unreachable", message: String(e) },
+      { error: "lazer_unreachable", message: String(e).slice(0, 500) },
       { status: 502 },
     );
   }

@@ -20,21 +20,12 @@ opt-level = 3
 incremental = false
 codegen-units = 1
 
-# Force a single anchor-lang / anchor-spl version tree.
-# Without this, pyth-solana-receiver-sdk 0.6.x pulls anchor-lang 1.0.x
-# (because its dep constraint is `>=0.28.0`), which drags in solana-pubkey
-# 4.2.0 requiring Rust 1.89+ and breaks edition2021 consumers.
-# Kamino + MarginFi use the same pattern (patch.crates-io pins).
+# Pin anchor-lang / anchor-spl to the exact git tag for a single, reproducible
+# version tree (the deterministic IDL build depends on this; see
+# private/CI_IDL_DETERMINISM.md "DECISION", proven over 13 CI runs). Kamino +
+# MarginFi use the same patch.crates-io pin pattern.
+# (The vendored pyth-solana-receiver-sdk patch was removed 2026-06-10 with the
+# Pyth Lazer migration; the Core receiver SDK is no longer a dependency.)
 [patch.crates-io]
 anchor-lang = { git = "https://github.com/coral-xyz/anchor", tag = "v0.31.1" }
 anchor-spl = { git = "https://github.com/coral-xyz/anchor", tag = "v0.31.1" }
-# Vendored pyth-solana-receiver-sdk 0.6.1 (EXACT version the deployed +
-# codex-audited + 68/68-tested devnet program uses), with a minimal
-# 3-line patch so it compiles on modern Rust: upstream's bare-trait
-# `AnchorSerialize::try_to_vec` is an E0782 hard error >= rust ~1.84 and
-# pyth never fixed it through HEAD; `solana-program 2.3.0` needs rust
-# >= 1.79, so no single non-vendored toolchain can build this graph
-# (proven over 13 CI runs; see private/CI_IDL_DETERMINISM.md "DECISION").
-# Price logic is byte-identical to the audited program: ONLY the
-# try_to_vec call syntax + an explicit borsh dep changed.
-pyth-solana-receiver-sdk = { path = "vendor/pyth-solana-receiver-sdk" }
