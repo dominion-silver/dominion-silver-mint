@@ -157,4 +157,26 @@ pub enum DominionError {
     MetadataFieldEmpty,
     #[msg("Metadata field exceeds its maximum length")]
     MetadataFieldTooLong,
+    // Pyth Lazer (Pyth Pro) oracle migration (2026-06-09). APPEND ONLY.
+    // Section 5.2 / 5.2.1 of private/PYTH_PRO_MIGRATION_PLAN.md.
+    #[msg("A pinned Lazer account (program/storage/treasury/sysvar/system) did not match")]
+    LazerWrongAccount,
+    #[msg("The Lazer program account is not executable")]
+    LazerProgramNotExecutable,
+    #[msg("The Lazer Storage account is too small to read the fee")]
+    LazerStorageMalformed,
+    #[msg("The Lazer single-update fee exceeds the Dominion ceiling")]
+    LazerFeeTooHigh,
+    #[msg("The Lazer fee-payer PDA did not match the expected derivation")]
+    LazerFeePayerMismatch,
+    #[msg("verify_message returned no return-data")]
+    LazerReturnDataMissing,
+    #[msg("verify_message return-data came from the wrong program")]
+    LazerReturnDataWrongProgram,
+    #[msg("verify_message return-data is malformed (length / trailing bytes)")]
+    LazerReturnDataMalformed,
+    #[msg("Lazer payload parse/extraction failed")]
+    LazerPayloadInvalid,
+    #[msg("The inbound Lazer message exceeds the size cap")]
+    LazerMessageTooLarge,
 }
