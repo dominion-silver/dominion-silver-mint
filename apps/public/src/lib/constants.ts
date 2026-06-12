@@ -1,7 +1,8 @@
 import { PublicKey } from "@solana/web3.js";
 
-// Program ID: V2 (Option B) fresh devnet deploy 2026-05-18. NOT the V1 id.
-export const PROGRAM_ID = new PublicKey("GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX");
+// Program ID: Pyth Lazer fresh devnet deploy 2026-06-10 (config layout changed
+// again). Old Core/V2 devnet id GDN5ktEm88... retired.
+export const PROGRAM_ID = new PublicKey("2ujQgKtxvaU9Ax3jL22374SypSyTR9J4yztqYkX23oMT");
 
 // Token programs.
 export const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -12,9 +13,9 @@ export const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZb
 // For mainnet swap to: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
 export const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
 
-// SILV mint - V2 fresh devnet init 2026-05-18 (target/devnet-deployment.json).
+// SILV mint - Pyth Lazer fresh devnet init 2026-06-10 (target/devnet-deployment.json).
 // Note: this needs to be updated after each fresh init.
-export const SILV_MINT = new PublicKey("4bNYnE1d8XV1W4iJuWVqmxVi5qqvAopvxekifDVvB4Ew");
+export const SILV_MINT = new PublicKey("5xiznEZfDRYojUL1WD2amruBZHonHphViH1SdnefyFx");
 
 // Pyth XAG/USD feed.
 export const PYTH_XAG_USD_FEED_ID = "0xf2fb02c32b055c805e7238d628e5e9dadef274376114eb1f012337cabe93871e";

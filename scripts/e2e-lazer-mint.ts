@@ -119,6 +119,38 @@ async function main() {
   console.log("after:  USDC", usdcAfter / 1e6, "| SILV", silvAfter / 1e6, "| total supply", supply / 1e6);
   console.log("\n  USDC spent:", (usdcBefore - usdcAfter) / 1e6, "| SILV minted:", (silvAfter - silvBefore) / 1e6);
   if (silvAfter <= silvBefore) throw new Error("SILV did not increase");
-  console.log("\n🎉 LAZER MINT E2E PASSED - real signed SILV price flowed through the on-chain verify_message.");
+  console.log("  ✅ MINT OK");
+
+  // === REDEEM (instant) - validates the redeem account set on-chain too ===
+  console.log("\n== Redeem 0.05 SILV (instant, fresh envelope) ==");
+  const redeemEnv = await fetchSilvEnvelope();
+  const redeemMsg = Buffer.from(lazerMessageData(redeemEnv));
+  const redeemIx = await (program.methods as any)
+    .redeemSilv(new anchor.BN(50_000), new anchor.BN(1), redeemMsg, 0, 0) // 0.05 SILV, min 1
+    .accounts({
+      config: configPda, user, usdcMint: USDC_MINT, silvMint: SILV_MINT,
+      usdcTreasury: usdcTreasuryAta, userUsdcAta, userSilvAta,
+      treasuryPda: pda("treasury"),
+      lazerProgram: LAZER_PROGRAM, lazerStorage: LAZER_STORAGE, lazerTreasury: LAZER_TREASURY,
+      lazerFeePayer: pda("lazer_fee_payer"), instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+      classicTokenProgram: TOKEN_PROGRAM, token2022Program: TOKEN_2022,
+      associatedTokenProgram: ATA_PROGRAM, systemProgram: SystemProgram.programId,
+    })
+    .instruction();
+  const redeemPre = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+    createAssociatedTokenAccountIdempotentInstruction(user, userUsdcAta, user, USDC_MINT, TOKEN_PROGRAM),
+  ];
+  const { ed25519Ix: redeemEd } = assembleLazerTx(redeemIx.data, redeemEnv, {
+    dominionInstructionIndex: 1 + redeemPre.length, ed25519InstructionIndex: 0,
+  });
+  const redeemSig = await provider.sendAndConfirm(new Transaction().add(redeemEd, ...redeemPre, redeemIx), []);
+  console.log("  ✅ REDEEM TX:", redeemSig);
+  const silvFinal = Number((await getAccount(conn, userSilvAta, "confirmed", TOKEN_2022)).amount);
+  const usdcFinal = Number((await getAccount(conn, userUsdcAta, "confirmed", TOKEN_PROGRAM)).amount);
+  console.log("  SILV burned:", (silvAfter - silvFinal) / 1e6, "| USDC received:", (usdcFinal - usdcAfter) / 1e6);
+  if (usdcFinal <= usdcAfter) throw new Error("USDC did not increase on redeem");
+
+  console.log("\n🎉 LAZER FULL-CYCLE E2E PASSED - mint + instant redeem with real signed SILV prices through the on-chain verify_message.");
 }
 main().catch((e) => { console.error("FAILED:", e.message || e); if (e.logs) console.error(e.logs.join("\n")); process.exit(1); });

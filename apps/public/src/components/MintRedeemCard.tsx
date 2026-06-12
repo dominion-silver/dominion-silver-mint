@@ -22,17 +22,19 @@ import {
   STALE_ORACLE_USER_MESSAGE,
   errorToText,
   fetchRedemptionRequests,
-  buildMintTx,
-  buildRedeemTx,
   buildRedeemQueuedTx,
-  buildClaimRedemptionTx,
   buildCloseSettledRedemptionTx,
   parseUsdcAmount,
   parseSilvAmount,
   type RedeemRoute,
   type RedemptionRequestView,
 } from "@/lib/anchor-client";
-import { postPythAndExecuteConsumer } from "@/lib/pyth-posting";
+import {
+  buildLazerMintTx,
+  buildLazerRedeemTx,
+  buildLazerClaimTx,
+} from "@/lib/lazer-tx";
+import { fetchAndExecuteLazer } from "@/lib/lazer-execute";
 import { toast } from "@/components/Toaster";
 import { recordTxKind } from "@/components/TransactionHistory";
 
@@ -252,14 +254,14 @@ export function MintRedeemCard() {
     try {
       if (mode === "mint") {
         showProgress("Preparing transaction...");
-        const r = await postPythAndExecuteConsumer(
+        const r = await fetchAndExecuteLazer(
           connection,
           wallet,
-          (priceUpdate) =>
-            buildMintTx(connection, wallet, {
+          (envelope) =>
+            buildLazerMintTx(connection, wallet, {
               amountUsdc: parseUsdcAmount(amount),
               minSilvOut: parseSilvAmount(preview.minOut.toFixed(6)),
-              priceUpdate,
+              envelope,
             }),
         );
         setErrorMsg(null);
@@ -377,14 +379,14 @@ export function MintRedeemCard() {
         } else {
           // Instant path (Pyth-priced).
           showProgress("Preparing transaction...");
-          const r = await postPythAndExecuteConsumer(
+          const r = await fetchAndExecuteLazer(
             connection,
             wallet,
-            (priceUpdate) =>
-              buildRedeemTx(connection, wallet, {
+            (envelope) =>
+              buildLazerRedeemTx(connection, wallet, {
                 amountSilv: parseSilvAmount(amount),
                 minUsdcOut: parseUsdcAmount(preview.minOut.toFixed(6)),
-                priceUpdate,
+                envelope,
               }),
           );
           setErrorMsg(null);
@@ -429,13 +431,13 @@ export function MintRedeemCard() {
     inFlight.current = true;
     setErrorMsg(null);
     try {
-      const r = await postPythAndExecuteConsumer(
+      const r = await fetchAndExecuteLazer(
         connection,
         wallet,
-        (priceUpdate) =>
-          buildClaimRedemptionTx(connection, wallet, {
+        (envelope) =>
+          buildLazerClaimTx(connection, wallet, {
             request: req,
-            priceUpdate,
+            envelope,
           }),
       );
       toast({
