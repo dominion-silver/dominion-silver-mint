@@ -18,7 +18,7 @@ mod harness {
     use std::str::FromStr;
 
     // Pinned constants (must match the dominion source).
-    const DOMINION_ID: &str = "GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX";
+    const DOMINION_ID: &str = "2ujQgKtxvaU9Ax3jL22374SypSyTR9J4yztqYkX23oMT";
     const LAZER_PROGRAM_ID: &str = "pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt";
     const LAZER_STORAGE: &str = "3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpPuSCQVyQL";
     const LAZER_TREASURY: &str = "Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak";
@@ -128,6 +128,10 @@ mod harness {
 
     fn build_storage_data(fee: u64) -> Vec<u8> {
         let mut d = vec![0u8; STORAGE_FEE_OFFSET + 8 + 8];
+        // treasury at offset 8 (disc) + 32 (top_authority) = 40; the contract's
+        // read_treasury validates the passed treasury account against this, so it
+        // MUST equal the treasury the harness passes to the CPI (LAZER_TREASURY).
+        d[40..72].copy_from_slice(&pk(LAZER_TREASURY).to_bytes());
         (&mut d[STORAGE_FEE_OFFSET..STORAGE_FEE_OFFSET + 8])
             .write_u64::<LittleEndian>(fee)
             .unwrap();

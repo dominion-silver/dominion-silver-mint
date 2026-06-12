@@ -40,25 +40,15 @@ pub const LAZER_PROGRAM_ID: Pubkey =
     anchor_lang::solana_program::pubkey!("pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt");
 pub const LAZER_STORAGE: Pubkey =
     anchor_lang::solana_program::pubkey!("3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpPuSCQVyQL");
-// DEPLOY-CHECKLIST (Fable audit P3-a): unlike LAZER_PROGRAM_ID / LAZER_STORAGE,
-// the treasury is a Lazer runtime artifact not derivable from the SDK. Before
-// each deploy, read the on-chain `Storage.treasury` and confirm it equals this
-// constant. A stale value is fail-closed DoS (the Lazer program's own
-// `has_one = treasury` rejects the CPI), never fund-loss, but it would break
-// every mint/redeem until corrected.
-//
-// CLUSTER-SPECIFIC (verified live 2026-06-10): the treasury DIFFERS between
-// mainnet (`Gx4MBPb1...`) and devnet (`opsLibxVY7...`, where the test Storage
-// sets treasury == top_authority). The `devnet` Cargo feature switches it; the
-// default (no feature) is the mainnet value. Build the devnet deploy with
-// `--features devnet`. Future cluster-agnostic option: read `Storage.treasury`
-// (offset 40) from the already-pinned storage account at runtime.
-#[cfg(feature = "devnet")]
-pub const LAZER_TREASURY: Pubkey =
-    anchor_lang::solana_program::pubkey!("opsLibxVY7Vz5eYMmSfX8cLFCFVYTtH6fr6MiifMpA7");
-#[cfg(not(feature = "devnet"))]
-pub const LAZER_TREASURY: Pubkey =
-    anchor_lang::solana_program::pubkey!("Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak");
+// NOTE (Fable audit P3-a, resolved 2026-06-10): the Lazer treasury is a runtime
+// artifact (NOT derivable from the SDK) and it DIFFERS between mainnet
+// (`Gx4MBPb1...`) and devnet (`opsLibxVY7...`, where the test Storage sets
+// treasury == top_authority). Rather than pin a per-cluster constant (which
+// needed a mainnet-footgun `--features devnet` build), we read `Storage.treasury`
+// (offset 40) from the already-pinned + trusted LAZER_STORAGE account at runtime
+// (read_treasury below). Cluster-agnostic: one build works on both. The caller
+// must still PASS the treasury account; we validate it == the Storage's own
+// treasury, so a wrong account is fail-closed (never fund-loss).
 
 // Anchor instruction discriminator = sha256("global:verify_message")[..8].
 // The Lazer contract is anchor 0.31.1 (verified). Locked here; the host-only
@@ -73,8 +63,9 @@ pub const LAZER_FEE_CEILING: u64 = 10_000; // 0.00001 SOL
 
 pub const LAZER_FEE_PAYER_SEED: &[u8] = b"lazer_fee_payer";
 
-// Offset of `single_update_fee_in_lamports` in the Lazer Storage account:
-// 8 (anchor disc) + 32 (top_authority) + 32 (treasury).
+// Lazer Storage layout: 8 (anchor disc) + 32 (top_authority) + 32 (treasury) +
+// 8 (single_update_fee_in_lamports) + ...
+const STORAGE_TREASURY_OFFSET: usize = 8 + 32;
 const STORAGE_FEE_OFFSET: usize = 8 + 32 + 32;
 
 // Defensive cap on the returned payload size. The real ceiling is far lower
@@ -116,6 +107,22 @@ fn read_fee(storage_data: &[u8]) -> Result<u64> {
     );
     require!(fee <= LAZER_FEE_CEILING, DominionError::LazerFeeTooHigh);
     Ok(fee)
+}
+
+/// PURE: read the Lazer Storage's own `treasury` pubkey. Cluster-agnostic - the
+/// treasury differs between mainnet + devnet, so we read it from the pinned
+/// (LAZER_STORAGE) trusted account at runtime instead of a compile-time constant
+/// (which would otherwise need a per-cluster build + a mainnet-footgun feature).
+fn read_treasury(storage_data: &[u8]) -> Result<Pubkey> {
+    require!(
+        storage_data.len() >= STORAGE_TREASURY_OFFSET + 32,
+        DominionError::LazerStorageMalformed
+    );
+    Ok(Pubkey::new_from_array(
+        storage_data[STORAGE_TREASURY_OFFSET..STORAGE_TREASURY_OFFSET + 32]
+            .try_into()
+            .unwrap(),
+    ))
 }
 
 /// PURE: parse `VerifiedMessage` return-data (borsh: public_key: Pubkey [32] +
@@ -173,10 +180,8 @@ pub fn verify_and_get_payload(
         accts.storage.key() == LAZER_STORAGE,
         DominionError::LazerWrongAccount
     );
-    require!(
-        accts.treasury.key() == LAZER_TREASURY,
-        DominionError::LazerWrongAccount
-    );
+    // treasury is validated against the Storage's OWN treasury field at the
+    // storage borrow below (cluster-agnostic; see read_treasury).
     require!(
         accts.instructions_sysvar.key() == sysvar_instructions::ID,
         DominionError::LazerWrongAccount
@@ -199,9 +204,16 @@ pub fn verify_and_get_payload(
         DominionError::LazerFeePayerMismatch
     );
 
-    // 2. Read + bound the effective fee.
+    // 2. Validate the treasury account against the Storage's own treasury field
+    //    (cluster-agnostic) + read the bounded fee, in one borrow of the pinned
+    //    storage. The Lazer program's own `has_one = treasury` will also enforce
+    //    this; we pre-check so a wrong treasury is our explicit LazerWrongAccount.
     let fee = {
         let data = accts.storage.try_borrow_data()?;
+        require!(
+            accts.treasury.key() == read_treasury(&data)?,
+            DominionError::LazerWrongAccount
+        );
         read_fee(&data)?
     };
 
@@ -307,6 +319,17 @@ mod tests {
         );
         assert!(read_fee(&storage_with_fee(LAZER_FEE_CEILING + 1)).is_err());
         assert!(read_fee(&[0u8; 10]).is_err()); // too small
+    }
+
+    #[test]
+    fn read_treasury_ok_and_bounded() {
+        let want = Pubkey::new_unique();
+        let mut s = vec![0u8; STORAGE_FEE_OFFSET + 8];
+        s[STORAGE_TREASURY_OFFSET..STORAGE_TREASURY_OFFSET + 32]
+            .copy_from_slice(&want.to_bytes());
+        assert_eq!(read_treasury(&s).unwrap(), want);
+        // too small (< treasury offset + 32) -> LazerStorageMalformed.
+        assert!(read_treasury(&[0u8; STORAGE_TREASURY_OFFSET + 31]).is_err());
     }
 
     #[test]

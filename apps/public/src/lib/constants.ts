@@ -20,11 +20,15 @@ export const SILV_MINT = new PublicKey("5xiznEZfDRYojUL1WD2amruBZHonHphViH1Sdnef
 // Pyth XAG/USD feed.
 export const PYTH_XAG_USD_FEED_ID = "0xf2fb02c32b055c805e7238d628e5e9dadef274376114eb1f012337cabe93871e";
 
-// Pyth Lazer (Pyth Pro) on-chain accounts (mainnet == devnet). Hard-pinned in
-// the contract (lazer_cpi.rs); the dominion oracle ix passes them.
+// Pyth Lazer (Pyth Pro) on-chain accounts. Program + Storage are the same
+// address on mainnet + devnet; the dominion oracle ix passes them.
 export const LAZER_PROGRAM_ID = new PublicKey("pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt");
 export const LAZER_STORAGE = new PublicKey("3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpPuSCQVyQL");
-export const LAZER_TREASURY = new PublicKey("Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak");
+// CLUSTER-SPECIFIC: the Storage's treasury differs per cluster (devnet
+// opsLibxVY7..., mainnet Gx4MBPb1...). The contract validates whatever we pass
+// against the Storage's own treasury field (read_treasury), so this must be the
+// current cluster's value. DEVNET here; swap to Gx4MBPb1... for mainnet.
+export const LAZER_TREASURY = new PublicKey("opsLibxVY7Vz5eYMmSfX8cLFCFVYTtH6fr6MiifMpA7");
 // SILV's Pyth Lazer feed id.
 export const LAZER_SILV_FEED_ID = 3304;
 

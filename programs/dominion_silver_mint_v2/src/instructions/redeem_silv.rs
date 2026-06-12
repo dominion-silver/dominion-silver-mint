@@ -87,7 +87,7 @@ pub struct RedeemSilv<'info> {
     pub lazer_program: UncheckedAccount<'info>,
     /// CHECK: pinned to LAZER_STORAGE in verify_and_get_payload.
     pub lazer_storage: UncheckedAccount<'info>,
-    /// CHECK: pinned to LAZER_TREASURY in verify_and_get_payload.
+    /// CHECK: validated against the Lazer Storage's own treasury (read_treasury) in verify_and_get_payload.
     #[account(mut)]
     pub lazer_treasury: UncheckedAccount<'info>,
     /// CHECK: System-owned isolated fee-payer PDA; derivation validated in the wrapper.

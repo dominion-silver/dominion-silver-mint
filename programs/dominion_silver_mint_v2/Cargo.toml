@@ -24,10 +24,6 @@ dev-hatch = []
 # NOT in `default`, so it is absent from the deploy build + the generated IDL.
 # Release/mainnet/CI builds MUST NOT pass it.
 test-harness = []
-# devnet: switches LAZER_TREASURY to the devnet Pyth Lazer Storage.treasury
-# (`opsLibxVY7...`, != the mainnet `Gx4MBPb1...`). Build the DEVNET deploy with
-# `--features devnet`. Mainnet/default MUST NOT pass it (keeps the mainnet pin).
-devnet = []
 default = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 
