@@ -8,7 +8,7 @@ import {
   SOLANA_FORMAT_MAGIC,
   ED25519_PROGRAM_ID,
 } from "../lazer-assembly";
-import { hexToBytes } from "../lazer-client";
+import { base64ToBytes } from "../lazer-client";
 
 // Build a SYNTHETIC, validly-signed Pyth Lazer SolanaMessage envelope:
 //   magic u32 (LE) | signature (64) | public_key (32) | payload_len u16 (LE) | payload
@@ -140,7 +140,7 @@ describe("ed25519 instruction assembly (matches signature.rs)", () => {
   });
 });
 
-describe("assembleLazerTx + hexToBytes", () => {
+describe("assembleLazerTx + base64ToBytes", () => {
   it("returns the ed25519 ix + the dominion-arg indices", () => {
     const { envelope } = makeSignedEnvelope(PAYLOAD);
     const ixData = makeMintDominionIxData(envelope);
@@ -153,16 +153,44 @@ describe("assembleLazerTx + hexToBytes", () => {
     expect(a.signatureIndex).toBe(0);
   });
 
-  it("hexToBytes decodes (with/without 0x) + rejects bad input", () => {
-    expect(Array.from(hexToBytes("0x00ff10"))).toEqual([0, 255, 16]);
-    expect(Array.from(hexToBytes("deadBEEF"))).toEqual([222, 173, 190, 239]);
-    expect(() => hexToBytes("abc")).toThrow(/invalid hex/);
-    expect(() => hexToBytes("zz")).toThrow(/invalid hex/);
-    // end-to-end: a hex envelope feeds the assembler.
+  it("base64ToBytes decodes + rejects bad input", () => {
+    // The Pyth Lazer proxy returns the envelope base64-encoded (solana.data).
+    expect(Array.from(base64ToBytes(Buffer.from([0, 1, 2]).toString("base64")))).toEqual([0, 1, 2]);
+    expect(Array.from(base64ToBytes(Buffer.from([222, 173, 190, 239]).toString("base64")))).toEqual([222, 173, 190, 239]);
+    expect(() => base64ToBytes("")).toThrow(/invalid base64/);
+    expect(() => base64ToBytes("!!!!")).toThrow(/invalid base64/);
+    // end-to-end: a base64 envelope (the real proxy format) feeds the assembler.
     const { envelope } = makeSignedEnvelope(PAYLOAD);
     const ixData = makeMintDominionIxData(envelope);
-    const hex = Buffer.from(envelope).toString("hex");
-    const ix = buildLazerEd25519Instruction(ixData, hexToBytes(hex), 1);
+    const b64 = Buffer.from(envelope).toString("base64");
+    const ix = buildLazerEd25519Instruction(ixData, base64ToBytes(b64), 1);
     expect(ix.data.length).toBe(16);
+  });
+});
+
+describe("real Pyth Lazer envelope (captured live fixture, feed 1 / BTC, 2026-06-10)", () => {
+  // A GENUINE ed25519-signed SolanaMessage from the live latest_price API. The
+  // signature is deterministic, so it verifies forever. Proves the parser +
+  // assembly handle the real wire format, not just synthetic test envelopes.
+  const REAL_ENVELOPE_HEX =
+    "b9011a820f98e6c363c858e8e826da18ce92c3c6822be8ff4d0c20b0c8807a75f4fc11b3c2e3058a140b3780af362b2ceb3dab97b7ba88d6baec1492357b78ba0103bc0080efc1f480c5615af3fb673d42287e993da9fbc3506b6e41dfa32950820c2e6c350075d3c793c04bd6c9085406000401010000000500525a2a96b705000004f8ff031200057a0d7028010000000c01c04bd6c908540600";
+  const realEnvelope = () => Uint8Array.from(Buffer.from(REAL_ENVELOPE_HEX, "hex"));
+
+  it("parses, the signature verifies over the payload, and there is no trailing slack", () => {
+    const env = realEnvelope();
+    const { signature, publicKey, payload } = parseSolanaMessage(env);
+    expect(env.length).toBe(102 + payload.length); // the on-chain slice_eq length check
+    expect(ed25519.verify(signature, payload, publicKey)).toBe(true);
+    expect(Array.from(lazerMessageData(env))).toEqual(Array.from(env));
+  });
+
+  it("the ed25519 ix offsets reference the real sig + pubkey inside the dominion ix", () => {
+    const env = realEnvelope();
+    const ixData = makeMintDominionIxData(env);
+    const ix = buildLazerEd25519Instruction(ixData, env, 1);
+    const sigOff = ix.data.readUInt16LE(2);
+    const pkOff = ix.data.readUInt16LE(6);
+    expect(Array.from(Buffer.from(ixData).subarray(sigOff, sigOff + 64))).toEqual(Array.from(env.subarray(4, 68)));
+    expect(Array.from(Buffer.from(ixData).subarray(pkOff, pkOff + 32))).toEqual(Array.from(env.subarray(68, 100)));
   });
 });

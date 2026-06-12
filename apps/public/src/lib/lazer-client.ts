@@ -13,15 +13,15 @@ export class LazerNotConfiguredError extends Error {
   }
 }
 
-/** Decode a hex string (optional 0x prefix) to bytes. Pure + testable. */
-export function hexToBytes(hex: string): Uint8Array {
-  const h = hex.startsWith("0x") ? hex.slice(2) : hex;
-  if (h.length % 2 !== 0 || /[^0-9a-fA-F]/.test(h)) {
-    throw new Error("invalid hex");
+/** Decode a base64 string to bytes (browser-safe via atob). Pure + testable. */
+export function base64ToBytes(b64: string): Uint8Array {
+  if (b64.length === 0 || /[^A-Za-z0-9+/=]/.test(b64)) {
+    throw new Error("invalid base64");
   }
-  const out = new Uint8Array(h.length / 2);
-  for (let i = 0; i < out.length; i++) {
-    out[i] = parseInt(h.slice(i * 2, i * 2 + 2), 16);
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) {
+    out[i] = bin.charCodeAt(i);
   }
   return out;
 }
@@ -43,6 +43,6 @@ export async function fetchLazerEnvelope(feedId?: number): Promise<Uint8Array> {
     const detail = await resp.text().catch(() => "");
     throw new Error(`Lazer proxy ${resp.status}: ${detail.slice(0, 200)}`);
   }
-  const { envelopeHex } = (await resp.json()) as { envelopeHex: string };
-  return hexToBytes(envelopeHex);
+  const { envelopeBase64 } = (await resp.json()) as { envelopeBase64: string };
+  return base64ToBytes(envelopeBase64);
 }

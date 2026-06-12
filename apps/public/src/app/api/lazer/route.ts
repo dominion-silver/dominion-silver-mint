@@ -4,11 +4,11 @@
 // returns the raw envelope (hex) to the client, which assembles the ed25519 +
 // dominion instructions (see src/lib/lazer-assembly.ts).
 //
-// STATUS: scaffold. The key-from-env + same-origin-proxy + never-expose-the-key
-// shape is final; the exact Lazer request/response field mapping is marked
-// VERIFY-AGAINST-LIVE and must be confirmed once Mark provisions the key (the
-// service cannot be exercised without it). Until the key is set this returns
-// 503 so the client can detect "Lazer not configured yet".
+// STATUS: the request + response mapping is VERIFIED against the live API
+// (2026-06-10): the ed25519-signed envelope is base64 at `solana.data`. Until
+// PYTH_LAZER_API_KEY is set this returns 503 so the client can detect "Lazer
+// not configured yet". NOTE: the key must have feed-group access to SILV (feed
+// 3304 needs the `pyth-indices` group); a key without it gets 403 from Lazer.
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -42,9 +42,9 @@ export async function POST(req: NextRequest) {
     /* default feed */
   }
 
-  // VERIFY-AGAINST-LIVE: request shape per the Pyth Lazer latest_price API. The
-  // dominion parser needs Price + Exponent + PublisherCount + Confidence +
-  // FeedUpdateTimestamp on the SOLANA chain at the fixed_rate@1000ms channel.
+  // Request shape per the Pyth Lazer latest_price API (verified live 2026-06-10).
+  // The dominion parser needs price + exponent + publisherCount + confidence +
+  // feedUpdateTimestamp on the SOLANA chain at the fixed_rate@1000ms channel.
   const lazerReq = {
     priceFeedIds: [feedId],
     properties: [
@@ -86,23 +86,22 @@ export async function POST(req: NextRequest) {
   }
 
   const data = await resp.json().catch(() => null);
-  // VERIFY-AGAINST-LIVE: extract the Solana signed-message envelope (hex). The
-  // exact JSON path depends on the live response; the known shape is an array
-  // of per-chain updates carrying a hex `data` for the `solana` evm/ed25519
-  // encoding. Adjust this single accessor once the live response is seen.
-  const envelopeHex: string | undefined =
-    data?.solanaSignedMessage ??
-    data?.[0]?.solana?.encoding?.hex ??
-    data?.evm?.data;
-
-  if (!envelopeHex) {
-    // Bounded diagnostic only (do not echo an unbounded third-party blob to the
-    // browser); the exact accessor is VERIFY-AGAINST-LIVE.
+  // The live response carries the ed25519-signed SolanaMessage envelope base64-
+  // encoded at solana.data (solana.encoding === "base64"). The client decodes
+  // it to the dominion ix's message_data arg (see lazer-client.ts).
+  const solana = data?.solana;
+  if (
+    !solana ||
+    solana.encoding !== "base64" ||
+    typeof solana.data !== "string" ||
+    solana.data.length === 0
+  ) {
+    // Bounded diagnostic only (never echo an unbounded third-party blob).
     return NextResponse.json(
       { error: "lazer_no_solana_message", raw: JSON.stringify(data).slice(0, 500) },
       { status: 502 },
     );
   }
 
-  return NextResponse.json({ envelopeHex });
+  return NextResponse.json({ envelopeBase64: solana.data });
 }
