@@ -42,10 +42,21 @@ pub const LAZER_STORAGE: Pubkey =
     anchor_lang::solana_program::pubkey!("3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpPuSCQVyQL");
 // DEPLOY-CHECKLIST (Fable audit P3-a): unlike LAZER_PROGRAM_ID / LAZER_STORAGE,
 // the treasury is a Lazer runtime artifact not derivable from the SDK. Before
-// each deploy (devnet + mainnet), read the on-chain `Storage.treasury` and
-// confirm it equals this constant. A stale value is fail-closed DoS (the Lazer
-// program's own `has_one = treasury` rejects the CPI), never fund-loss, but it
-// would break every mint/redeem until corrected.
+// each deploy, read the on-chain `Storage.treasury` and confirm it equals this
+// constant. A stale value is fail-closed DoS (the Lazer program's own
+// `has_one = treasury` rejects the CPI), never fund-loss, but it would break
+// every mint/redeem until corrected.
+//
+// CLUSTER-SPECIFIC (verified live 2026-06-10): the treasury DIFFERS between
+// mainnet (`Gx4MBPb1...`) and devnet (`opsLibxVY7...`, where the test Storage
+// sets treasury == top_authority). The `devnet` Cargo feature switches it; the
+// default (no feature) is the mainnet value. Build the devnet deploy with
+// `--features devnet`. Future cluster-agnostic option: read `Storage.treasury`
+// (offset 40) from the already-pinned storage account at runtime.
+#[cfg(feature = "devnet")]
+pub const LAZER_TREASURY: Pubkey =
+    anchor_lang::solana_program::pubkey!("opsLibxVY7Vz5eYMmSfX8cLFCFVYTtH6fr6MiifMpA7");
+#[cfg(not(feature = "devnet"))]
 pub const LAZER_TREASURY: Pubkey =
     anchor_lang::solana_program::pubkey!("Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak");
 

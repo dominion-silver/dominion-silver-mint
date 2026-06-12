@@ -332,17 +332,13 @@ async function main() {
     TOKEN_PROGRAM_ID,
   );
 
-  const feedIdBytes = Array.from(Buffer.from(PYTH_XAG_USD_FEED_ID_HEX, "hex"));
-  if (feedIdBytes.length !== 32) {
-    throw new Error("XAG/USD feed id must be 32 bytes");
-  }
+  console.log("\n== Step 2: Call program.initialize() (Lazer args) ==");
 
-  console.log("\n== Step 2: Call program.initialize() (V2 args) ==");
-
-  // V2 InitializeArgs ONLY (Option A per-tx/daily/hourly cap + reserve args
-  // were removed; all Option B economic params default on-chain and are
-  // admin-tunable post-deploy). premium 10%/2% within V2 ceilings (2000/1000);
-  // admin timelock 24h within [3600, 604800].
+  // Pyth Lazer InitializeArgs: the Core pyth_feed_id[32] + pyth_receiver_program
+  // were replaced by a single numeric pyth_lazer_feed_id (SILV = 3304); the
+  // program/storage/treasury are compile-time constants in the contract. All
+  // Option B economic params default on-chain + are admin-tunable post-deploy.
+  // premium 10%/2% within ceilings (2000/1000); admin timelock 24h in [3600, 604800].
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ix = await (program.methods as any)
     .initialize({
@@ -352,8 +348,7 @@ async function main() {
       complianceMode: false,
       premiumBpsMint: 1000, // 10%
       premiumBpsRedeem: 200, // 2%
-      pythFeedId: feedIdBytes,
-      pythReceiverProgram: PYTH_RECEIVER_DEVNET,
+      pythLazerFeedId: 3304, // SILV
       adminTimelockSeconds: 24 * 3600, // 24h
       maxGuardianCount: 5,
     })

@@ -30,9 +30,13 @@ use instructions::*;
 // CODEX P0-01: V2 is a MANDATORY fresh deploy under a NEW program ID (the
 // V1/V2 ConfigAccount layout is incompatible; the whole "no stale V1 state"
 // safety hypothesis depends on this ID NOT being the V1 ID
-// J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5). Keypair:
-// target/deploy/dominion_silver_mint_v2-keypair.json (gitignored).
-declare_id!("GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX");
+// J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5).
+// 2026-06-10 PYTH LAZER: the Lazer migration changed the ConfigAccount layout
+// AGAIN (pyth_feed_id[32]+receiver -> pyth_lazer_feed_id[u32]+min_publishers),
+// so the old V2 config at GDN5ktEm88... is incompatible -> another fresh deploy
+// under a new ID. Old V2/Core devnet id (retired): GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX.
+// Keypair: target/deploy/dominion_silver_mint_v2-keypair.json (gitignored).
+declare_id!("2ujQgKtxvaU9Ax3jL22374SypSyTR9J4yztqYkX23oMT");
 
 #[program]
 pub mod dominion_silver_mint {
