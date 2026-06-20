@@ -17,7 +17,7 @@ export default function HomePage() {
             Mint or redeem SILV
           </h1>
           <p className="text-sm text-muted">
-            1 SILV = 1 troy ounce LBMA silver, vaulted with Brink's. Priced via Pyth XAG/USD.
+            1 SILV = 1 troy ounce LBMA silver, vaulted with Brink&apos;s. Priced via Pyth Lazer.
           </p>
         </div>
         <WalletAuthGate>

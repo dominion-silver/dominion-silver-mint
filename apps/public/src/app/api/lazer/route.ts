@@ -17,6 +17,15 @@ export const dynamic = "force-dynamic";
 const LAZER_ENDPOINT = "https://pyth-lazer.dourolabs.app/v1/latest_price";
 const SILV_FEED_ID = 3304;
 
+// Short server-side cache for the default (SILV) feed. The UI price banner polls
+// every 5s and a mint fetches one envelope; without this, every poll burns a
+// Lazer API call. A ~2s envelope is well within the on-chain staleness ceiling,
+// and the high-water mark allows the same feed_update_timestamp across concurrent
+// mints, so a cached envelope is safe to reuse. (Coarse per-warm-instance memo;
+// a shared cache / rate-limit is the production hardening.)
+const CACHE_TTL_MS = 2000;
+let silvCache: { at: number; payload: unknown } | null = null;
+
 export async function POST(req: NextRequest) {
   const apiKey = process.env.PYTH_LAZER_API_KEY;
   if (!apiKey) {
@@ -40,6 +49,11 @@ export async function POST(req: NextRequest) {
     }
   } catch {
     /* default feed */
+  }
+
+  const isDefaultFeed = feedId === SILV_FEED_ID;
+  if (isDefaultFeed && silvCache && Date.now() - silvCache.at < CACHE_TTL_MS) {
+    return NextResponse.json(silvCache.payload);
   }
 
   // Request shape per the Pyth Lazer latest_price API (verified live 2026-06-10).
@@ -103,5 +117,23 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  return NextResponse.json({ envelopeBase64: solana.data });
+  // Also surface the parsed price for the UI (display + the mint/redeem preview),
+  // so the UI shows the SAME feed the contract uses (the Lazer SILV feed), not
+  // the retired Core XAG/USD. `parsed.priceFeeds[0]` carries price + exponent +
+  // confidence + feedUpdateTimestamp(us) + publisherCount.
+  const feed = data?.parsed?.priceFeeds?.[0];
+  const price =
+    feed && typeof feed.price !== "undefined"
+      ? {
+          priceUsd: Number(feed.price) * Math.pow(10, Number(feed.exponent)),
+          confidence: Number(feed.confidence) * Math.pow(10, Number(feed.exponent)),
+          publishTimeSec: Math.floor(Number(feed.feedUpdateTimestamp) / 1e6),
+          publisherCount: Number(feed.publisherCount),
+          exponent: Number(feed.exponent),
+        }
+      : null;
+
+  const payload = { envelopeBase64: solana.data, price };
+  if (isDefaultFeed) silvCache = { at: Date.now(), payload };
+  return NextResponse.json(payload);
 }
