@@ -43,12 +43,22 @@ import {
 } from "./constants";
 import { assembleLazerTx, lazerMessageData } from "./lazer-assembly";
 
-// The ed25519 precompile ix is ALWAYS first in the tx (index 0), placed there by
-// assembleLazerOracleIxs. This single constant is therefore correct as BOTH the
-// ed25519 ix's tx position AND the dominion ix's `ed25519_instruction_index` arg.
-// INVARIANT: nothing may be prepended before the ed25519 ix - if that ever
-// changes, this constant + assembleLazerOracleIxs's ordering must change together.
-const ED25519_IX_INDEX = 0;
+// CRITICAL ix ORDERING (the ed25519 precompile uses ABSOLUTE instruction-index
+// offsets, so the tx layout must be stable end-to-end):
+//   [cb_limit, cb_price, ed25519, ...ataIxs, dominionIx]
+// The 2 compute-budget ixs go FIRST and we set the priority fee OURSELVES.
+// Wallets (Phantom) otherwise PREPEND their own setComputeUnitPrice ix at index
+// 0, which shifts every instruction by 1 -> the ed25519 offsets (pinned to the
+// dominion ix's absolute index) then point one slot short, at an ATA ix ->
+// the precompile fails `InvalidDataOffsets` (Custom 3) and the mint reverts in
+// the wallet's pre-sign simulation. Setting the price ourselves makes the wallet
+// leave the tx untouched. The ed25519 ix therefore sits at index 2.
+const COMPUTE_BUDGET_IX_COUNT = 2;
+/** The ed25519 ix's tx position (= the dominion ix's `ed25519_instruction_index` arg). */
+export const ED25519_IX_INDEX = COMPUTE_BUDGET_IX_COUNT;
+// Modest devnet priority fee; its presence (not its size) is what stops the
+// wallet from prepending its own and breaking the offsets.
+const PRIORITY_FEE_MICROLAMPORTS = 1000;
 
 /** The 5 Lazer verify accounts every dominion oracle ix needs. */
 export function lazerOracleAccounts() {
@@ -61,24 +71,32 @@ export function lazerOracleAccounts() {
   };
 }
 
+function computeBudgetIxs(): TransactionInstruction[] {
+  return [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }),
+  ];
+}
+
 /**
- * Pure: order the instructions for a Lazer oracle tx. The dominion ix (carrying
- * the envelope as `message_data`) lands at index `1 + preIxs.length` (the
- * ed25519 ix is 0, then the pre-ixs), and the ed25519 ix's offsets are built to
- * reference exactly that index. Returns the ordered list `[ed25519, ...preIxs,
- * dominionIx]`. Unit-tested offline.
+ * Pure: order the instructions for a Lazer oracle tx as
+ * `[cb_limit, cb_price, ed25519, ...ataIxs, dominionIx]`. The compute-budget ixs
+ * lead so a wallet won't prepend its own and shift the ed25519 ix's absolute
+ * instruction-index offsets; the ed25519 ix sits at `COMPUTE_BUDGET_IX_COUNT`
+ * and its offsets reference the dominion ix at the tail. Unit-tested offline.
  */
 export function assembleLazerOracleIxs(
   dominionIx: TransactionInstruction,
   envelope: Uint8Array,
-  preIxs: TransactionInstruction[],
+  ataIxs: TransactionInstruction[],
 ): TransactionInstruction[] {
-  const dominionInstructionIndex = 1 + preIxs.length;
+  const cbIxs = computeBudgetIxs();
+  const dominionInstructionIndex = cbIxs.length + 1 + ataIxs.length;
   const { ed25519Ix } = assembleLazerTx(dominionIx.data, envelope, {
     dominionInstructionIndex,
     ed25519InstructionIndex: ED25519_IX_INDEX,
   });
-  return [ed25519Ix, ...preIxs, dominionIx];
+  return [...cbIxs, ed25519Ix, ...ataIxs, dominionIx];
 }
 
 async function finalize(
@@ -135,12 +153,11 @@ export async function buildLazerMintTx(
     })
     .instruction();
 
-  const preIxs = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
+  const ataIxs = [
     createAssociatedTokenAccountIdempotentInstruction(user, userSilvAta, user, SILV_MINT, TOKEN_2022_PROGRAM_ID),
     createAssociatedTokenAccountIdempotentInstruction(user, userUsdcAta, user, USDC_MINT, TOKEN_PROGRAM_ID),
   ];
-  return finalize(connection, user, assembleLazerOracleIxs(dominionIx, args.envelope, preIxs));
+  return finalize(connection, user, assembleLazerOracleIxs(dominionIx, args.envelope, ataIxs));
 }
 
 export interface BuildLazerRedeemTxArgs {
@@ -183,11 +200,10 @@ export async function buildLazerRedeemTx(
     })
     .instruction();
 
-  const preIxs = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
+  const ataIxs = [
     createAssociatedTokenAccountIdempotentInstruction(user, userUsdcAta, user, USDC_MINT, TOKEN_PROGRAM_ID),
   ];
-  return finalize(connection, user, assembleLazerOracleIxs(dominionIx, args.envelope, preIxs));
+  return finalize(connection, user, assembleLazerOracleIxs(dominionIx, args.envelope, ataIxs));
 }
 
 export interface BuildLazerClaimTxArgs {
@@ -226,9 +242,8 @@ export async function buildLazerClaimTx(
     })
     .instruction();
 
-  const preIxs = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
+  const ataIxs = [
     createAssociatedTokenAccountIdempotentInstruction(owner, ownerUsdcAta, owner, USDC_MINT, TOKEN_PROGRAM_ID),
   ];
-  return finalize(connection, owner, assembleLazerOracleIxs(dominionIx, args.envelope, preIxs));
+  return finalize(connection, owner, assembleLazerOracleIxs(dominionIx, args.envelope, ataIxs));
 }

@@ -8,7 +8,7 @@ import {
 } from "@solana/web3.js";
 import { ed25519 } from "@noble/curves/ed25519";
 import idl from "../idl/dominion_silver_mint.json";
-import { assembleLazerOracleIxs } from "../lazer-tx";
+import { assembleLazerOracleIxs, ED25519_IX_INDEX } from "../lazer-tx";
 import { SOLANA_FORMAT_MAGIC, ED25519_PROGRAM_ID } from "../lazer-assembly";
 
 // A synthetic signed Lazer envelope (magic|sig64|pk32|len2|payload).
@@ -44,7 +44,7 @@ async function buildMintDominionIx(envelope: Uint8Array) {
   const k = () => Keypair.generate().publicKey;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (p.methods as any)
-    .mintSilv(new anchor.BN(1000), new anchor.BN(1), Buffer.from(envelope), 0, 0)
+    .mintSilv(new anchor.BN(1000), new anchor.BN(1), Buffer.from(envelope), ED25519_IX_INDEX, 0)
     .accountsPartial({
       config: k(),
       user: k(),
@@ -70,27 +70,27 @@ async function buildMintDominionIx(envelope: Uint8Array) {
 const PAYLOAD = new Uint8Array([10, 20, 30, 40, 50]);
 
 describe("assembleLazerOracleIxs", () => {
-  it("orders [ed25519, ...preIxs, dominion] and points the ed25519 offsets at the dominion ix's actual index", async () => {
+  it("orders [cb_limit, cb_price, ed25519, ...ataIxs, dominion] (compute-budget FIRST so wallets can't shift the offsets)", async () => {
     const envelope = makeEnvelope(PAYLOAD);
     const dominionIx = await buildMintDominionIx(envelope);
 
-    // Mint has 3 pre-ixs (compute budget + 2 ATA creations) -> dominion at index 4.
-    const preIxs = [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 1 }),
+    // Mint has 2 ATA creations -> [cb, cb, ed25519(2), ata, ata, dominion(5)].
+    const ataIxs = [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 1 }), // stand-ins for the 2 ATA ixs
       ComputeBudgetProgram.setComputeUnitLimit({ units: 2 }),
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 3 }),
     ];
-    const ixs = assembleLazerOracleIxs(dominionIx, envelope, preIxs);
+    const ixs = assembleLazerOracleIxs(dominionIx, envelope, ataIxs);
 
-    expect(ixs.length).toBe(5);
-    expect(ixs[0].programId.equals(ED25519_PROGRAM_ID)).toBe(true); // ed25519 first
-    expect(ixs[4]).toBe(dominionIx); // dominion last
-    expect(ixs.slice(1, 4)).toEqual(preIxs); // pre-ixs in the middle
+    expect(ixs.length).toBe(6);
+    expect(ixs[0].programId.equals(ComputeBudgetProgram.programId)).toBe(true); // cb_limit
+    expect(ixs[1].programId.equals(ComputeBudgetProgram.programId)).toBe(true); // cb_price
+    expect(ixs[ED25519_IX_INDEX].programId.equals(ED25519_PROGRAM_ID)).toBe(true); // ed25519 at index 2
+    expect(ixs.slice(3, 5)).toEqual(ataIxs); // the ata ixs after ed25519
+    expect(ixs[5]).toBe(dominionIx); // dominion last
 
-    // The ed25519 offsets must reference the dominion ix's FINAL index (4), and
-    // the envelope lives in the dominion ix data at its serialized position.
-    const ed = ixs[0].data;
-    const dominionInstructionIndex = 4;
+    // The ed25519 offsets reference the dominion ix's FINAL index (5).
+    const ed = ixs[ED25519_IX_INDEX].data;
+    const dominionInstructionIndex = 5;
     expect(ed.readUInt16LE(4)).toBe(dominionInstructionIndex); // signature_instruction_index
     expect(ed.readUInt16LE(8)).toBe(dominionInstructionIndex); // public_key_instruction_index
     expect(ed.readUInt16LE(14)).toBe(dominionInstructionIndex); // message_instruction_index
@@ -101,22 +101,19 @@ describe("assembleLazerOracleIxs", () => {
     expect(Array.from(sigInDominion)).toEqual(Array.from(envelope.subarray(4, 68)));
   });
 
-  it("recomputes the index when there are fewer pre-ixs (redeem/claim = 2)", async () => {
+  it("recomputes the index when there is 1 ATA ix (redeem/claim) -> dominion at 4", async () => {
     const envelope = makeEnvelope(PAYLOAD);
     const dominionIx = await buildMintDominionIx(envelope); // shape is irrelevant here
-    const preIxs = [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 1 }),
-      ComputeBudgetProgram.setComputeUnitLimit({ units: 2 }),
-    ];
-    const ixs = assembleLazerOracleIxs(dominionIx, envelope, preIxs);
-    expect(ixs.length).toBe(4);
-    // dominion now at index 3.
-    expect(ixs[0].data.readUInt16LE(14)).toBe(3);
+    const ataIxs = [ComputeBudgetProgram.setComputeUnitLimit({ units: 1 })];
+    const ixs = assembleLazerOracleIxs(dominionIx, envelope, ataIxs);
+    expect(ixs.length).toBe(5); // cb, cb, ed25519, ata, dominion
+    expect(ixs[ED25519_IX_INDEX].programId.equals(ED25519_PROGRAM_ID)).toBe(true); // ed25519 at 2
+    expect(ixs[ED25519_IX_INDEX].data.readUInt16LE(14)).toBe(4); // dominion now at index 4
   });
 });
 
 describe("mint dominion ix shape", () => {
-  it("carries the 5 Lazer accounts + decodes message_data = envelope, indices 0/0", async () => {
+  it("carries the 5 Lazer accounts + decodes message_data = envelope, ed25519 index = 2", async () => {
     const envelope = makeEnvelope(PAYLOAD);
     const p = program();
     const dominionIx = await buildMintDominionIx(envelope);
@@ -124,7 +121,7 @@ describe("mint dominion ix shape", () => {
     const decoded = (p.coder.instruction as any).decode(dominionIx.data);
     expect(decoded.name).toBe("mintSilv");
     expect(Array.from(decoded.data.messageData)).toEqual(Array.from(envelope));
-    expect(decoded.data.ed25519InstructionIndex).toBe(0);
+    expect(decoded.data.ed25519InstructionIndex).toBe(ED25519_IX_INDEX);
     expect(decoded.data.signatureIndex).toBe(0);
 
     // The IDL account order includes the 5 Lazer accounts.

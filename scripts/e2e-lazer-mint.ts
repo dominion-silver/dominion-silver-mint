@@ -16,7 +16,8 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import idl from "../target/idl/dominion_silver_mint.json";
-import { lazerMessageData, assembleLazerTx } from "../apps/public/src/lib/lazer-assembly";
+import { lazerMessageData } from "../apps/public/src/lib/lazer-assembly";
+import { assembleLazerOracleIxs, ED25519_IX_INDEX } from "../apps/public/src/lib/lazer-tx";
 
 const RPC = "https://api.devnet.solana.com";
 const PROGRAM_ID = new PublicKey("2ujQgKtxvaU9Ax3jL22374SypSyTR9J4yztqYkX23oMT");
@@ -86,7 +87,7 @@ async function main() {
   const usdcTreasuryAta = getAssociatedTokenAddressSync(USDC_MINT, pda("treasury"), true, TOKEN_PROGRAM);
   const messageData = Buffer.from(lazerMessageData(envelope));
   const dominionIx = await (program.methods as any)
-    .mintSilv(new anchor.BN(10_000_000), new anchor.BN(1), messageData, 0, 0) // 10 USDC, min 1
+    .mintSilv(new anchor.BN(10_000_000), new anchor.BN(1), messageData, ED25519_IX_INDEX, 0) // 10 USDC, min 1
     .accounts({
       config: configPda, user, usdcMint: USDC_MINT, silvMint: SILV_MINT,
       usdcTreasury: usdcTreasuryAta, userUsdcAta, userSilvAta,
@@ -98,17 +99,12 @@ async function main() {
     })
     .instruction();
 
-  const preIxs = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+  const ataIxs = [
     createAssociatedTokenAccountIdempotentInstruction(user, userSilvAta, user, SILV_MINT, TOKEN_2022),
     createAssociatedTokenAccountIdempotentInstruction(user, userUsdcAta, user, USDC_MINT, TOKEN_PROGRAM),
   ];
-  const dominionIxIndex = 1 + preIxs.length; // ed25519 at 0, then preIxs, then dominion (4)
-  const { ed25519Ix } = assembleLazerTx(dominionIx.data, envelope, {
-    dominionInstructionIndex: dominionIxIndex, ed25519InstructionIndex: 0,
-  });
-
-  const tx = new Transaction().add(ed25519Ix, ...preIxs, dominionIx);
+  // Same assembly as the frontend: [cb_limit, cb_price, ed25519, ...ataIxs, dominion].
+  const tx = new Transaction().add(...assembleLazerOracleIxs(dominionIx, envelope, ataIxs));
   const sig = await provider.sendAndConfirm(tx, []);
   console.log("\n  ✅ MINT TX:", sig);
 
@@ -126,7 +122,7 @@ async function main() {
   const redeemEnv = await fetchSilvEnvelope();
   const redeemMsg = Buffer.from(lazerMessageData(redeemEnv));
   const redeemIx = await (program.methods as any)
-    .redeemSilv(new anchor.BN(50_000), new anchor.BN(1), redeemMsg, 0, 0) // 0.05 SILV, min 1
+    .redeemSilv(new anchor.BN(50_000), new anchor.BN(1), redeemMsg, ED25519_IX_INDEX, 0) // 0.05 SILV, min 1
     .accounts({
       config: configPda, user, usdcMint: USDC_MINT, silvMint: SILV_MINT,
       usdcTreasury: usdcTreasuryAta, userUsdcAta, userSilvAta,
@@ -137,14 +133,10 @@ async function main() {
       associatedTokenProgram: ATA_PROGRAM, systemProgram: SystemProgram.programId,
     })
     .instruction();
-  const redeemPre = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: 400_000 }),
+  const redeemAtas = [
     createAssociatedTokenAccountIdempotentInstruction(user, userUsdcAta, user, USDC_MINT, TOKEN_PROGRAM),
   ];
-  const { ed25519Ix: redeemEd } = assembleLazerTx(redeemIx.data, redeemEnv, {
-    dominionInstructionIndex: 1 + redeemPre.length, ed25519InstructionIndex: 0,
-  });
-  const redeemSig = await provider.sendAndConfirm(new Transaction().add(redeemEd, ...redeemPre, redeemIx), []);
+  const redeemSig = await provider.sendAndConfirm(new Transaction().add(...assembleLazerOracleIxs(redeemIx, redeemEnv, redeemAtas)), []);
   console.log("  ✅ REDEEM TX:", redeemSig);
   const silvFinal = Number((await getAccount(conn, userSilvAta, "confirmed", TOKEN_2022)).amount);
   const usdcFinal = Number((await getAccount(conn, userUsdcAta, "confirmed", TOKEN_PROGRAM)).amount);
