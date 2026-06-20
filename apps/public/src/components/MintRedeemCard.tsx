@@ -257,12 +257,25 @@ export function MintRedeemCard() {
         const r = await fetchAndExecuteLazer(
           connection,
           wallet,
-          (envelope) =>
-            buildLazerMintTx(connection, wallet, {
+          (envelope, priceUsd) => {
+            // Compute min_out off the ENVELOPE's own price (priceUsd) so the
+            // slippage floor matches what the contract prices at; fall back to
+            // the preview only if the proxy returned no price.
+            const minSilvOut =
+              priceUsd != null
+                ? parseSilvAmount(
+                    (
+                      (parseFloat(amount) / effectiveMintPrice(priceUsd, premiumBpsMint)) *
+                      (1 - slippageBps / 10_000)
+                    ).toFixed(6),
+                  )
+                : parseSilvAmount(preview.minOut.toFixed(6));
+            return buildLazerMintTx(connection, wallet, {
               amountUsdc: parseUsdcAmount(amount),
-              minSilvOut: parseSilvAmount(preview.minOut.toFixed(6)),
+              minSilvOut,
               envelope,
-            }),
+            });
+          },
         );
         setErrorMsg(null);
         afterTx(r.consumerSig, "Mint");
@@ -382,12 +395,23 @@ export function MintRedeemCard() {
           const r = await fetchAndExecuteLazer(
             connection,
             wallet,
-            (envelope) =>
-              buildLazerRedeemTx(connection, wallet, {
+            (envelope, priceUsd) => {
+              const minUsdcOut =
+                priceUsd != null
+                  ? parseUsdcAmount(
+                      (
+                        parseFloat(amount) *
+                        effectiveRedeemPrice(priceUsd, premiumBpsRedeem) *
+                        (1 - slippageBps / 10_000)
+                      ).toFixed(6),
+                    )
+                  : parseUsdcAmount(preview.minOut.toFixed(6));
+              return buildLazerRedeemTx(connection, wallet, {
                 amountSilv: parseSilvAmount(amount),
-                minUsdcOut: parseUsdcAmount(preview.minOut.toFixed(6)),
+                minUsdcOut,
                 envelope,
-              }),
+              });
+            },
           );
           setErrorMsg(null);
           afterTx(r.consumerSig, "Redeem");

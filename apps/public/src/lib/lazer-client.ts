@@ -29,10 +29,15 @@ export function base64ToBytes(b64: string): Uint8Array {
 /**
  * Fetch the latest signed Lazer envelope for `feedId` via the same-origin proxy.
  * Returns the raw SolanaMessage envelope bytes (the dominion ix's `message_data`
- * arg; see `lazerMessageData` / `assembleLazerTx` in lazer-assembly.ts). Throws
- * `LazerNotConfiguredError` while the proxy has no key.
+ * arg) AND the parsed `priceUsd` FROM THE SAME Lazer response - so the caller can
+ * compute `min_out` off the EXACT price the contract will price this mint/redeem
+ * at (the envelope's price), not a stale polled quote. That alignment is what
+ * prevents the SlippageExceeded revert when the feed moves between the price poll
+ * and the mint. Throws `LazerNotConfiguredError` while the proxy has no key.
  */
-export async function fetchLazerEnvelope(feedId?: number): Promise<Uint8Array> {
+export async function fetchLazerEnvelope(
+  feedId?: number,
+): Promise<{ envelope: Uint8Array; priceUsd: number | null }> {
   const resp = await fetch("/api/lazer", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -43,6 +48,9 @@ export async function fetchLazerEnvelope(feedId?: number): Promise<Uint8Array> {
     const detail = await resp.text().catch(() => "");
     throw new Error(`Lazer proxy ${resp.status}: ${detail.slice(0, 200)}`);
   }
-  const { envelopeBase64 } = (await resp.json()) as { envelopeBase64: string };
-  return base64ToBytes(envelopeBase64);
+  const { envelopeBase64, price } = (await resp.json()) as {
+    envelopeBase64: string;
+    price: { priceUsd: number } | null;
+  };
+  return { envelope: base64ToBytes(envelopeBase64), priceUsd: price?.priceUsd ?? null };
 }

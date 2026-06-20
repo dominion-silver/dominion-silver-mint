@@ -34,7 +34,7 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 export async function fetchAndExecuteLazer(
   connection: Connection,
   wallet: WalletContextState,
-  buildTx: (envelope: Uint8Array) => Promise<Transaction>,
+  buildTx: (envelope: Uint8Array, priceUsd: number | null) => Promise<Transaction>,
   feedId?: number,
 ): Promise<{ consumerSig: string }> {
   return withTimeout(
@@ -47,18 +47,20 @@ export async function fetchAndExecuteLazer(
 async function _impl(
   connection: Connection,
   wallet: WalletContextState,
-  buildTx: (envelope: Uint8Array) => Promise<Transaction>,
+  buildTx: (envelope: Uint8Array, priceUsd: number | null) => Promise<Transaction>,
   feedId?: number,
 ): Promise<{ consumerSig: string }> {
   if (!wallet.publicKey || !wallet.signTransaction) {
     throw new Error("Wallet not connected");
   }
 
-  // 1. Fetch the signed envelope (throws LazerNotConfiguredError on 503).
-  const envelope = await fetchLazerEnvelope(feedId);
+  // 1. Fetch the signed envelope + its price (throws LazerNotConfiguredError on 503).
+  const { envelope, priceUsd } = await fetchLazerEnvelope(feedId);
 
-  // 2. Build the single consumer tx (ed25519 + dominion).
-  const tx = await buildTx(envelope);
+  // 2. Build the single consumer tx (ed25519 + dominion). The caller computes
+  //    min_out from `priceUsd` - the envelope's OWN price - so the slippage floor
+  //    matches what the contract will price at.
+  const tx = await buildTx(envelope, priceUsd);
 
   // 3. ONE popup: sign the consumer tx. Phantom shows the isolated balance change.
   const signed = (await wallet.signTransaction(tx)) as Transaction;

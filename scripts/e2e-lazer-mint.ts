@@ -32,7 +32,7 @@ const ATA_PROGRAM = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
 
 const pda = (seed: string) => PublicKey.findProgramAddressSync([Buffer.from(seed)], PROGRAM_ID)[0];
 
-async function fetchSilvEnvelope(): Promise<Uint8Array> {
+async function fetchSilvEnvelope(): Promise<{ envelope: Uint8Array; priceUsd: number }> {
   const resp = await fetch("https://pyth-lazer.dourolabs.app/v1/latest_price", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.PYTH_LAZER_KEY}` },
@@ -44,10 +44,12 @@ async function fetchSilvEnvelope(): Promise<Uint8Array> {
   });
   const j: any = await resp.json();
   if (!j?.solana?.data) throw new Error("no envelope: " + JSON.stringify(j).slice(0, 300));
-  console.log("  SILV price: $" + (Number(j.parsed.priceFeeds[0].price) * 1e-5).toFixed(5),
-    "| publishers:", j.parsed.priceFeeds[0].publisherCount,
-    "| feed_ts==ts:", j.parsed.priceFeeds[0].feedUpdateTimestamp === Number(j.parsed.timestampUs));
-  return new Uint8Array(Buffer.from(j.solana.data, "base64"));
+  const f = j.parsed.priceFeeds[0];
+  const priceUsd = Number(f.price) * Math.pow(10, Number(f.exponent));
+  console.log("  SILV price: $" + priceUsd.toFixed(5),
+    "| publishers:", f.publisherCount,
+    "| feed_ts==ts:", f.feedUpdateTimestamp === Number(j.parsed.timestampUs));
+  return { envelope: new Uint8Array(Buffer.from(j.solana.data, "base64")), priceUsd };
 }
 
 async function main() {
@@ -80,14 +82,18 @@ async function main() {
   console.log("before: USDC", usdcBefore / 1e6, "| SILV", silvBefore / 1e6);
 
   // 4. Real SILV envelope.
-  const envelope = await fetchSilvEnvelope();
+  const { envelope, priceUsd } = await fetchSilvEnvelope();
   console.log("  envelope len:", envelope.length);
+  // min_out from the envelope's OWN price + 0.5% slippage (proves the frontend fix:
+  // a tight slippage no longer reverts because min_out matches the contract's price).
+  const minSilvOut = Math.floor((10 / (priceUsd * 1.1)) * (1 - 50 / 10_000) * 1e6);
+  console.log("  min_silv_out (0.5% slip @ envelope price):", minSilvOut / 1e6);
 
   // 5. Build the mint tx (mirrors buildLazerMintTx in lazer-tx.ts).
   const usdcTreasuryAta = getAssociatedTokenAddressSync(USDC_MINT, pda("treasury"), true, TOKEN_PROGRAM);
   const messageData = Buffer.from(lazerMessageData(envelope));
   const dominionIx = await (program.methods as any)
-    .mintSilv(new anchor.BN(10_000_000), new anchor.BN(1), messageData, ED25519_IX_INDEX, 0) // 10 USDC, min 1
+    .mintSilv(new anchor.BN(10_000_000), new anchor.BN(minSilvOut), messageData, ED25519_IX_INDEX, 0) // 10 USDC
     .accounts({
       config: configPda, user, usdcMint: USDC_MINT, silvMint: SILV_MINT,
       usdcTreasury: usdcTreasuryAta, userUsdcAta, userSilvAta,
@@ -119,10 +125,12 @@ async function main() {
 
   // === REDEEM (instant) - validates the redeem account set on-chain too ===
   console.log("\n== Redeem 0.05 SILV (instant, fresh envelope) ==");
-  const redeemEnv = await fetchSilvEnvelope();
+  const { envelope: redeemEnv, priceUsd: redeemPrice } = await fetchSilvEnvelope();
+  const minUsdcOut = Math.floor(0.05 * redeemPrice * (1 - 200 / 10_000) * (1 - 50 / 10_000) * 1e6);
+  console.log("  min_usdc_out (0.5% slip @ envelope price):", minUsdcOut / 1e6);
   const redeemMsg = Buffer.from(lazerMessageData(redeemEnv));
   const redeemIx = await (program.methods as any)
-    .redeemSilv(new anchor.BN(50_000), new anchor.BN(1), redeemMsg, ED25519_IX_INDEX, 0) // 0.05 SILV, min 1
+    .redeemSilv(new anchor.BN(50_000), new anchor.BN(minUsdcOut), redeemMsg, ED25519_IX_INDEX, 0) // 0.05 SILV
     .accounts({
       config: configPda, user, usdcMint: USDC_MINT, silvMint: SILV_MINT,
       usdcTreasury: usdcTreasuryAta, userUsdcAta, userSilvAta,
