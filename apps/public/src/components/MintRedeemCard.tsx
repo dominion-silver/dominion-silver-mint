@@ -589,6 +589,8 @@ export function MintRedeemCard() {
         <input
           type="number"
           inputMode="decimal"
+          min="0"
+          step="any"
           placeholder="0.00"
           value={amount}
           onChange={(e) => setAmount(e.target.value)}
@@ -691,14 +693,11 @@ export function MintRedeemCard() {
                 : `${(premiumBpsRedeem / 100).toFixed(1)}%`}
             </span>
           </div>
-          {/* CODEX P2-02: this flow posts a temporary on-chain Pyth price
-              account; its small rent (~0.001-0.01 SOL) is not auto-reclaimed
-              in this version. Disclosed so the behavior is deliberate and
-              observable; an automated reclaim is a tracked follow-up. */}
-          <div className="pt-1 text-[11px] text-muted/80">
-            A small one-time Solana rent (~0.001-0.01 SOL) is paid to post the
-            live oracle price and is not auto-reclaimed yet.
-          </div>
+          {/* Pyth Lazer rides the signed price inside the consumer tx (no
+              separate temporary price account is posted), so the old Core
+              price-account rent disclosure no longer applies. The only costs
+              are the standard tx fee + a one-time token-account rent the first
+              time you mint, both standard Solana costs. */}
         </div>
       )}
 

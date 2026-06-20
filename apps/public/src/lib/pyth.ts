@@ -27,7 +27,8 @@ export async function fetchSilverPrice(): Promise<SilverPrice> {
     priceUsd: price.priceUsd,
     confidence: price.confidence,
     publishTime: price.publishTimeSec,
-    ageSeconds: Math.floor(Date.now() / 1000) - price.publishTimeSec,
+    // clamp: a small client/server clock skew could otherwise show "-1s ago".
+    ageSeconds: Math.max(0, Math.floor(Date.now() / 1000) - price.publishTimeSec),
   };
 }
 
