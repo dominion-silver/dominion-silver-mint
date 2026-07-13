@@ -28,6 +28,7 @@ export interface ConfigAccount {
   upgradeAuthorityInfo: PublicKey;
   // Compliance
   permanentDelegateExpected: PublicKey;
+  freezeAuthorityExpected: PublicKey;
   complianceMode: boolean;
   // Premium
   premiumBpsMint: number;
@@ -91,6 +92,25 @@ export interface ConfigAccount {
   pendingComplianceNonce: BN | null;
   pendingPythFeedNonce: BN | null;
   pendingAdminTimelockNonce: BN | null;
+  // Admin-transfer ETA + the redeem-limits / max-supply pending nonces
+  pendingAdminEta: BN;
+  pendingMaxSupplyNonce: BN | null;
+  pendingRedeemLimitsNonce: BN | null;
+  // Inventory + public-mint gate
+  inventoryWallet: PublicKey;
+  publicMintEnabled: boolean;
+  // KYC
+  kycOperator: PublicKey;
+  kycEnforced: boolean;
+  pendingKycOperatorNonce: BN | null;
+  // Proof-of-reserves feed
+  porFeed: PublicKey;
+  porMaxStalenessSeconds: number;
+  porEnforced: boolean;
+  pendingPorFeedNonce: BN | null;
+  // Split pause flags (mint vs redeem)
+  mintPaused: boolean;
+  redeemPaused: boolean;
   version: number;
 }
 

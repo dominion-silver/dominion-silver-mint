@@ -34,6 +34,7 @@ import {
   guardianPda,
   redemptionRequestPda,
   silvMetadataAuthorityPda,
+  silvMintAuthorityPda,
   timelockPda,
   treasuryPda,
 } from "./pdas";
@@ -111,16 +112,78 @@ async function instant(c: BuildCtx, method: string, arg: any): Ix {
 }
 export const setMaxSilvSupply = (c: BuildCtx, v: bigint): Ix =>
   instant(c, "setMaxSilvSupply", new BN(v.toString()));
-export const setLargeRedeemThreshold = (c: BuildCtx, v: bigint): Ix =>
-  instant(c, "setLargeRedeemThreshold", new BN(v.toString()));
-export const setInstantRedeemBudget = (c: BuildCtx, v: bigint): Ix =>
-  instant(c, "setInstantRedeemBudget", new BN(v.toString()));
-export const setInstantRedeemWindow = (c: BuildCtx, secs: number): Ix =>
-  instant(c, "setInstantRedeemWindow", secs);
-export const setRedeemQueueDelay = (c: BuildCtx, secs: number): Ix =>
-  instant(c, "setRedeemQueueDelay", secs);
 export const setRedemptionsEnabled = (c: BuildCtx, on: boolean): Ix =>
   instant(c, "setRedemptionsEnabled", on);
+// Instant, admin-only. Sets the inventory wallet the admin_premint destination
+// ATA is derived against off-chain. Accounts: { config(auto), admin }.
+export const setInventoryWallet = (c: BuildCtx, wallet: PublicKey): Ix =>
+  instant(c, "setInventoryWallet", wallet);
+
+/** RedeemLimitsArgs: every field is optional (null = leave unchanged).
+ *  Same Borsh-camelCase constraint as OracleGuardsArgs (Fable audit P1-A): the
+ *  keys MUST be camelCase (Anchor camelCases the IDL at runtime); a snake_case
+ *  key silently encodes None and the field is dropped with NO error.
+ *
+ *  Two callers share this shape:
+ *   - emergencyTightenRedeemLimits: instant admin-only; the contract ONLY
+ *     accepts SAFE-DIRECTION values (budget DOWN, window UP, threshold DOWN,
+ *     queue_delay UP). A loosen reverts LooseningRequiresTimelock.
+ *   - proposeSetRedeemLimits: the 24h-timelocked LOOSEN path. */
+export interface RedeemLimitsInput {
+  instantRedeemBudgetUsdc?: bigint;
+  instantRedeemWindowSeconds?: number;
+  largeRedeemThresholdUsdc?: bigint;
+  redeemQueueDelaySeconds?: number;
+}
+export function redeemLimitsArgsObject(a: RedeemLimitsInput) {
+  return {
+    instantRedeemBudgetUsdc:
+      a.instantRedeemBudgetUsdc != null
+        ? new BN(a.instantRedeemBudgetUsdc.toString())
+        : null,
+    instantRedeemWindowSeconds: a.instantRedeemWindowSeconds ?? null,
+    largeRedeemThresholdUsdc:
+      a.largeRedeemThresholdUsdc != null
+        ? new BN(a.largeRedeemThresholdUsdc.toString())
+        : null,
+    redeemQueueDelaySeconds: a.redeemQueueDelaySeconds ?? null,
+  };
+}
+// Instant TIGHTEN-only. Accounts: { config(auto), admin }.
+export const emergencyTightenRedeemLimits = (
+  c: BuildCtx,
+  a: RedeemLimitsInput,
+): Ix =>
+  instant(c, "emergencyTightenRedeemLimits", redeemLimitsArgsObject(a));
+
+// ---------------------------------------------------------------------------
+// admin_premint: admin-only mint of SILV directly into the inventory owner's
+// Token-2022 ATA. Accounts: { config(auto), admin, silvMint, inventorySilvAta,
+// silvMintAuthority(PDA ["silv_mint_authority"]), token2022Program }.
+// ---------------------------------------------------------------------------
+export async function adminPremint(
+  c: BuildCtx,
+  amount: bigint,
+  inventoryOwner: PublicKey,
+): Ix {
+  const inventorySilvAta = getAssociatedTokenAddressSync(
+    SILV_MINT,
+    inventoryOwner,
+    true,
+    TOKEN_2022_PROGRAM_ID,
+  );
+  const ix = await (getProgram(c.connection).methods as any)
+    .adminPremint(new BN(amount.toString()))
+    .accountsPartial({
+      admin: adminAuthority(),
+      silvMint: SILV_MINT,
+      inventorySilvAta,
+      silvMintAuthority: silvMintAuthorityPda(),
+      token2022Program: TOKEN_2022_PROGRAM_ID,
+    })
+    .instruction();
+  return one(ix);
+}
 
 // ---------------------------------------------------------------------------
 // Deposit USDC (adds funds). usdc_treasury = treasury USDC ATA.
@@ -331,6 +394,12 @@ export function oracleGuardsArgsObject(a: OracleGuardsInput) {
 }
 export const proposeSetOracleGuards = (c: BuildCtx, a: OracleGuardsInput): Ix =>
   propose(c, "proposeSetOracleGuards", [oracleGuardsArgsObject(a)]);
+// 24h-timelocked LOOSEN path for the redeem limits (tighten is instant via
+// emergencyTightenRedeemLimits). Same RedeemLimitsArgs shape.
+export const proposeSetRedeemLimits = (
+  c: BuildCtx,
+  a: RedeemLimitsInput,
+): Ix => propose(c, "proposeSetRedeemLimits", [redeemLimitsArgsObject(a)]);
 
 // 2-step admin transfer. accept = signed by the NEW admin = the Ops vault.
 export async function acceptAdminTransfer(c: BuildCtx): Ix {
@@ -340,10 +409,14 @@ export async function acceptAdminTransfer(c: BuildCtx): Ix {
     .instruction();
   return one(ix);
 }
+// The `admin` account was renamed to `signer` and a NEW optional `guardian`
+// account (PDA ["guardian", signer]) was added. Admin path: pass the Ops vault
+// as `signer` and `guardian: null` (Anchor sends the program-id sentinel for
+// the null optional, matching the pause/cancelTimelockedAction convention).
 export async function cancelAdminTransfer(c: BuildCtx): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .cancelAdminTransfer()
-    .accountsPartial({ admin: adminAuthority() })
+    .accountsPartial({ signer: adminAuthority(), guardian: null })
     .instruction();
   return one(ix);
 }
@@ -355,7 +428,8 @@ export type ExecMethod =
   | "executeSetPythFeed"
   | "executeSetTreasuryMinFloat"
   | "executeSetAdminTimelock"
-  | "executeSetComplianceMode";
+  | "executeSetComplianceMode"
+  | "executeSetRedeemLimits";
 export const EXEC_METHODS: ExecMethod[] = [
   "executeSetPremiumMint",
   "executeSetPremiumRedeem",
@@ -364,6 +438,7 @@ export const EXEC_METHODS: ExecMethod[] = [
   "executeSetTreasuryMinFloat",
   "executeSetAdminTimelock",
   "executeSetComplianceMode",
+  "executeSetRedeemLimits",
 ];
 
 export async function executeTimelocked(

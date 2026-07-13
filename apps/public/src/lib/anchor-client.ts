@@ -43,6 +43,7 @@ import {
 export interface ConfigAccount {
   admin: PublicKey;
   permanentDelegateExpected: PublicKey;
+  freezeAuthorityExpected: PublicKey;
   complianceMode: boolean;
   premiumBpsMint: number;
   premiumBpsRedeem: number;
@@ -64,6 +65,21 @@ export interface ConfigAccount {
   paused: boolean;
   mintPausedUntil: BN;
   pendingPremiumMintNonce: BN | null;
+  // ---- launch-posture / new on-chain fields (order irrelevant; IDL decodes) ----
+  pendingAdminEta: BN;
+  pendingMaxSupplyNonce: BN | null;
+  pendingRedeemLimitsNonce: BN | null;
+  inventoryWallet: PublicKey;
+  publicMintEnabled: boolean;
+  kycOperator: PublicKey;
+  kycEnforced: boolean;
+  pendingKycOperatorNonce: BN | null;
+  porFeed: PublicKey;
+  porMaxStalenessSeconds: number;
+  porEnforced: boolean;
+  pendingPorFeedNonce: BN | null;
+  mintPaused: boolean;
+  redeemPaused: boolean;
   version: number;
 }
 

@@ -1,7 +1,7 @@
 import { PublicKey } from "@solana/web3.js";
 
 // Program ID: Pyth Lazer fresh devnet deploy 2026-06-10 (config layout changed).
-export const PROGRAM_ID = new PublicKey("2ujQgKtxvaU9Ax3jL22374SypSyTR9J4yztqYkX23oMT");
+export const PROGRAM_ID = new PublicKey("AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W");
 
 // Token programs.
 export const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -13,7 +13,7 @@ export const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZb
 export const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
 
 // SILV mint - Pyth Lazer fresh devnet init 2026-06-10 (target/devnet-deployment.json).
-export const SILV_MINT = new PublicKey("5xiznEZfDRYojUL1WD2amruBZHonHphViH1SdnefyFx");
+export const SILV_MINT = new PublicKey("5i13gz6vGKTYhpWbMuQfiBAApfNHCxxJu2GtDGM1A2Li");
 
 // Pyth XAG/USD feed.
 export const PYTH_XAG_USD_FEED_ID = "0xf2fb02c32b055c805e7238d628e5e9dadef274376114eb1f012337cabe93871e";

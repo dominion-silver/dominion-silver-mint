@@ -1,5 +1,5 @@
 {
-  "address": "2ujQgKtxvaU9Ax3jL22374SypSyTR9J4yztqYkX23oMT",
+  "address": "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W",
   "metadata": {
     "name": "dominion_silver_mint",
     "version": "0.1.0",
@@ -128,6 +128,96 @@
       ]
     },
     {
+      "name": "admin_premint",
+      "discriminator": [
+        44,
+        222,
+        247,
+        253,
+        254,
+        169,
+        218,
+        229
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "silv_mint",
+          "writable": true
+        },
+        {
+          "name": "inventory_silv_ata",
+          "writable": true
+        },
+        {
+          "name": "silv_mint_authority",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  115,
+                  105,
+                  108,
+                  118,
+                  95,
+                  109,
+                  105,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104,
+                  111,
+                  114,
+                  105,
+                  116,
+                  121
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_2022_program",
+          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "admin_settle_redemption_offchain",
       "discriminator": [
         205,
@@ -238,11 +328,38 @@
           }
         },
         {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "config"
-          ]
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "guardian",
+          "docs": [
+            "Optional guardian PDA tied to `signer` via PDA seeds (no spoofing).",
+            "Required when signer != admin. FIX B: a guardian can kill a malicious",
+            "admin-transfer proposal during the 24h delay window."
+          ],
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  117,
+                  97,
+                  114,
+                  100,
+                  105,
+                  97,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "signer"
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -774,6 +891,57 @@
       ]
     },
     {
+      "name": "emergency_tighten_redeem_limits",
+      "discriminator": [
+        36,
+        198,
+        118,
+        175,
+        60,
+        200,
+        53,
+        163
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "RedeemLimitsArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "execute_set_admin_timelock",
       "discriminator": [
         82,
@@ -1164,6 +1332,82 @@
         74,
         136,
         127
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_recipient",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "execute_set_redeem_limits",
+      "discriminator": [
+        162,
+        188,
+        101,
+        66,
+        6,
+        94,
+        85,
+        62
       ],
       "accounts": [
         {
@@ -2552,6 +2796,88 @@
       ]
     },
     {
+      "name": "propose_set_redeem_limits",
+      "discriminator": [
+        109,
+        165,
+        92,
+        103,
+        103,
+        159,
+        15,
+        11
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config.next_timelock_nonce",
+                "account": "ConfigAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "RedeemLimitsArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "propose_set_treasury_min_float",
       "discriminator": [
         200,
@@ -3293,63 +3619,16 @@
       ]
     },
     {
-      "name": "set_instant_redeem_budget",
+      "name": "set_inventory_wallet",
       "discriminator": [
-        53,
-        207,
-        8,
-        42,
-        184,
-        57,
-        5,
-        72
-      ],
-      "accounts": [
-        {
-          "name": "config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        }
-      ],
-      "args": [
-        {
-          "name": "new_budget_usdc",
-          "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "set_instant_redeem_window",
-      "discriminator": [
-        249,
-        16,
-        60,
-        33,
         145,
-        40,
-        244,
-        197
+        245,
+        215,
+        189,
+        240,
+        207,
+        205,
+        219
       ],
       "accounts": [
         {
@@ -3381,55 +3660,8 @@
       ],
       "args": [
         {
-          "name": "new_window_seconds",
-          "type": "u32"
-        }
-      ]
-    },
-    {
-      "name": "set_large_redeem_threshold",
-      "discriminator": [
-        5,
-        76,
-        233,
-        55,
-        234,
-        78,
-        171,
-        56
-      ],
-      "accounts": [
-        {
-          "name": "config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        }
-      ],
-      "args": [
-        {
-          "name": "new_threshold_usdc",
-          "type": "u64"
+          "name": "wallet",
+          "type": "pubkey"
         }
       ]
     },
@@ -3477,53 +3709,6 @@
         {
           "name": "new_max",
           "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "set_redeem_queue_delay",
-      "discriminator": [
-        21,
-        161,
-        246,
-        247,
-        196,
-        9,
-        214,
-        143
-      ],
-      "accounts": [
-        {
-          "name": "config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        }
-      ],
-      "args": [
-        {
-          "name": "new_delay_seconds",
-          "type": "u32"
         }
       ]
     },
@@ -3868,6 +4053,19 @@
       ]
     },
     {
+      "name": "PremintEvent",
+      "discriminator": [
+        15,
+        100,
+        83,
+        35,
+        113,
+        163,
+        10,
+        204
+      ]
+    },
+    {
       "name": "PriceDeltaRejected",
       "discriminator": [
         55,
@@ -4174,12 +4372,12 @@
     {
       "code": 12037,
       "name": "TimelockTooShort",
-      "msg": "Timelock seconds below hard floor (3600)"
+      "msg": "Timelock seconds below hard floor (86400)"
     },
     {
       "code": 12038,
       "name": "TimelockTooLong",
-      "msg": "Timelock seconds above hard ceiling (2592000)"
+      "msg": "Timelock seconds above hard ceiling (604800)"
     },
     {
       "code": 12039,
@@ -4405,6 +4603,46 @@
       "code": 12083,
       "name": "LazerWrongChannel",
       "msg": "Lazer payload channel does not match the configured channel"
+    },
+    {
+      "code": 12084,
+      "name": "SupplyCapRaiseBlocked",
+      "msg": "Supply cap can only be lowered instantly; raising it is not available at launch"
+    },
+    {
+      "code": 12085,
+      "name": "PublicMintDisabled",
+      "msg": "Public direct mint is disabled (closed at launch; opens with KYC in Phase 1)"
+    },
+    {
+      "code": 12086,
+      "name": "InventoryWalletNotSet",
+      "msg": "Inventory wallet is not set; call set_inventory_wallet first"
+    },
+    {
+      "code": 12087,
+      "name": "InvalidInventoryDestination",
+      "msg": "Pre-mint destination is not owned by the configured inventory wallet"
+    },
+    {
+      "code": 12088,
+      "name": "RedemptionsEnableBlocked",
+      "msg": "Enabling redemptions is blocked at launch; it opens with the Phase 1 KYC/redeem upgrade"
+    },
+    {
+      "code": 12089,
+      "name": "SilvFreezeAuthorityMismatch",
+      "msg": "SILV mint freeze_authority does not match config.freeze_authority_expected"
+    },
+    {
+      "code": 12090,
+      "name": "LooseningRequiresTimelock",
+      "msg": "Loosening a redeem throttle requires the 24h timelock (propose_set_redeem_limits); only tightening is instant"
+    },
+    {
+      "code": 12091,
+      "name": "RedeemLimitsAllNone",
+      "msg": "At least one redeem-limit field must be provided"
     }
   ],
   "types": [
@@ -4510,6 +4748,10 @@
             "type": "pubkey"
           },
           {
+            "name": "eta",
+            "type": "i64"
+          },
+          {
             "name": "expires_at",
             "type": "i64"
           }
@@ -4553,6 +4795,10 @@
           },
           {
             "name": "permanent_delegate_expected",
+            "type": "pubkey"
+          },
+          {
+            "name": "freeze_authority_expected",
             "type": "pubkey"
           },
           {
@@ -4758,6 +5004,70 @@
             }
           },
           {
+            "name": "pending_admin_eta",
+            "type": "i64"
+          },
+          {
+            "name": "pending_max_supply_nonce",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "pending_redeem_limits_nonce",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "inventory_wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "public_mint_enabled",
+            "type": "bool"
+          },
+          {
+            "name": "kyc_operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "kyc_enforced",
+            "type": "bool"
+          },
+          {
+            "name": "pending_kyc_operator_nonce",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "por_feed",
+            "type": "pubkey"
+          },
+          {
+            "name": "por_max_staleness_seconds",
+            "type": "u32"
+          },
+          {
+            "name": "por_enforced",
+            "type": "bool"
+          },
+          {
+            "name": "pending_por_feed_nonce",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "mint_paused",
+            "type": "bool"
+          },
+          {
+            "name": "redeem_paused",
+            "type": "bool"
+          },
+          {
             "name": "version",
             "type": "u8"
           },
@@ -4870,6 +5180,10 @@
           },
           {
             "name": "permanent_delegate_expected",
+            "type": "pubkey"
+          },
+          {
+            "name": "freeze_authority_expected",
             "type": "pubkey"
           },
           {
@@ -5058,6 +5372,30 @@
       }
     },
     {
+      "name": "PremintEvent",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "inventory",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "supply_post",
+            "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "PriceDeltaRejected",
       "type": {
         "kind": "struct",
@@ -5109,6 +5447,38 @@
           {
             "name": "timestamp",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RedeemLimitsArgs",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "instant_redeem_budget_usdc",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "instant_redeem_window_seconds",
+            "type": {
+              "option": "u32"
+            }
+          },
+          {
+            "name": "large_redeem_threshold_usdc",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
+            "name": "redeem_queue_delay_seconds",
+            "type": {
+              "option": "u32"
+            }
           }
         ]
       }

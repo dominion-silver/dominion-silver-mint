@@ -91,6 +91,8 @@ const optNum = (s: string | undefined, max: number) =>
   s && s.trim() ? parseUint(s, max) : undefined;
 const optBig = (s: string | undefined) =>
   s && s.trim() ? parseBigUint(s) : undefined;
+const optAtomic = (s: string | undefined, decimals: number) =>
+  s && s.trim() ? parseAtomic(s, decimals) : undefined;
 
 const ACTIONS: ActionDesc[] = [
   {
@@ -112,42 +114,42 @@ const ACTIONS: ActionDesc[] = [
     build: (c, p) => actions.setMaxSilvSupply(c, parseAtomic(p.oz, 6)),
   },
   {
-    id: "set-instant-budget",
-    label: "Set instant budget",
+    id: "tighten-redeem-limits",
+    label: "Emergency tighten redeem limits",
     group: "Instant",
     mode: "squads",
-    fields: [{ name: "usd", label: "Budget (USDC)", kind: "usdc" }],
-    tip: "Total instant-redemption value allowed per reset window.",
-    build: (c, p) => actions.setInstantRedeemBudget(c, parseAtomic(p.usd, 6)),
+    fields: [
+      { name: "budget", label: "Instant budget USDC - DOWN only (blank=keep)", kind: "usdc" },
+      { name: "window", label: "Instant window s - UP only (blank=keep)", kind: "int" },
+      { name: "threshold", label: "Large-redeem threshold USDC - DOWN only (blank=keep)", kind: "usdc" },
+      { name: "delay", label: "Queue delay s - UP only (blank=keep)", kind: "int" },
+    ],
+    tip: "Instant TIGHTEN only: budget DOWN, window UP, threshold DOWN, queue delay UP. LOOSENING in any direction requires the 24h timelock (see 'Propose redeem limits' under Delayed). Leave a field blank to keep it.",
+    build: (c, p) => {
+      const args = {
+        instantRedeemBudgetUsdc: optAtomic(p.budget, 6),
+        instantRedeemWindowSeconds: optNum(p.window, U32),
+        largeRedeemThresholdUsdc: optAtomic(p.threshold, 6),
+        redeemQueueDelaySeconds: optNum(p.delay, U32),
+      };
+      if (
+        args.instantRedeemBudgetUsdc == null &&
+        args.instantRedeemWindowSeconds == null &&
+        args.largeRedeemThresholdUsdc == null &&
+        args.redeemQueueDelaySeconds == null
+      )
+        throw new Error("Set at least one field to tighten");
+      return actions.emergencyTightenRedeemLimits(c, args);
+    },
   },
   {
-    id: "set-instant-window",
-    label: "Set instant window",
+    id: "set-inventory-wallet",
+    label: "Set inventory wallet",
     group: "Instant",
     mode: "squads",
-    fields: [{ name: "secs", label: "Window (seconds)", kind: "int" }],
-    tip: "Length of the fixed window after which the instant budget resets.",
-    build: (c, p) =>
-      actions.setInstantRedeemWindow(c, parseUint(p.secs, U32)),
-  },
-  {
-    id: "set-large-threshold",
-    label: "Set large-redeem threshold",
-    group: "Instant",
-    mode: "squads",
-    fields: [{ name: "usd", label: "Threshold (USDC)", kind: "usdc" }],
-    tip: "At/above this size a single redeem is forced into the T+3 queue.",
-    build: (c, p) =>
-      actions.setLargeRedeemThreshold(c, parseAtomic(p.usd, 6)),
-  },
-  {
-    id: "set-queue-delay",
-    label: "Set queue delay",
-    group: "Instant",
-    mode: "squads",
-    fields: [{ name: "secs", label: "Delay (seconds)", kind: "int" }],
-    tip: "How long a queued redemption waits before it can be claimed.",
-    build: (c, p) => actions.setRedeemQueueDelay(c, parseUint(p.secs, U32)),
+    fields: [{ name: "wallet", label: "Inventory wallet (pubkey)", kind: "pubkey" }],
+    tip: "Set the inventory wallet. admin_premint mints into this owner's Token-2022 SILV ATA.",
+    build: (c, p) => actions.setInventoryWallet(c, pk(p.wallet)),
   },
   {
     id: "propose-min-float",
@@ -286,6 +288,35 @@ const ACTIONS: ActionDesc[] = [
       }),
   },
   {
+    id: "propose-redeem-limits",
+    label: "Propose redeem limits (loosen)",
+    group: "Delayed (24h)",
+    mode: "squads",
+    fields: [
+      { name: "budget", label: "Instant budget USDC (blank=keep)", kind: "usdc" },
+      { name: "window", label: "Instant window s (blank=keep)", kind: "int" },
+      { name: "threshold", label: "Large-redeem threshold USDC (blank=keep)", kind: "usdc" },
+      { name: "delay", label: "Queue delay s (blank=keep)", kind: "int" },
+    ],
+    tip: "24h-timelocked path to LOOSEN redeem limits (budget up, window down, threshold up, queue delay down). To tighten instantly instead, use 'Emergency tighten redeem limits' under Instant. Leave a field blank to keep it.",
+    build: (c, p) => {
+      const args = {
+        instantRedeemBudgetUsdc: optAtomic(p.budget, 6),
+        instantRedeemWindowSeconds: optNum(p.window, U32),
+        largeRedeemThresholdUsdc: optAtomic(p.threshold, 6),
+        redeemQueueDelaySeconds: optNum(p.delay, U32),
+      };
+      if (
+        args.instantRedeemBudgetUsdc == null &&
+        args.instantRedeemWindowSeconds == null &&
+        args.largeRedeemThresholdUsdc == null &&
+        args.redeemQueueDelaySeconds == null
+      )
+        throw new Error("Set at least one field");
+      return actions.proposeSetRedeemLimits(c, args);
+    },
+  },
+  {
     id: "settle-offchain",
     label: "Settle redemption off-chain",
     group: "Emergency & ops",
@@ -404,6 +435,19 @@ const ACTIONS: ActionDesc[] = [
     tip: "Add USDC into the treasury (only adds funds).",
     build: (c, p) =>
       actions.depositUsdc(c, parseAtomic(p.usd, 6), pk(p.ata)),
+  },
+  {
+    id: "admin-premint",
+    label: "Admin pre-mint SILV",
+    group: "Emergency & ops",
+    mode: "squads",
+    fields: [
+      { name: "oz", label: "Amount (oz)", kind: "silv" },
+      { name: "owner", label: "Inventory owner (pubkey)", kind: "pubkey" },
+    ],
+    tip: "Admin-only: mint SILV directly into the inventory owner's Token-2022 ATA. Amount is oz (6 decimals). Owner is usually config.inventoryWallet.",
+    build: (c, p) =>
+      actions.adminPremint(c, parseAtomic(p.oz, 6), pk(p.owner)),
   },
   {
     id: "accept-admin",

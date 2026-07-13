@@ -220,6 +220,13 @@ export function MintRedeemCard() {
       cfg.mintPausedUntil.gt(new BN(Math.floor(Date.now() / 1000))))
   );
   const redemptionsOff = !!(mode === "redeem" && cfg && !cfg.redemptionsEnabled);
+  // Launch posture: the redeployed program ships with public direct mint
+  // CLOSED (`public_mint_enabled=false` -> `mint_silv` reverts
+  // PublicMintDisabled). At launch users trade SILV on a DEX instead of
+  // minting/redeeming directly. Gate the CTA so a click can't hit the revert.
+  const mintDisabled = !!(mode === "mint" && cfg && !cfg.publicMintEnabled);
+  // Either direction's DIRECT path is closed for the current mode.
+  const directClosed = mintDisabled || redemptionsOff;
 
   function afterTx(sig: string, label: string) {
     recordTxKind(sig, mode);
@@ -253,6 +260,12 @@ export function MintRedeemCard() {
     setSubmitting(true);
     try {
       if (mode === "mint") {
+        // Public direct mint is closed at launch (revert PublicMintDisabled).
+        if (!cfg.publicMintEnabled) {
+          throw new Error(
+            "Direct mint isn't open yet. You can buy SILV on the DEX.",
+          );
+        }
         showProgress("Preparing transaction...");
         const r = await fetchAndExecuteLazer(
           connection,
@@ -544,13 +557,23 @@ export function MintRedeemCard() {
 
   return (
     <div className="rounded-xl border border-border bg-card p-6">
-      {(paused || redemptionsOff) && (
+      {/* Genuine halt states (guardian pause / premium-update window) render
+          in alarming red. */}
+      {paused && (
         <div className="mb-4 rounded-md border border-danger bg-danger/10 px-3 py-2 text-xs text-danger">
           {cfg?.paused
             ? "Protocol paused by guardian."
-            : redemptionsOff
-              ? "Redemptions are currently disabled by the admin."
-              : "Mint paused during a premium-update window. Retry soon."}
+            : "Mint paused during a premium-update window. Retry soon."}
+        </div>
+      )}
+
+      {/* Launch posture: direct mint / redeem isn't open yet. Users trade SILV
+          on the DEX instead. Neutral (not alarming) informational styling. */}
+      {!paused && directClosed && (
+        <div className="mb-4 rounded-md border border-border bg-bg/50 px-3 py-2 text-xs text-muted">
+          {mode === "mint"
+            ? "Direct mint isn't open yet. You can buy SILV on the DEX."
+            : "Direct redemption isn't open yet. You can sell SILV on the DEX."}
         </div>
       )}
 
@@ -734,6 +757,7 @@ export function MintRedeemCard() {
           !wallet.connected ||
           !preview ||
           !!paused ||
+          mintDisabled ||
           redemptionsOff ||
           redeemRoute === "otc" ||
           submitting ||
@@ -748,17 +772,19 @@ export function MintRedeemCard() {
             ? "Submitting..."
             : paused
               ? "Paused"
-              : redemptionsOff
-                ? "Redemptions disabled"
-                : !amount
-                  ? "Enter an amount"
-                  : mode === "mint"
-                    ? "Mint SILV"
-                    : redeemRoute === "queue"
-                      ? "Queue redemption (T+3)"
-                      : redeemRoute === "otc"
-                        ? "Use OTC desk"
-                        : "Redeem SILV"}
+              : mintDisabled
+                ? "Mint not open yet"
+                : redemptionsOff
+                  ? "Redemptions not open yet"
+                  : !amount
+                    ? "Enter an amount"
+                    : mode === "mint"
+                      ? "Mint SILV"
+                      : redeemRoute === "queue"
+                        ? "Queue redemption (T+3)"
+                        : redeemRoute === "otc"
+                          ? "Use OTC desk"
+                          : "Redeem SILV"}
       </button>
 
       {/* Pending queued redemptions. */}
