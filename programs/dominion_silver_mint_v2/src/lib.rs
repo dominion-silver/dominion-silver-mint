@@ -151,26 +151,28 @@ pub mod dominion_silver_mint {
         instructions::admin::caps::set_redemptions_enabled_handler(ctx, enabled)
     }
 
-    pub fn set_instant_redeem_budget(ctx: Context<SetParam>, new_budget_usdc: u64) -> Result<()> {
-        instructions::admin::caps::set_instant_redeem_budget_handler(ctx, new_budget_usdc)
-    }
-
-    pub fn set_instant_redeem_window(
+    // FIX A (launch spec 2026-07): the four redeem throttles
+    // (instant_redeem_budget, instant_redeem_window, large_redeem_threshold,
+    // redeem_queue_delay) are loosen-slow / tighten-fast. This is the ONLY instant
+    // path and it accepts safe-direction (tighten) values only; LOOSENING goes
+    // through the 24h-timelocked propose/execute_set_redeem_limits below. Replaces
+    // the four individual instant setters (which were instant loosen holes).
+    pub fn emergency_tighten_redeem_limits(
         ctx: Context<SetParam>,
-        new_window_seconds: u32,
+        args: instructions::admin::execute::RedeemLimitsArgs,
     ) -> Result<()> {
-        instructions::admin::caps::set_instant_redeem_window_handler(ctx, new_window_seconds)
+        instructions::admin::caps::emergency_tighten_redeem_limits_handler(ctx, args)
     }
 
-    pub fn set_large_redeem_threshold(
-        ctx: Context<SetParam>,
-        new_threshold_usdc: u64,
-    ) -> Result<()> {
-        instructions::admin::caps::set_large_redeem_threshold_handler(ctx, new_threshold_usdc)
+    // Launch spec 2026-07: the pre-mint supply model (Mark's Telegram 2026-06-30).
+    // admin_premint mints SILV against the hard cap into the inventory wallet with
+    // no USDC and no oracle; set_inventory_wallet sets the destination (late-binding).
+    pub fn set_inventory_wallet(ctx: Context<SetInventoryWallet>, wallet: Pubkey) -> Result<()> {
+        instructions::admin::premint::set_inventory_wallet_handler(ctx, wallet)
     }
 
-    pub fn set_redeem_queue_delay(ctx: Context<SetParam>, new_delay_seconds: u32) -> Result<()> {
-        instructions::admin::caps::set_redeem_queue_delay_handler(ctx, new_delay_seconds)
+    pub fn admin_premint(ctx: Context<AdminPremint>, amount: u64) -> Result<()> {
+        instructions::admin::premint::premint_handler(ctx, amount)
     }
 
     /// DEV ONLY: bumps max_staleness_seconds without timelock.
@@ -238,14 +240,15 @@ pub mod dominion_silver_mint {
         instructions::admin::timelock::cancel_handler(ctx, nonce)
     }
 
-    // CODEX H-02 / Option B: thaw_account has NO #[program] entry point and
-    // the dead-code file (instructions/admin/thaw.rs) was DELETED in the
-    // Option B teardown. The original handler signed thaw_account with the
-    // PermanentDelegate authority, but SPL requires the mint's
-    // freeze_authority; the SILV mint is created with freeze_authority = None
-    // (CODEX C-02), so no working thaw path exists. PermanentDelegate is kept
-    // (D12) for transfer/burn-based compliance; a real freeze/thaw flow would
-    // require architectural redesign (a Squads-controlled freeze_authority).
+    // Freeze / thaw are NOT Dominion-program instructions. The SILV mint carries a
+    // freeze_authority = the compliance multisig (launch spec 2026-07: Mark confirmed
+    // the freeze lever), so freezing/thawing a specific token account is done directly
+    // via the SPL Token-2022 FreezeAccount / ThawAccount instructions signed by that
+    // multisig (e.g. a Squads tx), exactly as the seize/clawback is done directly via
+    // the PermanentDelegate (D12). Neither lever needs a wrapper instruction here, and
+    // neither changes the mint-level authorities that assertions.rs pins every call.
+    // (The old instructions/admin/thaw.rs dead-code file was removed in the Option B
+    // teardown; it is intentionally not reintroduced.)
 
     // === Admin: timelocked propose/execute ===
 
@@ -297,6 +300,19 @@ pub mod dominion_silver_mint {
 
     pub fn execute_set_oracle_guards(ctx: Context<ExecuteOracleGuards>, nonce: u64) -> Result<()> {
         instructions::admin::execute::execute_set_oracle_guards_handler(ctx, nonce)
+    }
+
+    // FIX A (launch spec 2026-07): the 24h-timelocked loosen path for the four
+    // redeem throttles. The instant tighten fast-lane is emergency_tighten_redeem_limits.
+    pub fn propose_set_redeem_limits(
+        ctx: Context<ProposeRedeemLimits>,
+        args: instructions::admin::execute::RedeemLimitsArgs,
+    ) -> Result<()> {
+        instructions::admin::propose::propose_set_redeem_limits_handler(ctx, args)
+    }
+
+    pub fn execute_set_redeem_limits(ctx: Context<ExecuteRedeemLimits>, nonce: u64) -> Result<()> {
+        instructions::admin::execute::execute_set_redeem_limits_handler(ctx, nonce)
     }
 
     // Option B D7: treasury minimum FLOAT (replaces Option A min-reserve bps).

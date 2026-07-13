@@ -10,6 +10,16 @@ pub struct MintEvent {
     pub timestamp: i64,
 }
 
+// Launch spec 2026-07: admin pre-mint against the hard cap into the inventory
+// wallet (no USDC, no oracle).
+#[event]
+pub struct PremintEvent {
+    pub inventory: Pubkey,
+    pub amount: u64,
+    pub supply_post: u64,
+    pub timestamp: i64,
+}
+
 #[event]
 pub struct RedeemEvent {
     pub user: Pubkey,
@@ -84,6 +94,7 @@ pub struct TreasuryDeposit {
 pub struct AdminTransferProposed {
     pub current: Pubkey,
     pub proposed: Pubkey,
+    pub eta: i64,
     pub expires_at: i64,
 }
 

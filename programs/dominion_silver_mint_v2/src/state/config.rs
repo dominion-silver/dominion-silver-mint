@@ -6,14 +6,24 @@ use anchor_lang::prelude::*;
 // CODEX P1-01: per-side premium ceilings aligned to CONFIRMED_SPEC.md §6
 // (premium_bps_mint 0..2000, premium_bps_redeem 0..1000). Was a single
 // 3000-bps ceiling for both, which diverged from the locked spec.
-pub const PREMIUM_BPS_MINT_CEILING: u16 = 2000; // 20% (spec §6)
-pub const PREMIUM_BPS_REDEEM_CEILING: u16 = 1000; // 10% (spec §6)
-pub const PREMIUM_BPS_COMBINED_FLOOR: u16 = 500; // 5% combined min
+pub const PREMIUM_BPS_MINT_CEILING: u16 = 300; // 3% (launch spec 2026-07: mint 1.5%, hard cap 3%)
+pub const PREMIUM_BPS_REDEEM_CEILING: u16 = 500; // 5% (launch spec 2026-07: redeem 2%, hard cap 5%)
+// Combined premium floor REMOVED (launch spec 2026-07): mint 1.5% + redeem 2% =
+// 3.5% sits below the old 5% floor, so the floor conflicts with the target fees.
+// Set to 0 so the existing `sum >= FLOOR` checks (config.rs, initialize, propose,
+// execute, dev) become harmless no-ops. A later cleanup can delete those sites +
+// the unused PremiumSpreadTooLow error.
+pub const PREMIUM_BPS_COMBINED_FLOOR: u16 = 0;
 
 // Pyth Lazer migration: the Core receiver-program pin (PYTH_RECEIVER_OFFICIAL)
 // was removed. Lazer's program / storage / treasury are hard-pinned constants
 // in lazer_cpi.rs, validated on every verify CPI.
-pub const ADMIN_TIMELOCK_MIN_SECONDS: u32 = 3600; // 1 hour (spec §6)
+// Launch spec 2026-07 (FIX C): raised from 3600 (1h) to 86400 (24h). The admin
+// timelock can now only be RAISED (24h..7d), never reduced below 24h, so the
+// "reduce to 1h then push a drain in a weekend" attack the head-dev flagged is
+// closed. DEFAULT_ADMIN_TIMELOCK_SECONDS == this floor, so the timelock starts at
+// the floor.
+pub const ADMIN_TIMELOCK_MIN_SECONDS: u32 = 86400; // 24 hours (launch spec 2026-07)
                                                   // CODEX P1-01: spec §6 caps admin timelock at 604_800s (7 days). Was 30 days.
 pub const ADMIN_TIMELOCK_MAX_SECONDS: u32 = 604_800; // 7 days (spec §6)
 pub const MAX_ACTIVE_PROPOSALS: u8 = 10;
@@ -64,10 +74,15 @@ pub const LAZER_CHANNEL_ID: u8 = 4;
 // via the timelocked set_oracle_guards BEFORE unpausing. Reviewer-flagged
 // (2026-06-09): the floor is process-gated (paused launch + GO gate), not
 // code-gated at this default. Do NOT unpause without raising it.
-pub const DEFAULT_MIN_PUBLISHERS: u16 = 1;
+// Launch spec 2026-07 (FIX D): raised 1 -> 2. Combined with the hard floor
+// (MIN_PUBLISHERS_FLOOR_HARD = 2 in lazer_price.rs), a single compromised or
+// colluding publisher can no longer price the protocol. The SILV feed has 3
+// publishers, so a floor of 2 tolerates one publisher down. Operating value stays
+// 2 for now (Thomas to confirm 2 vs 3 with Mark).
+pub const DEFAULT_MIN_PUBLISHERS: u16 = 2;
 
 // Default launch values.
-pub const DEFAULT_PREMIUM_MINT_BPS: u16 = 1000; // 10%
+pub const DEFAULT_PREMIUM_MINT_BPS: u16 = 150; // 1.5% (launch spec 2026-07)
 pub const DEFAULT_PREMIUM_REDEEM_BPS: u16 = 200; // 2%
                                                  // Lazer migration (5.4): operating target ~15s, hard-capped at
                                                  // MAX_STALENESS_CEILING_SECONDS (30). The "single-digit" idea was
@@ -86,7 +101,10 @@ pub const DEFAULT_PRICE_UPDATE_MIN_AMOUNT_USDC: u64 = 1_000_000_000; // $1000 in
 pub const DEFAULT_ADMIN_TIMELOCK_SECONDS: u32 = 86400; // 24 hours
 
 // Option B launch defaults (all admin-tunable post-deploy from the panel).
-pub const DEFAULT_MAX_SILV_SUPPLY: u64 = 712_000_000; // 712 oz at 6 decimals (D2)
+// Launch spec 2026-07: hard cap of 100,000 oz = the institutional allocation.
+// Stands in for the live PoR at launch (a manually-set backing bound). The
+// cap-RAISE is timelocked in this batch (FIX A) so it can't be lifted instantly.
+pub const DEFAULT_MAX_SILV_SUPPLY: u64 = 100_000_000_000; // 100,000 oz at 6 decimals
 pub const DEFAULT_TREASURY_MIN_FLOAT_USDC: u64 = 0; // Mark sets from panel (D7)
 pub const DEFAULT_LARGE_REDEEM_THRESHOLD_USDC: u64 = 5_000_000_000; // $5k (D10)
 pub const DEFAULT_INSTANT_REDEEM_BUDGET_USDC: u64 = 20_000_000_000; // $20k/window (D10)
@@ -110,8 +128,10 @@ pub struct ConfigAccount {
     pub pending_admin_expires_at: i64,
     pub upgrade_authority_info: Pubkey, // info-only: separate Upgrade Squads
 
-    // Compliance (D12: PermanentDelegate kept)
-    pub permanent_delegate_expected: Pubkey, // Ops Squads vault PDA, locked at init
+    // Compliance (D12 PermanentDelegate = seize/clawback; launch spec 2026-07:
+    // freeze authority added for the freeze lever). Both are set at mint creation.
+    pub permanent_delegate_expected: Pubkey, // seize/clawback authority (Ops/compliance multisig)
+    pub freeze_authority_expected: Pubkey, // freeze authority (Ops/compliance multisig), locked at init
     pub compliance_mode: bool,
 
     // Premium (D3/D4: ordinary USDC; launch discount = lower premium then restore)
@@ -144,7 +164,8 @@ pub struct ConfigAccount {
     pub price_delta_decay_seconds: u32,
     pub price_update_min_amount_usdc: u64,
 
-    // D2: HARD supply cap, atomic SILV (oz * 1e6). Admin-raisable (instant).
+    // D2: HARD supply cap, atomic SILV (oz * 1e6). Launch spec 2026-07: TIGHTEN-ONLY
+    // (lowering is instant; raising is blocked, see caps.rs set_max_silv_supply).
     pub max_silv_supply: u64,
 
     // D7: withdraw float. Blocks ADMIN withdraw only (option a); redemptions can
@@ -166,7 +187,7 @@ pub struct ConfigAccount {
     pub next_redeem_request_nonce: u64,
 
     // Timelock
-    pub admin_timelock_seconds: u32, // bounds [3600, 604800] (1h..7d, CONFIRMED_SPEC §6)
+    pub admin_timelock_seconds: u32, // bounds [86400, 604800] (24h..7d, launch spec 2026-07)
 
     // Guardians
     pub max_guardian_count: u8,
@@ -193,6 +214,54 @@ pub struct ConfigAccount {
     pub pending_pyth_feed_nonce: Option<u64>,
     pub pending_admin_timelock_nonce: Option<u64>,
 
+    // === Launch spec 2026-07 additions ===
+
+    // FIX B: admin-transfer accept delay. propose sets this to now +
+    // admin_timelock_seconds; accept requires now >= it; cleared on accept + cancel.
+    pub pending_admin_eta: i64,
+
+    // Reserved (Phase 1): single-active nonce for a future timelocked max-supply
+    // RAISE. At launch `set_max_silv_supply` is tighten-only (lowering is instant,
+    // raising is rejected: SupplyCapRaiseBlocked), so the cap is fixed at the 100k
+    // allocation and cannot be raised instantly. The raise path (timelocked, or
+    // PoR-driven in Phase 2) will use this nonce.
+    pub pending_max_supply_nonce: Option<u64>,
+
+    // FIX A (full loosen-slow / tighten-fast on the redeem throttles). ACTIVE at
+    // launch. Single-active nonce for the timelocked `SetRedeemLimits` action
+    // (the ONLY way to LOOSEN instant_redeem_budget / instant_redeem_window /
+    // large_redeem_threshold / redeem_queue_delay). Instant TIGHTENING of those
+    // four goes through `emergency_tighten_redeem_limits` (no timelock).
+    // max_silv_supply (raise-blocked) and redemptions_enabled (enable-blocked at
+    // launch) are NOT part of this action - they keep their stricter dedicated
+    // setters. See instructions/admin/caps.rs + propose.rs/execute.rs.
+    pub pending_redeem_limits_nonce: Option<u64>,
+
+    // Launch supply model (Mark's Telegram, 2026-06-30): the admin pre-mints SILV
+    // against the cap into the inventory wallet; public direct mint is CLOSED at
+    // launch (public_mint_enabled = false) and opens with KYC in Phase 1. Public
+    // redeem is closed via redemptions_enabled = false.
+    pub inventory_wallet: Pubkey,
+    pub public_mint_enabled: bool,
+
+    // --- Phase 1 KYC hooks (reserved now, unused until the KYC module ships; sized
+    // in so that upgrade is pure logic with no account realloc). ---
+    pub kyc_operator: Pubkey,
+    pub kyc_enforced: bool,
+    pub pending_kyc_operator_nonce: Option<u64>,
+
+    // --- Phase 2 PoR hooks (reserved now; at launch, backing is the manual
+    // max_silv_supply cap and por_enforced = false). ---
+    pub por_feed: Pubkey,
+    pub por_max_staleness_seconds: u32,
+    pub por_enforced: bool,
+    pub pending_por_feed_nonce: Option<u64>,
+
+    // --- Phase 1 granular pauses (reserved now; the global `paused` is used at
+    // launch until the mint/redeem pause split ships). ---
+    pub mint_paused: bool,
+    pub redeem_paused: bool,
+
     // Schema
     pub version: u8,
     pub reserved: [u8; 64],
@@ -207,6 +276,7 @@ impl ConfigAccount {
         + 8                   // pending_admin_expires_at
         + 32                  // upgrade_authority_info
         + 32                  // permanent_delegate_expected
+        + 32                  // freeze_authority_expected
         + 1                   // compliance_mode
         + 2 + 2               // premium_bps_mint + redeem
         + 4 + 2 + 8           // pyth_lazer_feed_id + min_publishers + last_used_feed_update_ts
@@ -224,6 +294,14 @@ impl ConfigAccount {
         + 1                   // paused
         + 8 + 1               // nonce + active count
         + (1 + 8) * 9         // 9 Option<u64> pending nonces
+        // --- launch spec 2026-07 additions ---
+        + 8                   // pending_admin_eta
+        + (1 + 8)             // pending_max_supply_nonce
+        + (1 + 8)             // pending_redeem_limits_nonce (FIX A, active at launch)
+        + 32 + 1              // inventory_wallet + public_mint_enabled
+        + 32 + 1 + (1 + 8)    // kyc_operator + kyc_enforced + pending_kyc_operator_nonce
+        + 32 + 4 + 1 + (1 + 8) // por_feed + por_max_staleness + por_enforced + pending_por_feed_nonce
+        + 1 + 1               // mint_paused + redeem_paused
         + 1                   // version
         + 64; // reserved
 

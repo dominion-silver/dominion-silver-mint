@@ -11,7 +11,10 @@ use anchor_lang::prelude::*;
 
 use crate::errors::DominionError;
 use crate::events::{AdminActionProposed, MintPausedUntilSet};
-use crate::instructions::admin::execute::{validate_metadata_args, MetadataArgs, OracleGuardsArgs};
+use crate::instructions::admin::execute::{
+    redeem_limits_any_set, validate_metadata_args, validate_redeem_limits_ceilings, MetadataArgs,
+    OracleGuardsArgs, RedeemLimitsArgs,
+};
 use crate::state::*;
 
 // === ProposePremium (mint or redeem) ===
@@ -511,6 +514,124 @@ pub fn propose_set_oracle_guards_handler(
         .checked_add(1)
         .ok_or(error!(DominionError::ArithmeticOverflow))?;
     config.pending_oracle_guards_nonce = Some(nonce);
+
+    emit!(AdminActionProposed {
+        nonce,
+        action_disc: tl.action_disc,
+        executable_at,
+        proposer: ctx.accounts.admin.key(),
+    });
+    Ok(())
+}
+
+// === ProposeRedeemLimits (FIX A loosen path, Option<T> per field) ===
+// The 24h-timelocked path to change any of the four redeem throttles in ANY
+// direction (in practice: to LOOSEN them; instant tightening is the separate
+// emergency_tighten_redeem_limits). Mirrors ProposeOracleGuards exactly.
+
+#[derive(Accounts)]
+pub struct ProposeRedeemLimits<'info> {
+    #[account(mut, seeds = [CONFIG_SEED], bump, has_one = admin)]
+    pub config: Account<'info, ConfigAccount>,
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    #[account(
+        init,
+        payer = admin,
+        space = TimelockQueueAccount::SIZE,
+        seeds = [TIMELOCK_SEED, &config.next_timelock_nonce.to_le_bytes()],
+        bump,
+    )]
+    pub timelock: Account<'info, TimelockQueueAccount>,
+    pub system_program: Program<'info, System>,
+}
+
+pub fn propose_set_redeem_limits_handler(
+    ctx: Context<ProposeRedeemLimits>,
+    args: RedeemLimitsArgs,
+) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+    let now = Clock::get()?.unix_timestamp;
+
+    // At least one field must be set.
+    require!(
+        redeem_limits_any_set(&args),
+        DominionError::RedeemLimitsAllNone
+    );
+
+    // Pre-validate the fat-finger ceilings on PROPOSE too (execute re-validates,
+    // defense in depth). Direction is intentionally NOT checked: this path exists
+    // precisely to allow a loosen, gated by the 24h delay + guardian cancel.
+    validate_redeem_limits_ceilings(&args)?;
+
+    // Reject pure no-op (every provided field already equals current) so a doomed
+    // proposal cannot occupy the single redeem-limits slot for the full timelock.
+    let mut effective_change = false;
+    if let Some(v) = args.instant_redeem_budget_usdc {
+        if v != config.instant_redeem_budget_usdc {
+            effective_change = true;
+        }
+    }
+    if let Some(v) = args.instant_redeem_window_seconds {
+        if v != config.instant_redeem_window_seconds {
+            effective_change = true;
+        }
+    }
+    if let Some(v) = args.large_redeem_threshold_usdc {
+        if v != config.large_redeem_threshold_usdc {
+            effective_change = true;
+        }
+    }
+    if let Some(v) = args.redeem_queue_delay_seconds {
+        if v != config.redeem_queue_delay_seconds {
+            effective_change = true;
+        }
+    }
+    require!(effective_change, DominionError::ProposalNoOp);
+
+    require!(
+        config.pending_redeem_limits_nonce.is_none(),
+        DominionError::ProposalAlreadyActive
+    );
+    require!(
+        config.active_proposal_count < MAX_ACTIVE_PROPOSALS,
+        DominionError::TooManyActiveProposals
+    );
+
+    let nonce = config.next_timelock_nonce;
+    let executable_at = now
+        .checked_add(config.admin_timelock_seconds as i64)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
+
+    let mut data = Vec::with_capacity(TimelockQueueAccount::MAX_ACTION_DATA_BYTES);
+    args.serialize(&mut data)
+        .map_err(|_| error!(DominionError::SerializationFailure))?;
+    // Worst-case borsh of RedeemLimitsArgs is 4*(1+8) = 36 B, far under the cap;
+    // guard explicitly for parity with the other Option<T>-payload proposals.
+    require!(
+        data.len() <= TimelockQueueAccount::MAX_ACTION_DATA_BYTES,
+        DominionError::MalformedActionData
+    );
+
+    let tl = &mut ctx.accounts.timelock;
+    tl.nonce = nonce;
+    tl.action_disc = TimelockAction::SetRedeemLimits as u8;
+    tl.action_data = data;
+    tl.scheduled_at = now;
+    tl.executable_at = executable_at;
+    tl.executed_at = None;
+    tl.cancelled = false;
+    tl.proposer = ctx.accounts.admin.key();
+    tl.rent_payer = ctx.accounts.admin.key();
+
+    config.next_timelock_nonce = nonce
+        .checked_add(1)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
+    config.active_proposal_count = config
+        .active_proposal_count
+        .checked_add(1)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
+    config.pending_redeem_limits_nonce = Some(nonce);
 
     emit!(AdminActionProposed {
         nonce,

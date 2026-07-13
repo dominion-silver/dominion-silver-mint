@@ -24,9 +24,10 @@ pub fn assert_silv_mint_invariants(
     program_id: &Pubkey,
 ) -> Result<()> {
     // CODEX C-02 defense-in-depth: assert base mint_authority + freeze_authority
-    // every call. Init pins these to the silv_mint_authority PDA + None
-    // respectively; they cannot change post-init given how the mint is set up
-    // (program PDA controls mint_authority; freeze_authority None is permanent).
+    // every call. Init pins the mint_authority to the silv_mint_authority PDA and the
+    // freeze_authority to config.freeze_authority_expected (the compliance multisig,
+    // launch spec 2026-07). The program PDA controls mint_authority; the freeze
+    // authority is a permanent Token-2022 power fixed at mint creation.
     // Runtime check makes drift impossible to miss.
     let (silv_mint_auth_pda, _) =
         Pubkey::find_program_address(&[SILV_MINT_AUTHORITY_SEED], program_id);
@@ -35,18 +36,23 @@ pub fn assert_silv_mint_invariants(
         mint_authority_opt == Some(silv_mint_auth_pda),
         DominionError::SilvMintAuthorityMismatch
     );
-    // Runtime check accepts EITHER None (target/strict) OR the silv_mint_authority
-    // PDA (current devnet state, since the off-chain init script set both authorities
-    // to the PDA rather than leaving freeze_authority None). PDA-held freeze authority
-    // is dead unless a program upgrade exposes a freeze ix; the program currently
-    // exposes no such ix. This is documented in REVIEW_REPORT.md (CODEX H-02 / C-02).
-    // Rejects anything else (e.g., deployer keypair = drift from intended state).
+    // Freeze authority MUST equal config.freeze_authority_expected (launch spec
+    // 2026-07: Mark confirmed he wants BOTH compliance levers). The SILV mint carries
+    // a freeze authority (block/thaw a sanctioned wallet, OFAC/court order) in addition
+    // to the PermanentDelegate (seize/clawback). initialize.rs pins the freeze
+    // authority to the expected compliance multisig (!= default) at mint creation, and
+    // no program instruction changes it; freezing/thawing a specific token account is
+    // done directly via the SPL Token-2022 FreezeAccount/ThawAccount by the multisig,
+    // which does NOT change this mint-level authority. Runtime check makes drift
+    // impossible to miss (mirrors the PermanentDelegate pin below).
+    // NOTE: the earlier launch batch pinned this strictly to None (FIX E). That was
+    // reversed once Mark confirmed the freeze lever; both authorities are permanent
+    // Token-2022 powers fixed at mint creation.
     let freeze_authority_opt: Option<Pubkey> = silv_mint_account.freeze_authority.into();
-    let freeze_ok = match freeze_authority_opt {
-        None => true,
-        Some(k) => k == silv_mint_auth_pda,
-    };
-    require!(freeze_ok, DominionError::SilvFreezeAuthorityMustBeNone);
+    require!(
+        freeze_authority_opt == Some(config.freeze_authority_expected),
+        DominionError::SilvFreezeAuthorityMismatch
+    );
 
     let mint_ai = silv_mint_account.to_account_info();
     let data = mint_ai.try_borrow_data()?;

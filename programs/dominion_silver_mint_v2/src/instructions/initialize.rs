@@ -14,14 +14,15 @@ pub struct InitializeArgs {
     // Authorities
     pub admin: Pubkey,                       // Ops Squads
     pub upgrade_authority_info: Pubkey,      // info-only: separate Upgrade Squads
-    pub permanent_delegate_expected: Pubkey, // Ops Squads vault PDA, derived off-chain
+    pub permanent_delegate_expected: Pubkey, // seize/clawback authority (Ops/compliance multisig)
+    pub freeze_authority_expected: Pubkey,   // freeze authority (Ops/compliance multisig), set at mint creation
 
     // Compliance off at launch
     pub compliance_mode: bool, // false at launch
 
     // Premium
-    pub premium_bps_mint: u16,   // e.g. 1000 (10%)
-    pub premium_bps_redeem: u16, // e.g. 200 (2%)
+    pub premium_bps_mint: u16,   // e.g. 150 (1.5%); ceiling 300 (launch spec 2026-07)
+    pub premium_bps_redeem: u16, // e.g. 200 (2%); ceiling 500 (launch spec 2026-07)
 
     // Oracle (Pyth Lazer). The program/storage/treasury are compile-time
     // constants; only the numeric feed id is an init arg.
@@ -32,7 +33,7 @@ pub struct InitializeArgs {
     // admin-tunable from the panel post-deploy (CONFIRMED_SPEC.md Section 6).
 
     // Optional overrides (else defaults)
-    pub admin_timelock_seconds: u32, // default 86400, bounds [3600, 604800] (1h..7d, §6)
+    pub admin_timelock_seconds: u32, // default 86400, bounds [86400, 604800] (24h..7d, launch spec 2026-07)
     pub max_guardian_count: u8,      // default 3
 }
 
@@ -158,13 +159,13 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     // CODEX C-02: enforce on-chain that the SILV mint authorities match the
     // documented invariants. Without this, the deployer could keep
     // mint_authority off-chain (silently mint SILV at will hors-program) or
-    // keep a freeze_authority (centralized seize/freeze hors-governance).
+    // set a freeze_authority that does not match the disclosed compliance multisig.
     //
     // The mint_authority must be the silv_mint_authority PDA (owned by this
     // program), so only mint_silv via this contract can produce SILV.
-    // The freeze_authority must be None: PermanentDelegate is the only
-    // optional admin-side capability (see CODEX H-01 for honest docs on
-    // its semantics).
+    // The freeze_authority must equal the expected compliance multisig (launch
+    // spec 2026-07: Mark confirmed the freeze lever alongside the PermanentDelegate
+    // seize/clawback). Both are permanent Token-2022 powers fixed here at creation.
     let (silv_mint_auth_pda, _) =
         Pubkey::find_program_address(&[SILV_MINT_AUTHORITY_SEED], ctx.program_id);
     let mint_authority_opt: Option<Pubkey> = ctx.accounts.silv_mint.mint_authority.into();
@@ -172,10 +173,20 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
         mint_authority_opt == Some(silv_mint_auth_pda),
         DominionError::SilvMintAuthorityMismatch
     );
+    // Launch spec 2026-07 (Mark, freeze + seize confirmed): the SILV mint carries
+    // a freeze authority (the compliance lever, e.g. OFAC/court order) in addition
+    // to the PermanentDelegate (the seize/clawback lever). Both are locked at mint
+    // creation. Pin the freeze authority to the expected compliance multisig from
+    // block 0 (mirrors the PermanentDelegate pin below); it must be a real key, not
+    // None and not the zero pubkey.
     let freeze_authority_opt: Option<Pubkey> = ctx.accounts.silv_mint.freeze_authority.into();
     require!(
-        freeze_authority_opt.is_none(),
-        DominionError::SilvFreezeAuthorityMustBeNone
+        args.freeze_authority_expected != Pubkey::default(),
+        DominionError::SilvFreezeAuthorityMismatch
+    );
+    require!(
+        freeze_authority_opt == Some(args.freeze_authority_expected),
+        DominionError::SilvFreezeAuthorityMismatch
     );
 
     // CODEX 2nd-pass M-01: pin the Token-2022 metadata extension's update
@@ -297,6 +308,7 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.upgrade_authority_info = args.upgrade_authority_info;
 
     config.permanent_delegate_expected = args.permanent_delegate_expected;
+    config.freeze_authority_expected = args.freeze_authority_expected;
     config.compliance_mode = args.compliance_mode;
 
     config.premium_bps_mint = args.premium_bps_mint;
@@ -328,7 +340,10 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     // + rolling-window instant budget, D11 manual redemptions switch.
     config.max_silv_supply = DEFAULT_MAX_SILV_SUPPLY;
     config.treasury_min_float_usdc = DEFAULT_TREASURY_MIN_FLOAT_USDC;
-    config.redemptions_enabled = true;
+    // Launch spec 2026-07: public direct redeem is CLOSED at launch (users exit by
+    // selling on the DEX; direct redeem needs KYC, which ships in Phase 1). Opened
+    // by the admin switch once KYC is live.
+    config.redemptions_enabled = false;
     config.large_redeem_threshold_usdc = DEFAULT_LARGE_REDEEM_THRESHOLD_USDC;
     config.instant_redeem_budget_usdc = DEFAULT_INSTANT_REDEEM_BUDGET_USDC;
     config.instant_redeem_window_seconds = DEFAULT_INSTANT_REDEEM_WINDOW_SECONDS;
@@ -361,7 +376,29 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.pending_pyth_feed_nonce = None;
     config.pending_admin_timelock_nonce = None;
 
-    config.version = 1;
+    // --- Launch spec 2026-07 additions (safe launch defaults) ---
+    config.pending_admin_eta = 0;
+    config.pending_max_supply_nonce = None;
+    // FIX A: no redeem-limits change is pending at init.
+    config.pending_redeem_limits_nonce = None;
+    // Inventory wallet is set via set_inventory_wallet before the first pre-mint.
+    config.inventory_wallet = Pubkey::default();
+    // Public direct mint closed at launch (opens with KYC in Phase 1).
+    config.public_mint_enabled = false;
+    // Phase 1 KYC hooks (reserved, unused at launch).
+    config.kyc_operator = Pubkey::default();
+    config.kyc_enforced = false;
+    config.pending_kyc_operator_nonce = None;
+    // Phase 2 PoR hooks (reserved; launch backing is the manual max_silv_supply cap).
+    config.por_feed = Pubkey::default();
+    config.por_max_staleness_seconds = 0;
+    config.por_enforced = false;
+    config.pending_por_feed_nonce = None;
+    // Phase 1 granular pauses (reserved; the global `paused` is used at launch).
+    config.mint_paused = false;
+    config.redeem_paused = false;
+
+    config.version = 2; // launch spec 2026-07 schema
     config.reserved = [0u8; 64];
 
     msg!("dominion_silver_mint initialized");

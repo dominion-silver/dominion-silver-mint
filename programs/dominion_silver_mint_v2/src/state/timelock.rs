@@ -25,6 +25,11 @@ pub enum TimelockAction {
     SetComplianceMode = 7,
     SetPythFeed = 8,
     SetAdminTimelock = 9,
+    // FIX A (launch spec 2026-07): the timelocked loosen path for the four redeem
+    // throttles (instant_redeem_budget, instant_redeem_window, large_redeem_threshold,
+    // redeem_queue_delay). Instant TIGHTENING is the separate, un-timelocked
+    // `emergency_tighten_redeem_limits`. APPEND ONLY - never reorder.
+    SetRedeemLimits = 10,
 }
 
 #[account]

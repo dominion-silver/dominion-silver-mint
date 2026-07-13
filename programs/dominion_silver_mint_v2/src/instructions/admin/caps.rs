@@ -1,17 +1,29 @@
-// Option B instant admin parameter setters (CONFIRMED_SPEC.md §6, change-path
-// = "instant"). The Option A per-tx min/max + daily + hourly cap setters are
-// gone (those config fields no longer exist). These are the "parametrable
-// within hardcoded safe bounds" surface (D14): every value is admin-tunable
-// from the panel with NO timelock (they only tune rate-limits / the supply
-// cap; none moves money), but each is clamped by a compile-time ceiling so a
-// compromised or fat-finger admin cannot set a catastrophic value.
+// Instant admin parameter setters. The remaining instant surface after FIX A
+// (launch spec 2026-07):
+//   - set_max_silv_supply: TIGHTEN-ONLY (lower instant; raise blocked entirely).
+//   - set_redemptions_enabled: FALSE-ONLY (disable instant; enable blocked at
+//     launch, Codex P0-01).
+//   - emergency_tighten_redeem_limits: the SINGLE instant fast-lane for the four
+//     redeem throttles, and it accepts SAFE-DIRECTION values only. LOOSENING any
+//     of the four goes through the 24h-timelocked SetRedeemLimits (propose.rs /
+//     execute.rs). This closes the head-dev "one-block drain": an admin can no
+//     longer strip the redemption rate-limits in a single instant tx.
 //
-// Float (treasury_min_float_usdc) and premiums/oracle-guards are NOT here:
-// those are sensitive and go through the 24h timelock (propose/execute).
+// The four individual instant throttle setters (set_instant_redeem_budget /
+// _window, set_large_redeem_threshold, set_redeem_queue_delay) were REMOVED in
+// favour of the single tighten-only entrypoint above (CORRECTION-2 clean shape:
+// one place for the counter-intuitive direction logic instead of four).
+//
+// Float (treasury_min_float_usdc) and premiums/oracle-guards remain 24h-timelocked
+// (propose/execute), as before.
 
 use anchor_lang::prelude::*;
 
 use crate::errors::DominionError;
+use crate::instructions::admin::execute::{
+    redeem_limits_all_tighten, redeem_limits_any_set, validate_redeem_limits_ceilings,
+    RedeemLimitsArgs,
+};
 use crate::state::*;
 
 #[derive(Accounts)]
@@ -22,75 +34,93 @@ pub struct SetParam<'info> {
     pub admin: Signer<'info>,
 }
 
-/// D2: raise/lower the HARD SILV supply cap, in atomic SILV (oz * 1e6). The
-/// panel sends "increase by N oz" as a new absolute value. Raising is low
-/// risk (cap can only gate NEW mints, can't harm holders); instant.
+/// D2 (launch spec 2026-07): the HARD SILV supply cap, atomic SILV (oz * 1e6).
+/// TIGHTEN-ONLY: lowering the cap is instant (a safety action), but RAISING it is
+/// rejected. At launch the cap is fixed at the physical allocation (100k oz) and
+/// there is no live PoR, so an instant raise would let a compromised admin
+/// pre-mint unbacked SILV. Raising the cap comes later, driven by the PoR feed
+/// (Phase 2) or a timelocked setter (Phase 1); `pending_max_supply_nonce` is
+/// reserved for that path.
 pub fn set_max_silv_supply_handler(ctx: Context<SetParam>, new_max: u64) -> Result<()> {
     require!(
         new_max <= MAX_SILV_SUPPLY_CEILING,
         DominionError::AboveMaximum
     );
+    require!(
+        new_max <= ctx.accounts.config.max_silv_supply,
+        DominionError::SupplyCapRaiseBlocked
+    );
     ctx.accounts.config.max_silv_supply = new_max;
     Ok(())
 }
 
-/// D11: the manual redemptions on/off switch (no auto-expiry, Mark's explicit
-/// choice). Disabling blocks NEW instant + queued redemptions; already-queued
-/// claims stay claimable (§8). Instant.
+/// D11 (launch spec 2026-07, Codex audit P0-01): the manual redemptions switch is
+/// now FALSE-ONLY at launch. DISABLING is instant (an emergency tighten). ENABLING
+/// is BLOCKED on-chain until the Phase 1 upgrade, which re-adds the enable path
+/// behind the KYC registry + the loosen-slow redeem-limit model. Rationale: public
+/// redeem is closed at launch; if a compromised admin could re-enable redemptions
+/// instantly (and instantly loosen the instant-redeem throttles), it could redeem
+/// pre-minted SILV for treasury USDC, bypassing the 24h-timelocked withdraw path.
+/// With enabling blocked, redemptions are cryptographically off at launch, so the
+/// throttle setters are genuinely inert and the treasury can only be drawn down via
+/// the timelocked, guardian-cancellable withdraw_usdc.
 pub fn set_redemptions_enabled_handler(ctx: Context<SetParam>, enabled: bool) -> Result<()> {
+    require!(!enabled, DominionError::RedemptionsEnableBlocked);
     ctx.accounts.config.redemptions_enabled = enabled;
     Ok(())
 }
 
-/// D10: the GLOBAL rolling-window instant-redeem budget (atomic USDC, all
-/// users combined). The Sybil-proof structuring defense. Instant.
-pub fn set_instant_redeem_budget_handler(
+/// FIX A (launch spec 2026-07): the SINGLE instant fast-lane for the four redeem
+/// throttles - instant TIGHTENING only. Every provided field must move its
+/// throttle in the safe (tighten) direction vs the current config, else
+/// `LooseningRequiresTimelock`; loosening any of them goes through the
+/// 24h-timelocked `propose_set_redeem_limits` / `execute_set_redeem_limits`.
+///
+/// Covers: instant_redeem_budget_usdc (D10), instant_redeem_window_seconds (D10),
+/// large_redeem_threshold_usdc (D10), redeem_queue_delay_seconds (D8). It does
+/// NOT touch max_silv_supply (raise-blocked via set_max_silv_supply) or
+/// redemptions_enabled (enable-blocked via set_redemptions_enabled) - those keep
+/// their stricter dedicated setters.
+///
+/// Direction semantics (see `redeem_limits_all_tighten`): budget down, window UP
+/// (longer = lower drain rate), threshold down (more forced to the queue), queue
+/// delay UP. Fat-finger ceilings still apply. No pause interaction (only tightens
+/// safety limits, so safe regardless of pause state). Note (accepted): lengthening
+/// the window toward the 7d max is a denial-of-instant-redemption grief, not a
+/// drain; doubly moot at launch since public redeem is closed.
+pub fn emergency_tighten_redeem_limits_handler(
     ctx: Context<SetParam>,
-    new_budget_usdc: u64,
+    args: RedeemLimitsArgs,
 ) -> Result<()> {
-    require!(
-        new_budget_usdc <= INSTANT_BUDGET_CEILING_USDC,
-        DominionError::AboveMaximum
-    );
-    ctx.accounts.config.instant_redeem_budget_usdc = new_budget_usdc;
-    Ok(())
-}
+    let config = &mut ctx.accounts.config;
 
-/// D10: the rolling-window length in seconds. Bounded [1 min, 7 days].
-pub fn set_instant_redeem_window_handler(
-    ctx: Context<SetParam>,
-    new_window_seconds: u32,
-) -> Result<()> {
     require!(
-        new_window_seconds >= INSTANT_WINDOW_MIN_SECONDS
-            && new_window_seconds <= INSTANT_WINDOW_MAX_SECONDS,
-        DominionError::AboveMaximum
+        redeem_limits_any_set(&args),
+        DominionError::RedeemLimitsAllNone
     );
-    ctx.accounts.config.instant_redeem_window_seconds = new_window_seconds;
-    Ok(())
-}
-
-/// D10: single-redeem size at/above which a redeem is forced to the T+3 queue.
-/// 0 = force ALL redemptions to queue (valid admin choice). No upper bound:
-/// the rolling-window budget is the real protection regardless of this value.
-pub fn set_large_redeem_threshold_handler(
-    ctx: Context<SetParam>,
-    new_threshold_usdc: u64,
-) -> Result<()> {
-    ctx.accounts.config.large_redeem_threshold_usdc = new_threshold_usdc;
-    Ok(())
-}
-
-/// D8: the queued-redemption delay (T+N) in seconds. Bounded [0, 30 days];
-/// 0 = claimable immediately after queueing (valid but unusual).
-pub fn set_redeem_queue_delay_handler(
-    ctx: Context<SetParam>,
-    new_delay_seconds: u32,
-) -> Result<()> {
+    validate_redeem_limits_ceilings(&args)?;
     require!(
-        new_delay_seconds <= REDEEM_QUEUE_DELAY_MAX_SECONDS,
-        DominionError::AboveMaximum
+        redeem_limits_all_tighten(
+            &args,
+            config.instant_redeem_budget_usdc,
+            config.instant_redeem_window_seconds,
+            config.large_redeem_threshold_usdc,
+            config.redeem_queue_delay_seconds,
+        ),
+        DominionError::LooseningRequiresTimelock
     );
-    ctx.accounts.config.redeem_queue_delay_seconds = new_delay_seconds;
+
+    if let Some(v) = args.instant_redeem_budget_usdc {
+        config.instant_redeem_budget_usdc = v;
+    }
+    if let Some(v) = args.instant_redeem_window_seconds {
+        config.instant_redeem_window_seconds = v;
+    }
+    if let Some(v) = args.large_redeem_threshold_usdc {
+        config.large_redeem_threshold_usdc = v;
+    }
+    if let Some(v) = args.redeem_queue_delay_seconds {
+        config.redeem_queue_delay_seconds = v;
+    }
     Ok(())
 }

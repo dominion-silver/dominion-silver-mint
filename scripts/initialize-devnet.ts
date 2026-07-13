@@ -18,8 +18,8 @@
  *      + TokenMetadata. Nothing else.
  *        - decimals            = 6           (V2 hard-pins 6)
  *        - mint_authority      = silv_mint_authority PDA   (set in phase 2)
- *        - freeze_authority    = None        (V2 requires None, NOT a PDA)
- *        - PermanentDelegate   = admin / Ops Squads vault  (== permanent_delegate_expected)
+ *        - freeze_authority    = admin / Ops Squads vault  (== freeze_authority_expected; compliance freeze lever)
+ *        - PermanentDelegate   = admin / Ops Squads vault  (== permanent_delegate_expected; seize/clawback lever)
  *        - MetadataPointer.authority        = silv_metadata_authority PDA
  *        - MetadataPointer.metadata_address = the mint itself (in-mint metadata)
  *        - TokenMetadata.update_authority   = silv_metadata_authority PDA
@@ -108,16 +108,17 @@ function loadKeypair(p: string): Keypair {
  *
  * Two phases because InitializeMetadata must be signed by the mint authority:
  *   Phase 1 (payer + mint keypair sign): create account, init the 3 extensions
- *     and the mint with mint_authority = payer TEMP and freeze_authority = None
- *     (passed as `null`), then InitializeMetadata (payer signs as mint auth).
- *     MetadataPointer.authority and TokenMetadata.update_authority are set
- *     DIRECTLY to the silv_metadata_authority PDA here - the MetadataPointer
- *     authority is NOT rotatable in Token-2022 (only its address is), so it
- *     must be correct at init.
+ *     and the mint with mint_authority = payer TEMP and freeze_authority = the
+ *     compliance multisig (launch spec 2026-07: Mark confirmed the freeze lever;
+ *     V2 requires freeze_authority == freeze_authority_expected, NOT None), then
+ *     InitializeMetadata (payer signs as mint auth). MetadataPointer.authority and
+ *     TokenMetadata.update_authority are set DIRECTLY to the silv_metadata_authority
+ *     PDA here - the MetadataPointer authority is NOT rotatable in Token-2022 (only
+ *     its address is), so it must be correct at init.
  *   Phase 2 (payer signs): rotate ONLY the mint authority to the
- *     silv_mint_authority PDA. Freeze authority is already None (nothing to
- *     rotate; V2 rejects a non-None freeze authority). Metadata authorities
- *     are already the metadata PDA.
+ *     silv_mint_authority PDA. Freeze authority is already the compliance multisig
+ *     (set at creation, nothing to rotate). Metadata authorities are already the
+ *     metadata PDA.
  */
 async function createSilvMint(
   connection: Connection,
@@ -126,6 +127,7 @@ async function createSilvMint(
   silvMintAuthorityPda: PublicKey,
   silvMetadataAuthorityPda: PublicKey,
   permanentDelegate: PublicKey,
+  freezeAuthority: PublicKey,
 ): Promise<void> {
   const decimals = 6; // V2 hard-pins 6 (math.rs assumes 6 for SILV + USDC).
   const metadata: TokenMetadata = {
@@ -175,12 +177,13 @@ async function createSilvMint(
       TOKEN_2022_PROGRAM_ID,
     ),
     // Mint: decimals 6, mint_authority = payer TEMP (rotated in phase 2),
-    // freeze_authority = None (V2 requires None - pass null, NOT a PDA).
+    // freeze_authority = the compliance multisig (launch spec 2026-07: Mark confirmed
+    // the freeze lever; must equal freezeAuthorityExpected passed to initialize()).
     createInitializeMintInstruction(
       silvMintKeypair.publicKey,
       decimals,
       payer.publicKey,
-      null,
+      freezeAuthority,
       TOKEN_2022_PROGRAM_ID,
     ),
     // TokenMetadata: update_authority = silv_metadata_authority PDA, mint =
@@ -312,10 +315,10 @@ async function main() {
   const silvMint = silvMintKeypair.publicKey;
   console.log("\n== Step 1: Create SILV Token-2022 mint (V2 shape) ==");
   console.log("SILV mint:", silvMint.toBase58());
-  console.log("PermanentDelegate (Ops vault):", admin.toBase58());
+  console.log("PermanentDelegate (seize/clawback, Ops vault):", admin.toBase58());
+  console.log("Freeze authority (compliance freeze lever, Ops vault):", admin.toBase58());
   console.log("Mint authority PDA:", silvMintAuthorityPda.toBase58());
   console.log("Metadata authority PDA:", silvMetadataAuthorityPda.toBase58());
-  console.log("Freeze authority: None");
   await createSilvMint(
     connection,
     deployer,
@@ -323,6 +326,7 @@ async function main() {
     silvMintAuthorityPda,
     silvMetadataAuthorityPda,
     admin,
+    admin, // freezeAuthority = Ops Squads (compliance multisig) on devnet
   );
 
   const usdcTreasuryAta = getAssociatedTokenAddressSync(
@@ -338,16 +342,17 @@ async function main() {
   // were replaced by a single numeric pyth_lazer_feed_id (SILV = 3304); the
   // program/storage/treasury are compile-time constants in the contract. All
   // Option B economic params default on-chain + are admin-tunable post-deploy.
-  // premium 10%/2% within ceilings (2000/1000); admin timelock 24h in [3600, 604800].
+  // launch spec 2026-07: premium 1.5%/2% within ceilings (300/500); admin timelock 24h in [86400, 604800].
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ix = await (program.methods as any)
     .initialize({
       admin,
       upgradeAuthorityInfo: upgradeSquads,
       permanentDelegateExpected: admin,
+      freezeAuthorityExpected: admin,
       complianceMode: false,
-      premiumBpsMint: 1000, // 10%
-      premiumBpsRedeem: 200, // 2%
+      premiumBpsMint: 150, // 1.5% (launch spec 2026-07; ceiling 300)
+      premiumBpsRedeem: 200, // 2% (ceiling 500)
       pythLazerFeedId: 3304, // SILV
       adminTimelockSeconds: 24 * 3600, // 24h
       maxGuardianCount: 5,

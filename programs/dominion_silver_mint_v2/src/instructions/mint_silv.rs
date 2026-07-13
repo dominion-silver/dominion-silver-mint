@@ -109,6 +109,14 @@ pub fn handler(
     // 1. Pause checks (immutable config reads; &mut taken after the oracle read
     //    so the Lazer verify accounts can be borrowed disjointly).
     require!(!ctx.accounts.config.paused, DominionError::Paused);
+    // Launch spec 2026-07: public direct mint is CLOSED at launch (the admin
+    // pre-mint is the only mint path; users buy on the DEX). This gate is before
+    // the oracle read, so the price oracle is dormant while public mint is closed.
+    // Public mint opens together with the KYC gate in Phase 1.
+    require!(
+        ctx.accounts.config.public_mint_enabled,
+        DominionError::PublicMintDisabled
+    );
     // 2. Mint-specific pause (D30 front-run defense). CODEX P2-01: gate on the
     // pending premium-mint proposal itself, not just `mint_paused_until`
     // (= executable_at). Otherwise, once the 24h elapses but before the admin

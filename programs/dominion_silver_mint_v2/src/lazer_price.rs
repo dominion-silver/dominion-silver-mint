@@ -16,7 +16,12 @@ pub const PRICE_SCALE: u32 = 9;
 /// `config.min_publishers` below the floor cannot weaken the guard. The
 /// OPERATING floor (Tier B, from live data) is `>= ` this and is what the
 /// caller passes in `params.min_publishers`.
-pub const MIN_PUBLISHERS_FLOOR_HARD: u16 = 1;
+// Launch spec 2026-07 (FIX D): raised 1 -> 2. This is the code-enforced floor,
+// applied via `max(config.min_publishers, FLOOR_HARD)` on every price read, so a
+// price backed by fewer than 2 distinct publishers is rejected regardless of the
+// configured operating value. The old floor of 1 gave zero margin (a single
+// publisher passed).
+pub const MIN_PUBLISHERS_FLOOR_HARD: u16 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LazerPolicyError {
@@ -255,14 +260,14 @@ mod tests {
         // floor, the policy enforces the floor (defense in depth).
         let now = 1_000_000;
         let mut pr = params(now);
-        pr.min_publishers = 0; // misconfigured below the hard floor (1)
+        pr.min_publishers = 0; // misconfigured below the hard floor (2)
         let mut p = silv(now);
-        p.publisher_count = 0;
+        p.publisher_count = 1; // below the hard floor of 2 -> still rejected
         assert_eq!(
             price_from_lazer(&p, &pr, 0),
             Err(LazerPolicyError::TooFewPublishers)
         );
-        p.publisher_count = 1; // meets the hard floor
+        p.publisher_count = 2; // meets the hard floor of 2
         assert!(price_from_lazer(&p, &pr, 0).is_ok());
     }
 

@@ -65,6 +65,7 @@ pub fn cancel_handler(ctx: Context<CancelTimelocked>, nonce: u64) -> Result<()> 
         }
         x if x == TimelockAction::SetPythFeed as u8 => Some(TimelockAction::SetPythFeed),
         x if x == TimelockAction::SetAdminTimelock as u8 => Some(TimelockAction::SetAdminTimelock),
+        x if x == TimelockAction::SetRedeemLimits as u8 => Some(TimelockAction::SetRedeemLimits),
         _ => None,
     };
 
@@ -83,6 +84,7 @@ pub fn cancel_handler(ctx: Context<CancelTimelocked>, nonce: u64) -> Result<()> 
             TimelockAction::SetComplianceMode => config.pending_compliance_nonce = None,
             TimelockAction::SetPythFeed => config.pending_pyth_feed_nonce = None,
             TimelockAction::SetAdminTimelock => config.pending_admin_timelock_nonce = None,
+            TimelockAction::SetRedeemLimits => config.pending_redeem_limits_nonce = None,
         }
     }
 

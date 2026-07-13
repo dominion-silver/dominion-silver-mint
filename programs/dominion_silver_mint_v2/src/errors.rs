@@ -76,9 +76,9 @@ pub enum DominionError {
     HourEpochMismatch,
     #[msg("Withdraw blocked while protocol is paused")]
     WithdrawBlockedWhilePaused,
-    #[msg("Timelock seconds below hard floor (3600)")]
+    #[msg("Timelock seconds below hard floor (86400)")]
     TimelockTooShort,
-    #[msg("Timelock seconds above hard ceiling (2592000)")]
+    #[msg("Timelock seconds above hard ceiling (604800)")]
     TimelockTooLong,
     #[msg("Guardian is in cooldown after recent removal")]
     GuardianInCooldown,
@@ -185,4 +185,24 @@ pub enum DominionError {
     LazerCarriedForward,
     #[msg("Lazer payload channel does not match the configured channel")]
     LazerWrongChannel,
+    // Launch spec 2026-07 (lean launch: pre-mint + hard cap, KYC/PoR deferred).
+    // APPEND ONLY - never reorder.
+    #[msg("Supply cap can only be lowered instantly; raising it is not available at launch")]
+    SupplyCapRaiseBlocked,
+    #[msg("Public direct mint is disabled (closed at launch; opens with KYC in Phase 1)")]
+    PublicMintDisabled,
+    #[msg("Inventory wallet is not set; call set_inventory_wallet first")]
+    InventoryWalletNotSet,
+    #[msg("Pre-mint destination is not owned by the configured inventory wallet")]
+    InvalidInventoryDestination,
+    #[msg("Enabling redemptions is blocked at launch; it opens with the Phase 1 KYC/redeem upgrade")]
+    RedemptionsEnableBlocked,
+    #[msg("SILV mint freeze_authority does not match config.freeze_authority_expected")]
+    SilvFreezeAuthorityMismatch,
+    // FIX A (launch spec 2026-07): loosen-slow / tighten-fast on the redeem
+    // throttles. APPEND ONLY - never reorder.
+    #[msg("Loosening a redeem throttle requires the 24h timelock (propose_set_redeem_limits); only tightening is instant")]
+    LooseningRequiresTimelock,
+    #[msg("At least one redeem-limit field must be provided")]
+    RedeemLimitsAllNone,
 }

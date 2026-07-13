@@ -477,6 +477,180 @@ pub struct OracleGuardsArgs {
     pub min_publishers: Option<u16>,
 }
 
+// === FIX A (launch spec 2026-07): loosen-slow / tighten-fast redeem throttles ===
+// The head-dev threat-model fix for the "one-block drain": a compromised admin
+// could strip every redemption rate-limit in a single instant tx, then redeem
+// pre-held SILV at the honest price and empty the treasury before a guardian
+// reacts. The fix (CORRECTION-2 clean shape):
+//   - TIGHTENING (making a throttle safer) stays INSTANT, via ONE entrypoint
+//     `emergency_tighten_redeem_limits` (caps.rs). One place for all direction
+//     logic, so the counter-intuitive window direction can't be gotten wrong in
+//     scattered setters.
+//   - LOOSENING (any direction, in practice raising the drain capacity) goes
+//     through this 24h-timelocked `SetRedeemLimits` action (guardian-cancellable).
+// The four throttles here are the ONLY ones in scope. max_silv_supply
+// (raise-blocked) and redemptions_enabled (enable-blocked at launch) keep their
+// stricter dedicated instant setters and are intentionally NOT loosenable here.
+#[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
+pub struct RedeemLimitsArgs {
+    pub instant_redeem_budget_usdc: Option<u64>,
+    pub instant_redeem_window_seconds: Option<u32>,
+    pub large_redeem_threshold_usdc: Option<u64>,
+    pub redeem_queue_delay_seconds: Option<u32>,
+}
+
+/// True if at least one field is provided (else the call is a pure no-op).
+pub fn redeem_limits_any_set(args: &RedeemLimitsArgs) -> bool {
+    args.instant_redeem_budget_usdc.is_some()
+        || args.instant_redeem_window_seconds.is_some()
+        || args.large_redeem_threshold_usdc.is_some()
+        || args.redeem_queue_delay_seconds.is_some()
+}
+
+/// Pure directional check for the INSTANT tighten path. Every PROVIDED field must
+/// move its throttle in the SAFE (tighten) direction vs the current config. The
+/// safety metric is max sustained drain: budget / window. Tighten = shrink it.
+///   - budget:      new <= cur   (smaller instant budget = less drainable)
+///   - window:      new >= cur   (LONGER window lowers budget/window drain rate;
+///                                shortening it can also early-reset a near-
+///                                exhausted budget, so shrink = LOOSEN)
+///   - threshold:   new <= cur   (lower = MORE redemptions forced to the T+3 queue)
+///   - queue_delay: new >= cur   (longer T+N wait before a queued claim pays out)
+/// A field left None is unchanged (trivially safe). Unit-tested below.
+pub fn redeem_limits_all_tighten(
+    args: &RedeemLimitsArgs,
+    cur_budget: u64,
+    cur_window: u32,
+    cur_threshold: u64,
+    cur_queue_delay: u32,
+) -> bool {
+    if let Some(v) = args.instant_redeem_budget_usdc {
+        if v > cur_budget {
+            return false;
+        }
+    }
+    if let Some(v) = args.instant_redeem_window_seconds {
+        if v < cur_window {
+            return false;
+        }
+    }
+    if let Some(v) = args.large_redeem_threshold_usdc {
+        if v > cur_threshold {
+            return false;
+        }
+    }
+    if let Some(v) = args.redeem_queue_delay_seconds {
+        if v < cur_queue_delay {
+            return false;
+        }
+    }
+    true
+}
+
+/// Fat-finger CEILINGS for the redeem throttles, mirroring the bounds the
+/// (removed) individual instant setters enforced. Applied on the instant tighten
+/// path AND on both sides of the timelocked path (propose pre-validates, execute
+/// binds). `large_redeem_threshold_usdc` has no ceiling (0 = force ALL to the
+/// queue; the rolling-window budget is the real protection regardless).
+pub fn validate_redeem_limits_ceilings(args: &RedeemLimitsArgs) -> Result<()> {
+    if let Some(v) = args.instant_redeem_budget_usdc {
+        require!(
+            v <= INSTANT_BUDGET_CEILING_USDC,
+            DominionError::AboveMaximum
+        );
+    }
+    if let Some(v) = args.instant_redeem_window_seconds {
+        require!(
+            v >= INSTANT_WINDOW_MIN_SECONDS && v <= INSTANT_WINDOW_MAX_SECONDS,
+            DominionError::AboveMaximum
+        );
+    }
+    if let Some(v) = args.redeem_queue_delay_seconds {
+        require!(
+            v <= REDEEM_QUEUE_DELAY_MAX_SECONDS,
+            DominionError::AboveMaximum
+        );
+    }
+    Ok(())
+}
+
+// === Execute SetRedeemLimits (FIX A loosen path) ===
+
+#[derive(Accounts)]
+#[instruction(nonce: u64)]
+pub struct ExecuteRedeemLimits<'info> {
+    #[account(mut, seeds = [CONFIG_SEED], bump, has_one = admin)]
+    pub config: Account<'info, ConfigAccount>,
+    pub admin: Signer<'info>,
+    #[account(
+        mut, close = rent_recipient,
+        seeds = [TIMELOCK_SEED, &nonce.to_le_bytes()], bump,
+        constraint = !timelock.cancelled @ DominionError::TimelockActionCancelled,
+        constraint = timelock.executed_at.is_none() @ DominionError::TimelockActionAlreadyExecuted,
+    )]
+    pub timelock: Account<'info, TimelockQueueAccount>,
+    /// CHECK: rent recipient.
+    #[account(mut, address = timelock.rent_payer)]
+    pub rent_recipient: AccountInfo<'info>,
+}
+
+pub fn execute_set_redeem_limits_handler(
+    ctx: Context<ExecuteRedeemLimits>,
+    nonce: u64,
+) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+    let tl = &mut ctx.accounts.timelock;
+    let now = Clock::get()?.unix_timestamp;
+
+    require!(tl.nonce == nonce, DominionError::NonceMismatch);
+    require!(
+        tl.action_disc == TimelockAction::SetRedeemLimits as u8,
+        DominionError::NonceMismatch
+    );
+    require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
+
+    let args = RedeemLimitsArgs::try_from_slice(&tl.action_data)
+        .map_err(|_| error!(DominionError::SerializationFailure))?;
+
+    // Binding re-validation of the fat-finger CEILINGS at execute (defense in
+    // depth vs propose). Direction is intentionally NOT re-checked here: a value
+    // that was a loosen at propose may be a no-op or even a tighten by execute if
+    // an instant `emergency_tighten_redeem_limits` ran during the 24h window;
+    // re-checking direction would then spuriously fail a legitimately queued
+    // loosen. The whole point of this path is that a loosen is allowed - after
+    // the 24h delay + guardian-cancel window. (CORRECTION-2.)
+    validate_redeem_limits_ceilings(&args)?;
+
+    if let Some(v) = args.instant_redeem_budget_usdc {
+        config.instant_redeem_budget_usdc = v;
+    }
+    if let Some(v) = args.instant_redeem_window_seconds {
+        config.instant_redeem_window_seconds = v;
+    }
+    if let Some(v) = args.large_redeem_threshold_usdc {
+        config.large_redeem_threshold_usdc = v;
+    }
+    if let Some(v) = args.redeem_queue_delay_seconds {
+        config.redeem_queue_delay_seconds = v;
+    }
+
+    // NO auto-pause (unlike oracle-guards / pyth-feed / compliance). Those affect
+    // the PRICE and must never go live silently after the window; the redeem
+    // throttles are rate-limits, and a deliberate loosen already paid the 24h
+    // delay + guardian-cancel cost. (Head-dev FIX A: "recommend NO here".)
+
+    config.pending_redeem_limits_nonce = None;
+    config.active_proposal_count = config.active_proposal_count.saturating_sub(1);
+    tl.executed_at = Some(now);
+
+    emit!(AdminActionExecuted {
+        nonce,
+        action_disc: tl.action_disc,
+        executor: ctx.accounts.admin.key(),
+    });
+    Ok(())
+}
+
 // === P2-05: per-field metadata args (Option<String> + bounds) ===
 // `None` for a field means "leave it unchanged" (the execute path skips the
 // CPI for that field, so it cannot be blanked). A provided field must be
@@ -853,4 +1027,118 @@ fn decode_u64(data: &[u8]) -> Result<u64> {
             .try_into()
             .map_err(|_| error!(DominionError::MalformedActionData))?,
     ))
+}
+
+#[cfg(test)]
+mod fix_a_tests {
+    // Pure directional logic for the instant tighten path (FIX A). The
+    // integration behavior (propose->wait->execute, guardian-cancel, single-active
+    // nonce) is covered by the litesvm + TS e2e in the off-chain batch; these host
+    // tests pin the direction rules, which are the error-prone core (esp. the
+    // counter-intuitive window direction).
+    use super::{redeem_limits_all_tighten, redeem_limits_any_set, RedeemLimitsArgs};
+
+    // Baseline current config for the checks below.
+    const CUR_BUDGET: u64 = 20_000_000_000; // $20k
+    const CUR_WINDOW: u32 = 86_400; // 24h
+    const CUR_THRESHOLD: u64 = 5_000_000_000; // $5k
+    const CUR_DELAY: u32 = 259_200; // T+3d
+
+    fn tighten(args: &RedeemLimitsArgs) -> bool {
+        redeem_limits_all_tighten(args, CUR_BUDGET, CUR_WINDOW, CUR_THRESHOLD, CUR_DELAY)
+    }
+
+    #[test]
+    fn none_fields_is_no_op_and_trivially_tighten() {
+        let a = RedeemLimitsArgs::default();
+        assert!(!redeem_limits_any_set(&a));
+        assert!(tighten(&a)); // vacuously safe
+    }
+
+    #[test]
+    fn lowering_budget_is_tighten_raising_is_loosen() {
+        let lower = RedeemLimitsArgs {
+            instant_redeem_budget_usdc: Some(CUR_BUDGET - 1),
+            ..Default::default()
+        };
+        let equal = RedeemLimitsArgs {
+            instant_redeem_budget_usdc: Some(CUR_BUDGET),
+            ..Default::default()
+        };
+        let higher = RedeemLimitsArgs {
+            instant_redeem_budget_usdc: Some(CUR_BUDGET + 1),
+            ..Default::default()
+        };
+        assert!(tighten(&lower));
+        assert!(tighten(&equal)); // equal = no change = safe
+        assert!(!tighten(&higher)); // raising drain capacity = loosen
+    }
+
+    #[test]
+    fn window_direction_is_inverted_lengthen_is_tighten() {
+        // The footgun: LONGER window = safer (lower drain rate). Shortening is the
+        // loosen that must route through the timelock.
+        let longer = RedeemLimitsArgs {
+            instant_redeem_window_seconds: Some(CUR_WINDOW + 1),
+            ..Default::default()
+        };
+        let shorter = RedeemLimitsArgs {
+            instant_redeem_window_seconds: Some(CUR_WINDOW - 1),
+            ..Default::default()
+        };
+        assert!(tighten(&longer));
+        assert!(!tighten(&shorter));
+    }
+
+    #[test]
+    fn lowering_threshold_is_tighten_raising_is_loosen() {
+        // Lower threshold => MORE redemptions forced to the slow T+3 queue = safer.
+        let lower = RedeemLimitsArgs {
+            large_redeem_threshold_usdc: Some(CUR_THRESHOLD - 1),
+            ..Default::default()
+        };
+        let higher = RedeemLimitsArgs {
+            large_redeem_threshold_usdc: Some(CUR_THRESHOLD + 1),
+            ..Default::default()
+        };
+        assert!(tighten(&lower));
+        assert!(!tighten(&higher));
+    }
+
+    #[test]
+    fn lengthening_queue_delay_is_tighten_shortening_is_loosen() {
+        let longer = RedeemLimitsArgs {
+            redeem_queue_delay_seconds: Some(CUR_DELAY + 1),
+            ..Default::default()
+        };
+        let shorter = RedeemLimitsArgs {
+            redeem_queue_delay_seconds: Some(CUR_DELAY - 1),
+            ..Default::default()
+        };
+        assert!(tighten(&longer));
+        assert!(!tighten(&shorter));
+    }
+
+    #[test]
+    fn any_single_loosen_field_fails_the_whole_batch() {
+        // budget tighten + window loosen (shorten) => the whole call is a loosen.
+        let mixed = RedeemLimitsArgs {
+            instant_redeem_budget_usdc: Some(CUR_BUDGET - 1),
+            instant_redeem_window_seconds: Some(CUR_WINDOW - 1),
+            ..Default::default()
+        };
+        assert!(redeem_limits_any_set(&mixed));
+        assert!(!tighten(&mixed));
+    }
+
+    #[test]
+    fn all_four_tighten_together_passes() {
+        let all = RedeemLimitsArgs {
+            instant_redeem_budget_usdc: Some(CUR_BUDGET - 1),
+            instant_redeem_window_seconds: Some(CUR_WINDOW + 1),
+            large_redeem_threshold_usdc: Some(CUR_THRESHOLD - 1),
+            redeem_queue_delay_seconds: Some(CUR_DELAY + 1),
+        };
+        assert!(tighten(&all));
+    }
 }
