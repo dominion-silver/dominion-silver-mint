@@ -10,7 +10,7 @@ skip-lint = false
 dominion_silver_mint = "GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX"
 
 [programs.devnet]
-dominion_silver_mint = "2ujQgKtxvaU9Ax3jL22374SypSyTR9J4yztqYkX23oMT"
+dominion_silver_mint = "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W"
 
 [programs.mainnet]
 dominion_silver_mint = "GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX"

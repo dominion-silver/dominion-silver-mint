@@ -36,7 +36,7 @@ use instructions::*;
 // so the old V2 config at GDN5ktEm88... is incompatible -> another fresh deploy
 // under a new ID. Old V2/Core devnet id (retired): GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX.
 // Keypair: target/deploy/dominion_silver_mint_v2-keypair.json (gitignored).
-declare_id!("2ujQgKtxvaU9Ax3jL22374SypSyTR9J4yztqYkX23oMT");
+declare_id!("AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W");
 
 #[program]
 pub mod dominion_silver_mint {
