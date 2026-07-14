@@ -270,9 +270,7 @@ export function WalletAuthGate({ children }: { children: ReactNode }) {
     return (
       <Shell title="Not authorized">
         <p className="mb-2 text-sm text-muted">
-          This wallet controls its key, but it is not the protocol admin, a
-          guardian, or a member of the Ops multisig. The admin console is
-          restricted to those roles.
+          This wallet does not have admin rights.
         </p>
         <p className="mb-6 break-all font-mono text-xs text-muted">{pk}</p>
         <button
