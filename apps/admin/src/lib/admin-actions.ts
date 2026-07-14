@@ -87,6 +87,15 @@ export async function fetchOnchainAdmin(
   return new PublicKey(c.admin);
 }
 
+/** Fetch the full decoded config account (for showing current values in the
+ *  Actions UI). Returns the raw Anchor-decoded account (camelCase fields;
+ *  BN for u64/i64 fields, raw bytes/PublicKey for pubkeys). */
+export async function fetchConfig(connection: Connection): Promise<any> {
+  return (getProgram(connection).account as any).configAccount.fetch(
+    configPda(),
+  );
+}
+
 async function nextTimelockNonce(connection: Connection): Promise<bigint> {
   const c: any = await (getProgram(connection).account as any).configAccount.fetch(
     configPda(),

@@ -1,5 +1,7 @@
 "use client";
 
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
 // Wired admin actions tab. Each action builds the dominion instruction
 // (admin-actions.ts), wraps it into a Squads proposal (squads.ts), and the
 // connected wallet (an Ops Squads member) signs + sends. Guardian-only
@@ -80,6 +82,10 @@ interface ActionDesc {
   mode: "squads" | "direct";
   fields: Field[];
   tip: string;
+  /** When present and the config snapshot is loaded, renders the current
+   *  on-chain value near the label so the operator knows what they're changing.
+   *  `c` is the decoded config account (any; camelCase fields, BN for u64/i64). */
+  current?: (c: any) => string;
   build: (
     ctx: actions.BuildCtx,
     p: Record<string, string>,
@@ -102,6 +108,7 @@ const ACTIONS: ActionDesc[] = [
     mode: "squads",
     fields: [{ name: "on", label: "Enabled", kind: "bool" }],
     tip: "Master switch for user redemptions.",
+    current: (c) => (c.redemptionsEnabled ? "on" : "off"),
     build: (c, p) => actions.setRedemptionsEnabled(c, p.on === "true"),
   },
   {
@@ -111,6 +118,7 @@ const ACTIONS: ActionDesc[] = [
     mode: "squads",
     fields: [{ name: "oz", label: "Max supply (oz)", kind: "silv" }],
     tip: "Hard ceiling on total SILV. Raise only with matching physical silver.",
+    current: (c) => `${Number(c.maxSilvSupply) / 1e6} oz`,
     build: (c, p) => actions.setMaxSilvSupply(c, parseAtomic(p.oz, 6)),
   },
   {
@@ -125,6 +133,8 @@ const ACTIONS: ActionDesc[] = [
       { name: "delay", label: "Queue delay s - UP only (blank=keep)", kind: "int" },
     ],
     tip: "Instant TIGHTEN only: budget DOWN, window UP, threshold DOWN, queue delay UP. LOOSENING in any direction requires the 24h timelock (see 'Propose redeem limits' under Delayed). Leave a field blank to keep it.",
+    current: (c) =>
+      `budget ${Number(c.instantRedeemBudgetUsdc) / 1e6} USDC · window ${c.instantRedeemWindowSeconds}s · threshold ${Number(c.largeRedeemThresholdUsdc) / 1e6} USDC · delay ${c.redeemQueueDelaySeconds}s`,
     build: (c, p) => {
       const args = {
         instantRedeemBudgetUsdc: optAtomic(p.budget, 6),
@@ -149,6 +159,12 @@ const ACTIONS: ActionDesc[] = [
     mode: "squads",
     fields: [{ name: "wallet", label: "Inventory wallet (pubkey)", kind: "pubkey" }],
     tip: "Set the inventory wallet. admin_premint mints into this owner's Token-2022 SILV ATA.",
+    current: (c) => {
+      const key = new PublicKey(c.inventoryWallet);
+      if (key.equals(PublicKey.default)) return "unset";
+      const s = key.toBase58();
+      return `${s.slice(0, 4)}..${s.slice(-4)}`;
+    },
     build: (c, p) => actions.setInventoryWallet(c, pk(p.wallet)),
   },
   {
@@ -158,6 +174,7 @@ const ACTIONS: ActionDesc[] = [
     mode: "squads",
     fields: [{ name: "usd", label: "Min float (USDC)", kind: "usdc" }],
     tip: "Minimum USDC the admin must leave in the treasury.",
+    current: (c) => `${Number(c.treasuryMinFloatUsdc) / 1e6} USDC`,
     build: (c, p) =>
       actions.proposeSetTreasuryMinFloat(c, parseAtomic(p.usd, 6)),
   },
@@ -168,6 +185,7 @@ const ACTIONS: ActionDesc[] = [
     mode: "squads",
     fields: [{ name: "bps", label: "Premium (bps, 0..2000)", kind: "bps" }],
     tip: "Markup users pay to mint.",
+    current: (c) => `${c.premiumBpsMint / 100}%`,
     build: (c, p) =>
       actions.proposeSetPremiumMint(c, parseUint(p.bps, U16)),
   },
@@ -178,6 +196,7 @@ const ACTIONS: ActionDesc[] = [
     mode: "squads",
     fields: [{ name: "bps", label: "Fee (bps, 0..1000)", kind: "bps" }],
     tip: "Fee applied when users redeem.",
+    current: (c) => `${c.premiumBpsRedeem / 100}%`,
     build: (c, p) =>
       actions.proposeSetPremiumRedeem(c, parseUint(p.bps, U16)),
   },
@@ -203,6 +222,7 @@ const ACTIONS: ActionDesc[] = [
       { name: "secs", label: "Delay (3600..604800 s)", kind: "int" },
     ],
     tip: "Change the timelock duration itself.",
+    current: (c) => `${c.adminTimelockSeconds}s`,
     build: (c, p) =>
       actions.proposeSetAdminTimelock(c, parseUint(p.secs, U32)),
   },
@@ -213,6 +233,7 @@ const ACTIONS: ActionDesc[] = [
     mode: "squads",
     fields: [{ name: "on", label: "Compliance on", kind: "bool" }],
     tip: "Flip the compliance flag (also auto-pauses).",
+    current: (c) => (c.complianceMode ? "on" : "off"),
     build: (c, p) => actions.proposeSetComplianceMode(c, p.on === "true"),
   },
   {
@@ -257,6 +278,7 @@ const ACTIONS: ActionDesc[] = [
       { name: "feed", label: "Lazer feed id (u32, SILV = 3304)", kind: "int" },
     ],
     tip: "Change the Pyth Lazer feed id. The Lazer program is a fixed contract constant (no receiver arg).",
+    current: (c) => `feed ${c.pythLazerFeedId}`,
     build: (c, p) => actions.proposeSetPythFeed(c, parseUint(p.feed, U32)),
   },
   {
@@ -275,6 +297,8 @@ const ACTIONS: ActionDesc[] = [
       { name: "minpub", label: "Min publishers (blank=keep)", kind: "optint" },
     ],
     tip: "Change oracle guards. Leave a field blank to keep its value. Raising Min publishers (>=2) is the mandatory pre-unpause GO-gate step.",
+    current: (c) =>
+      `staleness ${c.maxStalenessSeconds}s · minPub ${c.minPublishers} · conf ${c.maxConfidenceBps}bps`,
     build: (c, p) =>
       actions.proposeSetOracleGuards(c, {
         stalenessSeconds: optNum(p.stale, U32),
@@ -299,6 +323,8 @@ const ACTIONS: ActionDesc[] = [
       { name: "delay", label: "Queue delay s (blank=keep)", kind: "int" },
     ],
     tip: "24h-timelocked path to LOOSEN redeem limits (budget up, window down, threshold up, queue delay down). To tighten instantly instead, use 'Emergency tighten redeem limits' under Instant. Leave a field blank to keep it.",
+    current: (c) =>
+      `budget ${Number(c.instantRedeemBudgetUsdc) / 1e6} USDC · window ${c.instantRedeemWindowSeconds}s · threshold ${Number(c.largeRedeemThresholdUsdc) / 1e6} USDC · delay ${c.redeemQueueDelaySeconds}s`,
     build: (c, p) => {
       const args = {
         instantRedeemBudgetUsdc: optAtomic(p.budget, 6),
@@ -384,6 +410,7 @@ const ACTIONS: ActionDesc[] = [
     mode: "squads",
     fields: [],
     tip: "Halt mint + redeem. Creates an Ops proposal.",
+    current: (c) => (c.paused ? "PAUSED" : "live"),
     build: (c) => actions.pauseAsAdmin(c),
   },
   {
@@ -394,6 +421,7 @@ const ACTIONS: ActionDesc[] = [
     mode: "direct",
     fields: [],
     tip: "Connected guardian key pauses immediately, single signature.",
+    current: (c) => (c.paused ? "PAUSED" : "live"),
     build: (c, _p, me) => actions.pauseAsGuardian(c, me),
   },
   {
@@ -403,6 +431,7 @@ const ACTIONS: ActionDesc[] = [
     mode: "squads",
     fields: [],
     tip: "Resume after a pause (admin only).",
+    current: (c) => (c.paused ? "PAUSED" : "live"),
     build: (c) => actions.unpause(c),
   },
   {
@@ -486,6 +515,9 @@ export function AdminActions() {
   );
   const [pending, setPending] = useState<ProposalView[]>([]);
   const [adminMismatch, setAdminMismatch] = useState<boolean | null>(null);
+  const [activeGroup, setActiveGroup] =
+    useState<ActionDesc["group"]>("Instant");
+  const [cfg, setCfg] = useState<any>(null);
   const opsConfigured = isConfigured("ops");
   const squadsBlocked = !opsConfigured || adminMismatch === true;
 
@@ -511,6 +543,27 @@ export function AdminActions() {
     };
   }, [connection, opsConfigured]);
 
+  // One-time fetch of the on-chain config snapshot so each action can show its
+  // current value. Refreshed on the same 12s cadence as the pending panel so
+  // values stay live after an action lands. Errors are ignored (read-only).
+  useEffect(() => {
+    let alive = true;
+    const load = async () => {
+      try {
+        const c = await actions.fetchConfig(connection);
+        if (alive) setCfg(c);
+      } catch {
+        /* read-only; ignore transient RPC errors */
+      }
+    };
+    load();
+    const i = setInterval(load, 12_000);
+    return () => {
+      alive = false;
+      clearInterval(i);
+    };
+  }, [connection]);
+
   const refreshPending = useCallback(async () => {
     if (!opsConfigured) return;
     try {
@@ -528,6 +581,18 @@ export function AdminActions() {
 
   const setField = (aid: string, fname: string, v: string) =>
     setParams((s) => ({ ...s, [aid]: { ...(s[aid] ?? {}), [fname]: v } }));
+
+  // Current on-chain value for an action's card. null => don't render the row.
+  // "…" while the snapshot is still loading (or a field can't be read).
+  const currentValue = (a: ActionDesc): string | null => {
+    if (!a.current) return null;
+    if (!cfg) return "…";
+    try {
+      return a.current(cfg);
+    } catch {
+      return "…";
+    }
+  };
 
   async function runAction(a: ActionDesc) {
     if (!publicKey) {
@@ -650,33 +715,52 @@ export function AdminActions() {
           is sent.
         </p>
 
-        {GROUPS.map((g) => (
-          <div key={g} className="mb-6 last:mb-0">
-            <div className="mb-2 text-xs uppercase tracking-wide text-muted">
+        <nav className="mb-5 flex flex-wrap gap-1 border-b border-border">
+          {GROUPS.map((g) => (
+            <button
+              key={g}
+              onClick={() => setActiveGroup(g)}
+              className={`-mb-px border-b-2 px-4 py-2 text-sm transition ${
+                activeGroup === g
+                  ? "border-accent font-semibold text-white"
+                  : "border-transparent text-muted hover:text-white"
+              }`}
+            >
               {g}
+            </button>
+          ))}
+        </nav>
+
+        <div className="mb-6">
+          {activeGroup === "Delayed (24h)" && (
+            <div className="mb-3 rounded-md border border-border bg-bg/40 p-2 text-xs text-muted">
+              Stage these one at a time: fully execute one proposal (create,
+              approve, then execute) before creating the next. Two delayed
+              proposals created together would both claim the same timelock
+              slot and the second would fail after the first executes.
             </div>
-            {g === "Delayed (24h)" && (
-              <div className="mb-3 rounded-md border border-border bg-bg/40 p-2 text-xs text-muted">
-                Stage these one at a time: fully execute one proposal (create,
-                approve, then execute) before creating the next. Two delayed
-                proposals created together would both claim the same timelock
-                slot and the second would fail after the first executes.
-              </div>
-            )}
-            <div className="grid gap-3 md:grid-cols-2">
-              {ACTIONS.filter((a) => a.group === g).map((a) => (
+          )}
+          <div className="grid gap-3 md:grid-cols-2">
+            {ACTIONS.filter((a) => a.group === activeGroup).map((a) => {
+              const cur = currentValue(a);
+              return (
                 <div
                   key={a.id}
                   className={`rounded-md border p-3 ${
                     a.danger ? "border-danger/60" : "border-border"
                   }`}
                 >
-                  <div className="mb-1 flex items-center justify-between">
+                  <div className="mb-1 flex items-center justify-between gap-2">
                     <span className="text-sm font-medium">{a.label}</span>
                     <span className="text-[10px] uppercase text-muted">
                       {a.mode === "squads" ? "Squads" : "Direct"}
                     </span>
                   </div>
+                  {cur !== null && (
+                    <div className="mb-2 break-all text-[11px] text-muted">
+                      current: {cur}
+                    </div>
+                  )}
                   <div className="mb-2 text-[11px] leading-snug text-muted">
                     {a.tip}
                   </div>
@@ -739,10 +823,10 @@ export function AdminActions() {
                         : "Sign + send now"}
                   </button>
                 </div>
-              ))}
-            </div>
+              );
+            })}
           </div>
-        ))}
+        </div>
       </div>
 
       <div className="rounded-xl border border-border bg-card p-6">

@@ -2,8 +2,11 @@
 
 import { ReactNode, useCallback, useEffect, useState } from "react";
 import dynamic from "next/dynamic";
-import { useWallet } from "@solana/wallet-adapter-react";
+import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
+import { fetchOnchainAdmin } from "@/lib/admin-actions";
+import { guardianPda } from "@/lib/pdas";
+import { isActiveMember, isConfigured } from "@/lib/squads";
 
 // SSR-disabled (wallet state is client-only) -> no hydration mismatch.
 const WalletMultiButton = dynamic(
@@ -76,9 +79,16 @@ function verifySig(message: string, sigHex: string, pubkey: string): boolean {
 
 export function WalletAuthGate({ children }: { children: ReactNode }) {
   const { publicKey, signMessage, connected, disconnect } = useWallet();
+  const { connection } = useConnection();
   const [verifiedPk, setVerifiedPk] = useState<string | null>(null);
   const [signing, setSigning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Authorization (identity), separate from ownership proof: is THIS wallet
+  // allowed to see the console at all? Fail-closed. Allowed = the on-chain
+  // config.admin, OR a registered guardian, OR (if an Ops Squads is configured)
+  // an active member of it. A random wallet that merely proved ownership is NOT
+  // allowed to view the console.
+  const [authz, setAuthz] = useState<"checking" | "ok" | "denied">("checking");
 
   const pk = publicKey?.toBase58() ?? null;
   // Gate on the pubkey the verification belongs to, not a bare boolean, so a
@@ -147,6 +157,45 @@ export function WalletAuthGate({ children }: { children: ReactNode }) {
     }
   }, [pk, signMessage]);
 
+  // Identity authorization: only after ownership is proven, and re-run per pk.
+  // Fail-closed: any error or non-match => denied.
+  useEffect(() => {
+    if (!verified || !pk) {
+      setAuthz("checking");
+      return;
+    }
+    let alive = true;
+    setAuthz("checking");
+    (async () => {
+      try {
+        const key = new PublicKey(pk);
+        // 1) the on-chain admin (covers a direct-admin deploy, e.g. devnet).
+        const admin = await fetchOnchainAdmin(connection);
+        if (admin.equals(key)) {
+          if (alive) setAuthz("ok");
+          return;
+        }
+        // 2) a registered guardian (guardian PDA account exists).
+        const gInfo = await connection.getAccountInfo(guardianPda(key));
+        if (gInfo) {
+          if (alive) setAuthz("ok");
+          return;
+        }
+        // 3) an active member of the configured Ops Squads (mainnet model).
+        if (isConfigured("ops") && (await isActiveMember(connection, "ops", key))) {
+          if (alive) setAuthz("ok");
+          return;
+        }
+        if (alive) setAuthz("denied");
+      } catch {
+        if (alive) setAuthz("denied"); // fail-closed
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [verified, pk, connection]);
+
   // Not connected.
   if (!connected || !pk) {
     return (
@@ -199,6 +248,38 @@ export function WalletAuthGate({ children }: { children: ReactNode }) {
           className="mt-6 block text-xs text-muted underline hover:text-white"
         >
           Disconnect
+        </button>
+      </Shell>
+    );
+  }
+
+  // Ownership proven; now checking identity authorization.
+  if (authz === "checking") {
+    return (
+      <Shell title="Checking authorization…">
+        <p className="text-sm text-muted">
+          Verifying this wallet is the admin, a guardian, or an Ops multisig
+          member.
+        </p>
+      </Shell>
+    );
+  }
+
+  // Ownership proven but this wallet is NOT authorized to view the console.
+  if (authz === "denied") {
+    return (
+      <Shell title="Not authorized">
+        <p className="mb-2 text-sm text-muted">
+          This wallet controls its key, but it is not the protocol admin, a
+          guardian, or a member of the Ops multisig. The admin console is
+          restricted to those roles.
+        </p>
+        <p className="mb-6 break-all font-mono text-xs text-muted">{pk}</p>
+        <button
+          onClick={() => disconnect().catch(() => {})}
+          className="rounded-md border border-border px-6 py-3 text-sm transition hover:bg-white/5"
+        >
+          Disconnect and switch wallet
         </button>
       </Shell>
     );
