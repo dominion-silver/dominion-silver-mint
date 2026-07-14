@@ -105,6 +105,12 @@ async function nextTimelockNonce(connection: Connection): Promise<bigint> {
 
 export interface BuildCtx {
   connection: Connection;
+  /** Direct-admin override: when the connected wallet IS the on-chain
+   *  config.admin (a plain wallet, not the Ops Squads vault), pass it here so
+   *  the admin-role account/signer is the connected key and the instruction is
+   *  signed DIRECTLY (no Squads wrapper). When absent, builders fall back to
+   *  adminAuthority() (the Ops vault PDA) exactly as before. */
+  admin?: PublicKey;
 }
 type Ix = Promise<TransactionInstruction[]>;
 const one = (ix: TransactionInstruction): TransactionInstruction[] => [ix];
@@ -115,7 +121,7 @@ const one = (ix: TransactionInstruction): TransactionInstruction[] => [ix];
 async function instant(c: BuildCtx, method: string, arg: any): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     [method](arg)
-    .accountsPartial({ admin: adminAuthority() })
+    .accountsPartial({ admin: c.admin ?? adminAuthority() })
     .instruction();
   return one(ix);
 }
@@ -184,7 +190,7 @@ export async function adminPremint(
   const ix = await (getProgram(c.connection).methods as any)
     .adminPremint(new BN(amount.toString()))
     .accountsPartial({
-      admin: adminAuthority(),
+      admin: c.admin ?? adminAuthority(),
       silvMint: SILV_MINT,
       inventorySilvAta,
       silvMintAuthority: silvMintAuthorityPda(),
@@ -205,7 +211,7 @@ export async function depositUsdc(
   const ix = await (getProgram(c.connection).methods as any)
     .depositUsdc(new BN(amount.toString()))
     .accountsPartial({
-      user: adminAuthority(),
+      user: c.admin ?? adminAuthority(),
       usdcMint: USDC_MINT,
       usdcTreasury: treasuryUsdcAta(),
       userUsdcAta: sourceUsdcAta,
@@ -222,8 +228,8 @@ export async function addGuardian(c: BuildCtx, g: PublicKey): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .addGuardian(g)
     .accountsPartial({
-      admin: adminAuthority(),
-      payer: adminAuthority(),
+      admin: c.admin ?? adminAuthority(),
+      payer: c.admin ?? adminAuthority(),
       systemProgram: SystemProgram.programId,
     })
     .instruction();
@@ -232,7 +238,7 @@ export async function addGuardian(c: BuildCtx, g: PublicKey): Ix {
 export async function removeGuardian(c: BuildCtx, g: PublicKey): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .removeGuardian(g)
-    .accountsPartial({ admin: adminAuthority() })
+    .accountsPartial({ admin: c.admin ?? adminAuthority() })
     .instruction();
   return one(ix);
 }
@@ -244,7 +250,7 @@ export async function removeGuardian(c: BuildCtx, g: PublicKey): Ix {
 export async function pauseAsAdmin(c: BuildCtx): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .pause()
-    .accountsPartial({ signer: adminAuthority(), guardian: null })
+    .accountsPartial({ signer: c.admin ?? adminAuthority(), guardian: null })
     .instruction();
   return one(ix);
 }
@@ -264,7 +270,7 @@ export async function pauseAsGuardian(
 export async function unpause(c: BuildCtx): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .unpause()
-    .accountsPartial({ admin: adminAuthority() })
+    .accountsPartial({ admin: c.admin ?? adminAuthority() })
     .instruction();
   return one(ix);
 }
@@ -280,7 +286,7 @@ export async function settleRedemptionOffchain(
   const ix = await (getProgram(c.connection).methods as any)
     .adminSettleRedemptionOffchain()
     .accountsPartial({
-      admin: adminAuthority(),
+      admin: c.admin ?? adminAuthority(),
       redemptionRequest: redemptionRequestPda(owner, nonce),
     })
     .instruction();
@@ -324,7 +330,7 @@ async function propose(c: BuildCtx, method: string, args: any[]): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     [method](...args)
     .accountsPartial({
-      admin: adminAuthority(),
+      admin: c.admin ?? adminAuthority(),
       timelock: timelockPda(nonce),
       systemProgram: SystemProgram.programId,
     })
@@ -414,7 +420,7 @@ export const proposeSetRedeemLimits = (
 export async function acceptAdminTransfer(c: BuildCtx): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .acceptAdminTransfer()
-    .accountsPartial({ newAdmin: adminAuthority() })
+    .accountsPartial({ newAdmin: c.admin ?? adminAuthority() })
     .instruction();
   return one(ix);
 }
@@ -425,7 +431,7 @@ export async function acceptAdminTransfer(c: BuildCtx): Ix {
 export async function cancelAdminTransfer(c: BuildCtx): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .cancelAdminTransfer()
-    .accountsPartial({ signer: adminAuthority(), guardian: null })
+    .accountsPartial({ signer: c.admin ?? adminAuthority(), guardian: null })
     .instruction();
   return one(ix);
 }
@@ -459,7 +465,7 @@ export async function executeTimelocked(
   const ix = await (getProgram(c.connection).methods as any)
     [method](new BN(nonce.toString()))
     .accountsPartial({
-      admin: adminAuthority(),
+      admin: c.admin ?? adminAuthority(),
       timelock: timelockPda(nonce),
       rentRecipient,
     })
@@ -474,7 +480,7 @@ export async function executeUpdateMetadata(
   const ix = await (getProgram(c.connection).methods as any)
     .executeUpdateMetadata(new BN(nonce.toString()))
     .accountsPartial({
-      admin: adminAuthority(),
+      admin: c.admin ?? adminAuthority(),
       timelock: timelockPda(nonce),
       rentRecipient,
       silvMint: SILV_MINT,
@@ -493,7 +499,7 @@ export async function executeWithdrawUsdc(
   const ix = await (getProgram(c.connection).methods as any)
     .executeWithdrawUsdc(new BN(nonce.toString()))
     .accountsPartial({
-      admin: adminAuthority(),
+      admin: c.admin ?? adminAuthority(),
       timelock: timelockPda(nonce),
       rentRecipient,
       usdcMint: USDC_MINT,

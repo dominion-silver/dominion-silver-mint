@@ -520,6 +520,18 @@ export function AdminActions() {
   const [cfg, setCfg] = useState<any>(null);
   const opsConfigured = isConfigured("ops");
   const squadsBlocked = !opsConfigured || adminMismatch === true;
+  // Direct-admin mode: the connected wallet IS the on-chain config.admin (a
+  // plain wallet, e.g. the current devnet deploy - not the Ops Squads vault).
+  // In that case squads-mode admin actions are signed + sent DIRECTLY by this
+  // wallet (no Squads proposal wrapper). Guarded by try/catch so a malformed
+  // cfg.admin can never crash the render.
+  let directAdmin = false;
+  try {
+    directAdmin =
+      !!cfg && !!publicKey && new PublicKey(cfg.admin).equals(publicKey);
+  } catch {
+    directAdmin = false;
+  }
 
   // Surface a wrong-multisig: the configured Ops vault PDA must equal the
   // on-chain config.admin, else members would govern the wrong multisig.
@@ -603,17 +615,29 @@ export function AdminActions() {
     const summary = a.fields.length
       ? a.fields.map((f) => `${f.label} = ${p[f.name] ?? "(empty)"}`).join("\n")
       : "(no parameters)";
-    const kind =
-      a.mode === "squads"
-        ? "Create an Ops Squads PROPOSAL for:"
+    // A squads-mode action becomes a Squads proposal ONLY when we are not the
+    // on-chain admin. In direct-admin mode it is signed + sent directly, just
+    // like the guardian ("direct") actions.
+    const asProposal = a.mode === "squads" && !directAdmin;
+    const kind = asProposal
+      ? "Create an Ops Squads PROPOSAL for:"
+      : a.mode === "squads"
+        ? "Sign + send NOW (direct admin):"
         : "Sign + send NOW (direct):";
     if (!window.confirm(`${kind}\n\n${a.label}\n\n${summary}`)) return;
 
     setBusy(a.id);
     setMsg(null);
     try {
-      const ixs = await a.build({ connection }, p, publicKey);
-      if (a.mode === "direct") {
+      // Direct-admin: thread the connected key as the admin authority so the
+      // builder targets it as the acting admin (guardian builders ignore this
+      // and use the passed-in `me`).
+      const ctx: actions.BuildCtx =
+        a.mode === "squads" && directAdmin
+          ? { connection, admin: publicKey }
+          : { connection };
+      const ixs = await a.build(ctx, p, publicKey);
+      if (!asProposal) {
         const { blockhash } = await connection.getLatestBlockhash("confirmed");
         const tx = new Transaction().add(...ixs);
         tx.feePayer = publicKey;
@@ -690,7 +714,13 @@ export function AdminActions() {
 
   return (
     <div className="space-y-6">
-      {!opsConfigured && (
+      {directAdmin && (
+        <div className="rounded-md border border-accent bg-accent/10 p-3 text-xs text-accent">
+          Direct admin mode - you are the on-chain admin; admin actions are
+          signed directly by this wallet (no Squads).
+        </div>
+      )}
+      {!directAdmin && !opsConfigured && (
         <div className="rounded-md border border-warning bg-warning/10 p-3 text-xs text-warning">
           Ops Squads multisig is a placeholder. Set
           <code className="mx-1">NEXT_PUBLIC_OPS_SQUADS</code> to the real
@@ -698,7 +728,7 @@ export function AdminActions() {
           actions still work.
         </div>
       )}
-      {adminMismatch === true && (
+      {!directAdmin && adminMismatch === true && (
         <div className="rounded-md border border-danger bg-danger/10 p-3 text-xs text-danger">
           MISMATCH: the configured Ops vault PDA does NOT equal the on-chain
           <code className="mx-1">config.admin</code>. Do NOT sign Squads
@@ -806,8 +836,8 @@ export function AdminActions() {
                   <button
                     disabled={
                       busy !== null ||
-                      (a.mode === "squads" && squadsBlocked) ||
-                      !publicKey
+                      !publicKey ||
+                      (a.mode === "squads" && !directAdmin && squadsBlocked)
                     }
                     onClick={() => runAction(a)}
                     className={`mt-1 w-full rounded-md border px-3 py-1.5 text-xs font-semibold transition disabled:opacity-50 ${
@@ -818,7 +848,7 @@ export function AdminActions() {
                   >
                     {busy === a.id
                       ? "Working..."
-                      : a.mode === "squads"
+                      : a.mode === "squads" && !directAdmin
                         ? "Create Squads proposal"
                         : "Sign + send now"}
                   </button>
