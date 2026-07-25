@@ -71,8 +71,23 @@ const DEVNET_RPC = "https://api.devnet.solana.com";
 // under a fresh id. Unset in all real deploys -> the canonical V2 id.
 const PROGRAM_ID = new PublicKey(
   process.env.DOMINION_PROGRAM_ID ||
-    "GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX",
+    "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W",
 );
+// AUDIT DOM-001: `initialize` now requires the signer to BE the program's
+// upgrade authority, proven through the loader's ProgramData account. That
+// account is NOT a PDA of this program, so Anchor cannot resolve it: it must be
+// passed explicitly (verified against Anchor 0.31.1's resolver, which throws
+// "Account `programData` not provided" otherwise).
+const BPF_LOADER_UPGRADEABLE = new PublicKey(
+  "BPFLoaderUpgradeab1e11111111111111111111111",
+);
+function programDataAddress(programId: PublicKey): PublicKey {
+  const [pda] = PublicKey.findProgramAddressSync(
+    [programId.toBytes()],
+    BPF_LOADER_UPGRADEABLE,
+  );
+  return pda;
+}
 // Circle devnet USDC (in the V2 initialize allowlist).
 const DEVNET_USDC = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
 // Official Pyth pull-oracle receiver (V2 hard-pins exactly this).
@@ -359,6 +374,14 @@ async function main() {
     })
     .accounts({
       deployer: deployer.publicKey,
+      // DOM-001: the upgrade-authority proof chain. `dominionProgram` carries an
+      // `address` literal in the IDL so Anchor WOULD auto-resolve it, but it is
+      // passed explicitly on purpose: the DOMINION_PROGRAM_ID override below
+      // only rewrites `idl.address`, not the per-account address literal, so the
+      // throwaway-id path (scripts/test-dominion-squads-e2e.ts) would otherwise
+      // silently supply the canonical program instead of the throwaway one.
+      dominionProgram: PROGRAM_ID,
+      programData: programDataAddress(PROGRAM_ID),
       config: configPda,
       treasuryPda,
       usdcMint: DEVNET_USDC,
@@ -370,6 +393,46 @@ async function main() {
       systemProgram: SystemProgram.programId,
     })
     .instruction();
+
+  // AUDIT DOM-001 pre-flight. `initialize` now requires the signer to BE the
+  // program's upgrade authority. Without this check a wrong signer produces an
+  // opaque DeployerNotUpgradeAuthority after the mint has already been created in
+  // step 1, which on mainnet means a burned deploy. Read the loader's ProgramData
+  // and fail early with a readable message.
+  //
+  // Operational note for mainnet: if the upgrade authority has already been moved
+  // to an Upgrade Squads vault, this instruction must be executed AS that vault
+  // (the vault PDA is both the signer and the rent payer, so it must hold SOL).
+  // Initialize BEFORE transferring the upgrade authority, or route this through
+  // the vault. See private/DEPLOY_CHECKLIST.md.
+  {
+    const pdAddr = programDataAddress(PROGRAM_ID);
+    const pd = await connection.getAccountInfo(pdAddr);
+    if (!pd) {
+      throw new Error(
+        `ProgramData ${pdAddr.toBase58()} not found. Is ${PROGRAM_ID.toBase58()} deployed with the upgradeable loader?`,
+      );
+    }
+    // UpgradeableLoaderState::ProgramData = 4-byte enum tag, 8-byte slot,
+    // 1-byte Option tag, then 32-byte authority when present.
+    const hasAuthority = pd.data[12] === 1;
+    if (!hasAuthority) {
+      throw new Error(
+        "The program's upgrade authority has been revoked, so initialize can never succeed. " +
+          "Initialize before making the program immutable.",
+      );
+    }
+    const authority = new PublicKey(pd.data.subarray(13, 45));
+    if (!authority.equals(deployer.publicKey)) {
+      throw new Error(
+        `initialize must be signed by the upgrade authority.\n` +
+          `  upgrade authority: ${authority.toBase58()}\n` +
+          `  this signer:       ${deployer.publicKey.toBase58()}\n` +
+          `If the authority is a Squads vault, run initialize as a vault transaction.`,
+      );
+    }
+    console.log("Upgrade-authority pre-flight OK:", authority.toBase58());
+  }
 
   const tx = new Transaction().add(ix);
   const latest = await connection.getLatestBlockhash("confirmed");

@@ -38,6 +38,75 @@ pub const INSTANT_BUDGET_CEILING_USDC: u64 = 100_000_000_000_000; // $100M atomi
 pub const INSTANT_WINDOW_MIN_SECONDS: u32 = 60; // 1 min
 pub const INSTANT_WINDOW_MAX_SECONDS: u32 = 604_800; // 7 days
 pub const REDEEM_QUEUE_DELAY_MAX_SECONDS: u32 = 2_592_000; // 30 days
+// AUDIT WAVE 0, finding DOM-006 (P1): the queue delay had NO lower bound while
+// its sibling `instant_redeem_window_seconds` had both (see
+// validate_redeem_limits_ceilings). That asymmetry let the 24h-timelocked loosen
+// path set the delay to 0, which makes a queued request claimable in the SAME
+// slot it is created. That matters because the queued path performs NO volume
+// accounting at all: it never reads instant_redeem_budget_usdc,
+// instant_used_usdc or large_redeem_threshold_usdc (those live only in
+// redeem_silv.rs), so the delay is currently the ONLY throttle on it.
+//
+// This is a HARD floor in the same "hard floor vs operating value" tiering the
+// codebase already uses for min_publishers: the code-enforced minimum simply
+// forbids the degenerate same-transaction case, while the OPERATING value is set
+// far higher (DEFAULT_REDEEM_QUEUE_DELAY_SECONDS = T+3 days).
+//
+// Honest scope note: 1 hour alone is NOT adequate protection for a reopened
+// redeem path. It bounds the degenerate case only. Before Phase 1 reopens
+// redemptions, the queued path must also debit a volume budget (audit action
+// 2.4), otherwise the treasury is protected by nothing but its own balance.
+pub const REDEEM_QUEUE_DELAY_MIN_SECONDS: u32 = 3_600; // 1 hour, hard floor only
+
+// AUDIT WAVE 0, finding DOM-007 (P1): `remove_guardian` was instant and
+// admin-only with no floor, so ONE admin signature could strip the ENTIRE
+// guardian veto and then proceed with whatever the veto existed to stop. The
+// guardian exists specifically as an independent control against a compromised
+// admin, and FIX A (loosen-slow) plus FIX B (admin-transfer delay) both rely on
+// guardian cancellation, so that circularity voided the protection.
+//
+// Decision (Thomas, 2026-07-25): the hybrid model. Instant removal stays
+// available for its legitimate purpose (ejecting a misbehaving guardian fast),
+// but it may never take the active set below this floor. Removal below the floor
+// is REFUSED outright rather than timelocked, so rotation needs no new
+// machinery: add the replacement first, then remove the old one ("always swap,
+// never leave zero").
+//
+// !! READ THIS BEFORE TRUSTING THE GUARDIAN VETO !!
+//
+// THIS FLOOR IS NOT SUFFICIENT, and an earlier version of this comment wrongly
+// claimed it was. The triple-review of 2026-07-25 demonstrated the bypass: since
+// `add_guardian` is ALSO instant and admin-only and does not vet the key, a
+// compromised admin can walk the set down while keeping the count at the floor:
+//
+//     remove_guardian(G1)          // 3 -> 2, passes the floor
+//     add_guardian(attacker_key)   // 2 -> 3
+//     remove_guardian(G2)          // 3 -> 2
+//     remove_guardian(G3)          // 2 -> 1, passes the floor
+//     // the only "active guardian" left is a key the attacker controls
+//
+// So what this constant guarantees is exactly `guardian_count >= 1`, NOT that an
+// independent party holds a veto. The circularity that FIX A (loosen-slow) and
+// FIX B (admin-transfer delay) depend on is therefore only PARTIALLY closed.
+// `remove_handler` additionally refuses to remove `config.admin` itself, which
+// blocks the literal exploit above, but an admin holding any second key defeats
+// that too.
+//
+// REQUIRED FOLLOW-UP before guardians become load-bearing, i.e. before Phase 1
+// reopens redemptions: make removal DEFERRED instead of instant. Add
+// `pending_removal_at: i64` to GuardianAccount; `remove_guardian` sets it to
+// now + admin_timelock_seconds and changes nothing else, so the target KEEPS its
+// pause and cancel powers during the window and can veto its own removal; a
+// separate `finalize_guardian_removal` applies it after the delay, and the
+// guardian or the admin may cancel it. That fixes the property by giving the
+// victim time to react, instead of trying to guess whether a key is independent.
+// It is deliberately not in this batch: it adds two instructions plus an account
+// field and needs its own review pass. Tracked as audit action 0.12b.
+//
+// Operationally, until then: run 2 or 3 guardians so a lost key does not sit on
+// the floor, and treat the guardian veto as a monitoring aid rather than a
+// guarantee against a compromised admin.
+pub const MIN_ACTIVE_GUARDIANS: u8 = 1;
 
 // P2-05: per-field SILV metadata bounds (Token-2022 TokenMetadata extension).
 // Caps follow the Metaplex name/symbol convention (32/10). The URI cap is

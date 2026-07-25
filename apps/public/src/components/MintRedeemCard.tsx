@@ -98,11 +98,18 @@ export function MintRedeemCard() {
     setAmount("");
   }, [mode]);
 
-  const premiumBpsMint = cfg?.premiumBpsMint ?? 1000;
-  const premiumBpsRedeem = cfg?.premiumBpsRedeem ?? 200;
+  // AUDIT finding A-26: these used to fall back to 1000 / 200 bps when `cfg` had
+  // not loaded. The live mint premium is 150 bps, so the fallback quoted a price
+  // 6.7x too expensive and, worse, fed that wrong premium into the min_out the
+  // transaction actually enforces. Quote nothing until the real config is in
+  // hand: `null` propagates through every memo and disables the preview.
+  const premiumBpsMint = cfg?.premiumBpsMint ?? null;
+  const premiumBpsRedeem = cfg?.premiumBpsRedeem ?? null;
 
   const preview = useMemo(() => {
     if (!price || !amount) return null;
+    // A-26: no quote without the real premium (no fallback).
+    if (premiumBpsMint === null || premiumBpsRedeem === null) return null;
     const num = parseFloat(amount);
     if (isNaN(num) || num <= 0) return null;
     if (mode === "mint") {
@@ -122,6 +129,7 @@ export function MintRedeemCard() {
   const nowSecs = Math.floor(Date.now() / 1000);
   const redeemUsdcOutBn = useMemo(() => {
     if (mode !== "redeem" || !price || !amount) return null;
+    if (premiumBpsRedeem === null) return null; // A-26
     const n = parseFloat(amount);
     if (isNaN(n) || n <= 0) return null;
     const priceScaled1e9 = new BN(Math.round(price.priceUsd * 1e9));
@@ -143,7 +151,7 @@ export function MintRedeemCard() {
     const usdc = computeMaxInstantRedeemableUsdc(cfg, treasury, nowSecs);
     const usdcNum = usdc.toNumber() / 1e6;
     const silvApprox =
-      price && price.priceUsd > 0
+      price && price.priceUsd > 0 && premiumBpsRedeem !== null
         ? usdcNum / effectiveRedeemPrice(price.priceUsd, premiumBpsRedeem)
         : null;
     return { usdcNum, silvApprox };
@@ -244,6 +252,13 @@ export function MintRedeemCard() {
 
   async function handleSubmit() {
     if (inFlight.current) return;
+    // A-26 defense in depth: never build a transaction whose enforced min_out
+    // was derived from a guessed premium. The button is already disabled without
+    // a preview; this makes the invariant explicit at the money path.
+    if (premiumBpsMint === null || premiumBpsRedeem === null) {
+      setErrorMsg("Protocol parameters are still loading. Please retry in a moment.");
+      return;
+    }
     inFlight.current = true;
     setErrorMsg(null);
     if (!wallet.publicKey || !preview || !cfg) {
@@ -712,8 +727,12 @@ export function MintRedeemCard() {
             <span>Fee</span>
             <span className="font-mono text-white">
               {mode === "mint"
-                ? `${(premiumBpsMint / 100).toFixed(1)}%`
-                : `${(premiumBpsRedeem / 100).toFixed(1)}%`}
+                ? premiumBpsMint !== null
+                  ? `${(premiumBpsMint / 100).toFixed(1)}%`
+                  : "loading"
+                : premiumBpsRedeem !== null
+                  ? `${(premiumBpsRedeem / 100).toFixed(1)}%`
+                  : "loading"}
             </span>
           </div>
           {/* Pyth Lazer rides the signed price inside the consumer tx (no

@@ -205,4 +205,19 @@ pub enum DominionError {
     LooseningRequiresTimelock,
     #[msg("At least one redeem-limit field must be provided")]
     RedeemLimitsAllNone,
+    // Audit remediation wave 0 (2026-07-25). APPEND ONLY - never reorder.
+    #[msg("initialize must be signed by the program's upgrade authority")]
+    DeployerNotUpgradeAuthority,
+    #[msg("initialize requires an upgradeable program: initialize before revoking the upgrade authority")]
+    ProgramNotUpgradeable,
+    // NOTE: a TreasuryAtaMismatch variant was added and then REMOVED before the
+    // IDL was regenerated. Anchor's own init_if_needed codegen already validates
+    // the existing ATA (mint, owner, token program, derived address) and raises
+    // ConstraintTokenMint / ConstraintTokenOwner / AccountNotAssociatedTokenAccount,
+    // so the variant was unreachable and would have permanently occupied a
+    // discriminant. Removed while it was still safe to remove.
+    #[msg("Queue delay below the hard floor (loosening the queue below it would remove the only throttle on the queued path)")]
+    QueueDelayTooShort,
+    #[msg("Removing this guardian would take the active set below the floor; add a replacement guardian first")]
+    GuardianFloorBreached,
 }

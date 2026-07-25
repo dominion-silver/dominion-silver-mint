@@ -175,11 +175,25 @@ export function WalletAuthGate({ children }: { children: ReactNode }) {
           if (alive) setAuthz("ok");
           return;
         }
-        // 2) a registered guardian (guardian PDA account exists).
+        // 2) an ACTIVE registered guardian.
+        //
+        // AUDIT finding L-01: this used to accept any wallet whose guardian PDA
+        // merely EXISTED. Removal does not close that account, it stamps
+        // `cooldown_until`, so a removed guardian kept console access (it could
+        // no longer act on-chain, but it could still read the panel). Decode the
+        // account and require an active guardian, matching what the program
+        // itself enforces (`g.cooldown_until == 0`).
+        //
+        // GuardianAccount layout: 8-byte discriminator, guardian Pubkey (32),
+        // added_at i64 (8), cooldown_until i64 (8) = 56 bytes.
         const gInfo = await connection.getAccountInfo(guardianPda(key));
-        if (gInfo) {
-          if (alive) setAuthz("ok");
-          return;
+        if (gInfo && gInfo.data.length >= 56) {
+          const stored = new PublicKey(gInfo.data.subarray(8, 40));
+          const cooldownUntil = gInfo.data.readBigInt64LE(48);
+          if (stored.equals(key) && cooldownUntil === 0n) {
+            if (alive) setAuthz("ok");
+            return;
+          }
         }
         // 3) an active member of the configured Ops Squads (mainnet model).
         if (isConfigured("ops") && (await isActiveMember(connection, "ops", key))) {

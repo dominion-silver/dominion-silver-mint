@@ -18,7 +18,11 @@ mod harness {
     use std::str::FromStr;
 
     // Pinned constants (must match the dominion source).
-    const DOMINION_ID: &str = "2ujQgKtxvaU9Ax3jL22374SypSyTR9J4yztqYkX23oMT";
+    // AUDIT: was pinned to the retired 2ujQg... while the .so this harness loads
+    // declares AX7se..., so every test failed with Anchor Custom(4100)
+    // DeclaredProgramIdMismatch (0 of 6 passing). Must equal declare_id! in
+    // programs/dominion_silver_mint_v2/src/lib.rs.
+    const DOMINION_ID: &str = "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W";
     const LAZER_PROGRAM_ID: &str = "pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt";
     const LAZER_STORAGE: &str = "3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpPuSCQVyQL";
     const LAZER_TREASURY: &str = "Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak";
@@ -50,6 +54,15 @@ mod harness {
     }
 
     fn so_bytes(name: &str) -> Vec<u8> {
+        // WARNING (audit 2026-07-25). This reads the SAME path that
+        // `solana program deploy` uses. Making these tests pass requires
+        // building it with `-- --features test-harness`, which compiles the
+        // `probe_oracle_price` instruction INTO that artifact. So after running
+        // this harness, target/deploy/dominion_silver_mint.so is contaminated and
+        // MUST NOT be deployed. Rebuild with the default feature set and run
+        // scripts/verify-release-artifact.sh before any deploy.
+        //   cargo build-sbf --manifest-path programs/dominion_silver_mint_v2/Cargo.toml
+        //   scripts/verify-release-artifact.sh
         // tools/lazer-harness -> repo root -> target/deploy/<name>.so
         let path = format!("{}/../../target/deploy/{}.so", env!("CARGO_MANIFEST_DIR"), name);
         std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e} (build it first)"))
@@ -77,6 +90,9 @@ mod harness {
         b.extend_from_slice(&[0u8; 32]); // upgrade_authority_info
         // Compliance
         b.extend_from_slice(&[0u8; 32]); // permanent_delegate_expected
+        // AUDIT: freeze_authority_expected was MISSING here, which shifted every
+        // subsequent field by 32 bytes and made the whole account mis-decode.
+        b.extend_from_slice(&[0u8; 32]); // freeze_authority_expected
         b.push(0); // compliance_mode
         // Premium
         b.write_u16::<LittleEndian>(0).unwrap(); // premium_bps_mint
@@ -121,8 +137,38 @@ mod harness {
         for _ in 0..9 {
             b.push(0); // 9 Option<u64> nonces = None
         }
+        // AUDIT: every launch-spec 2026-07 field below was MISSING, leaving the
+        // buffer 149 bytes short of the layout the program deserializes. Keep this
+        // block in the same order as ConfigAccount in state/config.rs.
+        b.write_i64::<LittleEndian>(0).unwrap(); // pending_admin_eta
+        b.push(0); // pending_max_supply_nonce: Option<u64> = None
+        b.push(0); // pending_redeem_limits_nonce: Option<u64> = None
+        b.extend_from_slice(&[0u8; 32]); // inventory_wallet
+        b.push(0); // public_mint_enabled
+        b.extend_from_slice(&[0u8; 32]); // kyc_operator
+        b.push(0); // kyc_enforced
+        b.push(0); // pending_kyc_operator_nonce: Option<u64> = None
+        b.extend_from_slice(&[0u8; 32]); // por_feed
+        b.write_u32::<LittleEndian>(0).unwrap(); // por_max_staleness_seconds
+        b.push(0); // por_enforced
+        b.push(0); // pending_por_feed_nonce: Option<u64> = None
+        b.push(0); // mint_paused
+        b.push(0); // redeem_paused
         b.push(0); // version
         b.extend_from_slice(&[0u8; 64]); // reserved
+
+        // Drift guard. ConfigAccount::SIZE is 800, but that is the ALLOCATED
+        // budget: it reserves 1+8 for every Option<u64> and 1+32 for the
+        // Option<Pubkey>, while a `None` serializes to a single byte. With all 13
+        // Option<u64> fields and pending_admin set to None, the serialized length
+        // is 800 - 13*8 - 32 = 664. If the program layout changes, this assert
+        // fails loudly here instead of producing a silently mis-decoded account.
+        assert_eq!(
+            b.len(),
+            664,
+            "hand-built ConfigAccount buffer is out of sync with state/config.rs \
+             (expected 664 serialized bytes with every Option = None)"
+        );
         b
     }
 

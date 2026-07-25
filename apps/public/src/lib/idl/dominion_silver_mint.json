@@ -1823,6 +1823,13 @@
           "signer": true
         },
         {
+          "name": "dominion_program",
+          "address": "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W"
+        },
+        {
+          "name": "program_data"
+        },
+        {
           "name": "treasury_pda",
           "pda": {
             "seeds": [
@@ -4643,6 +4650,26 @@
       "code": 12091,
       "name": "RedeemLimitsAllNone",
       "msg": "At least one redeem-limit field must be provided"
+    },
+    {
+      "code": 12092,
+      "name": "DeployerNotUpgradeAuthority",
+      "msg": "initialize must be signed by the program's upgrade authority"
+    },
+    {
+      "code": 12093,
+      "name": "ProgramNotUpgradeable",
+      "msg": "initialize requires an upgradeable program: initialize before revoking the upgrade authority"
+    },
+    {
+      "code": 12094,
+      "name": "QueueDelayTooShort",
+      "msg": "Queue delay below the hard floor (loosening the queue below it would remove the only throttle on the queued path)"
+    },
+    {
+      "code": 12095,
+      "name": "GuardianFloorBreached",
+      "msg": "Removing this guardian would take the active set below the floor; add a replacement guardian first"
     }
   ],
   "types": [

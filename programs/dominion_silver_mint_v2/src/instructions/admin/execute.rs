@@ -566,6 +566,14 @@ pub fn validate_redeem_limits_ceilings(args: &RedeemLimitsArgs) -> Result<()> {
         );
     }
     if let Some(v) = args.redeem_queue_delay_seconds {
+        // DOM-006 (P1): both bounds, mirroring instant_redeem_window_seconds
+        // above. The missing floor let the timelocked loosen path set 0, making a
+        // queued request claimable in the same slot, and the queued path has no
+        // volume accounting to fall back on. See REDEEM_QUEUE_DELAY_MIN_SECONDS.
+        require!(
+            v >= REDEEM_QUEUE_DELAY_MIN_SECONDS,
+            DominionError::QueueDelayTooShort
+        );
         require!(
             v <= REDEEM_QUEUE_DELAY_MAX_SECONDS,
             DominionError::AboveMaximum
@@ -1036,7 +1044,14 @@ mod fix_a_tests {
     // nonce) is covered by the litesvm + TS e2e in the off-chain batch; these host
     // tests pin the direction rules, which are the error-prone core (esp. the
     // counter-intuitive window direction).
-    use super::{redeem_limits_all_tighten, redeem_limits_any_set, RedeemLimitsArgs};
+    use super::{
+        redeem_limits_all_tighten, redeem_limits_any_set, validate_redeem_limits_ceilings,
+        RedeemLimitsArgs,
+    };
+    use crate::state::{
+        REDEEM_QUEUE_DELAY_MAX_SECONDS, REDEEM_QUEUE_DELAY_MIN_SECONDS,
+        DEFAULT_REDEEM_QUEUE_DELAY_SECONDS,
+    };
 
     // Baseline current config for the checks below.
     const CUR_BUDGET: u64 = 20_000_000_000; // $20k
@@ -1129,6 +1144,47 @@ mod fix_a_tests {
         };
         assert!(redeem_limits_any_set(&mixed));
         assert!(!tighten(&mixed));
+    }
+
+    // --- DOM-006 (audit wave 0): the queue-delay floor. ---
+
+    fn delay(v: u32) -> RedeemLimitsArgs {
+        RedeemLimitsArgs {
+            redeem_queue_delay_seconds: Some(v),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn queue_delay_zero_is_rejected() {
+        // The exact case the audit found: delay 0 makes a queued request
+        // claimable in the same slot, and the queued path has no volume budget.
+        assert!(validate_redeem_limits_ceilings(&delay(0)).is_err());
+    }
+
+    #[test]
+    fn queue_delay_below_the_hard_floor_is_rejected() {
+        assert!(validate_redeem_limits_ceilings(&delay(REDEEM_QUEUE_DELAY_MIN_SECONDS - 1)).is_err());
+        assert!(validate_redeem_limits_ceilings(&delay(1)).is_err());
+    }
+
+    #[test]
+    fn queue_delay_at_and_above_the_floor_is_accepted() {
+        assert!(validate_redeem_limits_ceilings(&delay(REDEEM_QUEUE_DELAY_MIN_SECONDS)).is_ok());
+        assert!(validate_redeem_limits_ceilings(&delay(REDEEM_QUEUE_DELAY_MAX_SECONDS)).is_ok());
+    }
+
+    #[test]
+    fn queue_delay_above_the_ceiling_is_still_rejected() {
+        // Regression guard: adding the floor must not have dropped the ceiling.
+        assert!(validate_redeem_limits_ceilings(&delay(REDEEM_QUEUE_DELAY_MAX_SECONDS + 1)).is_err());
+    }
+
+    #[test]
+    fn the_shipped_default_delay_satisfies_the_new_floor() {
+        // Proves the new floor cannot brick a fresh deploy or an existing config.
+        assert!(DEFAULT_REDEEM_QUEUE_DELAY_SECONDS >= REDEEM_QUEUE_DELAY_MIN_SECONDS);
+        assert!(validate_redeem_limits_ceilings(&delay(DEFAULT_REDEEM_QUEUE_DELAY_SECONDS)).is_ok());
     }
 
     #[test]

@@ -1,0 +1,150 @@
+#!/usr/bin/env bash
+# Gate: refuse to deploy an artifact that was not built from this source with the
+# default feature set.
+#
+# WHY THIS EXISTS (audit finding A-33, demonstrated 2026-07-25). The Lazer harness
+# reads target/deploy/dominion_silver_mint.so, and its tests only pass when that
+# path is built with `--features test-harness`, which compiles the
+# `probe_oracle_price` instruction into it. tools/lazer-harness/run.sh restores the
+# default build afterwards, but a manual run, or a test failure under `set -e`,
+# leaves a contaminated binary at exactly the path `solana program deploy` reads.
+# The `dev-hatch` feature is worse: `dev_set_premiums` and `dev_set_max_staleness`
+# mutate config with NO timelock.
+#
+# HOW THIS SCRIPT GOT HERE. Three earlier designs were each defeated, which is
+# recorded because the lesson is the point: this repository's core CI problem is
+# a gate that cannot fail.
+#   v1: matched snake_case symbols only. Anchor emits the PascalCase instruction
+#       name via msg!("Instruction: X") and the Rust fn name is optimized out, so
+#       a dev-hatch build passed with "ARTIFACT OK". The probe was caught only by
+#       accident, because ProbeOraclePrice happened to be listed too.
+#   v2: added PascalCase. Still defeated by the crate's own `no-log-ix-name`
+#       feature, which strips those msg! strings entirely, plus a latent
+#       SIGPIPE fail-open: `strings f | grep -q X` under `set -euo pipefail`
+#       returns 141 when grep exits early and strings dies of SIGPIPE, which the
+#       `if` reads as "not found".
+#   v3: matched the 8-byte Anchor discriminators, on the theory that dispatch
+#       needs them so no feature could strip them. MEASURED AND FALSE: the
+#       compiler does not keep them as contiguous byte sequences. Verified that
+#       even `initialize`'s discriminator is absent from a known-good binary, so
+#       that check would have rejected everything.
+#   v4 (this one): the primary gate is a REPRODUCIBLE REBUILD. Rebuild from the
+#       working tree with the default feature set into an isolated directory and
+#       compare hashes. That catches every contamination, including
+#       `no-log-ix-name`, without needing to know which symbol to look for. The
+#       string scan is kept as a fast secondary signal only.
+#
+# Usage: scripts/verify-release-artifact.sh [path-to-so] [path-to-idl]
+#   --skip-rebuild   only run the secondary checks (faster, weaker: use in a
+#                    loop, never as the pre-deploy gate)
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MANIFEST="$ROOT/programs/dominion_silver_mint_v2/Cargo.toml"
+SKIP_REBUILD=0
+ARGS=()
+for a in "$@"; do
+  if [[ "$a" == "--skip-rebuild" ]]; then SKIP_REBUILD=1; else ARGS+=("$a"); fi
+done
+SO="${ARGS[0]:-$ROOT/target/deploy/dominion_silver_mint.so}"
+IDL="${ARGS[1]:-$ROOT/target/idl/dominion_silver_mint.json}"
+
+FORBIDDEN_IX=(probe_oracle_price dev_set_max_staleness dev_set_premiums)
+
+echo "Verifying release artifact"
+echo "  so:  $SO"
+echo "  idl: $IDL"
+echo
+
+if [[ ! -f "$SO" ]]; then
+  echo "FAIL: .so not found at $SO"
+  echo "Build it: cargo build-sbf --manifest-path $MANIFEST"
+  exit 1
+fi
+
+fail=0
+
+# ---- 1. Primary gate: reproducible rebuild with default features ----
+if [[ "$SKIP_REBUILD" -eq 1 ]]; then
+  echo "1. Reproducible rebuild: SKIPPED (--skip-rebuild). This is the only check"
+  echo "   that catches a no-log-ix-name build. Do not skip it before a deploy."
+else
+  echo "1. Reproducible rebuild with the default feature set"
+  TMPDIR_BUILD="$(mktemp -d)"
+  trap 'rm -rf "$TMPDIR_BUILD"' EXIT
+  if ! cargo build-sbf --manifest-path "$MANIFEST" --sbf-out-dir "$TMPDIR_BUILD" >"$TMPDIR_BUILD/build.log" 2>&1; then
+    echo "   FAIL: the default-feature rebuild did not succeed"
+    tail -5 "$TMPDIR_BUILD/build.log" | sed 's/^/     /'
+    exit 1
+  fi
+  REF="$TMPDIR_BUILD/dominion_silver_mint.so"
+  if [[ ! -f "$REF" ]]; then
+    echo "   FAIL: rebuild produced no artifact at $REF"
+    exit 1
+  fi
+  h_have="$(shasum -a 256 "$SO" | awk '{print $1}')"
+  h_ref="$(shasum -a 256 "$REF" | awk '{print $1}')"
+  if [[ "$h_have" != "$h_ref" ]]; then
+    echo "   FAIL: the artifact does NOT match a clean default-feature rebuild."
+    echo "     artifact: $h_have"
+    echo "     rebuild:  $h_ref"
+    echo "   The artifact was built with extra features, from different source, or"
+    echo "   with a different toolchain. Do not deploy it."
+    fail=1
+  else
+    echo "   ok: byte-identical to a clean default rebuild ($h_ref)"
+  fi
+fi
+
+# ---- 2. Secondary: forbidden name strings (no pipeline, so no SIGPIPE) ----
+echo "2. Forbidden instruction names as strings (secondary signal)"
+python3 - "$SO" "${FORBIDDEN_IX[@]}" <<'PY'
+import sys
+blob = open(sys.argv[1], "rb").read()
+bad = []
+for name in sys.argv[2:]:
+    pascal = "".join(p.capitalize() for p in name.split("_"))
+    for probe in (name, pascal):
+        if blob.find(probe.encode()) != -1:
+            print(f"   FAIL: string '{probe}' present in the binary")
+            bad.append(probe)
+if not bad:
+    print("   ok: none of the forbidden names appear")
+sys.exit(1 if bad else 0)
+PY
+[[ $? -eq 0 ]] || fail=1
+
+# ---- 3. IDL must exist and must not advertise the forbidden instructions ----
+echo "3. IDL"
+if [[ ! -f "$IDL" ]]; then
+  # A missing IDL is a FAILURE, not a skip: an unverifiable IDL is not a pass.
+  echo "   FAIL: IDL not found at $IDL"
+  echo "   regenerate: (cd programs/dominion_silver_mint_v2 && anchor idl build -- --locked)"
+  fail=1
+else
+  python3 - "$IDL" "${FORBIDDEN_IX[@]}" <<'PY'
+import json, sys
+idl = json.load(open(sys.argv[1]))
+names = [i["name"] for i in idl.get("instructions", [])]
+bad = [n for n in sys.argv[2:] if n in names]
+for n in bad:
+    print(f"   FAIL: '{n}' is present in the IDL")
+if not bad:
+    print(f"   ok: {len(names)} instructions, none forbidden")
+print(f"   idl address: {idl.get('address')}")
+sys.exit(1 if bad else 0)
+PY
+  [[ $? -eq 0 ]] || fail=1
+fi
+
+echo "4. Release record"
+echo "   sha256: $(shasum -a 256 "$SO" | awk '{print $1}')"
+echo "   bytes:  $(wc -c < "$SO" | tr -d ' ')"
+echo
+if [[ "$fail" -ne 0 ]]; then
+  echo "ARTIFACT REJECTED. Rebuild with the default feature set:"
+  echo "  cargo build-sbf --manifest-path $MANIFEST"
+  echo "  (cd programs/dominion_silver_mint_v2 && anchor idl build -- --locked)"
+  exit 1
+fi
+echo "ARTIFACT OK: matches a clean default rebuild, no forbidden instruction."

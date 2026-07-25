@@ -3,6 +3,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import idl from "../idl/dominion_silver_mint.json";
 import { oracleGuardsArgsObject } from "../admin-actions";
+import { boolField, displayField, selectField } from "../form-defaults";
 
 // Fable audit P1-A regression guard. proposeSetOracleGuards is the launch
 // GO-gate instruction; it was silently dropping 6 of 7 fields because the arg
@@ -109,5 +110,54 @@ describe("proposeSetOracleGuards encoding (Fable P1-A camelCase guard)", () => {
     expect(args.confBps).toBeNull();
     expect(args.minPriceScaled).toBeNull();
     expect(args.minPublishers).toBeNull();
+  });
+});
+
+// AUDIT finding A-02 regression guard (P1, operator integrity), updated after
+// the follow-up review. The original bug was a boolean <select> that DISPLAYED
+// "on / true" while the builder encoded `false`, because the render default and
+// the read default were two different things. The first fix shared one default;
+// the review showed that (a) the window.confirm summary was still a THIRD
+// default, and (b) defaulting to "true" made an unconsidered click queue a
+// compliance-mode enable, which auto-pauses the protocol. So privileged
+// two-sided switches now require an EXPLICIT choice and every reader shares one
+// code path.
+describe("privileged form fields require an explicit choice (A-02)", () => {
+  it("an untouched bool field refuses to encode instead of guessing", () => {
+    expect(() => boolField({}, "on")).toThrow(/Choose a value/);
+  });
+
+  it("an explicit choice is honoured in both directions", () => {
+    expect(boolField({ on: "true" }, "on")).toBe(true);
+    expect(boolField({ on: "false" }, "on")).toBe(false);
+  });
+
+  it("an untouched select refuses rather than passing undefined to an argument", () => {
+    expect(() => selectField({}, "m")).toThrow(/Choose a value/);
+    expect(selectField({ m: "executeSetPremiumMint" }, "m")).toBe(
+      "executeSetPremiumMint",
+    );
+  });
+
+  it("the confirmation dialog shows exactly what the builder will read", () => {
+    // The dialog and the builder must never disagree: this is the invariant the
+    // whole finding was about.
+    expect(displayField({}, "on")).toBe("(not chosen)");
+    expect(displayField({ on: "true" }, "on")).toBe("true");
+    expect(displayField({ on: "false" }, "on")).toBe("false");
+    // and when the dialog says a value, the builder encodes that same value
+    for (const v of ["true", "false"]) {
+      const p = { on: v };
+      expect(displayField(p, "on")).toBe(v);
+      expect(boolField(p, "on")).toBe(v === "true");
+    }
+  });
+
+  it("documents the original regression: the old read inverted an untouched dropdown", () => {
+    const params: Record<string, string> = {};
+    const oldRead = params.on === "true"; // the shipped bug: silently false
+    expect(oldRead).toBe(false);
+    // the new reader refuses instead of silently choosing either value
+    expect(() => boolField(params, "on")).toThrow();
   });
 });

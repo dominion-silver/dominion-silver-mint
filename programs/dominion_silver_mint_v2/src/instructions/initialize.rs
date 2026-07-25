@@ -51,6 +51,46 @@ pub struct Initialize<'info> {
     #[account(mut)]
     pub deployer: Signer<'info>,
 
+    // === AUDIT WAVE 0, finding DOM-001 (P0): authenticate the initializer. ===
+    //
+    // Before this, `deployer` was an unconstrained Signer: ANY key could call
+    // initialize on a freshly deployed program id, seize the single [CONFIG_SEED]
+    // PDA, set itself as `config.admin` (the handler writes args.admin verbatim),
+    // then unpause, redirect the inventory and pre-mint the whole supply cap.
+    // `initialize` is a separate transaction from `solana program deploy`, so the
+    // window is real and observable on-chain.
+    //
+    // The fix binds the signer to the program's UPGRADE AUTHORITY, chaining every
+    // link so a forged ProgramData cannot be substituted:
+    //   1. `Program<'info, program::DominionSilverMint>` makes Anchor require this
+    //      account to be executable AND to equal `crate::ID` (an attacker cannot
+    //      point at their own program).
+    //   2. `programdata_address()` reads the PROGRAM account's own state, so the
+    //      expected ProgramData address is derived from chain data, not supplied.
+    //      It returns Some only for a bpf_loader_upgradeable program.
+    //   3. The constraint pins the supplied `program_data` to exactly that address,
+    //      which is what stops an attacker passing the ProgramData of a program
+    //      they control.
+    //   4. `Account<'info, ProgramData>` enforces owner == bpf_loader_upgradeable
+    //      and that the account really deserializes as the ProgramData variant
+    //      (not a Buffer, not a Program).
+    //   5. The handler then requires upgrade_authority_address == Some(deployer).
+    //
+    // Immutable-program case (decided, audit action 0.1): if the upgrade authority
+    // has been revoked, `upgrade_authority_address` is None and initialize is
+    // refused with ProgramNotUpgradeable. Initialization must therefore happen
+    // BEFORE revoking the upgrade authority, which the launch gate already
+    // requires (the authority is retained until the later phases ship). A
+    // compile-time bootstrap key was rejected as a second privileged constant to
+    // guard for no operational gain.
+    #[account(
+        constraint = dominion_program.programdata_address()?
+            == Some(program_data.key()) @ DominionError::Unauthorized,
+    )]
+    pub dominion_program: Program<'info, crate::program::DominionSilverMint>,
+
+    pub program_data: Account<'info, ProgramData>,
+
     // Treasury PDA (authority for the USDC ATA we create below).
     /// CHECK: derived deterministically; signs USDC transfer out via seeds.
     #[account(seeds = [TREASURY_SEED], bump)]
@@ -64,9 +104,26 @@ pub struct Initialize<'info> {
     #[account(mint::token_program = token_2022_program)]
     pub silv_mint: InterfaceAccount<'info, InterfaceMint>,
 
-    // Treasury USDC ATA: created here, owned by treasury_pda.
+    // Treasury USDC ATA, owned by treasury_pda.
+    //
+    // AUDIT WAVE 0, finding DOM-002 (P1): this was `init`, which fails when the
+    // account already exists. Creating an associated token account is
+    // permissionless (anyone may create the ATA of any owner/mint pair), so a
+    // third party could pre-create exactly this ATA and make `initialize` fail
+    // forever, denying the launch until a tolerant program version is deployed.
+    //
+    // `init_if_needed` closes it: when the account is absent Anchor creates it,
+    // and when it is already present Anchor VALIDATES it against the same three
+    // constraints below (mint, authority, token program), so a pre-created
+    // account is only accepted if it is byte-for-byte the account we would have
+    // created ourselves. A wrong-mint or wrong-owner account still fails.
+    //
+    // The usual `init_if_needed` hazard (an attacker re-running an initializer to
+    // reset state) does not apply here: there is no per-account initialization
+    // logic beyond creation, and since DOM-001 this instruction can only be
+    // called by the program's upgrade authority.
     #[account(
-        init,
+        init_if_needed,
         payer = deployer,
         associated_token::mint = usdc_mint,
         associated_token::authority = treasury_pda,
@@ -81,6 +138,25 @@ pub struct Initialize<'info> {
 }
 
 pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
+    // DOM-001 (P0): the signer must BE the program's upgrade authority. The
+    // Accounts struct already proved that `program_data` is the genuine
+    // ProgramData of THIS program (see the chain documented there); this is the
+    // final link. Checked first, before any argument validation, so an
+    // unauthorized caller learns nothing about the accepted parameters.
+    let upgrade_authority = ctx
+        .accounts
+        .program_data
+        .upgrade_authority_address
+        // None means the upgrade authority was revoked and the program is
+        // immutable. Decided in audit action 0.1: refuse, rather than fall back
+        // to a second privileged constant. Initialize before revoking.
+        .ok_or(error!(DominionError::ProgramNotUpgradeable))?;
+    require_keys_eq!(
+        upgrade_authority,
+        ctx.accounts.deployer.key(),
+        DominionError::DeployerNotUpgradeAuthority
+    );
+
     // Validate args.
     require!(args.pyth_lazer_feed_id != 0, DominionError::InvalidFeedId);
     require!(args.admin != Pubkey::default(), DominionError::Unauthorized);

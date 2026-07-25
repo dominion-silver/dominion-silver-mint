@@ -18,6 +18,9 @@ import {
 } from "@solana/web3.js";
 import * as actions from "../lib/admin-actions";
 import { EXEC_METHODS } from "../lib/admin-actions";
+// A-02: the bool/select form defaults live in one shared module so the render
+// default and the read default cannot diverge again. See form-defaults.ts.
+import { boolField, selectField, displayField, UNCHOSEN } from "../lib/form-defaults";
 import {
   buildApproveTx,
   buildCreateProposalTx,
@@ -109,7 +112,7 @@ const ACTIONS: ActionDesc[] = [
     fields: [{ name: "on", label: "Enabled", kind: "bool" }],
     tip: "Master switch for user redemptions.",
     current: (c) => (c.redemptionsEnabled ? "on" : "off"),
-    build: (c, p) => actions.setRedemptionsEnabled(c, p.on === "true"),
+    build: (c, p) => actions.setRedemptionsEnabled(c, boolField(p, "on")),
   },
   {
     id: "set-max-supply",
@@ -234,7 +237,7 @@ const ACTIONS: ActionDesc[] = [
     fields: [{ name: "on", label: "Compliance on", kind: "bool" }],
     tip: "Flip the compliance flag (also auto-pauses).",
     current: (c) => (c.complianceMode ? "on" : "off"),
-    build: (c, p) => actions.proposeSetComplianceMode(c, p.on === "true"),
+    build: (c, p) => actions.proposeSetComplianceMode(c, boolField(p, "on")),
   },
   {
     id: "propose-metadata",
@@ -384,7 +387,7 @@ const ACTIONS: ActionDesc[] = [
     build: (c, p) =>
       actions.executeTimelocked(
         c,
-        p.m as actions.ExecMethod,
+        selectField(p, "m") as actions.ExecMethod,
         parseBigUint(p.nonce),
         pk(p.rent),
       ),
@@ -613,7 +616,11 @@ export function AdminActions() {
     }
     const p = params[a.id] ?? {};
     const summary = a.fields.length
-      ? a.fields.map((f) => `${f.label} = ${p[f.name] ?? "(empty)"}`).join("\n")
+      ? a.fields
+          // A-02 follow-up: the dialog MUST read the same state the builder
+          // reads, or it becomes a third divergent default.
+          .map((f) => `${f.label} = ${displayField(p, f.name)}`)
+          .join("\n")
       : "(no parameters)";
     // A squads-mode action becomes a Squads proposal ONLY when we are not the
     // on-chain admin. In direct-admin mode it is signed + sent directly, just
@@ -799,22 +806,26 @@ export function AdminActions() {
                       {f.kind === "bool" ? (
                         <select
                           className="w-full rounded border border-border bg-bg px-2 py-1 text-xs"
-                          value={params[a.id]?.[f.name] ?? "true"}
+                          value={params[a.id]?.[f.name] ?? UNCHOSEN}
                           onChange={(e) =>
                             setField(a.id, f.name, e.target.value)
                           }
                         >
+                          {/* A-02: no default. A privileged two-sided switch
+                              must be chosen explicitly. */}
+                          <option value={UNCHOSEN}>choose...</option>
                           <option value="true">on / true</option>
                           <option value="false">off / false</option>
                         </select>
                       ) : f.kind === "select" ? (
                         <select
                           className="w-full rounded border border-border bg-bg px-2 py-1 text-xs"
-                          value={params[a.id]?.[f.name] ?? f.options?.[0] ?? ""}
+                          value={params[a.id]?.[f.name] ?? UNCHOSEN}
                           onChange={(e) =>
                             setField(a.id, f.name, e.target.value)
                           }
                         >
+                          <option value={UNCHOSEN}>choose...</option>
                           {(f.options ?? []).map((o) => (
                             <option key={o} value={o}>
                               {o}

@@ -315,10 +315,28 @@ export async function fetchAllRedemptionRequests(
 
 // ---- formatting ----
 
-/** Raw u64 BN (6 decimals) -> display USD string. */
+/** Raw u64 BN (6 decimals) -> display USD string.
+ *
+ * AUDIT finding A-29: this used `raw.div(1e6).toNumber()`, an INTEGER division
+ * that discarded the fractional part before formatting, so every USD figure in
+ * the console silently lost its cents ($1,234.56 rendered as "1,234"). The
+ * `maximumFractionDigits: 2` was therefore decorative. Now the atomic amount is
+ * split into whole and fractional parts so the cents survive, and the result is
+ * still grouped for readability. */
 export function formatUsdc(raw: BN): string {
-  const dollars = raw.div(new BN(1_000_000)).toNumber();
-  return dollars.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  const MICRO = new BN(1_000_000);
+  const neg = raw.isNeg();
+  const abs = neg ? raw.neg() : raw;
+  const whole = abs.div(MICRO).toString();
+  const micros = abs.mod(MICRO).toNumber(); // 0..999_999, safe in a JS number
+  const grouped = Number(whole).toLocaleString("en-US");
+  // Round micros to cents, carrying into the whole part when it rounds up.
+  const cents = Math.round(micros / 10_000);
+  if (cents === 100) {
+    const carried = (Number(whole) + 1).toLocaleString("en-US");
+    return `${neg ? "-" : ""}${carried}.00`;
+  }
+  return `${neg ? "-" : ""}${grouped}.${String(cents).padStart(2, "0")}`;
 }
 
 /** Raw u64 BN (6 decimals) -> display SILV/oz count string. */
