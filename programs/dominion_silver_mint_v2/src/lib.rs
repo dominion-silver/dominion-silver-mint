@@ -36,7 +36,7 @@ use instructions::*;
 // so the old V2 config at GDN5ktEm88... is incompatible -> another fresh deploy
 // under a new ID. Old V2/Core devnet id (retired): GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX.
 // Keypair: target/deploy/dominion_silver_mint_v2-keypair.json (gitignored).
-declare_id!("AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W");
+declare_id!("gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc");
 
 #[program]
 pub mod dominion_silver_mint {
@@ -143,7 +143,7 @@ pub mod dominion_silver_mint {
     // Option B instant param setters (§6, no timelock, bounded by compile-time
     // ceilings - D14). Replaces the Option A per-tx/daily/hourly cap setters.
 
-    pub fn set_max_silv_supply(ctx: Context<SetParam>, new_max: u64) -> Result<()> {
+    pub fn set_max_silv_supply(ctx: Context<SetMaxSupply>, new_max: u64) -> Result<()> {
         instructions::admin::caps::set_max_silv_supply_handler(ctx, new_max)
     }
 
@@ -217,8 +217,27 @@ pub mod dominion_silver_mint {
         instructions::admin::guardian::add_handler(ctx, guardian_pubkey)
     }
 
+    /// AUDIT 0.12b: SCHEDULES a removal (does not apply it). The guardian keeps
+    /// full powers for admin_timelock_seconds and may cancel its own removal, so a
+    /// compromised admin can no longer clear the veto in one signature.
     pub fn remove_guardian(ctx: Context<RemoveGuardian>, guardian_pubkey: Pubkey) -> Result<()> {
         instructions::admin::guardian::remove_handler(ctx, guardian_pubkey)
+    }
+
+    /// Applies a scheduled removal after its window. Permissionless on purpose.
+    pub fn finalize_guardian_removal(
+        ctx: Context<FinalizeGuardianRemoval>,
+        guardian_pubkey: Pubkey,
+    ) -> Result<()> {
+        instructions::admin::guardian::finalize_removal_handler(ctx, guardian_pubkey)
+    }
+
+    /// Cancels a scheduled removal. Admin OR the targeted guardian itself.
+    pub fn cancel_guardian_removal(
+        ctx: Context<CancelGuardianRemoval>,
+        guardian_pubkey: Pubkey,
+    ) -> Result<()> {
+        instructions::admin::guardian::cancel_removal_handler(ctx, guardian_pubkey)
     }
 
     pub fn propose_admin_transfer(

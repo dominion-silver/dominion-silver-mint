@@ -26,6 +26,92 @@ env:
   NODE_VERSION: 20
 
 jobs:
+  # ===================================================================
+  # BLOCKING GATE (audit action 0.5, added 2026-07-25).
+  #
+  # Every step below is intentionally WITHOUT continue-on-error. The audit's
+  # finding H-02 / DOM-015 was that this workflow could not fail: a non-compiling
+  # program and failing unit tests both produced a green check, because every
+  # substantive step was continue-on-error and there was no test step at all.
+  # The legacy job that follows is left as-is (it exists for artifact upload and
+  # the known-flaky anchor build); this job is the one that gates.
+  # ===================================================================
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+          components: rustfmt
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: gate-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Install Solana CLI (for cargo build-sbf)
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v${{ env.SOLANA_VERSION }}/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: cargo fmt (BLOCKING)
+        run: cargo fmt --all -- --check
+
+      - name: cargo check (BLOCKING)
+        run: cargo check -p dominion_silver_mint --all-targets --locked
+
+      - name: cargo test (BLOCKING - this step did not exist before)
+        run: cargo test -p dominion_silver_mint --lib --locked
+
+      - name: Build the release artifact, default features (BLOCKING)
+        run: cargo build-sbf --manifest-path programs/dominion_silver_mint_v2/Cargo.toml
+
+      - name: Regenerate the IDL (BLOCKING)
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor --tag v0.31.1 anchor-cli --locked || true
+          (cd programs/dominion_silver_mint_v2 && anchor idl build -- --locked > "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json")
+
+      - name: Verify the release artifact (BLOCKING - audit A-33)
+        # Refuses any binary that does not match a clean default-feature rebuild,
+        # which is what catches a dev-hatch or test-harness build reaching the
+        # deploy path. Also fails on a missing IDL.
+        run: scripts/verify-release-artifact.sh
+
+      - name: Lazer behavioural harness (BLOCKING - audit H-01)
+        # Builds into target/harness, so it cannot contaminate the deploy artifact.
+        run: bash tools/lazer-harness/run.sh
+
+      - name: Assert the deploy artifact is still clean after the harness
+        run: scripts/verify-release-artifact.sh
+
+      - name: Node setup
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Public app (BLOCKING - typecheck, tests, production build)
+        working-directory: apps/public
+        run: |
+          npm ci
+          npx tsc --noEmit
+          npx vitest run
+          npm run build
+
+      - name: Admin app (BLOCKING - typecheck, tests, production build)
+        working-directory: apps/admin
+        run: |
+          npm ci
+          npx tsc --noEmit
+          npx vitest run
+          npm run build
+
   build:
     runs-on: ubuntu-latest
     steps:

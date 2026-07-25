@@ -15,13 +15,13 @@ pub struct InitializeArgs {
     pub admin: Pubkey,                       // Ops Squads
     pub upgrade_authority_info: Pubkey,      // info-only: separate Upgrade Squads
     pub permanent_delegate_expected: Pubkey, // seize/clawback authority (Ops/compliance multisig)
-    pub freeze_authority_expected: Pubkey,   // freeze authority (Ops/compliance multisig), set at mint creation
+    pub freeze_authority_expected: Pubkey, // freeze authority (Ops/compliance multisig), set at mint creation
 
     // Compliance off at launch
     pub compliance_mode: bool, // false at launch
 
     // Premium
-    pub premium_bps_mint: u16,   // e.g. 150 (1.5%); ceiling 300 (launch spec 2026-07)
+    pub premium_bps_mint: u16, // e.g. 150 (1.5%); ceiling 300 (launch spec 2026-07)
     pub premium_bps_redeem: u16, // e.g. 200 (2%); ceiling 500 (launch spec 2026-07)
 
     // Oracle (Pyth Lazer). The program/storage/treasury are compile-time

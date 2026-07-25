@@ -341,8 +341,24 @@ export function formatUsdc(raw: BN): string {
 
 /** Raw u64 BN (6 decimals) -> display SILV/oz count string. */
 export function formatSilv(raw: BN): string {
-  const silv = raw.toNumber() / 1_000_000;
-  return silv.toLocaleString("en-US", { maximumFractionDigits: 4 });
+  // AUDIT follow-up to A-29: `raw.toNumber()` THROWS above 2^53. It is bounded
+  // safe today because MAX_SILV_SUPPLY_CEILING (1e15 atomic) sits under 2^53, but
+  // it would throw rather than misformat if that ceiling ever moved, and the whole
+  // point of the A-29 fix was to stop doing lossy arithmetic on BN before display.
+  // Split into whole and fractional parts instead, so no intermediate exceeds 2^53.
+  const MICRO = new BN(1_000_000);
+  const neg = raw.isNeg();
+  const abs = neg ? raw.neg() : raw;
+  const whole = Number(abs.div(MICRO).toString()).toLocaleString("en-US");
+  const frac = abs.mod(MICRO).toNumber(); // 0..999_999
+  if (frac === 0) return `${neg ? "-" : ""}${whole}`;
+  // Up to 4 decimals, trailing zeros trimmed, matching the previous display.
+  const decimals = String(Math.round(frac / 100))
+    .padStart(4, "0")
+    .replace(/0+$/, "");
+  return decimals.length
+    ? `${neg ? "-" : ""}${whole}.${decimals}`
+    : `${neg ? "-" : ""}${whole}`;
 }
 
 /**

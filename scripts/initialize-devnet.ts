@@ -71,7 +71,7 @@ const DEVNET_RPC = "https://api.devnet.solana.com";
 // under a fresh id. Unset in all real deploys -> the canonical V2 id.
 const PROGRAM_ID = new PublicKey(
   process.env.DOMINION_PROGRAM_ID ||
-    "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W",
+    "gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc",
 );
 // AUDIT DOM-001: `initialize` now requires the signer to BE the program's
 // upgrade authority, proven through the loader's ProgramData account. That

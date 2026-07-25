@@ -1049,8 +1049,8 @@ mod fix_a_tests {
         RedeemLimitsArgs,
     };
     use crate::state::{
-        REDEEM_QUEUE_DELAY_MAX_SECONDS, REDEEM_QUEUE_DELAY_MIN_SECONDS,
-        DEFAULT_REDEEM_QUEUE_DELAY_SECONDS,
+        DEFAULT_REDEEM_QUEUE_DELAY_SECONDS, REDEEM_QUEUE_DELAY_MAX_SECONDS,
+        REDEEM_QUEUE_DELAY_MIN_SECONDS,
     };
 
     // Baseline current config for the checks below.
@@ -1164,7 +1164,9 @@ mod fix_a_tests {
 
     #[test]
     fn queue_delay_below_the_hard_floor_is_rejected() {
-        assert!(validate_redeem_limits_ceilings(&delay(REDEEM_QUEUE_DELAY_MIN_SECONDS - 1)).is_err());
+        assert!(
+            validate_redeem_limits_ceilings(&delay(REDEEM_QUEUE_DELAY_MIN_SECONDS - 1)).is_err()
+        );
         assert!(validate_redeem_limits_ceilings(&delay(1)).is_err());
     }
 
@@ -1177,14 +1179,18 @@ mod fix_a_tests {
     #[test]
     fn queue_delay_above_the_ceiling_is_still_rejected() {
         // Regression guard: adding the floor must not have dropped the ceiling.
-        assert!(validate_redeem_limits_ceilings(&delay(REDEEM_QUEUE_DELAY_MAX_SECONDS + 1)).is_err());
+        assert!(
+            validate_redeem_limits_ceilings(&delay(REDEEM_QUEUE_DELAY_MAX_SECONDS + 1)).is_err()
+        );
     }
 
     #[test]
     fn the_shipped_default_delay_satisfies_the_new_floor() {
         // Proves the new floor cannot brick a fresh deploy or an existing config.
         assert!(DEFAULT_REDEEM_QUEUE_DELAY_SECONDS >= REDEEM_QUEUE_DELAY_MIN_SECONDS);
-        assert!(validate_redeem_limits_ceilings(&delay(DEFAULT_REDEEM_QUEUE_DELAY_SECONDS)).is_ok());
+        assert!(
+            validate_redeem_limits_ceilings(&delay(DEFAULT_REDEEM_QUEUE_DELAY_SECONDS)).is_ok()
+        );
     }
 
     #[test]

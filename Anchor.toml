@@ -6,14 +6,20 @@ solana_version = "3.0.0"
 resolution = true
 skip-lint = false
 
+# AUDIT DOM-014: localnet and mainnet pointed at the RETIRED GDN5k... id, which is
+# not this binary's declare_id. An operator could initialize, verify or sign against
+# the wrong program. localnet now matches declare_id.
 [programs.localnet]
-dominion_silver_mint = "GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX"
+dominion_silver_mint = "gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc"
 
 [programs.devnet]
-dominion_silver_mint = "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W"
+dominion_silver_mint = "gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc"
 
-[programs.mainnet]
-dominion_silver_mint = "GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX"
+# AUDIT DOM-014: the mainnet entry is intentionally ABSENT until the real mainnet
+# program id is generated and reviewed. Declaring a stale id here is worse than
+# declaring none: it silently points mainnet tooling at a program nobody controls.
+# [programs.mainnet]
+# dominion_silver_mint = "<TBD: generate at the mainnet deploy ceremony>"
 
 [registry]
 url = "https://api.apr.dev"

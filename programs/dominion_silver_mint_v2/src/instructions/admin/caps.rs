@@ -18,6 +18,7 @@
 // (propose/execute), as before.
 
 use anchor_lang::prelude::*;
+use anchor_spl::token_interface::Mint as InterfaceMint;
 
 use crate::errors::DominionError;
 use crate::instructions::admin::execute::{
@@ -25,6 +26,23 @@ use crate::instructions::admin::execute::{
     RedeemLimitsArgs,
 };
 use crate::state::*;
+
+/// AUDIT A-31: set_max_silv_supply needs to read the LIVE mint supply, so it gets
+/// its own Accounts struct rather than adding a required account to the shared
+/// `SetParam` (which would change the ABI of set_redemptions_enabled and
+/// emergency_tighten_redeem_limits too, for no reason).
+#[derive(Accounts)]
+pub struct SetMaxSupply<'info> {
+    #[account(mut, seeds = [CONFIG_SEED], bump, has_one = admin)]
+    pub config: Account<'info, ConfigAccount>,
+
+    pub admin: Signer<'info>,
+
+    /// Read-only, pinned to the configured SILV mint so the supply cannot be
+    /// spoofed by passing a different mint.
+    #[account(address = config.silv_mint @ DominionError::WrongMint)]
+    pub silv_mint: InterfaceAccount<'info, InterfaceMint>,
+}
 
 #[derive(Accounts)]
 pub struct SetParam<'info> {
@@ -41,7 +59,7 @@ pub struct SetParam<'info> {
 /// pre-mint unbacked SILV. Raising the cap comes later, driven by the PoR feed
 /// (Phase 2) or a timelocked setter (Phase 1); `pending_max_supply_nonce` is
 /// reserved for that path.
-pub fn set_max_silv_supply_handler(ctx: Context<SetParam>, new_max: u64) -> Result<()> {
+pub fn set_max_silv_supply_handler(ctx: Context<SetMaxSupply>, new_max: u64) -> Result<()> {
     require!(
         new_max <= MAX_SILV_SUPPLY_CEILING,
         DominionError::AboveMaximum
@@ -49,6 +67,22 @@ pub fn set_max_silv_supply_handler(ctx: Context<SetParam>, new_max: u64) -> Resu
     require!(
         new_max <= ctx.accounts.config.max_silv_supply,
         DominionError::SupplyCapRaiseBlocked
+    );
+    // AUDIT A-31: because raising the cap is blocked, lowering it BELOW the live
+    // supply is irreversible from the panel and permanently kills admin_premint,
+    // the only mint path at launch. The only exit would be a program upgrade. The
+    // minimal invariant the review recommended: never let the cap fall under what
+    // is already minted. Headroom can still be shrunk all the way to the current
+    // supply, so the emergency "stop issuing more" action is preserved; what is
+    // refused is the fat-finger that bricks the instruction.
+    //
+    // Read from the REAL mint rather than a tracked counter, so the check cannot
+    // drift. If a deliberate permanent halt is ever wanted, it should be a separate,
+    // explicitly named, separately confirmed instruction, not a side effect of this
+    // setter (open product decision, see the master audit doc section 13.4).
+    require!(
+        new_max >= ctx.accounts.silv_mint.supply,
+        DominionError::SupplyCapBelowSupply
     );
     ctx.accounts.config.max_silv_supply = new_max;
     Ok(())

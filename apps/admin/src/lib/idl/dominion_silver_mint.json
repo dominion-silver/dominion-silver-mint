@@ -1,5 +1,5 @@
 {
-  "address": "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W",
+  "address": "gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc",
   "metadata": {
     "name": "dominion_silver_mint",
     "version": "0.1.0",
@@ -363,6 +363,77 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "cancel_guardian_removal",
+      "docs": [
+        "Cancels a scheduled removal. Admin OR the targeted guardian itself."
+      ],
+      "discriminator": [
+        71,
+        152,
+        30,
+        57,
+        64,
+        248,
+        189,
+        11
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "signer",
+          "signer": true
+        },
+        {
+          "name": "guardian_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  117,
+                  97,
+                  114,
+                  100,
+                  105,
+                  97,
+                  110
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "guardian_pubkey"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "guardian_pubkey",
+          "type": "pubkey"
+        }
+      ]
     },
     {
       "name": "cancel_timelocked_action",
@@ -1786,6 +1857,74 @@
       ]
     },
     {
+      "name": "finalize_guardian_removal",
+      "docs": [
+        "Applies a scheduled removal after its window. Permissionless on purpose."
+      ],
+      "discriminator": [
+        201,
+        46,
+        39,
+        207,
+        197,
+        74,
+        207,
+        208
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "guardian_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  117,
+                  97,
+                  114,
+                  100,
+                  105,
+                  97,
+                  110
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "guardian_pubkey"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "guardian_pubkey",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
       "name": "initialize",
       "discriminator": [
         175,
@@ -1824,7 +1963,7 @@
         },
         {
           "name": "dominion_program",
-          "address": "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W"
+          "address": "gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc"
         },
         {
           "name": "program_data"
@@ -3555,6 +3694,11 @@
     },
     {
       "name": "remove_guardian",
+      "docs": [
+        "AUDIT 0.12b: SCHEDULES a removal (does not apply it). The guardian keeps",
+        "full powers for admin_timelock_seconds and may cancel its own removal, so a",
+        "compromised admin can no longer clear the veto in one signature."
+      ],
       "discriminator": [
         72,
         117,
@@ -3709,6 +3853,13 @@
           "signer": true,
           "relations": [
             "config"
+          ]
+        },
+        {
+          "name": "silv_mint",
+          "docs": [
+            "Read-only, pinned to the configured SILV mint so the supply cannot be",
+            "spoofed by passing a different mint."
           ]
         }
       ],
@@ -3979,6 +4130,32 @@
         58,
         162,
         18
+      ]
+    },
+    {
+      "name": "GuardianRemovalCancelled",
+      "discriminator": [
+        163,
+        216,
+        139,
+        196,
+        73,
+        160,
+        48,
+        240
+      ]
+    },
+    {
+      "name": "GuardianRemovalScheduled",
+      "discriminator": [
+        78,
+        47,
+        62,
+        220,
+        58,
+        13,
+        241,
+        11
       ]
     },
     {
@@ -4670,6 +4847,21 @@
       "code": 12095,
       "name": "GuardianFloorBreached",
       "msg": "Removing this guardian would take the active set below the floor; add a replacement guardian first"
+    },
+    {
+      "code": 12096,
+      "name": "GuardianRemovalAlreadyScheduled",
+      "msg": "A removal is already scheduled for this guardian"
+    },
+    {
+      "code": 12097,
+      "name": "GuardianRemovalNotScheduled",
+      "msg": "No removal is scheduled for this guardian"
+    },
+    {
+      "code": 12098,
+      "name": "SupplyCapBelowSupply",
+      "msg": "Supply cap cannot be set below the SILV already minted (it would permanently brick minting, since raising the cap is blocked)"
     }
   ],
   "types": [
@@ -5160,6 +5352,10 @@
           {
             "name": "cooldown_until",
             "type": "i64"
+          },
+          {
+            "name": "pending_removal_at",
+            "type": "i64"
           }
         ]
       }
@@ -5172,6 +5368,38 @@
           {
             "name": "guardian",
             "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GuardianRemovalCancelled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "guardian",
+            "type": "pubkey"
+          },
+          {
+            "name": "cancelled_by",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "GuardianRemovalScheduled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "guardian",
+            "type": "pubkey"
+          },
+          {
+            "name": "effective_at",
+            "type": "i64"
           }
         ]
       }

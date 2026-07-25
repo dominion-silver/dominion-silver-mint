@@ -195,7 +195,9 @@ pub enum DominionError {
     InventoryWalletNotSet,
     #[msg("Pre-mint destination is not owned by the configured inventory wallet")]
     InvalidInventoryDestination,
-    #[msg("Enabling redemptions is blocked at launch; it opens with the Phase 1 KYC/redeem upgrade")]
+    #[msg(
+        "Enabling redemptions is blocked at launch; it opens with the Phase 1 KYC/redeem upgrade"
+    )]
     RedemptionsEnableBlocked,
     #[msg("SILV mint freeze_authority does not match config.freeze_authority_expected")]
     SilvFreezeAuthorityMismatch,
@@ -220,4 +222,10 @@ pub enum DominionError {
     QueueDelayTooShort,
     #[msg("Removing this guardian would take the active set below the floor; add a replacement guardian first")]
     GuardianFloorBreached,
+    #[msg("A removal is already scheduled for this guardian")]
+    GuardianRemovalAlreadyScheduled,
+    #[msg("No removal is scheduled for this guardian")]
+    GuardianRemovalNotScheduled,
+    #[msg("Supply cap cannot be set below the SILV already minted (it would permanently brick minting, since raising the cap is blocked)")]
+    SupplyCapBelowSupply,
 }

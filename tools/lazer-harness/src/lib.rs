@@ -17,12 +17,28 @@ mod harness {
     use std::io::Write;
     use std::str::FromStr;
 
+    // AUDIT: the dominion program id used to be a hardcoded string here, and it
+    // silently drifted on every fresh deploy (2ujQg -> AX7se -> gc5TW). Each drift
+    // turned all 6 tests into Anchor Custom(4100) DeclaredProgramIdMismatch, which
+    // reads as "the oracle path is broken" rather than "the harness is stale".
+    // It is now parsed out of the program source that produced the .so we load, so
+    // the two can no longer disagree. Change declare_id! and this follows.
+    const DOMINION_SRC: &str =
+        include_str!("../../../programs/dominion_silver_mint_v2/src/lib.rs");
+    fn dominion_id() -> Pubkey {
+        const NEEDLE: &str = "declare_id!(\"";
+        let start = DOMINION_SRC
+            .find(NEEDLE)
+            .expect("declare_id! not found in the program source")
+            + NEEDLE.len();
+        let end = start
+            + DOMINION_SRC[start..]
+                .find('"')
+                .expect("unterminated declare_id! literal");
+        Pubkey::from_str(&DOMINION_SRC[start..end]).expect("declare_id! is not a valid pubkey")
+    }
+
     // Pinned constants (must match the dominion source).
-    // AUDIT: was pinned to the retired 2ujQg... while the .so this harness loads
-    // declares AX7se..., so every test failed with Anchor Custom(4100)
-    // DeclaredProgramIdMismatch (0 of 6 passing). Must equal declare_id! in
-    // programs/dominion_silver_mint_v2/src/lib.rs.
-    const DOMINION_ID: &str = "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W";
     const LAZER_PROGRAM_ID: &str = "pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt";
     const LAZER_STORAGE: &str = "3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpPuSCQVyQL";
     const LAZER_TREASURY: &str = "Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak";
@@ -54,17 +70,14 @@ mod harness {
     }
 
     fn so_bytes(name: &str) -> Vec<u8> {
-        // WARNING (audit 2026-07-25). This reads the SAME path that
-        // `solana program deploy` uses. Making these tests pass requires
-        // building it with `-- --features test-harness`, which compiles the
-        // `probe_oracle_price` instruction INTO that artifact. So after running
-        // this harness, target/deploy/dominion_silver_mint.so is contaminated and
-        // MUST NOT be deployed. Rebuild with the default feature set and run
-        // scripts/verify-release-artifact.sh before any deploy.
-        //   cargo build-sbf --manifest-path programs/dominion_silver_mint_v2/Cargo.toml
-        //   scripts/verify-release-artifact.sh
-        // tools/lazer-harness -> repo root -> target/deploy/<name>.so
-        let path = format!("{}/../../target/deploy/{}.so", env!("CARGO_MANIFEST_DIR"), name);
+        // AUDIT root-cause fix (2026-07-25): this used to read target/deploy, the
+        // same path `solana program deploy` reads, and the harness needs a
+        // `--features test-harness` build, so running it left a probe-contaminated
+        // binary sitting at the deploy path. It now reads target/harness, which
+        // run.sh populates, so the contamination class is gone at the root rather
+        // than being mitigated by a warning. Use `tools/lazer-harness/run.sh`.
+        // tools/lazer-harness -> repo root -> target/harness/<name>.so
+        let path = format!("{}/../../target/harness/{}.so", env!("CARGO_MANIFEST_DIR"), name);
         std::fs::read(&path).unwrap_or_else(|e| panic!("read {path}: {e} (build it first)"))
     }
 
@@ -238,7 +251,7 @@ mod harness {
     }
 
     fn setup(o: &OracleCfg, fee: u64) -> Env {
-        let dominion = pk(DOMINION_ID);
+        let dominion = dominion_id();
         let lazer = pk(LAZER_PROGRAM_ID);
         let mut svm = LiteSVM::new();
         // Pin the clock so staleness/future checks are deterministic.
@@ -272,7 +285,7 @@ mod harness {
     }
 
     fn run_probe(env: &mut Env, message_data: &[u8]) -> Result<Vec<u8>, String> {
-        let dominion = pk(DOMINION_ID);
+        let dominion = dominion_id();
         let ix = Instruction {
             program_id: dominion,
             accounts: vec![

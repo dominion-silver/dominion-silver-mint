@@ -189,3 +189,16 @@ pub struct DevParamSet {
     pub value_b: u64,
     pub timestamp: i64,
 }
+
+// AUDIT action 0.12b (DOM-007): deferred guardian removal.
+#[event]
+pub struct GuardianRemovalScheduled {
+    pub guardian: Pubkey,
+    pub effective_at: i64,
+}
+
+#[event]
+pub struct GuardianRemovalCancelled {
+    pub guardian: Pubkey,
+    pub cancelled_by: Pubkey,
+}

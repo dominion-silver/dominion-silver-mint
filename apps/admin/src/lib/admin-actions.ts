@@ -125,8 +125,20 @@ async function instant(c: BuildCtx, method: string, arg: any): Ix {
     .instruction();
   return one(ix);
 }
-export const setMaxSilvSupply = (c: BuildCtx, v: bigint): Ix =>
-  instant(c, "setMaxSilvSupply", new BN(v.toString()));
+// AUDIT A-31: set_max_silv_supply now reads the live mint supply (so the cap can
+// never be set below what is already minted, which would permanently brick
+// admin_premint since raising the cap is blocked). It therefore has its own
+// Accounts struct with the SILV mint, and cannot use the shared `instant` helper.
+export async function setMaxSilvSupply(c: BuildCtx, v: bigint): Ix {
+  const ix = await (getProgram(c.connection).methods as any)
+    .setMaxSilvSupply(new BN(v.toString()))
+    .accountsPartial({
+      admin: c.admin ?? adminAuthority(),
+      silvMint: SILV_MINT,
+    })
+    .instruction();
+  return one(ix);
+}
 export const setRedemptionsEnabled = (c: BuildCtx, on: boolean): Ix =>
   instant(c, "setRedemptionsEnabled", on);
 // Instant, admin-only. Sets the inventory wallet the admin_premint destination
@@ -235,10 +247,39 @@ export async function addGuardian(c: BuildCtx, g: PublicKey): Ix {
     .instruction();
   return one(ix);
 }
+/** AUDIT 0.12b: this SCHEDULES a removal, it does not apply it. The guardian keeps
+ *  full powers for admin_timelock_seconds and may cancel its own removal, so a
+ *  compromised admin can no longer clear the veto in one signature. Apply it after
+ *  the window with `finalizeGuardianRemoval`. */
 export async function removeGuardian(c: BuildCtx, g: PublicKey): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .removeGuardian(g)
     .accountsPartial({ admin: c.admin ?? adminAuthority() })
+    .instruction();
+  return one(ix);
+}
+
+/** Applies a removal scheduled by removeGuardian, once its window has elapsed.
+ *  Permissionless on-chain, so no admin account is needed. */
+export async function finalizeGuardianRemoval(c: BuildCtx, g: PublicKey): Ix {
+  const ix = await (getProgram(c.connection).methods as any)
+    .finalizeGuardianRemoval(g)
+    .accountsPartial({})
+    .instruction();
+  return one(ix);
+}
+
+/** Cancels a scheduled removal. Signed by the admin OR by the targeted guardian
+ *  itself, which is the point of the mechanism. `signer` defaults to the acting
+ *  admin; pass the guardian key to exercise the self-veto path. */
+export async function cancelGuardianRemoval(
+  c: BuildCtx,
+  g: PublicKey,
+  signer?: PublicKey,
+): Ix {
+  const ix = await (getProgram(c.connection).methods as any)
+    .cancelGuardianRemoval(g)
+    .accountsPartial({ signer: signer ?? c.admin ?? adminAuthority() })
     .instruction();
   return one(ix);
 }

@@ -1,7 +1,9 @@
 import { PublicKey } from "@solana/web3.js";
 
-// Program ID: Pyth Lazer fresh devnet deploy 2026-06-10 (config layout changed).
-export const PROGRAM_ID = new PublicKey("AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W");
+// Program ID: fresh devnet deploy 2026-07-25 (wave-0 audit remediation changed the
+// ConfigAccount + GuardianAccount layout, and initialize can only ever run once
+// per program id, so a new id was required). Retired: AX7seVo6..., GDN5ktEm...
+export const PROGRAM_ID = new PublicKey("gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc");
 
 // Token programs.
 export const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -12,8 +14,9 @@ export const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZb
 // For mainnet swap to: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
 export const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
 
-// SILV mint - Pyth Lazer fresh devnet init 2026-06-10 (target/devnet-deployment.json).
-export const SILV_MINT = new PublicKey("5i13gz6vGKTYhpWbMuQfiBAApfNHCxxJu2GtDGM1A2Li");
+// SILV mint - created by the 2026-07-25 init (scripts/t1-hostile-bootstrap.ts case 5).
+// Must be updated after every fresh init: read it back with scripts/read-config.ts.
+export const SILV_MINT = new PublicKey("9jM14E8kV6asGw2FwNhKk3gXQNzGhoLrJGyFZ8U7gMoF");
 
 // Pyth XAG/USD feed.
 export const PYTH_XAG_USD_FEED_ID = "0xf2fb02c32b055c805e7238d628e5e9dadef274376114eb1f012337cabe93871e";

@@ -325,8 +325,7 @@ mod tests {
     fn read_treasury_ok_and_bounded() {
         let want = Pubkey::new_unique();
         let mut s = vec![0u8; STORAGE_FEE_OFFSET + 8];
-        s[STORAGE_TREASURY_OFFSET..STORAGE_TREASURY_OFFSET + 32]
-            .copy_from_slice(&want.to_bytes());
+        s[STORAGE_TREASURY_OFFSET..STORAGE_TREASURY_OFFSET + 32].copy_from_slice(&want.to_bytes());
         assert_eq!(read_treasury(&s).unwrap(), want);
         // too small (< treasury offset + 32) -> LazerStorageMalformed.
         assert!(read_treasury(&[0u8; STORAGE_TREASURY_OFFSET + 31]).is_err());
