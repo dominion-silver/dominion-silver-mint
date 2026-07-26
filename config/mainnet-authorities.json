@@ -1,0 +1,98 @@
+{
+  "_README": [
+    "MAINNET authority assignment for the Dominion SILV launch. Confirmed by Thomas 2026-07-26.",
+    "",
+    "This file is the SINGLE SOURCE OF TRUTH for the mainnet deploy ceremony. Every one of",
+    "these decisions is IRREVERSIBLE or expensive to undo, so they are recorded here rather",
+    "than typed at a terminal. Verify with: scripts/verify-mainnet-authorities.ts",
+    "",
+    "These are PUBLIC KEYS. Publishing them is safe (they are on-chain regardless) and",
+    "desirable: anyone can check that the deployed program's authorities match what was",
+    "announced. No secret material belongs in this file, ever."
+  ],
+
+  "cluster": "mainnet-beta",
+
+  "authorities": {
+    "ops_admin": {
+      "pubkey": "65g5nNXTtqtFz3jggKAqyvS6oCoVUXuXqAU9B8jHqPPS",
+      "role": "config.admin. Day-to-day operations: premint, param setters, proposing timelocked actions.",
+      "kind": "off-curve (PDA, consistent with a Squads vault)",
+      "verified_onchain": "2026-07-26: exists on mainnet, 0.100251 SOL, System-owned, OFF-CURVE",
+      "notes": "The hottest key: touched on every operational action. Correctly separated from the upgrade authority."
+    },
+    "upgrade_authority": {
+      "pubkey": "FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3",
+      "role": "BPF loader upgrade authority. Can replace the program with arbitrary code, which overrides EVERY in-program safeguard. The ultimate trust root.",
+      "kind": "off-curve (PDA, consistent with a Squads vault)",
+      "verified_onchain": "2026-07-26: exists on mainnet, 0.001 SOL, System-owned, OFF-CURVE",
+      "notes": "SHARES A KEY with compliance and guardian. See risk_accepted.upgrade_equals_compliance."
+    },
+    "compliance": {
+      "pubkey": "FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3",
+      "role": "SILV mint freeze_authority AND Token-2022 permanent delegate. Can freeze/thaw any holder and transfer or burn any holder's tokens. Set at MINT CREATION and permanent.",
+      "kind": "off-curve (PDA, consistent with a Squads vault)",
+      "verified_onchain": "same account as upgrade_authority",
+      "notes": "Written into config.freeze_authority_expected and config.permanent_delegate_expected at initialize, and re-asserted on EVERY user instruction. If this vault is ever lost below threshold, freeze and seize are PERMANENTLY unrecoverable: not even the upgrade authority can restore an external SPL authority."
+    },
+    "guardian": {
+      "pubkey": "FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3",
+      "role": "Guardian veto: pause, cancel_timelocked_action, cancel_admin_transfer during a delay window.",
+      "kind": "off-curve (PDA, consistent with a Squads vault)",
+      "verified_onchain": "same account as upgrade_authority",
+      "notes": "Distinct from ops_admin, which is what matters for the code: add_guardian refuses config.admin and GuardianAccount::may_act refuses a guardian that IS the admin. Both pass with this assignment. More guardians to be added shortly (Thomas, 2026-07-26); MIN_ACTIVE_GUARDIANS is 1 and max_guardian_count defaults to 3."
+    },
+    "inventory_wallet": {
+      "pubkey": "EkDhR65JUL8tGhxRhnueaqri6zNzxMEJ82UU35pQ7V56",
+      "role": "config.inventory_wallet. Destination of admin_premint. Holds the pre-minted SILV before it is sent to the DEX pool.",
+      "kind": "ON-CURVE (a plain single-signer wallet, NOT a multisig)",
+      "verified_onchain": "2026-07-26: exists on mainnet, 0.119654603 SOL, System-owned, ON-CURVE",
+      "notes": "Deliberately a hot wallet so inventory can be moved to the pool without a multisig round trip. It will hold the ENTIRE pre-minted supply, so its private key is as valuable as the float. Consider a Squads vault once the pool is seeded and inventory stops moving."
+    },
+    "deployer": {
+      "pubkey": "2Lp91FyJUb8MQ1yteFLKh345Umb5f1RgCCwwDFNCYEcD",
+      "role": "Pays for the mainnet deploy and signs initialize. MUST be the upgrade authority at initialize time (audit DOM-001 binds them), so either deploy from the upgrade Squads vault or transfer the upgrade authority to it AFTER initialize.",
+      "kind": "ON-CURVE (a plain single-signer wallet)",
+      "verified_onchain": "2026-07-26: DOES NOT EXIST on mainnet (AccountNotFound, zero balance)",
+      "notes": "BLOCKER: needs funding before any mainnet deploy. A ~1.05 MB program needs about 7.5 SOL of rent, plus the buffer at peak. Budget 9 SOL."
+    }
+  },
+
+  "risk_accepted": {
+    "upgrade_equals_compliance": {
+      "what": "upgrade_authority and compliance are the SAME vault (FqFNX...), and it is also the guardian.",
+      "why_it_matters": "SolidProof TrustNet MEDIUM #1 is precisely 'these must be split across separate multisigs'. A compromise of FqFNX can replace the program with arbitrary code AND freeze or seize any holder's balance. That is the complete-takeover scenario the audit named, lacking only the ops_admin role, which an arbitrary upgrade can grant itself anyway.",
+      "what_it_DOES_still_defend": "The more likely compromise. ops_admin is the hot, frequently-signed key, and it is genuinely separate: if it falls, FqFNX can veto its timelocked actions as guardian and repair the program as upgrade authority.",
+      "recommendation": "Separate upgrade_authority from compliance before material value accrues. Compliance is a WARM key (it gets exercised in response to legal orders); an upgrade authority should be COLD, used rarely, and ideally renounced once the code is final. A third vault, or renouncing upgradeability post-launch, closes this.",
+      "status": "ACCEPTED for launch by Thomas 2026-07-26, with the split tracked as a follow-up."
+    }
+  },
+
+  "mint_creation_ceremony": {
+    "_note": "Every value here is FIXED FOREVER at mint creation. There is no second chance.",
+    "decimals": 6,
+    "extensions": ["MetadataPointer", "TokenMetadata", "PermanentDelegate"],
+    "freeze_authority": "compliance vault (FqFNX...)",
+    "permanent_delegate": "compliance vault (FqFNX...)",
+    "mint_authority": "the program's silv_mint_authority PDA (derived, never a wallet)",
+    "metadata_update_authority": "the program's silv_metadata_authority PDA",
+    "name": "Dominion Silver",
+    "symbol": "SILV",
+    "uri": "https://dominion.market/silv-metadata.json",
+    "uri_must_resolve_before_launch": true
+  },
+
+  "launch_posture": {
+    "paused": true,
+    "public_mint_enabled": false,
+    "redemptions_enabled": false,
+    "max_silv_supply": "100000000000 (100,000 oz at 6dp)",
+    "premium_bps_mint": 150,
+    "premium_bps_redeem": 200,
+    "admin_timelock_seconds": 86400,
+    "min_publishers": 2,
+    "treasury_min_float_usdc": "SET A NON-ZERO VALUE before enabling any withdrawal (SolidProof LOW #4)",
+    "usdc_mint_mainnet": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "lazer_treasury_mainnet": "Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak"
+  }
+}
