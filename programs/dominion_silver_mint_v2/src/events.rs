@@ -261,3 +261,13 @@ pub struct AdminTransferCancelled {
     pub cancelled_pending_admin: Option<Pubkey>,
     pub by: Pubkey,
 }
+
+/// "Mint at launch" phase. Emitted by BOTH the timelocked open and the instant close,
+/// so a monitor sees every transition of the single most consequential public-facing
+/// flag in the program.
+#[event]
+pub struct PublicMintEnabledChanged {
+    pub old_enabled: bool,
+    pub new_enabled: bool,
+    pub by: Pubkey,
+}

@@ -22,7 +22,8 @@ use anchor_spl::token_interface::Mint as InterfaceMint;
 
 use crate::errors::DominionError;
 use crate::events::{
-    InventoryWalletChanged, MaxSupplyChanged, RedeemLimitsTightened, RedemptionsEnabledChanged,
+    InventoryWalletChanged, MaxSupplyChanged, PublicMintEnabledChanged, RedeemLimitsTightened,
+    RedemptionsEnabledChanged,
 };
 use crate::instructions::admin::execute::{
     redeem_limits_all_tighten, redeem_limits_any_set, validate_redeem_limits_ceilings,
@@ -123,6 +124,35 @@ pub fn set_redemptions_enabled_handler(ctx: Context<SetParam>, enabled: bool) ->
     ctx.accounts.config.redemptions_enabled = enabled;
     // SolidProof LOW #3.
     emit!(RedemptionsEnabledChanged {
+        old_enabled,
+        new_enabled: enabled,
+        by: ctx.accounts.admin.key(),
+    });
+    Ok(())
+}
+
+/// Instant CLOSE of the public mint path. FALSE-ONLY, mirroring
+/// `set_redemptions_enabled` and the FIX A tighten-fast/loosen-slow asymmetry.
+///
+/// Closing is the emergency direction and must take one transaction: if the Lazer feed
+/// misbehaves, or a publisher set degrades, or a price band looks wrong, public minting
+/// has to stop NOW rather than in 24 hours. OPENING goes through
+/// `propose_set_public_mint` + `execute_set_public_mint` so it is announced, delayed and
+/// guardian-cancellable.
+///
+/// Note what this does NOT touch: the pre-mint path. `admin_premint` has never depended
+/// on `public_mint_enabled`, so closing public mint in an emergency does not block
+/// inventory operations, and pausing the protocol (which does block them) stays a
+/// separate, coarser lever.
+pub fn set_public_mint_enabled_handler(ctx: Context<SetParam>, enabled: bool) -> Result<()> {
+    require!(!enabled, DominionError::PublicMintOpenRequiresTimelock);
+    let old_enabled = ctx.accounts.config.public_mint_enabled;
+    require!(old_enabled != enabled, DominionError::PublicMintUnchanged);
+    ctx.accounts.config.public_mint_enabled = enabled;
+    // Also clear any in-flight OPEN proposal: leaving one pending after a deliberate
+    // emergency close would let the open land later without a fresh decision.
+    ctx.accounts.config.pending_public_mint_nonce = None;
+    emit!(PublicMintEnabledChanged {
         old_enabled,
         new_enabled: enabled,
         by: ctx.accounts.admin.key(),
@@ -277,5 +307,68 @@ mod tests {
             validate_new_max_supply(DEFAULT_MAX_SILV_SUPPLY + 1, DEFAULT_MAX_SILV_SUPPLY, 0)
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod public_mint_tests {
+    use super::*;
+
+    fn code(e: anchor_lang::error::Error) -> u32 {
+        match e {
+            anchor_lang::error::Error::AnchorError(a) => a.error_code_number,
+            _ => panic!("expected an AnchorError"),
+        }
+    }
+
+    /// The decision the instant setter makes, extracted so the asymmetry is testable
+    /// without a Context. Mirrors set_public_mint_enabled_handler exactly.
+    fn validate_instant_public_mint(current: bool, requested: bool) -> Result<()> {
+        require!(!requested, DominionError::PublicMintOpenRequiresTimelock);
+        require!(current != requested, DominionError::PublicMintUnchanged);
+        Ok(())
+    }
+
+    #[test]
+    fn closing_an_open_mint_is_allowed_instantly() {
+        // The emergency direction: a misbehaving feed must be answerable in one tx.
+        assert!(validate_instant_public_mint(true, false).is_ok());
+    }
+
+    #[test]
+    fn opening_instantly_is_refused() {
+        // The whole point of the asymmetry. Opening wakes the oracle path and lets the
+        // public consume the cap headroom, so it must be announced and vetoable.
+        let e = validate_instant_public_mint(false, true).unwrap_err();
+        assert_eq!(
+            code(e),
+            DominionError::PublicMintOpenRequiresTimelock as u32 + 6000
+        );
+    }
+
+    #[test]
+    fn opening_instantly_is_refused_even_when_already_open() {
+        // Ordering matters: the direction check runs BEFORE the no-op check, so an
+        // operator who fat-fingers `true` always sees why it is refused rather than
+        // the less informative "unchanged".
+        let e = validate_instant_public_mint(true, true).unwrap_err();
+        assert_eq!(
+            code(e),
+            DominionError::PublicMintOpenRequiresTimelock as u32 + 6000
+        );
+    }
+
+    #[test]
+    fn closing_an_already_closed_mint_is_a_no_op_error() {
+        let e = validate_instant_public_mint(false, false).unwrap_err();
+        assert_eq!(code(e), DominionError::PublicMintUnchanged as u32 + 6000);
+    }
+
+    #[test]
+    fn the_launch_default_is_closed() {
+        // Pinned so a future change to initialize cannot silently ship an open mint.
+        // The launch posture is public mint CLOSED; opening is a deliberate,
+        // timelocked, announced act.
+        assert!(!DEFAULT_PUBLIC_MINT_ENABLED);
     }
 }

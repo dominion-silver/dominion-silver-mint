@@ -147,6 +147,12 @@ pub mod dominion_silver_mint {
         instructions::admin::caps::set_max_silv_supply_handler(ctx, new_max)
     }
 
+    /// Instant CLOSE of the public mint. FALSE-ONLY; opening goes through the
+    /// 24h timelock (propose_set_public_mint / execute_set_public_mint).
+    pub fn set_public_mint_enabled(ctx: Context<SetParam>, enabled: bool) -> Result<()> {
+        instructions::admin::caps::set_public_mint_enabled_handler(ctx, enabled)
+    }
+
     pub fn set_redemptions_enabled(ctx: Context<SetParam>, enabled: bool) -> Result<()> {
         instructions::admin::caps::set_redemptions_enabled_handler(ctx, enabled)
     }
@@ -299,6 +305,11 @@ pub mod dominion_silver_mint {
         instructions::admin::execute::execute_withdraw_usdc_handler(ctx, nonce)
     }
 
+    /// Propose OPENING the public mint (24h timelock, guardian-cancellable).
+    pub fn propose_set_public_mint(ctx: Context<ProposePublicMint>, new_value: bool) -> Result<()> {
+        instructions::admin::propose::propose_set_public_mint_handler(ctx, new_value)
+    }
+
     pub fn propose_set_compliance_mode(
         ctx: Context<ProposeCompliance>,
         new_value: bool,
@@ -368,6 +379,10 @@ pub mod dominion_silver_mint {
         new_lazer_feed_id: u32,
     ) -> Result<()> {
         instructions::admin::propose::propose_set_pyth_feed_handler(ctx, new_lazer_feed_id)
+    }
+
+    pub fn execute_set_public_mint(ctx: Context<ExecutePublicMint>, nonce: u64) -> Result<()> {
+        instructions::admin::execute::execute_set_public_mint_handler(ctx, nonce)
     }
 
     pub fn execute_set_pyth_feed(ctx: Context<ExecutePythFeed>, nonce: u64) -> Result<()> {

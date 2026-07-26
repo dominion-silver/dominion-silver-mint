@@ -245,4 +245,9 @@ pub enum DominionError {
     // one use, otherwise a rogue guardian is permanently unremovable.
     #[msg("This guardian has already used its one self-cancel")]
     GuardianSelfCancelExhausted,
+    // "Mint at launch" phase (Thomas, 2026-07-26).
+    #[msg("Public mint is already in the requested state")]
+    PublicMintUnchanged,
+    #[msg("Opening the public mint requires the 24h timelock; only CLOSING it is instant")]
+    PublicMintOpenRequiresTimelock,
 }

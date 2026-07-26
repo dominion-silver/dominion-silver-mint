@@ -105,6 +105,35 @@ const optAtomic = (s: string | undefined, decimals: number) =>
 
 const ACTIONS: ActionDesc[] = [
   {
+    // "Mint at launch" (Thomas, 2026-07-26). Two cards on purpose, because the
+    // program is deliberately asymmetric: closing is instant, opening is timelocked.
+    // One combined on/off card would let an operator try to open the mint instantly
+    // and get a confusing revert.
+    id: "close-public-mint",
+    label: "CLOSE public mint (emergency, instant)",
+    group: "Emergency & ops",
+    mode: "squads",
+    fields: [],
+    tip: "Stops public minting in ONE transaction. Use this the moment the price feed looks wrong: a degraded publisher set, a stale print, a price outside the band. Does NOT affect admin pre-mint, and does not pause the protocol. Re-opening afterwards takes the 24h timelock again.",
+    current: (c) => (c.publicMintEnabled ? "OPEN" : "closed"),
+    build: (c) => actions.setPublicMintEnabled(c, false),
+  },
+  {
+    id: "propose-open-public-mint",
+    label: "OPEN public mint (24h timelock)",
+    group: "Delayed (24h)",
+    mode: "squads",
+    fields: [],
+    tip: "Opens direct minting: users pay USDC and receive SILV at the oracle price plus the mint premium. This WAKES THE ORACLE PATH, which is dormant while mint and redeem are both closed, so confirm the staleness, confidence, publisher-floor and price-band guards against live feed data BEFORE proposing. Takes 24h and a guardian can cancel during the window. Execute it afterwards from the Timelock tab.",
+    current: (c) =>
+      c.publicMintEnabled
+        ? "already OPEN"
+        : c.pendingPublicMintNonce
+          ? `open pending (nonce ${c.pendingPublicMintNonce.toString()})`
+          : "closed",
+    build: (c) => actions.proposeSetPublicMint(c, true),
+  },
+  {
     id: "set-redemptions",
     label: "Set redemptions on/off",
     group: "Instant",

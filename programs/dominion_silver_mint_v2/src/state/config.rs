@@ -182,6 +182,12 @@ pub const DEFAULT_ADMIN_TIMELOCK_SECONDS: u32 = 86400; // 24 hours
 // Stands in for the live PoR at launch (a manually-set backing bound). The
 // cap-RAISE is timelocked in this batch (FIX A) so it can't be lifted instantly.
 pub const DEFAULT_MAX_SILV_SUPPLY: u64 = 100_000_000_000; // 100,000 oz at 6 decimals
+                                                          // The launch posture for the public mint path. FALSE at launch: users buy pre-minted
+                                                          // SILV on the DEX, and opening the direct mint is a deliberate 24h-timelocked,
+                                                          // guardian-cancellable act (propose_set_public_mint). Pinned as a named constant so the
+                                                          // default lives in one place and a unit test can guard it: an accidental `true` here
+                                                          // would ship an open mint with a live oracle path on day one.
+pub const DEFAULT_PUBLIC_MINT_ENABLED: bool = false;
 pub const DEFAULT_TREASURY_MIN_FLOAT_USDC: u64 = 0; // Mark sets from panel (D7)
 pub const DEFAULT_LARGE_REDEEM_THRESHOLD_USDC: u64 = 5_000_000_000; // $5k (D10)
 pub const DEFAULT_INSTANT_REDEEM_BUDGET_USDC: u64 = 20_000_000_000; // $20k/window (D10)
@@ -398,7 +404,18 @@ pub struct ConfigAccount {
 
     // Schema
     pub version: u8,
-    pub reserved: [u8; 63],
+
+    // Public-mint gate, phase "mint at launch" (Thomas, 2026-07-26). Single-active
+    // guard for the timelocked ENABLE path, mirroring every other pending_*_nonce.
+    //
+    // Declared AFTER `version` and immediately before `reserved`, which is the rule
+    // the pending_removal_count comment above establishes the hard way: carving a byte
+    // out BEFORE `version` shifts `version` and `reserved`, and doing that on an
+    // in-place upgrade would decode garbage into the new field. Placed here, only
+    // `reserved` (opaque zeros) moves, so an in-place upgrade over an existing config
+    // reads None, which is the correct value for "no proposal pending".
+    pub pending_public_mint_nonce: Option<u64>,
+    pub reserved: [u8; 54],
 }
 
 impl ConfigAccount {
@@ -438,7 +455,8 @@ impl ConfigAccount {
         + 1 + 1               // mint_paused + redeem_paused
         + 1                   // pending_removal_count (carved out of reserved)
         + 1                   // version
-        + 63; // reserved
+        + (1 + 8)             // pending_public_mint_nonce (carved out of reserved)
+        + 54; // reserved
 
     pub fn assert_premium_within_bounds(&self) -> Result<()> {
         require!(

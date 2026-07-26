@@ -247,6 +247,94 @@ pub fn propose_withdraw_usdc_handler(
 // === ProposeCompliance ===
 
 #[derive(Accounts)]
+pub struct ProposePublicMint<'info> {
+    #[account(mut, seeds = [CONFIG_SEED], bump, has_one = admin)]
+    pub config: Account<'info, ConfigAccount>,
+
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    #[account(
+        init,
+        payer = admin,
+        space = TimelockQueueAccount::SIZE,
+        seeds = [TIMELOCK_SEED, &config.next_timelock_nonce.to_le_bytes()],
+        bump,
+    )]
+    pub timelock: Account<'info, TimelockQueueAccount>,
+
+    pub system_program: Program<'info, System>,
+}
+
+/// Propose OPENING the public mint path ("mint at launch", Thomas 2026-07-26).
+///
+/// Only `true` is proposable here. Closing is instant via
+/// `set_public_mint_enabled(false)`, because closing is the emergency direction: if the
+/// oracle misbehaves, mint must stop in one transaction, not in 24 hours.
+///
+/// Why opening is timelocked at all, given that a public mint takes USDC IN rather than
+/// paying it out: it is not a drain vector, but it is a posture change with two real
+/// consequences. It wakes the ORACLE path, which is completely dormant while mint and
+/// redeem are both closed, so every staleness / confidence / publisher-count guard
+/// becomes load-bearing at that instant. And it lets the public consume the supply-cap
+/// headroom that backs the pre-minted inventory. Both deserve an announced,
+/// guardian-cancellable window.
+pub fn propose_set_public_mint_handler(
+    ctx: Context<ProposePublicMint>,
+    new_value: bool,
+) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+    let now = Clock::get()?.unix_timestamp;
+
+    require!(new_value, DominionError::PublicMintOpenRequiresTimelock);
+    require!(
+        new_value != config.public_mint_enabled,
+        DominionError::PublicMintUnchanged
+    );
+    require!(
+        config.pending_public_mint_nonce.is_none(),
+        DominionError::ProposalAlreadyActive
+    );
+    require!(
+        config.active_proposal_count < MAX_ACTIVE_PROPOSALS,
+        DominionError::TooManyActiveProposals
+    );
+
+    let nonce = config.next_timelock_nonce;
+    let executable_at = now
+        .checked_add(config.admin_timelock_seconds as i64)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
+
+    let tl = &mut ctx.accounts.timelock;
+    tl.nonce = nonce;
+    tl.action_disc = TimelockAction::SetPublicMint as u8;
+    tl.action_data = vec![new_value as u8];
+    tl.scheduled_at = now;
+    tl.executable_at = executable_at;
+    tl.executed_at = None;
+    tl.cancelled = false;
+    tl.proposer = ctx.accounts.admin.key();
+    tl.rent_payer = ctx.accounts.admin.key();
+
+    config.next_timelock_nonce = nonce
+        .checked_add(1)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
+    config.active_proposal_count = config
+        .active_proposal_count
+        .checked_add(1)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
+    config.pending_public_mint_nonce = Some(nonce);
+
+    emit!(AdminActionProposed {
+        nonce,
+        action_disc: tl.action_disc,
+        executable_at,
+        proposer: ctx.accounts.admin.key(),
+    });
+    Ok(())
+}
+
+#[derive(Accounts)]
 pub struct ProposeCompliance<'info> {
     #[account(mut, seeds = [CONFIG_SEED], bump, has_one = admin)]
     pub config: Account<'info, ConfigAccount>,

@@ -1394,6 +1394,82 @@
       ]
     },
     {
+      "name": "execute_set_public_mint",
+      "discriminator": [
+        197,
+        200,
+        116,
+        124,
+        3,
+        187,
+        192,
+        44
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_recipient",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "execute_set_pyth_feed",
       "discriminator": [
         118,
@@ -2865,6 +2941,87 @@
       ]
     },
     {
+      "name": "propose_set_public_mint",
+      "docs": [
+        "Propose OPENING the public mint (24h timelock, guardian-cancellable)."
+      ],
+      "discriminator": [
+        18,
+        101,
+        88,
+        92,
+        50,
+        29,
+        80,
+        181
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config.next_timelock_nonce",
+                "account": "ConfigAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_value",
+          "type": "bool"
+        }
+      ]
+    },
+    {
       "name": "propose_set_pyth_feed",
       "discriminator": [
         188,
@@ -3872,6 +4029,57 @@
       ]
     },
     {
+      "name": "set_public_mint_enabled",
+      "docs": [
+        "Instant CLOSE of the public mint. FALSE-ONLY; opening goes through the",
+        "24h timelock (propose_set_public_mint / execute_set_public_mint)."
+      ],
+      "discriminator": [
+        100,
+        19,
+        211,
+        212,
+        135,
+        194,
+        136,
+        236
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "enabled",
+          "type": "bool"
+        }
+      ]
+    },
+    {
       "name": "set_redemptions_enabled",
       "discriminator": [
         169,
@@ -4300,6 +4508,19 @@
         193,
         231,
         116
+      ]
+    },
+    {
+      "name": "PublicMintEnabledChanged",
+      "discriminator": [
+        242,
+        11,
+        25,
+        79,
+        125,
+        151,
+        216,
+        163
       ]
     },
     {
@@ -4938,6 +5159,16 @@
       "code": 12100,
       "name": "GuardianSelfCancelExhausted",
       "msg": "This guardian has already used its one self-cancel"
+    },
+    {
+      "code": 12101,
+      "name": "PublicMintUnchanged",
+      "msg": "Public mint is already in the requested state"
+    },
+    {
+      "code": 12102,
+      "name": "PublicMintOpenRequiresTimelock",
+      "msg": "Opening the public mint requires the 24h timelock; only CLOSING it is instant"
     }
   ],
   "types": [
@@ -5394,11 +5625,17 @@
             "type": "u8"
           },
           {
+            "name": "pending_public_mint_nonce",
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
             "name": "reserved",
             "type": {
               "array": [
                 "u8",
-                63
+                54
               ]
             }
           }
@@ -5842,6 +6079,31 @@
           {
             "name": "timestamp",
             "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PublicMintEnabledChanged",
+      "docs": [
+        "\"Mint at launch\" phase. Emitted by BOTH the timelocked open and the instant close,",
+        "so a monitor sees every transition of the single most consequential public-facing",
+        "flag in the program."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_enabled",
+            "type": "bool"
+          },
+          {
+            "name": "new_enabled",
+            "type": "bool"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
           }
         ]
       }

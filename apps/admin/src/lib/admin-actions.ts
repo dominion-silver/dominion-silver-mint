@@ -139,6 +139,16 @@ export async function setMaxSilvSupply(c: BuildCtx, v: bigint): Ix {
     .instruction();
   return one(ix);
 }
+// "Mint at launch" (Thomas, 2026-07-26). Deliberately asymmetric, matching the
+// program: CLOSING is instant, OPENING is 24h-timelocked and guardian-cancellable.
+// Opening wakes the oracle path, which is dormant while mint and redeem are both
+// closed, so every staleness / confidence / publisher guard becomes load-bearing the
+// moment it lands.
+export const setPublicMintEnabled = (c: BuildCtx, on: boolean): Ix =>
+  instant(c, "setPublicMintEnabled", on);
+export const proposeSetPublicMint = (c: BuildCtx, on: boolean): Ix =>
+  propose(c, "proposeSetPublicMint", [on]);
+
 export const setRedemptionsEnabled = (c: BuildCtx, on: boolean): Ix =>
   instant(c, "setRedemptionsEnabled", on);
 // Instant, admin-only. Sets the inventory wallet the admin_premint destination
@@ -485,7 +495,8 @@ export type ExecMethod =
   | "executeSetTreasuryMinFloat"
   | "executeSetAdminTimelock"
   | "executeSetComplianceMode"
-  | "executeSetRedeemLimits";
+  | "executeSetRedeemLimits"
+  | "executeSetPublicMint";
 export const EXEC_METHODS: ExecMethod[] = [
   "executeSetPremiumMint",
   "executeSetPremiumRedeem",
@@ -495,6 +506,7 @@ export const EXEC_METHODS: ExecMethod[] = [
   "executeSetAdminTimelock",
   "executeSetComplianceMode",
   "executeSetRedeemLimits",
+  "executeSetPublicMint",
 ];
 
 export async function executeTimelocked(

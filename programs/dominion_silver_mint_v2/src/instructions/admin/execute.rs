@@ -829,6 +829,72 @@ pub fn execute_set_admin_timelock_handler(
     Ok(())
 }
 
+// === Execute SetPublicMint ===
+// Applies the timelocked OPENING of the public mint path ("mint at launch").
+
+#[derive(Accounts)]
+#[instruction(nonce: u64)]
+pub struct ExecutePublicMint<'info> {
+    #[account(mut, seeds = [CONFIG_SEED], bump, has_one = admin)]
+    pub config: Account<'info, ConfigAccount>,
+    pub admin: Signer<'info>,
+    #[account(
+        mut, close = rent_recipient,
+        seeds = [TIMELOCK_SEED, &nonce.to_le_bytes()], bump,
+        constraint = !timelock.cancelled @ DominionError::TimelockActionCancelled,
+        constraint = timelock.executed_at.is_none() @ DominionError::TimelockActionAlreadyExecuted,
+    )]
+    pub timelock: Account<'info, TimelockQueueAccount>,
+    /// CHECK: rent recipient.
+    #[account(mut, address = timelock.rent_payer)]
+    pub rent_recipient: AccountInfo<'info>,
+}
+
+pub fn execute_set_public_mint_handler(ctx: Context<ExecutePublicMint>, nonce: u64) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+    let tl = &mut ctx.accounts.timelock;
+    let now = Clock::get()?.unix_timestamp;
+
+    require!(tl.nonce == nonce, DominionError::NonceMismatch);
+    require!(
+        tl.action_disc == TimelockAction::SetPublicMint as u8,
+        DominionError::NonceMismatch
+    );
+    require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
+
+    require!(
+        !tl.action_data.is_empty(),
+        DominionError::MalformedActionData
+    );
+    let new_value = tl.action_data[0] != 0;
+    // Re-validated at execute, not only at propose (defence in depth, and the same
+    // shape as every other execute handler here): only OPENING is reachable through
+    // the timelock, and it must still be a real change.
+    require!(new_value, DominionError::PublicMintOpenRequiresTimelock);
+    require!(
+        new_value != config.public_mint_enabled,
+        DominionError::PublicMintUnchanged
+    );
+
+    config.public_mint_enabled = new_value;
+
+    config.pending_public_mint_nonce = None;
+    config.active_proposal_count = config.active_proposal_count.saturating_sub(1);
+    tl.executed_at = Some(now);
+
+    emit!(PublicMintEnabledChanged {
+        old_enabled: !new_value,
+        new_enabled: new_value,
+        by: ctx.accounts.admin.key(),
+    });
+    emit!(AdminActionExecuted {
+        nonce,
+        action_disc: tl.action_disc,
+        executor: ctx.accounts.admin.key(),
+    });
+    Ok(())
+}
+
 // === Execute SetPythFeed (auto-pause on execute) ===
 
 #[derive(Accounts)]

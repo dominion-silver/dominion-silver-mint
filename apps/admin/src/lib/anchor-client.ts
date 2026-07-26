@@ -115,6 +115,8 @@ export interface ConfigAccount {
   // removal floor is evaluated against guardianCount - pendingRemovalCount.
   pendingRemovalCount: number;
   version: number;
+  /** Single-active guard for the timelocked public-mint OPEN. */
+  pendingPublicMintNonce: BN | null;
 }
 
 export type RedemptionStatusKind = "pending" | "claimed" | "settledOffchain";

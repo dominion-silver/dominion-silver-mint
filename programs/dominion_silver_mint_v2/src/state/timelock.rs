@@ -30,6 +30,13 @@ pub enum TimelockAction {
     // redeem_queue_delay). Instant TIGHTENING is the separate, un-timelocked
     // `emergency_tighten_redeem_limits`. APPEND ONLY - never reorder.
     SetRedeemLimits = 10,
+    // "Mint at launch" phase: opening the public mint path is a LOOSENING, so it goes
+    // through the 24h timelock and is guardian-cancellable. CLOSING it is instant
+    // (set_public_mint_enabled(false)), the same tighten-fast/loosen-slow asymmetry
+    // FIX A applies to the redeem throttles. Opening the mint wakes the oracle path,
+    // which is dormant while it is closed, so a 24h announced window is exactly when
+    // a misconfigured oracle guard should be caught.
+    SetPublicMint = 11,
 }
 
 #[account]

@@ -460,7 +460,7 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     // Inventory wallet is set via set_inventory_wallet before the first pre-mint.
     config.inventory_wallet = Pubkey::default();
     // Public direct mint closed at launch (opens with KYC in Phase 1).
-    config.public_mint_enabled = false;
+    config.public_mint_enabled = DEFAULT_PUBLIC_MINT_ENABLED;
     // Phase 1 KYC hooks (reserved, unused at launch).
     config.kyc_operator = Pubkey::default();
     config.kyc_enforced = false;
@@ -476,7 +476,8 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
 
     config.pending_removal_count = 0;
     config.version = 2; // launch spec 2026-07 schema
-    config.reserved = [0u8; 63];
+    config.pending_public_mint_nonce = None;
+    config.reserved = [0u8; 54];
 
     msg!("dominion_silver_mint initialized");
     Ok(())
