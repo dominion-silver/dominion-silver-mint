@@ -63,10 +63,28 @@ npm run dev          # http://localhost:3001
 
 ## Status
 
-Devnet program: `GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX`
+Devnet program: `6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh`
+SILV mint: `62dTkSN7FF2HH8tENWL1mXmrCm8ouqX1bditK71yfxPr`
 
-The previous program id (`J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5`) is
-**retired** and must not be used.
+**Retired program ids. None of these must ever be used, verified against, or
+deployed to:**
+
+| Program id | Retired |
+|---|---|
+| `gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc` | 2026-07-26, superseded by the review fix-pack |
+| `AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W` | 2026-07-25, closed on-chain |
+| `GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX` | pre-Lazer |
+| `J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5` | older still |
+
+This table exists because it was wrong. SolidProof TrustNet LOW #2 ("Program id
+configuration is inconsistent across manifests and documentation") found this
+README still naming `GDN5k` as THE devnet program, two generations after it was
+retired, while `Anchor.toml` and the source declared something else. A stale id in
+the place people look it up is the same hazard as a stale id in a manifest: a
+source-verification run keyed off the wrong entry silently verifies the wrong
+program. `scripts/verify-constants-consistency.sh` now fails the build if any
+retired id appears on a live line of the files that drive deploys, and the current
+id above is asserted against `declare_id!`.
 
 Deployment is fresh-deploy-only: a new program keypair per environment, never
 an in-place upgrade over a prior id. The ad-hoc `scripts/deploy-devnet.sh` and

@@ -4082,6 +4082,19 @@
       ]
     },
     {
+      "name": "AdminTransferCancelled",
+      "discriminator": [
+        93,
+        23,
+        69,
+        55,
+        216,
+        128,
+        106,
+        56
+      ]
+    },
+    {
       "name": "AdminTransferProposed",
       "discriminator": [
         203,
@@ -4170,6 +4183,32 @@
         196,
         5,
         56
+      ]
+    },
+    {
+      "name": "InventoryWalletChanged",
+      "discriminator": [
+        235,
+        193,
+        11,
+        107,
+        143,
+        91,
+        115,
+        232
+      ]
+    },
+    {
+      "name": "MaxSupplyChanged",
+      "discriminator": [
+        212,
+        136,
+        120,
+        105,
+        109,
+        1,
+        152,
+        162
       ]
     },
     {
@@ -4277,6 +4316,19 @@
       ]
     },
     {
+      "name": "RedeemLimitsTightened",
+      "discriminator": [
+        181,
+        112,
+        79,
+        180,
+        112,
+        104,
+        27,
+        50
+      ]
+    },
+    {
       "name": "RedeemQueued",
       "discriminator": [
         186,
@@ -4326,6 +4378,19 @@
         189,
         56,
         174
+      ]
+    },
+    {
+      "name": "RedemptionsEnabledChanged",
+      "discriminator": [
+        146,
+        164,
+        156,
+        217,
+        178,
+        228,
+        20,
+        239
       ]
     },
     {
@@ -4642,7 +4707,7 @@
     {
       "code": 12054,
       "name": "SilvFreezeAuthorityMustBeNone",
-      "msg": "SILV mint freeze_authority must be None"
+      "msg": "RETIRED: no longer raised. The SILV mint freeze_authority is REQUIRED to be present and to match config.freeze_authority_expected; see SilvFreezeAuthorityMismatch"
     },
     {
       "code": 12055,
@@ -4959,6 +5024,29 @@
           },
           {
             "name": "new",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AdminTransferCancelled",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "cancelled_pending_admin",
+            "docs": [
+              "The admin-elect whose handover was just cancelled. None is impossible in",
+              "practice (the handler requires a pending transfer) but the field is an",
+              "Option so the event cannot lie if that ever changes."
+            ],
+            "type": {
+              "option": "pubkey"
+            }
+          },
+          {
+            "name": "by",
             "type": "pubkey"
           }
         ]
@@ -5501,6 +5589,58 @@
       }
     },
     {
+      "name": "InventoryWalletChanged",
+      "docs": [
+        "SolidProof MEDIUM #3 asked specifically for this one: the pre-mint destination",
+        "can be redirected instantly, so the redirect must at least be observable."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
+      "name": "MaxSupplyChanged",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_max",
+            "type": "u64"
+          },
+          {
+            "name": "new_max",
+            "type": "u64"
+          },
+          {
+            "name": "live_supply",
+            "docs": [
+              "Live mint supply at the moment of the change, so the \"how much headroom",
+              "was just removed\" question is answerable from the log alone."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
       "name": "MetadataUpdated",
       "type": {
         "kind": "struct",
@@ -5771,6 +5911,38 @@
       }
     },
     {
+      "name": "RedeemLimitsTightened",
+      "docs": [
+        "The instant tighten fast lane. Every field is Option in the args, so the event",
+        "reports the resulting values rather than only what was supplied."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "instant_redeem_budget_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "instant_redeem_window_seconds",
+            "type": "u32"
+          },
+          {
+            "name": "large_redeem_threshold_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "redeem_queue_delay_seconds",
+            "type": "u32"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
       "name": "RedeemQueued",
       "type": {
         "kind": "struct",
@@ -5944,6 +6116,26 @@
           },
           {
             "name": "SettledOffchain"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RedemptionsEnabledChanged",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_enabled",
+            "type": "bool"
+          },
+          {
+            "name": "new_enabled",
+            "type": "bool"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
           }
         ]
       }

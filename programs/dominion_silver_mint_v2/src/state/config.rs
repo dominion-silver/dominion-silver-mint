@@ -209,6 +209,23 @@ pub struct ConfigAccount {
     // freeze authority added for the freeze lever). Both are set at mint creation.
     pub permanent_delegate_expected: Pubkey, // seize/clawback authority (Ops/compliance multisig)
     pub freeze_authority_expected: Pubkey, // freeze authority (Ops/compliance multisig), locked at init
+    // SolidProof TrustNet audit (2026-07-24), INFORMATIONAL #2: "Compliance mode flag
+    // is never read as a gate". Correct, and the name is misleading, so it is
+    // documented here rather than wired up.
+    //
+    // What this flag DOES: nothing on its own. No instruction reads it to permit or
+    // deny anything. Its only on-chain effect is that flipping it (via the
+    // 24h-timelocked SetComplianceMode action) AUTO-PAUSES the protocol.
+    //
+    // What it is FOR: it is an operator signal, not an enforcement mechanism. The
+    // real compliance enforcement is the freeze authority and the Token-2022
+    // permanent delegate, both held by an EXTERNAL multisig and exercised with direct
+    // SPL Token-2022 transactions that never touch this program.
+    //
+    // Why it is not wired: an integrator could reasonably but wrongly assume this
+    // flag gates transfers or redemptions on-chain. It does not, and it must not be
+    // presented as if it did. Left inert and documented, per the auditor's first
+    // suggested resolution.
     pub compliance_mode: bool,
 
     // Premium (D3/D4: ordinary USDC; launch discount = lower premium then restore)
@@ -339,11 +356,44 @@ pub struct ConfigAccount {
     pub mint_paused: bool,
     pub redeem_paused: bool,
 
-    // AUDIT review of daac4ac (P1): guardians currently scheduled for removal but not
-    // yet finalized. Carved out of `reserved` rather than appended, so the byte
-    // offsets of every existing field are unchanged and ConfigAccount::SIZE stays
-    // 800: an in-place upgrade decodes an existing config with this field reading 0,
-    // which is the correct value for a config that has no pending removals.
+    // Guardians currently scheduled for removal but not yet finalized. The removal
+    // floor is evaluated against `guardian_count - pending_removal_count`.
+    //
+    // ###################################################################
+    // CORRECTION, and a rule for whoever carves the NEXT byte out of `reserved`.
+    //
+    // The comment that shipped here claimed that carving this field out of
+    // `reserved` left "the byte offsets of every existing field unchanged". THAT WAS
+    // FALSE, and the review-of-fixes caught it with a byte-level simulation. Borsh is
+    // a sequential format: this field was inserted BEFORE `version`, so it shifted
+    // `version` and `reserved` by one byte. Only `SIZE` was unchanged (still 800).
+    //
+    // Why that matters, concretely. If this layout were ever applied by an IN-PLACE
+    // upgrade over a config written by the previous layout, the new
+    // `pending_removal_count` would decode the OLD `version` byte, which is always 2
+    // for every v2 config. The floor check then demands
+    // `guardian_count - 2 > MIN_ACTIVE_GUARDIANS`, i.e. at least 4 guardians, while
+    // MAX_GUARDIAN_COUNT_DEFAULT is 3 and no instruction can raise it. Neither
+    // decrement path can run either, because both require a guardian with a pending
+    // notice and none has one. Guardian removal would be PERMANENTLY bricked, exit
+    // via another program upgrade: precisely the failure this field exists to prevent.
+    //
+    // Not live: this layout only ever met a FRESH `initialize` (program 6bgSnX), so
+    // the field genuinely started at 0. The danger was never the deployed state, it
+    // was this comment becoming the in-tree pattern for using `reserved` while the
+    // KYC and PoR hooks below exist specifically so Phase 1 and Phase 2 are "pure
+    // logic with no account realloc".
+    //
+    // THE RULE: a new field carved out of `reserved` must be declared AFTER
+    // `version`, immediately before `reserved`, and `reserved` shrunk by the same
+    // number of bytes. Only then are all preceding offsets genuinely untouched, and
+    // only `reserved` (opaque zeros) shifts. Never insert before `version` again.
+    //
+    // Also worth knowing before reasoning about offsets in this struct at all: they
+    // are not fixed by the declaration alone. There are 14 `Option` fields, so the
+    // absolute byte offset of `version` depends on how many are `Some`. Field ORDER
+    // is the only stable thing. Do not reason in absolute offsets.
+    // ###################################################################
     pub pending_removal_count: u8,
 
     // Schema
@@ -409,6 +459,14 @@ impl ConfigAccount {
 }
 
 // Compile-time sanity check on ConfigAccount size.
+// The in-place-upgrade model for the KYC/PoR/pause hooks depends on this account
+// never changing size, and until the review-of-fixes nothing asserted it: the only
+// bounds were >= 256 and <= 4096, which a 200-byte drift would pass. GuardianAccount
+// got an exact size test in the same batch; this one, which matters more, did not.
+const _: () = assert!(
+    ConfigAccount::SIZE == 800,
+    "ConfigAccount::SIZE must stay 800. New fields come out of `reserved` (declared      AFTER `version`), never appended, or every deployed config needs a realloc."
+);
 const _: () = assert!(
     ConfigAccount::SIZE >= 256,
     "ConfigAccount too small (forgot fields?)"

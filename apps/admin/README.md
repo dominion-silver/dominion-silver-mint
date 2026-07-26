@@ -59,7 +59,10 @@ src/
 | Action | Timelocked | Notes |
 |---|---|---|
 | `set_mint_caps` / `set_redeem_caps` / `set_hourly_redeem_cap` | Instant | Admin Squads signing only |
-| `add_guardian` / `remove_guardian` | Instant | |
+| `add_guardian` | Instant | Refuses the current AND the pending admin |
+| `remove_guardian` | **SCHEDULES only** | Writes `pending_removal_at = now + 24h`. The guardian keeps every power until finalized. Refused if it would leave no guardian free to react |
+| `finalize_guardian_removal` | Permissionless, after the 24h ETA | Anyone may apply a matured removal. Expires 7 days after the ETA |
+| `cancel_guardian_removal` | Instant | Admin (free), the targeted guardian (ONCE), or anyone once the notice has expired |
 | `propose_admin_transfer` + `accept_admin_transfer` | 2-step, 7d expiry | |
 | `cancel_timelocked_action` | Instant | Admin OR guardian |
 | `thaw_account` | Instant | Requires PermanentDelegate authority (Ops Squads vault) |

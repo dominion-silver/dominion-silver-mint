@@ -16,13 +16,49 @@
 // out treasury USDC. The residual is that the SILV could be dumped on the DEX (the MM's
 // pool), bounded by the 100k cap. Matches the launch trust model (the multisig admin is
 // trusted to seed inventory). Phase 1 hardening: timelock set_inventory_wallet.
+//
+// ===================================================================
+// SolidProof TrustNet audit (2026-07-24), MEDIUM #3:
+//   "Instant pre-mint to an admin-chosen wallet with no timelock"
+//
+// ACCEPTED, WITH ONE PART FIXED AND ONE PART DEFERRED TO A PRODUCT DECISION.
+//
+// The finding is correct and precisely stated: set_inventory_wallet and
+// admin_premint are both instant, so a compromised admin can redirect the
+// inventory to an address it controls and mint the remaining cap headroom into it
+// in ONE transaction. The auditor also correctly bounds the exposure: the cap
+// cannot be raised instantly (SupplyCapRaiseBlocked), and pre-minted SILV cannot
+// be redeemed for treasury USDC (redemptions are closed and re-enabling them is
+// blocked ON-CHAIN, not by a flag), so the worst case is unbacked SILV dumped on
+// the secondary market, NOT a direct treasury drain.
+//
+// FIXED HERE: the auditor asked for events from both the setter and the pre-mint
+// so a redirect is at least observable. set_inventory_wallet now emits
+// InventoryWalletChanged with the old and new wallet, and admin_premint already
+// emitted PremintEvent carrying the inventory destination.
+//
+// DEFERRED, DELIBERATELY, AND IT IS A PRODUCT DECISION NOT A TECHNICAL ONE:
+// putting set_inventory_wallet behind the 24h timelock. It would close the
+// one-transaction path, and it would also mean that seeding or re-pointing
+// market-maker inventory at launch takes a day. That trade-off is the owner's
+// call, not the auditor's and not mine. Recommendation on the record: adopt it
+// once the inventory wallet is stable, i.e. right after the DEX pool is seeded,
+// because from then on the setter should essentially never be used again and the
+// delay costs nothing.
+//
+// WHY THIS IS SURVIVABLE AT LAUNCH: this is exactly the launch mechanism (mint
+// the physical allocation into inventory, seed the pool), the admin is the same
+// party that would have to be trusted to seed inventory at all, and the cap is a
+// hard ceiling that cannot be lifted. It is a bounded, observable trust
+// assumption, not an unbounded one.
+// ===================================================================
 // admin_premint also does not yet gate on the reserved `mint_paused` field (dormant at
 // launch); the Phase 1 author must wire it, since pre-mint is a mint path.
 
 use crate::assertions::assert_silv_mint_invariants;
 use crate::cpi::silv_mint_to;
 use crate::errors::DominionError;
-use crate::events::PremintEvent;
+use crate::events::{InventoryWalletChanged, PremintEvent};
 use crate::state::*;
 use anchor_lang::prelude::*;
 use anchor_spl::token_interface::{
@@ -131,6 +167,17 @@ pub fn set_inventory_wallet_handler(
         wallet != Pubkey::default(),
         DominionError::InventoryWalletNotSet
     );
+    let old_wallet = ctx.accounts.config.inventory_wallet;
     ctx.accounts.config.inventory_wallet = wallet;
+    // SolidProof MEDIUM #3 + LOW #3. The pre-mint destination can be redirected
+    // instantly and with no timelock, which is the accepted launch trade-off (see
+    // the ADMIN-TRUST note in this file's header). The audit's point stands
+    // regardless: an instant redirect must at minimum be OBSERVABLE, so a monitor
+    // can alert on a redirect it did not authorize even though it cannot block it.
+    emit!(InventoryWalletChanged {
+        old_wallet,
+        new_wallet: wallet,
+        by: ctx.accounts.admin.key(),
+    });
     Ok(())
 }

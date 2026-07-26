@@ -77,7 +77,7 @@ export function Dashboard() {
   // and it is the only place a guardian can see it is under notice.
   const { data: guardians } = useSWR<GuardianView[]>(
     data ? "dominion-guardians" : null,
-    () => fetchGuardians(connection),
+    () => fetchGuardians(connection, data?.cfg.admin),
     {
       refreshInterval: 20_000,
       revalidateOnFocus: false,
@@ -713,7 +713,15 @@ function GuardianRoster({ guardians }: { guardians: GuardianView[] }) {
                     {g.guardian.toBase58()}
                   </td>
                   <td className="py-2 pr-4">
-                    {g.active ? (
+                    {g.inertBecauseAdmin ? (
+                      // The state guardian_count cannot express: registered, not in
+                      // cooldown, and yet refused by every authorization site because
+                      // this key IS the admin. Called out loudly, because the count
+                      // claims a veto that no independent key can exercise.
+                      <span className="text-red-400">
+                        INERT: this key is the admin
+                      </span>
+                    ) : g.active ? (
                       <span className="text-accent">active</span>
                     ) : (
                       <span className="text-muted">
@@ -727,6 +735,15 @@ function GuardianRoster({ guardians }: { guardians: GuardianView[] }) {
                   <td className="py-2 pr-4">
                     {untilRemoval === null ? (
                       <span className="text-muted">not scheduled</span>
+                    ) : g.removalExpired ? (
+                      // Review-of-fixes: without this branch the cell said "due now,
+                      // anyone may finalize" forever, including long after the notice
+                      // died. finalize then reverts GuardianRemovalExpired, so the one
+                      // surface built to make the veto visible was misreporting the
+                      // rule shipped alongside it.
+                      <span className="text-muted">
+                        notice EXPIRED, no longer finalizable (schedule a new one)
+                      </span>
                     ) : untilRemoval > 0 ? (
                       <span className="text-amber-400">
                         scheduled, fires {formatCountdown(untilRemoval)}

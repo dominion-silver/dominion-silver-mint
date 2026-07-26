@@ -393,14 +393,30 @@ export const PROGRAM_ID_STR = PROGRAM_ID.toBase58();
  * console gave that guardian no way to see that a removal had been scheduled, who is
  * targeted, or when it fires. A veto nobody can see is not a veto.
  */
+/** Mirrors GUARDIAN_REMOVAL_EXEC_WINDOW_SECONDS in state/config.rs. */
+export const GUARDIAN_REMOVAL_EXEC_WINDOW_SECONDS = 7 * 86400;
+
 export type GuardianView = {
   guardian: PublicKey;
   addedAt: BN;
   cooldownUntil: BN;
   pendingRemovalAt: BN;
   selfCancelUsed: boolean;
-  /** Derived: active means the program will accept its powers. */
+  /**
+   * Derived: whether the PROGRAM will accept this guardian's powers, which is
+   * `cooldown_until == 0 && guardian != config.admin`, i.e. exactly
+   * GuardianAccount::may_act.
+   *
+   * Review-of-fixes: this used to be `cooldown_until == 0` alone, so a guardian key
+   * that IS the admin rendered as a healthy active guardian even though every
+   * authorization site refuses it. That is the one state where guardian_count
+   * overstates the real veto, so it is the one the roster most needs to show.
+   */
   active: boolean;
+  /** True when this guardian is registered but is the admin, so its powers are refused. */
+  inertBecauseAdmin: boolean;
+  /** True when a scheduled removal has aged out and can no longer be finalized. */
+  removalExpired: boolean;
 };
 
 /**
@@ -412,26 +428,36 @@ export type GuardianView = {
  */
 export async function fetchGuardians(
   connection: Connection,
+  admin?: PublicKey,
 ): Promise<GuardianView[]> {
   const program = getReadOnlyProgram(connection);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rows = await (program.account as any).guardianAccount.all();
+  const nowSecs = Math.floor(Date.now() / 1000);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return rows
     .map((r: any) => {
       const a = r.account;
+      const g = a.guardian as PublicKey;
+      const cooldownUntil = a.cooldownUntil as BN;
+      const pendingRemovalAt = a.pendingRemovalAt as BN;
+      const inertBecauseAdmin = admin ? g.equals(admin) : false;
+      const removalExpired =
+        !pendingRemovalAt.isZero() &&
+        nowSecs >
+          pendingRemovalAt.toNumber() + GUARDIAN_REMOVAL_EXEC_WINDOW_SECONDS;
       return {
-        guardian: a.guardian as PublicKey,
+        guardian: g,
         addedAt: a.addedAt as BN,
-        cooldownUntil: a.cooldownUntil as BN,
-        pendingRemovalAt: a.pendingRemovalAt as BN,
+        cooldownUntil,
+        pendingRemovalAt,
         selfCancelUsed: Boolean(a.selfCancelUsed),
-        active: (a.cooldownUntil as BN).isZero(),
+        active: cooldownUntil.isZero() && !inertBecauseAdmin,
+        inertBecauseAdmin,
+        removalExpired,
       } as GuardianView;
     })
-    .sort((a: GuardianView, b: GuardianView) =>
-      b.addedAt.cmp(a.addedAt),
-    );
+    .sort((a: GuardianView, b: GuardianView) => b.addedAt.cmp(a.addedAt));
 }
 
 /** Seconds until `ts`, or null when nothing is scheduled. Negative once elapsed. */

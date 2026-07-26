@@ -57,6 +57,30 @@ impl GuardianAccount {
     /// being true. It costs nothing operationally, because every guardian power
     /// (pause, cancel_timelocked_action, cancel_admin_transfer) is already available
     /// to the admin directly.
+    ///
+    /// RESIDUAL, found by the review-of-fixes and NOT closed here. Both floor checks
+    /// count REGISTRATIONS, and this predicate is invisible to them. So an admin
+    /// holding a second key K can: add K as a guardian (legal, no transfer pending),
+    /// transfer admin-ship to K, then remove the honest guardians. The end state
+    /// passes every check: `guardian_count == MIN_ACTIVE_GUARDIANS`,
+    /// `pending_removal_count == 0`, no error, no event, and the surviving "guardian"
+    /// is the admin, whose powers this predicate refuses. The config then claims a
+    /// veto that no independent key can exercise.
+    ///
+    /// Scope of the harm, precisely: the ADMIN can still pause and cancel (every such
+    /// site checks `is_admin || is_guardian`), so nothing is bricked. What is lost is
+    /// the INDEPENDENT veto, and what is wrong is that `guardian_count`
+    /// misrepresents it. This is the same end state as the residual already documented
+    /// in the MIN_ACTIVE_GUARDIANS comment (an admin can appoint puppets it controls);
+    /// this path merely makes the puppet inert rather than active.
+    ///
+    /// Structural fix, recommended and deliberately not taken in this pass because it
+    /// changes a governance instruction's ABI: `accept_admin_transfer` should take the
+    /// incoming admin's guardian PDA as a seeds-bound account and refuse to complete
+    /// while that guardian is active. Raising MIN_ACTIVE_GUARDIANS does not help, the
+    /// same trick works one step later. Until then the guardian roster in the admin
+    /// console marks a guardian whose key equals the admin as INERT, so an operator
+    /// can at least see the state.
     pub fn may_act(&self, signer: &Pubkey, admin: &Pubkey) -> bool {
         self.guardian == *signer && self.cooldown_until == 0 && self.guardian != *admin
     }
@@ -181,5 +205,167 @@ mod tests {
     #[test]
     fn expiry_does_not_overflow_at_the_extremes() {
         assert!(!removal_schedule_expired(i64::MAX, i64::MAX));
+    }
+
+    // ---------------------------------------------------------------------
+    // The review-of-fixes noted that `may_schedule_removal` and
+    // `removal_schedule_expired` were each tested as pure predicates, but their
+    // INTERACTION inside remove_handler is the only place `pending_removal_count`
+    // can desynchronise, and it had no coverage at all (the expired-re-arm branch
+    // skips BOTH the floor check and the increment, and needs a 31-day clock to
+    // reach on-chain). This is a model of the three handlers over
+    // (guardian_count, pending_removal_count, pending_removal_at) so the
+    // interaction is exercised without a validator.
+    // ---------------------------------------------------------------------
+    const TIMELOCK: i64 = 86_400;
+
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct Model {
+        count: u8,
+        pending: u8,
+        /// pending_removal_at of the single guardian we track.
+        at: i64,
+    }
+
+    impl Model {
+        /// Mirrors remove_handler.
+        fn schedule(&mut self, now: i64) -> core::result::Result<(), &'static str> {
+            let existing = self.at;
+            if !(existing == 0 || removal_schedule_expired(existing, now)) {
+                return Err("AlreadyScheduled");
+            }
+            if existing == 0 {
+                if !may_schedule_removal(self.count, self.pending) {
+                    return Err("FloorBreached");
+                }
+                self.pending += 1;
+            }
+            self.at = now + TIMELOCK;
+            Ok(())
+        }
+        /// Mirrors finalize_removal_handler.
+        fn finalize(&mut self, now: i64) -> core::result::Result<(), &'static str> {
+            if self.at == 0 {
+                return Err("NotScheduled");
+            }
+            if now < self.at {
+                return Err("NotElapsed");
+            }
+            if removal_schedule_expired(self.at, now) {
+                return Err("Expired");
+            }
+            if self.count <= MIN_ACTIVE_GUARDIANS {
+                return Err("FloorBreached");
+            }
+            self.at = 0;
+            self.count -= 1;
+            self.pending = self.pending.checked_sub(1).expect("underflow");
+            Ok(())
+        }
+        /// Mirrors cancel_removal_handler.
+        fn cancel(&mut self) -> core::result::Result<(), &'static str> {
+            if self.at == 0 {
+                return Err("NotScheduled");
+            }
+            self.at = 0;
+            self.pending = self.pending.checked_sub(1).expect("underflow");
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn re_arming_an_expired_notice_does_not_double_count() {
+        let mut m = Model {
+            count: 2,
+            pending: 0,
+            at: 0,
+        };
+        m.schedule(1_000).unwrap();
+        assert_eq!(m.pending, 1);
+        // Let it expire, then re-arm. The guardian was already counted as pending,
+        // so the counter must NOT increment again.
+        let later = 1_000 + TIMELOCK + GUARDIAN_REMOVAL_EXEC_WINDOW_SECONDS + 1;
+        m.schedule(later).unwrap();
+        assert_eq!(m.pending, 1, "re-arming double-counted the pending removal");
+        // And the fresh ETA is a full timelock away: no zero-notice removal.
+        assert_eq!(m.at, later + TIMELOCK);
+    }
+
+    #[test]
+    fn re_arm_then_cancel_returns_the_counter_to_zero() {
+        let mut m = Model {
+            count: 2,
+            pending: 0,
+            at: 0,
+        };
+        m.schedule(1_000).unwrap();
+        let later = 1_000 + TIMELOCK + GUARDIAN_REMOVAL_EXEC_WINDOW_SECONDS + 1;
+        m.schedule(later).unwrap();
+        m.cancel().unwrap();
+        assert_eq!(m.pending, 0);
+        assert_eq!(m.at, 0);
+    }
+
+    #[test]
+    fn an_expired_notice_cannot_be_finalized() {
+        let mut m = Model {
+            count: 2,
+            pending: 0,
+            at: 0,
+        };
+        m.schedule(1_000).unwrap();
+        let dead = 1_000 + TIMELOCK + GUARDIAN_REMOVAL_EXEC_WINDOW_SECONDS + 1;
+        assert_eq!(m.finalize(dead), Err("Expired"));
+        // Still armed-but-dead, and the counter is still 1 until someone clears it.
+        assert_eq!(m.pending, 1);
+        m.cancel().unwrap();
+        assert_eq!(m.pending, 0);
+    }
+
+    #[test]
+    fn the_counter_never_underflows_across_any_ordering() {
+        // Every ordering of the three transitions from a clean 2-guardian state.
+        for ops in [
+            vec!["s", "c", "s", "f"],
+            vec!["s", "f", "s"],
+            vec!["c", "s", "c"],
+            vec!["f", "s", "c", "s"],
+            vec!["s", "s", "c", "c"],
+        ] {
+            let mut m = Model {
+                count: 2,
+                pending: 0,
+                at: 0,
+            };
+            let mut now = 1_000i64;
+            for op in ops {
+                let _ = match op {
+                    "s" => m.schedule(now),
+                    "f" => m.finalize(now),
+                    _ => m.cancel(),
+                };
+                now += TIMELOCK + 1; // always past the ETA, never past the expiry
+                assert!(
+                    m.pending <= m.count,
+                    "pending {} exceeded count {}",
+                    m.pending,
+                    m.count
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_last_guardian_can_never_be_put_under_notice() {
+        // Corollary the review verified by hand: count == 1 implies pending == 0, so
+        // the no-floor-check re-arm branch can never apply to the last guardian.
+        let mut m = Model {
+            count: 1,
+            pending: 0,
+            at: 0,
+        };
+        assert_eq!(m.schedule(1_000), Err("FloorBreached"));
+        assert_eq!(m.pending, 0);
+        assert_eq!(m.at, 0);
     }
 }

@@ -792,6 +792,16 @@ pub fn execute_set_admin_timelock_handler(
     );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
 
+    // SolidProof INFORMATIONAL #9: this sliced action_data[..4] with no prior length
+    // check, unlike every sibling execute handler. Not reachable today (the propose
+    // path always writes exactly 4 bytes, the account is program-owned and its type
+    // is bound by the discriminant plus the nonce check), but an unchecked slice
+    // PANICS rather than returning the mapped error below, so the map_err was
+    // unreachable defence. Made uniform with the other handlers.
+    require!(
+        tl.action_data.len() >= 4,
+        DominionError::MalformedActionData
+    );
     let new_seconds = u32::from_le_bytes(
         tl.action_data[..4]
             .try_into()

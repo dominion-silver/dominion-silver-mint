@@ -202,3 +202,62 @@ pub struct GuardianRemovalCancelled {
     pub guardian: Pubkey,
     pub cancelled_by: Pubkey,
 }
+
+// ---------------------------------------------------------------------------
+// SolidProof TrustNet audit (2026-07-24), LOW #3: "State-changing admin setters
+// emit no events". Five privileged instructions mutated security-relevant state
+// silently, so an off-chain indexer could not observe them without diffing full
+// account snapshots: the supply-cap setter, the redemptions switch, the
+// emergency tighten-redeem-limits fast lane, the inventory-wallet setter, and the
+// admin-transfer cancellation. The last one is the worst of the five, because
+// propose and accept both emit while the CANCEL of a governance handover did not.
+//
+// Each event carries the OLD and the NEW value plus the signer, so a monitor can
+// alert on the transition itself rather than on a poll.
+// ---------------------------------------------------------------------------
+
+#[event]
+pub struct MaxSupplyChanged {
+    pub old_max: u64,
+    pub new_max: u64,
+    /// Live mint supply at the moment of the change, so the "how much headroom
+    /// was just removed" question is answerable from the log alone.
+    pub live_supply: u64,
+    pub by: Pubkey,
+}
+
+#[event]
+pub struct RedemptionsEnabledChanged {
+    pub old_enabled: bool,
+    pub new_enabled: bool,
+    pub by: Pubkey,
+}
+
+/// The instant tighten fast lane. Every field is Option in the args, so the event
+/// reports the resulting values rather than only what was supplied.
+#[event]
+pub struct RedeemLimitsTightened {
+    pub instant_redeem_budget_usdc: u64,
+    pub instant_redeem_window_seconds: u32,
+    pub large_redeem_threshold_usdc: u64,
+    pub redeem_queue_delay_seconds: u32,
+    pub by: Pubkey,
+}
+
+/// SolidProof MEDIUM #3 asked specifically for this one: the pre-mint destination
+/// can be redirected instantly, so the redirect must at least be observable.
+#[event]
+pub struct InventoryWalletChanged {
+    pub old_wallet: Pubkey,
+    pub new_wallet: Pubkey,
+    pub by: Pubkey,
+}
+
+#[event]
+pub struct AdminTransferCancelled {
+    /// The admin-elect whose handover was just cancelled. None is impossible in
+    /// practice (the handler requires a pending transfer) but the field is an
+    /// Option so the event cannot lie if that ever changes.
+    pub cancelled_pending_admin: Option<Pubkey>,
+    pub by: Pubkey,
+}

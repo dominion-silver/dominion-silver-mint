@@ -15,8 +15,15 @@
  * Run (devnet, admin keypair):
  *   DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json npx tsx scripts/e2e-guardian-devnet.ts
  *
- * Non-destructive: every guardian this script adds is left in place with
- * pending_removal_at == 0, because finalizing a removal needs a 24h wait.
+ * Non-destructive as to the guardian SET: every guardian this script adds is left in
+ * place with pending_removal_at == 0, because finalizing a removal needs a 24h wait.
+ *
+ * NOT non-destructive as to G2's one-shot self-veto budget: section 8 deliberately
+ * spends it and asserts that it stays spent. Only a full remove + cooldown + re-add
+ * resets it, which needs 24h, so section 8 branches on the live flag and reports which
+ * half of the rule it exercised. Do not "fix" that branch by re-deriving a fresh
+ * guardian per run: max_guardian_count is 5 and the script would leak a slot each
+ * time.
  */
 import { AnchorProvider, Program, Wallet, Idl } from "@coral-xyz/anchor";
 import {
@@ -315,23 +322,54 @@ async function main() {
       idl,
       new AnchorProvider(conn, new Wallet(G2kp), { commitment: "confirmed" }),
     );
-    await asG2.methods
-      .cancelGuardianRemoval(G2)
-      .accounts({ config: configPda, signer: G2, guardianAccount: gPda(G2) })
-      .rpc();
-    const g2a: any = await gAcct.fetch(gPda(G2));
-    ok(
-      "the targeted guardian can veto its own removal",
-      g2a.pendingRemovalAt.toString() === "0" && g2a.selfCancelUsed === true,
-      `self_cancel_used=${g2a.selfCancelUsed}`,
-    );
 
-    // Re-schedule. The SECOND self-veto must be refused: this is what stops a rogue
-    // guardian being permanently unremovable.
-    await program.methods
-      .removeGuardian(G2)
-      .accounts({ config: configPda, admin, guardianAccount: gPda(G2) })
-      .rpc();
+    // Review-of-fixes: this section is what makes the script SINGLE-USE, and the
+    // first version crashed on run 2 instead of failing cleanly. The self-veto is
+    // one-shot BY DESIGN and only a full remove + 1h cooldown + re-add resets it,
+    // which this script cannot do (finalizing needs 24h). So G2 keeps
+    // self_cancel_used == true forever, and a bare `await` of the self-cancel throws
+    // an unhandled GuardianSelfCancelExhausted on every later run, after ~14
+    // assertions have already printed PASS. Since "T2 green" is a release gate, a
+    // gate satisfiable exactly once per admin keypair is not a gate.
+    //
+    // Handled by branching on the live flag: whichever state the guardian is in, the
+    // rule being tested is asserted, and the run is honest about which half it
+    // exercised.
+    const g2Pre: any = await gAcct.fetch(gPda(G2));
+    if (!g2Pre.selfCancelUsed) {
+      await asG2.methods
+        .cancelGuardianRemoval(G2)
+        .accounts({ config: configPda, signer: G2, guardianAccount: gPda(G2) })
+        .rpc();
+      const g2a: any = await gAcct.fetch(gPda(G2));
+      ok(
+        "the targeted guardian can veto its own removal",
+        g2a.pendingRemovalAt.toString() === "0" && g2a.selfCancelUsed === true,
+        `self_cancel_used=${g2a.selfCancelUsed}`,
+      );
+      // Re-schedule so the exhaustion check below has something to refuse.
+      await program.methods
+        .removeGuardian(G2)
+        .accounts({ config: configPda, admin, guardianAccount: gPda(G2) })
+        .rpc();
+    } else {
+      console.log(
+        "  NOTE: G2 already spent its self-veto in an earlier run, so the " +
+          "first-veto-succeeds half is skipped. The exhaustion check below is the " +
+          "half that matters and still runs.",
+      );
+      ok("the spent self-veto persisted across runs", g2Pre.selfCancelUsed === true);
+      if (g2Pre.pendingRemovalAt.toString() === "0") {
+        await program.methods
+          .removeGuardian(G2)
+          .accounts({ config: configPda, admin, guardianAccount: gPda(G2) })
+          .rpc();
+      }
+    }
+
+    // The SECOND self-veto must be refused: this is what stops a rogue guardian
+    // being permanently unremovable. (The re-schedule happened in whichever branch
+    // ran above.)
     await expectRevert(
       "the SECOND self-veto is refused (rogue guardian is now evictable)",
       "GuardianSelfCancelExhausted",

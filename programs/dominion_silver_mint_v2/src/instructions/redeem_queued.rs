@@ -313,6 +313,46 @@ pub fn claim_handler(
 
 // ---------------------------------------------------------------------------
 // 3. admin_settle_redemption_offchain: mark a Pending request settled via OTC.
+//
+// ===================================================================
+// SolidProof TrustNet audit (2026-07-24), MEDIUM #4:
+//   "Admin can finalize a queued redemption off-chain with no on-chain proof
+//    of payment"
+//
+// FOUND INDEPENDENTLY BY THREE REVIEWS (SolidProof MEDIUM #4, and my own audit
+// pass 2 as "admin_settle_redemption_offchain can destroy user value"). It is the
+// most serious open item in the program and it is NOT yet fixed.
+//
+// The defect: the user's SILV is BURNED at request time, so the request PDA is the
+// only record of the debt. This instruction flips Pending -> SettledOffchain, and
+// the claim path then rejects the request, so the owner can never obtain USDC
+// on-chain again. Its only precondition is `status == Pending`. There is no check
+// that a claim was attempted, no check that the treasury could not pay, no on-chain
+// evidence that any payment happened, no timeout that restores the claim right, and
+// no user-side escape hatch. It is irreversible on-chain.
+//
+// WHY IT IS NOT A LAUNCH BLOCKER, precisely: this path is DORMANT and cannot be
+// woken by an admin key. Reaching it requires a Pending RedemptionRequest, which
+// requires the queued redeem path, which requires redemptions_enabled == true. That
+// flag is false at initialize and `set_redemptions_enabled` REFUSES to set it true
+// (RedemptionsEnableBlocked) - the block is in the deployed bytecode, not a config
+// value, so no admin, compromised or not, can enable it. Turning it on takes a
+// program upgrade. Therefore no queued request can exist at launch and this
+// instruction has nothing it can act on.
+//
+// PHASE 1 BLOCKER, and it must not ship with redemptions. The fix, in the
+// auditor's order of strength (which matches my own recommendation):
+//   1. only permit off-chain settlement of a request whose on-chain claim genuinely
+//      cannot be paid (check the treasury cannot cover it AT SETTLE TIME), or
+//   2. add a timeout after which the owner can always claim on-chain regardless of
+//      the settled flag, or
+//   3. require an on-chain reference to the settlement: a transfer proof, or a
+//      signature from the OWNER acknowledging payment.
+// At minimum, put this instruction behind the same 24h timelock as the other
+// sensitive admin actions, and disclose the trust assumption to holders.
+//
+// DO NOT re-enable redemptions until one of the above exists.
+// ===================================================================
 // ---------------------------------------------------------------------------
 
 #[derive(Accounts)]

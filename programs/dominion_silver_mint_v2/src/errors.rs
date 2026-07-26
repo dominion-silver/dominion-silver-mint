@@ -112,7 +112,15 @@ pub enum DominionError {
     // CODEX C-02: bootstrap authority validation.
     #[msg("SILV mint authority must be the silv_mint_authority PDA")]
     SilvMintAuthorityMismatch,
-    #[msg("SILV mint freeze_authority must be None")]
+    // SolidProof INFORMATIONAL #1: this message is actively misleading and was
+    // flagged as such. The code no longer requires freeze_authority to be None: the
+    // launch design REQUIRES it to be present and to equal
+    // config.freeze_authority_expected (see SilvFreezeAuthorityMismatch, which is
+    // what is actually raised). The variant is retained, NOT deleted, because error
+    // discriminants are append-only here and external clients decode them by number;
+    // removing it would silently renumber every later variant. Kept as a reserved
+    // hole with a message that says so.
+    #[msg("RETIRED: no longer raised. The SILV mint freeze_authority is REQUIRED to be present and to match config.freeze_authority_expected; see SilvFreezeAuthorityMismatch")]
     SilvFreezeAuthorityMustBeNone,
     // CODEX M-02: external dependency hard-pin.
     #[msg("USDC mint not in known-good allowlist (Circle mainnet/devnet/testnet)")]

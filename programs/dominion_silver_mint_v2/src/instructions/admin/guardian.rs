@@ -76,11 +76,23 @@ pub fn add_handler(ctx: Context<AddGuardian>, guardian_pubkey: Pubkey) -> Result
         DominionError::GuardianCountExceeded
     );
 
+    // Review-of-fixes: this used to CLEAR pending_removal_at, which is the one write
+    // to that field with no paired update of config.pending_removal_count. It is
+    // provably a no-op today (the guard above rejects an active guardian, and
+    // finalize sets cooldown and zeroes pending in the same handler, so a guardian in
+    // cooldown never carries a pending notice), but "provably unreachable" was one
+    // edit to the guard above away from a permanent counter drift with exactly the
+    // brick semantics described in the ConfigAccount carve-out note. Assert the
+    // invariant rather than paper over it.
+    require!(
+        guardian.pending_removal_at == 0,
+        DominionError::GuardianRemovalAlreadyScheduled
+    );
+
     // Persist the guardian pubkey on first add (or re-add post-cooldown).
     guardian.guardian = guardian_pubkey;
     guardian.added_at = now;
     guardian.cooldown_until = 0;
-    guardian.pending_removal_at = 0;
     // A re-appointment is a fresh mandate, so the self-defence budget resets. Only
     // this instruction clears the flag, and it is admin-only and requires the removal
     // cooldown to have elapsed, so a guardian can never restore its own budget.

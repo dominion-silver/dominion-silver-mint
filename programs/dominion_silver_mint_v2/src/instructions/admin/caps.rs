@@ -21,6 +21,9 @@ use anchor_lang::prelude::*;
 use anchor_spl::token_interface::Mint as InterfaceMint;
 
 use crate::errors::DominionError;
+use crate::events::{
+    InventoryWalletChanged, MaxSupplyChanged, RedeemLimitsTightened, RedemptionsEnabledChanged,
+};
 use crate::instructions::admin::execute::{
     redeem_limits_all_tighten, redeem_limits_any_set, validate_redeem_limits_ceilings,
     RedeemLimitsArgs,
@@ -60,12 +63,18 @@ pub struct SetParam<'info> {
 /// (Phase 2) or a timelocked setter (Phase 1); `pending_max_supply_nonce` is
 /// reserved for that path.
 pub fn set_max_silv_supply_handler(ctx: Context<SetMaxSupply>, new_max: u64) -> Result<()> {
-    validate_new_max_supply(
-        new_max,
-        ctx.accounts.config.max_silv_supply,
-        ctx.accounts.silv_mint.supply,
-    )?;
+    let old_max = ctx.accounts.config.max_silv_supply;
+    let live_supply = ctx.accounts.silv_mint.supply;
+    validate_new_max_supply(new_max, old_max, live_supply)?;
     ctx.accounts.config.max_silv_supply = new_max;
+    // SolidProof LOW #3: this setter was silent. The cap is TIGHTEN-ONLY, so every
+    // change here is irreversible and belongs in the log.
+    emit!(MaxSupplyChanged {
+        old_max,
+        new_max,
+        live_supply,
+        by: ctx.accounts.admin.key(),
+    });
     Ok(())
 }
 
@@ -110,7 +119,14 @@ pub fn validate_new_max_supply(new_max: u64, current_cap: u64, live_supply: u64)
 /// the timelocked, guardian-cancellable withdraw_usdc.
 pub fn set_redemptions_enabled_handler(ctx: Context<SetParam>, enabled: bool) -> Result<()> {
     require!(!enabled, DominionError::RedemptionsEnableBlocked);
+    let old_enabled = ctx.accounts.config.redemptions_enabled;
     ctx.accounts.config.redemptions_enabled = enabled;
+    // SolidProof LOW #3.
+    emit!(RedemptionsEnabledChanged {
+        old_enabled,
+        new_enabled: enabled,
+        by: ctx.accounts.admin.key(),
+    });
     Ok(())
 }
 
@@ -166,6 +182,15 @@ pub fn emergency_tighten_redeem_limits_handler(
     if let Some(v) = args.redeem_queue_delay_seconds {
         config.redeem_queue_delay_seconds = v;
     }
+    // SolidProof LOW #3: the instant fast lane was silent. Reports the RESULTING
+    // values, not the supplied Options, so a monitor sees the live throttle state.
+    emit!(RedeemLimitsTightened {
+        instant_redeem_budget_usdc: config.instant_redeem_budget_usdc,
+        instant_redeem_window_seconds: config.instant_redeem_window_seconds,
+        large_redeem_threshold_usdc: config.large_redeem_threshold_usdc,
+        redeem_queue_delay_seconds: config.redeem_queue_delay_seconds,
+        by: ctx.accounts.admin.key(),
+    });
     Ok(())
 }
 
@@ -237,10 +262,20 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_launch_values_are_consistent() {
-        // Sanity-pin the launch posture: the default cap is under the hard ceiling,
-        // and a tighten from it down to the live devnet supply is legal.
-        assert!(CAP <= MAX_SILV_SUPPLY_CEILING);
-        assert!(validate_new_max_supply(SUPPLY, CAP, SUPPLY).is_ok());
+    fn the_shipped_launch_cap_is_the_one_being_tested() {
+        // Review-of-fixes: this test used the test-local CAP constant, so it could not
+        // detect the SHIPPED launch cap drifting away from what these cases assume,
+        // and its second assertion duplicated tighten_to_exactly_the_live_supply.
+        // Now pinned to the real default.
+        assert_eq!(
+            CAP, DEFAULT_MAX_SILV_SUPPLY,
+            "the launch cap moved: revisit these cases"
+        );
+        assert!(DEFAULT_MAX_SILV_SUPPLY <= MAX_SILV_SUPPLY_CEILING);
+        // A raise from the shipped cap is refused even by one atomic unit.
+        assert!(
+            validate_new_max_supply(DEFAULT_MAX_SILV_SUPPLY + 1, DEFAULT_MAX_SILV_SUPPLY, 0)
+                .is_err()
+        );
     }
 }

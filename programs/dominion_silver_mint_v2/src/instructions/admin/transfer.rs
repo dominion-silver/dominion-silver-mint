@@ -123,8 +123,16 @@ pub fn cancel_handler(ctx: Context<CancelAdminTransfer>) -> Result<()> {
     require!(is_admin || is_guardian, DominionError::Unauthorized);
 
     let config = &mut ctx.accounts.config;
+    let cancelled_pending_admin = config.pending_admin;
     config.pending_admin = None;
     config.pending_admin_expires_at = 0;
     config.pending_admin_eta = 0;
+    // SolidProof LOW #3, the most important of the five: propose AND accept both
+    // emit, but cancelling a governance handover did not, so the one transition an
+    // operator most needs in their logs was the invisible one.
+    emit!(AdminTransferCancelled {
+        cancelled_pending_admin,
+        by: signer,
+    });
     Ok(())
 }

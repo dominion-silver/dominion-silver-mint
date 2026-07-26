@@ -48,6 +48,45 @@ pub fn assert_silv_mint_invariants(
     // NOTE: the earlier launch batch pinned this strictly to None (FIX E). That was
     // reversed once Mark confirmed the freeze lever; both authorities are permanent
     // Token-2022 powers fixed at mint creation.
+    //
+    // ===================================================================
+    // SolidProof TrustNet audit (2026-07-24), MEDIUM #2:
+    //   "Issuer can freeze and seize or claw back any holder's tokens"
+    //
+    // ACCEPTED AND INTENTIONAL. This is not a defect and it is not an oversight.
+    // It is a deliberate compliance design for a regulated, physically-backed
+    // asset, locked by the project owner (Mark) after the alternatives were
+    // written up and compared:
+    //
+    //   Option 1  freeze_authority = None            -> no compliance lever at all
+    //   Option 2  freeze + PermanentDelegate  <== CHOSEN (the USDC model)
+    //   Option 3  token-acl permissioned transfers   -> ruled out: requires KYC
+    //             infrastructure that does not exist yet, and contradicts the
+    //             "permissionless token" promise on the public site
+    //
+    // The auditor's substantive point is NOT that the powers exist, it is that
+    // they must be DISCLOSED rather than assumed. That obligation is accepted:
+    //   - both authorities are held by an EXTERNAL compliance multisig, never by
+    //     this program (there is deliberately no in-program freeze instruction),
+    //   - the public site must state plainly that balances can be frozen and
+    //     seized by the issuer, alongside "freely transferable",
+    //   - a documented policy must say under what conditions they are used.
+    //
+    // Consequence the team has explicitly accepted: SILV is NOT censorship
+    // resistant, and it cannot be listed on venues that reject a mint carrying
+    // freeze or permanent-delegate (Meteora/Orca permissionless pools). Listing is
+    // curated-only. See private/MARK_TOKEN_ACL_DECISION.md and the decision brief.
+    //
+    // Also accepted, and worse than the powers themselves if mishandled: if the
+    // compliance multisig is ever lost below its threshold, freeze and seize
+    // become PERMANENTLY unrecoverable. Not even the upgrade authority can
+    // recover an external SPL authority. Use a hardware-backed M-of-N.
+    // ===================================================================
+    //
+    // What this runtime check enforces: the mint's freeze authority must still be
+    // exactly the key the config was initialized with. It is a DRIFT DETECTOR, not
+    // a permission: it makes a silent rotation of the compliance authority
+    // impossible to miss, because every user instruction fails loudly instead.
     let freeze_authority_opt: Option<Pubkey> = silv_mint_account.freeze_authority.into();
     require!(
         freeze_authority_opt == Some(config.freeze_authority_expected),
