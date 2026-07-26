@@ -2,9 +2,15 @@
  * One-time DEVNET initialization for the V2 (Option B) program.
  *
  * PREREQUISITES (CODEX P0-03 / deploy-prep):
- *   - The program is FRESH-DEPLOYED under the V2 id
- *     GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX (NEVER an in-place upgrade
- *     over V1; the ConfigAccount layout is incompatible).
+ *   - The program is FRESH-DEPLOYED under the CURRENT id, which this script resolves
+ *     from scripts/_program-id.ts (the generated IDL's address, or
+ *     DOMINION_PROGRAM_ID). This header used to name a specific id; it named one
+ *     retired two generations ago, which is exactly the hazard SolidProof LOW #2
+ *     flagged. Never hardcode it here again.
+ *   - NEVER an in-place upgrade over a program whose ConfigAccount layout differs.
+ *   - Run scripts/t1-hostile-bootstrap.ts BEFORE this script: `initialize` succeeds
+ *     once per program id, so that is the only window in which the DOM-001
+ *     authentication can be tested, and T1's case 5 performs the real init.
  *   - `target/idl/dominion_silver_mint.json` MUST be the regenerated V2 IDL
  *     (from the default-features build, dev-hatch EXCLUDED). The bundled IDLs
  *     are still stale V1 until regenerated.
@@ -63,16 +69,17 @@ import {
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 
 const DEVNET_RPC = "https://api.devnet.solana.com";
 // CODEX P0-01: V2 program id (NOT the V1 id J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5).
 // DOMINION_PROGRAM_ID override exists ONLY for the isolated Squads E2E
 // (scripts/test-dominion-squads-e2e.ts) which deploys a throwaway instance
 // under a fresh id. Unset in all real deploys -> the canonical V2 id.
-const PROGRAM_ID = new PublicKey(
-  process.env.DOMINION_PROGRAM_ID ||
-    "6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh",
-);
+// Review-of-fixes F6: this was a hardcoded fallback, the exact pattern
+// scripts/_program-id.ts exists to forbid. 16 of 18 scripts were converted; the
+// three that actually get run were not.
+const PROGRAM_ID = SHARED_PROGRAM_ID;
 // AUDIT DOM-001: `initialize` now requires the signer to BE the program's
 // upgrade authority, proven through the loader's ProgramData account. That
 // account is NOT a PDA of this program, so Anchor cannot resolve it: it must be

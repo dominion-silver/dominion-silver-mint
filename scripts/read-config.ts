@@ -2,12 +2,15 @@ import { Connection, PublicKey, Keypair } from "@solana/web3.js";
 import { AnchorProvider, Program, Wallet, Idl } from "@coral-xyz/anchor";
 import fs from "fs";
 import path from "path";
+import { PROGRAM_ID as SHARED_PROGRAM_ID, IDL_PATH } from "./_program-id";
 async function main() {
-  const PROGRAM_ID = new PublicKey(process.env.DOMINION_PROGRAM_ID!);
-  const idl = JSON.parse(fs.readFileSync(
-    path.join(__dirname, "..", "target", "idl", "dominion_silver_mint.json"),
-    "utf8",
-  ));
+  // Review-of-fixes F5: this used a non-null-asserted env var with no fallback, so
+  // the tool that constants.ts and every SUPERSEDED header name as THE way to read
+  // back SILV_MINT crashed with "Cannot read properties of undefined (reading
+  // '_bn')" when run as documented. That is precisely the opaque failure the
+  // supersede guards were added to eliminate.
+  const PROGRAM_ID = SHARED_PROGRAM_ID;
+  const idl = JSON.parse(fs.readFileSync(IDL_PATH, "utf8"));
   idl.address = PROGRAM_ID.toBase58();
   const conn = new Connection("https://api.devnet.solana.com","confirmed");
   const p = new Program(idl as Idl, new AnchorProvider(conn, new Wallet(Keypair.generate()), {}));

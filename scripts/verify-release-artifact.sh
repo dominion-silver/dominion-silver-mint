@@ -107,7 +107,7 @@ fi
 
 # ---- 2. Secondary: forbidden name strings (no pipeline, so no SIGPIPE) ----
 echo "2. Forbidden instruction names as strings (secondary signal)"
-python3 - "$SO" "${FORBIDDEN_IX[@]}" <<'PY'
+( python3 - "$SO" "${FORBIDDEN_IX[@]}" <<'PY'
 import sys
 blob = open(sys.argv[1], "rb").read()
 bad = []
@@ -121,7 +121,8 @@ if not bad:
     print("   ok: none of the forbidden names appear")
 sys.exit(1 if bad else 0)
 PY
-[[ $? -eq 0 ]] || fail=1
+# Review-of-fixes F9: was `[[ $? -eq 0 ]] || fail=1`, dead under `set -e`.
+) || fail=1
 
 # ---- 3. IDL must exist and must not advertise the forbidden instructions ----
 echo "3. IDL"
@@ -134,7 +135,7 @@ else
   # AUDIT review of daac4ac (P1): this used to only PRINT idl.address. An IDL that
   # describes a different program is exactly the drift that ships a console pointed
   # at the wrong deployment, so it is now asserted against declare_id!.
-  python3 - "$IDL" "$LIB_RS" "${FORBIDDEN_IX[@]}" <<'PY'
+  ( python3 - "$IDL" "$LIB_RS" "${FORBIDDEN_IX[@]}" <<'PY'
 import json, re, sys
 idl = json.load(open(sys.argv[1]))
 src = open(sys.argv[2]).read()
@@ -157,7 +158,12 @@ else:
     print(f"   ok: idl address == declare_id! ({declared})")
 sys.exit(1 if bad else 0)
 PY
-  [[ $? -eq 0 ]] || fail=1
+  # Review-of-fixes F9: this used to be `[[ $? -eq 0 ]] || fail=1`, which is dead code
+  # under `set -e`: the script died the instant the heredoc python exited non-zero, so
+  # $? was never observed, the `fail` accumulator never fired, and the operator saw
+  # ONE finding instead of all of them. `|| fail=1` on the command itself is what
+  # actually suppresses errexit and accumulates.
+  ) || fail=1
 fi
 
 echo "4. Release record"

@@ -55,21 +55,37 @@ check(n_declare == 1, f"exactly one declare_id! in the program source (found {n_
 print("2. Anchor.toml")
 toml = pathlib.Path("Anchor.toml").read_text()
 # Only UNCOMMENTED entries count; a commented mainnet entry is the documented state.
+def section_entry(cluster):
+    """The active dominion_silver_mint value inside [programs.<cluster>], or None.
+
+    Review-of-fixes F10: the previous regex required dominion_silver_mint to be the
+    section's FIRST non-comment line, so adding any sibling key (mock_lazer, say)
+    made the gate report "no active entry" while the entry was present and correct.
+    Now the section body is isolated first and searched anywhere within it.
+    """
+    m = re.search(r'^\[programs\.' + cluster + r'\]\s*$(.*?)(?=^\[|\Z)',
+                  toml, re.M | re.S)
+    if not m:
+        return None
+    for line in m.group(1).splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#'):
+            continue  # a commented entry is not active
+        km = re.match(r'dominion_silver_mint\s*=\s*"(' + B58 + r')"', stripped)
+        if km:
+            return km.group(1)
+    return None
+
 for cluster in ("localnet", "devnet"):
-    mm = re.search(
-        r'^\[programs\.' + cluster + r'\]\s*\n(?:^\s*#.*\n)*^\s*dominion_silver_mint\s*=\s*"(' + B58 + r')"',
-        toml, re.M)
-    if not mm:
+    got = section_entry(cluster)
+    if got is None:
         check(False, f"[programs.{cluster}] has no active dominion_silver_mint entry")
         continue
-    check(mm.group(1) == DECLARED, f"[programs.{cluster}] == declare_id!")
+    check(got == DECLARED, f"[programs.{cluster}] == declare_id!")
 # mainnet must stay absent until the mainnet ceremony (audit DOM-014).
-active_mainnet = re.search(
-    r'^\[programs\.mainnet\]\s*\n(?:^\s*#.*\n)*^\s*dominion_silver_mint\s*=\s*"(' + B58 + r')"',
-    toml, re.M)
+active_mainnet = section_entry("mainnet")
 if active_mainnet:
-    check(active_mainnet.group(1) == DECLARED,
-          "[programs.mainnet] (present) == declare_id!")
+    check(active_mainnet == DECLARED, "[programs.mainnet] (present) == declare_id!")
 else:
     print("   ok: [programs.mainnet] intentionally absent (DOM-014)")
 
@@ -84,7 +100,12 @@ digests = {}
 for path in list(idls):
     p = pathlib.Path(path)
     if not p.exists():
-        check(False, f"{path} is missing")
+        # Review-of-fixes F8: a missing generated IDL used to FAIL here, which made
+        # this script strictly downstream of `anchor idl build` while its own header
+        # claimed to be the anchor-free hard floor. target/idl is gitignored and only
+        # exists after a build, so on a fresh checkout the honest answer is "not
+        # built yet", not "inconsistent". The COMMITTED app copies are still checked.
+        print(f"   skip: {path} not built yet (gitignored; run anchor idl build)")
         continue
     raw = p.read_bytes()
     digests[path] = hashlib.sha256(raw).hexdigest()
@@ -124,14 +145,25 @@ if "SILV_MINT" in a and "SILV_MINT" in p_:
     # SILV_MINT cannot be derived from anything: it is created by `initialize` and
     # only the live config knows it. The most this offline gate can prove is that the
     # two apps agree and that the value is not a known-retired mint.
-    RETIRED_MINTS = {"5i13gz6vGKTYhpWbMuQfiBAApfNHCxxJu2GtDGM1A2Li"}
+    # Review-of-fixes F2: same staleness. SILV_MINT cannot be derived from anything,
+    # so this list is the ONLY check on it, and it was one generation behind.
+    RETIRED_MINTS = {
+        "9jM14E8kV6asGw2FwNhKk3gXQNzGhoLrJGyFZ8U7gMoF",  # gc5TW era, program closed
+        "5i13gz6vGKTYhpWbMuQfiBAApfNHCxxJu2GtDGM1A2Li",  # AX7se era, program closed
+    }
     check(a["SILV_MINT"] not in RETIRED_MINTS,
           "SILV_MINT is not a known-retired mint")
 
 # ---- retired program ids must not appear on any live path ----
 print("5. Retired program ids")
+# Review-of-fixes F1: this list was STALE ON THE COMMIT THAT INTRODUCED IT. gc5TW,
+# the id that commit retired, was missing, so a wholesale self-consistent regression
+# to the only realistically reachable dead id passed with "CONSTANTS OK". Section 5
+# exists precisely to catch that. WHEN YOU RETIRE AN ID, ADD IT HERE IN THE SAME
+# COMMIT: the check is worthless one generation behind.
 RETIRED = {
-    "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W": "devnet 2026-07-13",
+    "gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc": "devnet 2026-07-26, CLOSED on-chain",
+    "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W": "devnet 2026-07-25, CLOSED on-chain",
     "GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX": "devnet, pre-Lazer",
     "J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5": "devnet, older still",
 }
@@ -141,13 +173,20 @@ LIVE_PATHS = [
     "apps/public/src/lib/constants.ts",
     "programs/dominion_silver_mint_v2/src/lib.rs",
 ]
+# Review-of-fixes F6: scripts/ was outside this check, so the three E2E scripts that
+# actually get run kept a hardcoded id fallback and no gate could see it. This repo
+# has rotated ids four times in two weeks and every rotation left stale hardcodes.
+LIVE_PATHS += sorted(str(q) for q in pathlib.Path("scripts").glob("*.ts"))
 found_retired = False
 for path in LIVE_PATHS:
     src = pathlib.Path(path).read_text()
     for rid, why in RETIRED.items():
         # A retired id inside a comment is a historical note and is fine.
+        # "*" catches block-comment continuation lines (/** ... */), which are
+        # historical notes, not live code. Without it the gate cries wolf and gets
+        # ignored, which is worse than not having it.
         offenders = [ln for ln in src.splitlines()
-                     if rid in ln and not ln.strip().startswith(("//", "#"))]
+                     if rid in ln and not ln.strip().startswith(("//", "#", "*", "/*"))]
         if offenders:
             found_retired = True
             check(False, f"{path} references retired id {rid} ({why}) on a live line")

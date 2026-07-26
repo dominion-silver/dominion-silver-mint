@@ -54,14 +54,18 @@ jobs:
       # be linked into BOTH and the hashes would agree. The script now isolates its
       # reference build with its own CARGO_TARGET_DIR; `target` is also no longer
       # cached here, so the gate's own artifact is built from source every run.
-      # ~/.cargo/bin IS cached, so anchor-cli is not rebuilt from git each time.
+      # Only ~/.cargo/bin/ANCHOR is cached, not the whole bin dir: review-of-fixes F11
+      # noted that ~/.cargo/bin holds the rustup shims (cargo, rustc, rustfmt), the
+      # cache is restored AFTER dtolnay/rust-toolchain, and a tarball from an older
+      # runner image can overwrite the shims that action just set up ("rustup could
+      # not choose a version").
       - name: Cache Cargo
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            ~/.cargo/bin
+            ~/.cargo/bin/anchor
           key: gate-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install Solana CLI (for cargo build-sbf)

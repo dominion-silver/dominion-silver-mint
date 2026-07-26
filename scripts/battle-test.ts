@@ -1256,19 +1256,32 @@ async function main() {
     expectedError: null,
     severityIfBypassed: "info",
     run: async () => {
+      // Review-of-fixes F12: this added ONE fresh guardian and scheduled its removal.
+      // The floor is `guardian_count - pending_removal_count > MIN_ACTIVE_GUARDIANS`,
+      // so on a config with no other guardians that is `1 > 1 == false` and the case
+      // fails with GuardianFloorBreached. It only passed because the live config
+      // happened to hold two. It now adds TWO of its own, so it is self-sufficient,
+      // and CANCELS at the end so it does not leak a slot against max_guardian_count
+      // on every run (the previous version leaked one per run, forever).
+      const gKeep = Keypair.generate().publicKey;
       const g = Keypair.generate().publicKey;
       const gpda = guardianPda(g);
-      const addIx = await (program.methods as any)
-        .addGuardian(g)
-        .accounts({
-          config: configPda,
-          admin: deployer.publicKey,
-          payer: deployer.publicKey,
-          guardianAccount: gpda,
-          systemProgram: SystemProgram.programId,
-        })
-        .instruction();
-      await send(addIx);
+      for (const [key, pda] of [
+        [gKeep, guardianPda(gKeep)],
+        [g, gpda],
+      ] as const) {
+        const ix = await (program.methods as any)
+          .addGuardian(key)
+          .accounts({
+            config: configPda,
+            admin: deployer.publicKey,
+            payer: deployer.publicKey,
+            guardianAccount: pda,
+            systemProgram: SystemProgram.programId,
+          })
+          .instruction();
+        await send(ix);
+      }
 
       const removeIx = await (program.methods as any)
         .removeGuardian(g)
@@ -1293,6 +1306,19 @@ async function main() {
             "it must keep its powers for the whole notice window",
         );
       }
+
+      // Clean up: cancel the notice as ADMIN (which does not consume the guardian's
+      // one-shot self-veto). The two guardians remain, which is the correct end state
+      // for a config that should have a working veto anyway.
+      const cancelIx = await (program.methods as any)
+        .cancelGuardianRemoval(g)
+        .accounts({
+          config: configPda,
+          signer: deployer.publicKey,
+          guardianAccount: gpda,
+        })
+        .instruction();
+      await send(cancelIx);
     },
   });
 

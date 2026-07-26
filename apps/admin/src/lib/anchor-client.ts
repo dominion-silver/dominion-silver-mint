@@ -460,15 +460,31 @@ export async function fetchGuardians(
     .sort((a: GuardianView, b: GuardianView) => b.addedAt.cmp(a.addedAt));
 }
 
-/** Seconds until `ts`, or null when nothing is scheduled. Negative once elapsed. */
+/**
+ * Seconds until `ts`, or null when nothing is scheduled. Negative once elapsed.
+ *
+ * Review-of-fixes F14: this called `ts.toNumber()`, which THROWS above 2^53 ("Number
+ * can only safely store up to 53 bits"). It is called twice per row inside the
+ * guardian roster's render, so a single out-of-range i64 would unmount the entire
+ * Dashboard rather than degrade one cell. The guardian tests assert i64::MAX is
+ * reachable in that field, so this is not hypothetical. Clamped instead: any absurd
+ * timestamp reads as "very far away", which is the correct display semantics and
+ * cannot throw.
+ */
+const MAX_SAFE_TS = Number.MAX_SAFE_INTEGER;
 export function secondsUntil(ts: BN, nowSeconds?: number): number | null {
   if (ts.isZero()) return null;
   const now = nowSeconds ?? Math.floor(Date.now() / 1000);
+  const MAX = new BN(MAX_SAFE_TS.toString());
+  if (ts.gt(MAX)) return MAX_SAFE_TS - now;
+  if (ts.neg().gt(MAX)) return -MAX_SAFE_TS;
   return ts.toNumber() - now;
 }
 
 /** "in 23h 59m" / "elapsed 2h ago", for a countdown an operator can act on. */
 export function formatCountdown(seconds: number): string {
+  // Review-of-fixes F14: returned "in Infinityd NaNh" for non-finite input.
+  if (!Number.isFinite(seconds)) return "unknown";
   const abs = Math.abs(seconds);
   const d = Math.floor(abs / 86400);
   const h = Math.floor((abs % 86400) / 3600);

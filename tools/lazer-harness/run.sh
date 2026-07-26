@@ -23,9 +23,27 @@ scan_for() {
     echo "ERROR: expected artifact does not exist: $f" >&2
     exit 1
   fi
-  tmp="$(mktemp)"
-  # No pipeline: strings writes to a file, grep reads it. Nothing can SIGPIPE.
-  strings "$f" > "$tmp"
+  # Review-of-fixes F3: removing the pipeline was not enough. `strings > tmp` had its
+  # exit status DISCARDED, and because scan_for is invoked as an `if` condition bash
+  # suspends errexit for the entire function body. So a file that exists but cannot be
+  # READ (chmod 000, or a failing mktemp) produced an empty temp, grep found nothing,
+  # and step 4 printed "OK: is the clean (no-probe) deploy artifact" and exited 0. The
+  # header's old claim that "the exit code means what it says" was false: the pipeline
+  # was gone but the swallowed status was not. Now an unreadable artifact ABORTS.
+  if ! tmp="$(mktemp)"; then
+    echo "ERROR: mktemp failed, cannot scan $f" >&2
+    exit 1
+  fi
+  if ! strings "$f" > "$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    echo "ERROR: cannot read $f (permissions? truncated?). Refusing to report on it." >&2
+    exit 1
+  fi
+  if ! [[ -s "$tmp" ]]; then
+    rm -f "$tmp"
+    echo "ERROR: $f yielded no strings at all, which is not a real .so" >&2
+    exit 1
+  fi
   if grep -q -- "$needle" "$tmp"; then
     rm -f "$tmp"; return 0
   fi

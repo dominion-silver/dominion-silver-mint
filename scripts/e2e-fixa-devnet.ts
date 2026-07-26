@@ -22,11 +22,13 @@ import {
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 
 const RPC = "https://api.devnet.solana.com";
-const PROGRAM_ID = new PublicKey(
-  process.env.DOMINION_PROGRAM_ID || "6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh",
-);
+// Review-of-fixes F6: no hardcoded id fallback. _program-id.ts resolves it from
+// DOMINION_PROGRAM_ID or the generated IDL, and the consistency gate pins that
+// to declare_id!.
+const PROGRAM_ID = SHARED_PROGRAM_ID;
 // AUDIT review of daac4ac (P2): PROGRAM_ID is env-overridable but SILV_MINT was a
 // hardcoded constant, so ANY use of DOMINION_PROGRAM_ID produced a guaranteed-broken
 // run (WrongMint on set_max_silv_supply, the wrong mint on premint) that looked like a

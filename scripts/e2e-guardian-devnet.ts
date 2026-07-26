@@ -38,11 +38,16 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { createHash } from "crypto";
+import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 
-const RPC = "https://api.devnet.solana.com";
-const PROGRAM_ID = new PublicKey(
-  process.env.DOMINION_PROGRAM_ID || "6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh",
-);
+// Review-of-fixes F15: the devnet guard below compared a module-level literal, so it
+// was a tautology and its comment claimed to distrust an environment that was never
+// read. Now the endpoint IS an environment input, so the guard has something to guard.
+const RPC = process.env.DOMINION_RPC || "https://api.devnet.solana.com";
+// Review-of-fixes F6: no hardcoded id fallback. _program-id.ts resolves it from
+// DOMINION_PROGRAM_ID or the generated IDL, and the consistency gate pins that
+// to declare_id!.
+const PROGRAM_ID = SHARED_PROGRAM_ID;
 
 let pass = 0,
   fail = 0;

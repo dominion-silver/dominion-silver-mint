@@ -75,7 +75,7 @@ export function Dashboard() {
   // has a full timelock window to react, which requires the console to show that a
   // removal exists and when it fires. Cheap query (a handful of small accounts),
   // and it is the only place a guardian can see it is under notice.
-  const { data: guardians } = useSWR<GuardianView[]>(
+  const { data: guardians, error: guardiansError } = useSWR<GuardianView[]>(
     data ? "dominion-guardians" : null,
     () => fetchGuardians(connection, data?.cfg.admin),
     {
@@ -136,7 +136,11 @@ export function Dashboard() {
         <RedemptionsTab data={data} queue={queue} />
       )}
       {tab === "governance" && (
-        <GovernanceTab data={data} guardians={guardians ?? []} />
+        <GovernanceTab
+          data={data}
+          guardians={guardians ?? []}
+          guardiansDegraded={!!guardiansError}
+        />
       )}
       {tab === "actions" && <AdminActions />}
       {tab === "help" && <HelpTab />}
@@ -472,9 +476,11 @@ function StatusPill({
 function GovernanceTab({
   data,
   guardians,
+  guardiansDegraded,
 }: {
   data: DashboardSnapshot;
   guardians: GuardianView[];
+  guardiansDegraded: boolean;
 }) {
   const { cfg } = data;
   const pendingProposals: { label: string; nonce: BN | null }[] = [
@@ -533,7 +539,7 @@ function GovernanceTab({
         />
       </Section>
 
-      <GuardianRoster guardians={guardians} />
+      <GuardianRoster guardians={guardians} degraded={guardiansDegraded} />
 
       <Section title="Price feed safety checks">
         <Metric
@@ -677,7 +683,30 @@ function HelpTab() {
  * and `pending_removal_at` was read nowhere in either app. This is the only surface
  * that shows it.
  */
-function GuardianRoster({ guardians }: { guardians: GuardianView[] }) {
+function GuardianRoster({
+  guardians,
+  degraded,
+}: {
+  guardians: GuardianView[];
+  degraded: boolean;
+}) {
+  // Review-of-fixes F4: the fetch error used to be DISCARDED, so any RPC failure
+  // (devnet 429, a transient getProgramAccounts error) rendered the affirmative claim
+  // below. A guardian actually under notice would have been told, positively, that no
+  // guardians exist. That is the same failure this panel was built to fix ("a veto
+  // nobody can see is not a veto"), inverted into a veto the console denies exists.
+  // An unknown state must never be reported as a known-empty one.
+  if (degraded && !guardians.length) {
+    return (
+      <Section title="Guardian roster">
+        <p className="text-sm text-amber-400">
+          Could not read the guardian accounts (RPC error). This is NOT a
+          statement that no guardians exist: the roster is unknown right now.
+          Retrying automatically.
+        </p>
+      </Section>
+    );
+  }
   if (!guardians.length) {
     return (
       <Section title="Guardian roster">
@@ -767,6 +796,12 @@ function GuardianRoster({ guardians }: { guardians: GuardianView[] }) {
             })}
           </tbody>
         </table>
+        {degraded && (
+          <p className="mt-3 text-xs text-amber-400">
+            Showing the last successful read; the latest refresh failed, so this
+            may be stale.
+          </p>
+        )}
         <p className="mt-3 text-xs text-muted">
           A guardian under notice keeps every power until the removal is
           finalized, and may cancel its own removal ONCE. After that only the
