@@ -111,9 +111,13 @@ pub struct CancelAdminTransfer<'info> {
 
 pub fn cancel_handler(ctx: Context<CancelAdminTransfer>) -> Result<()> {
     let signer = ctx.accounts.signer.key();
-    let is_admin = signer == ctx.accounts.config.admin;
+    let admin_key = ctx.accounts.config.admin;
+    let is_admin = signer == admin_key;
+    // AUDIT review of daac4ac: `may_act` also refuses a guardian key that IS the
+    // current admin. add_guardian cannot prevent that overlap on its own, because
+    // admin-ship can move after the appointment.
     let is_guardian = match &ctx.accounts.guardian {
-        Some(g) => g.guardian == signer && g.cooldown_until == 0,
+        Some(g) => g.may_act(&signer, &admin_key),
         None => false,
     };
     require!(is_admin || is_guardian, DominionError::Unauthorized);

@@ -19,8 +19,14 @@
  *   2. attacker signs, its own compliant mint    -> must FAIL
  *   3. attacker supplies a foreign ProgramData   -> must FAIL (constraint)
  *   4. attacker supplies a Buffer as ProgramData -> must FAIL (not ProgramData)
+ *  4b. attacker points dominion_program elsewhere -> must FAIL (InvalidProgramId)
  *   5. genuine upgrade authority signs           -> must SUCCEED
  *   8. post-init on-chain verification            -> matches the intended manifest
+ *   9. initialize cannot be replayed             -> must FAIL
+ *
+ * Every mustFail regex requires the SPECIFIC error for that case. They used to also
+ * accept a generic Unauthorized, which meant cases 3, 4 and 4b could not tell their
+ * own failure mode from any constraint failure (audit review of daac4ac, P2).
  *
  * Case 6 (a pre-created treasury ATA is tolerated, DOM-002) is exercised by
  * pre-creating that ATA before case 5.
@@ -41,10 +47,12 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
   getAssociatedTokenAddressSync,
   createAssociatedTokenAccountIdempotentInstruction,
+  getMint,
 } from "@solana/spl-token";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { createSilvMintForTest } from "./_t1-mint-helper";
 
 const RPC = "https://api.devnet.solana.com";
 const PROGRAM_ID = new PublicKey(
@@ -52,6 +60,10 @@ const PROGRAM_ID = new PublicKey(
 );
 const DEVNET_USDC = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
 const BPF_LOADER = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
+// A third-party, live, upgradeable devnet program used as the "foreign ProgramData"
+// in case 3. Deliberately NOT a Dominion id: we retire ours, and a closed program
+// would turn case 3 into a false FAIL.
+const LAZER_PROGRAM_ID = new PublicKey("pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt");
 
 let pass = 0;
 let fail = 0;
@@ -146,7 +158,6 @@ async function main() {
   // that case 1 is the worst case: the attacker points at the real, valid mint.
   const silvMint = Keypair.generate();
   console.log("  creating the real SILV mint (Token-2022 + extensions)...");
-  const { createSilvMintForTest } = await import("./_t1-mint-helper");
   await createSilvMintForTest(conn, authority, silvMint, mintAuthPda, PROGRAM_ID);
   console.log("  SILV mint:", silvMint.publicKey.toBase58(), "\n");
 
@@ -200,14 +211,62 @@ async function main() {
         .rpc(),
   );
 
+  // --- case 2: attacker signs with a mint IT created, correctly shaped, whose
+  // authorities it controls. Listed in this file's header since the first version
+  // but never actually implemented (audit review of daac4ac, P2). It matters because
+  // it is the realistic attack: the attacker does not need the real mint at all, it
+  // needs the config PDA. The authentication check runs BEFORE any mint validation,
+  // so the expected failure is still DeployerNotUpgradeAuthority, which also proves
+  // the check is not accidentally dependent on mint shape.
+  {
+    const attackerMint = Keypair.generate();
+    await createSilvMintForTest(
+      conn,
+      attacker,
+      attackerMint,
+      mintAuthPda,
+      PROGRAM_ID,
+    );
+    const accsOwnMint = {
+      ...accs(attacker.publicKey, programData(PROGRAM_ID), PROGRAM_ID),
+      silvMint: attackerMint.publicKey,
+    };
+    await mustFail(
+      "case 2: attacker signs with its own compliant mint",
+      /DeployerNotUpgradeAuthority/,
+      () =>
+        mkProgram(attacker)
+          .methods.initialize(args(attacker.publicKey) as never)
+          .accounts(accsOwnMint as never)
+          .rpc(),
+    );
+  }
+
   // --- case 3: attacker supplies a FOREIGN ProgramData (of a program it controls).
   // Use the ProgramData address of an unrelated deployed program.
-  const foreignProgram = new PublicKey(
-    "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W", // the previous devnet deploy
-  );
+  // AUDIT review of daac4ac (P2): this used to be the previous Dominion devnet
+  // deploy. That program is ours, we retire ids routinely, and `solana program
+  // close` would turn this case into a false FAIL (AccountNotInitialized matches
+  // none of the expected codes). Pyth Lazer is a third-party, upgradeable, live
+  // devnet program we will never close. Asserted below rather than assumed.
+  const foreignProgram = LAZER_PROGRAM_ID;
+  {
+    const pdInfo = await conn.getAccountInfo(programData(foreignProgram));
+    if (!pdInfo || !pdInfo.owner.equals(BPF_LOADER)) {
+      throw new Error(
+        `case 3 precondition failed: ${foreignProgram.toBase58()} has no ` +
+          `loader-owned ProgramData on this cluster. Pick another live ` +
+          `upgradeable program; do NOT use a Dominion id.`,
+      );
+    }
+  }
   await mustFail(
     "case 3: attacker supplies a foreign ProgramData",
-    /Unauthorized|ConstraintRaw|AccountNotProgramData|InvalidProgramId/,
+    // Tightened after the review: this used to also accept ConstraintRaw,
+    // AccountNotProgramData and InvalidProgramId, so it could not tell its own
+    // failure mode from a generic constraint failure. The programdata_address()
+    // constraint raises Unauthorized specifically.
+    /Unauthorized/,
     () =>
       mkProgram(attacker)
         .methods.initialize(args(attacker.publicKey) as never)
@@ -221,7 +280,8 @@ async function main() {
   // address is unallocated, so use the SILV mint: a real account, wrong type).
   await mustFail(
     "case 4: attacker supplies a non-ProgramData account",
-    /Unauthorized|AccountNotProgramData|AccountOwnedByWrongProgram|ConstraintRaw/,
+    // Anchor's Owner impl for ProgramData rejects a non-loader-owned account.
+    /AccountOwnedByWrongProgram/,
     () =>
       mkProgram(attacker)
         .methods.initialize(args(attacker.publicKey) as never)
@@ -232,7 +292,8 @@ async function main() {
   // --- case 4b: attacker points dominionProgram at another program
   await mustFail(
     "case 4b: attacker points dominion_program at a different program",
-    /InvalidProgramId|Unauthorized|ConstraintRaw/,
+    // Program<'info, T> pins the account to crate::ID.
+    /InvalidProgramId/,
     () =>
       mkProgram(attacker)
         .methods.initialize(args(attacker.publicKey) as never)
@@ -293,12 +354,33 @@ async function main() {
       cfg.redeemQueueDelaySeconds >= 3600,
       String(cfg.redeemQueueDelaySeconds),
     );
-    ok("case 8: supply is zero", new BN(0).eq(new BN(0)));
+    // AUDIT review of daac4ac (P1): this line used to read
+    //   ok("case 8: supply is zero", new BN(0).eq(new BN(0)))
+    // which is a tautology. It asserted nothing, never touched the mint, and was
+    // counted in the headline "15/15". The thing it claims to check is the CODEX
+    // C-01 rug-by-init defence, so it now reads the real mint.
+    const mintAfter = await getMint(
+      conn,
+      silvMint.publicKey,
+      "confirmed",
+      TOKEN_2022_PROGRAM_ID,
+    );
+    ok(
+      "case 8: SILV supply is zero at init",
+      mintAfter.supply === 0n,
+      `supply=${mintAfter.supply}`,
+    );
+    ok(
+      "case 8: mint authority is the program PDA",
+      mintAfter.mintAuthority?.equals(mintAuthPda) ?? false,
+      mintAfter.mintAuthority?.toBase58() ?? "null",
+    );
 
     // --- case 9: a second initialize (even by the authority) cannot re-seize
     await mustFail(
       "case 9: initialize cannot be replayed once the config exists",
-      /already in use|AccountAlreadyInitialized|0x0/,
+      // "0x0" was removed: it matches a broad class of unrelated messages.
+      /already in use|AccountAlreadyInitialized/,
       () =>
         mkProgram(authority)
           .methods.initialize(args(authority.publicKey) as never)

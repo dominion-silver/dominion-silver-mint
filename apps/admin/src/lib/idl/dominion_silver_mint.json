@@ -1,5 +1,5 @@
 {
-  "address": "gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc",
+  "address": "6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh",
   "metadata": {
     "name": "dominion_silver_mint",
     "version": "0.1.0",
@@ -382,6 +382,7 @@
       "accounts": [
         {
           "name": "config",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -1963,7 +1964,7 @@
         },
         {
           "name": "dominion_program",
-          "address": "gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc"
+          "address": "6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh"
         },
         {
           "name": "program_data"
@@ -4862,6 +4863,16 @@
       "code": 12098,
       "name": "SupplyCapBelowSupply",
       "msg": "Supply cap cannot be set below the SILV already minted (it would permanently brick minting, since raising the cap is blocked)"
+    },
+    {
+      "code": 12099,
+      "name": "GuardianRemovalExpired",
+      "msg": "Guardian removal notice has expired; schedule a new one"
+    },
+    {
+      "code": 12100,
+      "name": "GuardianSelfCancelExhausted",
+      "msg": "This guardian has already used its one self-cancel"
     }
   ],
   "types": [
@@ -5287,6 +5298,10 @@
             "type": "bool"
           },
           {
+            "name": "pending_removal_count",
+            "type": "u8"
+          },
+          {
             "name": "version",
             "type": "u8"
           },
@@ -5295,7 +5310,7 @@
             "type": {
               "array": [
                 "u8",
-                64
+                63
               ]
             }
           }
@@ -5356,6 +5371,23 @@
           {
             "name": "pending_removal_at",
             "type": "i64"
+          },
+          {
+            "name": "self_cancel_used",
+            "type": "bool"
+          },
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
           }
         ]
       }

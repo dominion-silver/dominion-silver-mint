@@ -226,6 +226,15 @@ pub enum DominionError {
     GuardianRemovalAlreadyScheduled,
     #[msg("No removal is scheduled for this guardian")]
     GuardianRemovalNotScheduled,
+
     #[msg("Supply cap cannot be set below the SILV already minted (it would permanently brick minting, since raising the cap is blocked)")]
     SupplyCapBelowSupply,
+    // AUDIT review of daac4ac (P1): a scheduled removal used to stay armed forever
+    // once matured, which turned it into a stored instant-removal coupon.
+    #[msg("Guardian removal notice has expired; schedule a new one")]
+    GuardianRemovalExpired,
+    // AUDIT review of daac4ac (P0): the targeted guardian's self-veto is capped at
+    // one use, otherwise a rogue guardian is permanently unremovable.
+    #[msg("This guardian has already used its one self-cancel")]
+    GuardianSelfCancelExhausted,
 }

@@ -47,13 +47,21 @@ jobs:
           toolchain: 1.89.0
           components: rustfmt
 
+      # AUDIT review of daac4ac (P1, security reviewer): `target` was cached under a key
+      # that hashes only Cargo.lock, never the source. verify-release-artifact.sh
+      # compares the artifact against a "clean" rebuild, and both used to compile
+      # through this same shared target dir, so a stale or tampered intermediate would
+      # be linked into BOTH and the hashes would agree. The script now isolates its
+      # reference build with its own CARGO_TARGET_DIR; `target` is also no longer
+      # cached here, so the gate's own artifact is built from source every run.
+      # ~/.cargo/bin IS cached, so anchor-cli is not rebuilt from git each time.
       - name: Cache Cargo
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
+            ~/.cargo/bin
           key: gate-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install Solana CLI (for cargo build-sbf)
@@ -73,10 +81,42 @@ jobs:
       - name: Build the release artifact, default features (BLOCKING)
         run: cargo build-sbf --manifest-path programs/dominion_silver_mint_v2/Cargo.toml
 
+      # AUDIT review of daac4ac (P0, integration reviewer, proved by execution): this
+      # job could NEVER have passed on a fresh runner. `cargo build-sbf` does not
+      # create target/idl (it makes deploy/, release/, sbpf-solana-solana/ only) and
+      # target/ is gitignored, so the shell failed the redirect before anchor ran. The
+      # next two BLOCKING steps then failed for the same root cause, because
+      # verify-release-artifact.sh treats a missing IDL as a FAILURE rather than a
+      # skip. Fixed by creating the directory. Also: `|| true` swallowed an install
+      # failure (surfacing later as the far less obvious "anchor: command not found"),
+      # --force was missing, and ~/.cargo/bin was not cached.
       - name: Regenerate the IDL (BLOCKING)
         run: |
-          cargo install --git https://github.com/coral-xyz/anchor --tag v0.31.1 anchor-cli --locked || true
+          mkdir -p "$GITHUB_WORKSPACE/target/idl"
+          if ! command -v anchor >/dev/null 2>&1; then
+            cargo install --git https://github.com/coral-xyz/anchor --tag v0.31.1 anchor-cli --locked --force
+          fi
+          anchor --version
           (cd programs/dominion_silver_mint_v2 && anchor idl build -- --locked > "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json")
+
+      # Anchor-free and network-free, so it holds even if the IDL step above is
+      # unavailable. This is the gate's hard floor against the drift class that has
+      # already bitten this repo three times.
+      - name: Verify every hand-copied address agrees with declare_id! (BLOCKING)
+        run: bash scripts/verify-constants-consistency.sh
+
+      - name: Assert the regenerated IDL matches the committed copies (BLOCKING)
+        # The apps bundle their own IDL copy. If a regeneration differs from what is
+        # committed, the console is describing a program that is not the one being
+        # deployed. verify-constants-consistency.sh proves the three COMMITTED copies
+        # agree with each other; this proves they agree with a FRESH build.
+        run: |
+          diff -u apps/admin/src/lib/idl/dominion_silver_mint.json \
+                  target/idl/dominion_silver_mint.json \
+            || { echo "::error::the committed admin IDL differs from a fresh regeneration"; exit 1; }
+          diff -u apps/public/src/lib/idl/dominion_silver_mint.json \
+                  target/idl/dominion_silver_mint.json \
+            || { echo "::error::the committed public IDL differs from a fresh regeneration"; exit 1; }
 
       - name: Verify the release artifact (BLOCKING - audit A-33)
         # Refuses any binary that does not match a clean default-feature rebuild,

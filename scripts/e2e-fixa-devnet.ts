@@ -25,9 +25,15 @@ import path from "path";
 
 const RPC = "https://api.devnet.solana.com";
 const PROGRAM_ID = new PublicKey(
-  process.env.DOMINION_PROGRAM_ID || "gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc",
+  process.env.DOMINION_PROGRAM_ID || "6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh",
 );
-const SILV_MINT = new PublicKey("9jM14E8kV6asGw2FwNhKk3gXQNzGhoLrJGyFZ8U7gMoF");
+// AUDIT review of daac4ac (P2): PROGRAM_ID is env-overridable but SILV_MINT was a
+// hardcoded constant, so ANY use of DOMINION_PROGRAM_ID produced a guaranteed-broken
+// run (WrongMint on set_max_silv_supply, the wrong mint on premint) that looked like a
+// real failure. The mint is now read from the live config, which is the only authority
+// on which mint a given program is bound to. Set DOMINION_SILV_MINT only to override
+// deliberately.
+let SILV_MINT: PublicKey;
 
 let pass = 0,
   fail = 0;
@@ -64,6 +70,10 @@ async function main() {
   console.log("Program:", PROGRAM_ID.toBase58(), "\nAdmin:", admin.toBase58(), "\nConfig:", configPda.toBase58(), "\n");
 
   let cfg = await acct.fetch(configPda);
+  SILV_MINT = process.env.DOMINION_SILV_MINT
+    ? new PublicKey(process.env.DOMINION_SILV_MINT)
+    : (cfg.silvMint as PublicKey);
+  console.log("SILV mint (from the live config):", SILV_MINT.toBase58());
   console.log("Initial: paused =", cfg.paused, "| publicMint =", cfg.publicMintEnabled, "| redeem =", cfg.redemptionsEnabled);
 
   // 1. unpause
@@ -138,19 +148,28 @@ async function main() {
       .rpc(),
   );
 
-  // 7b. a tighten BELOW the live supply is rejected (DOM-011). Supply is 1000oz
-  // after the premint above, so 999oz is a legal tighten that must still fail.
+  // 7b. a tighten BELOW the live supply is rejected (DOM-011). Derived from the LIVE
+  // supply rather than hardcoded: the previous 999_000_000 only happened to be below
+  // supply because a single premint had run, and would have silently stopped testing
+  // anything the moment the devnet supply changed.
+  const liveSupply = new BN(supplyAfter.toString());
   await expectRevert("supply-cap tighten below live supply reverts", "SupplyCapBelowSupply", () =>
     program.methods
-      .setMaxSilvSupply(new BN(999_000_000))
+      .setMaxSilvSupply(liveSupply.sub(new BN(1)))
       .accounts({ config: configPda, admin, silvMint: SILV_MINT })
       .rpc(),
   );
 
   // 7c. The happy path (tighten to >= live supply) is deliberately NOT exercised
-  // here: the cap is tighten-only, so a successful tighten on this live devnet
-  // config could never be undone and would cripple it for UI testing. That branch
-  // is covered by the caps.rs unit tests instead.
+  // here: the cap is tighten-only, so a successful tighten on this live devnet config
+  // could never be undone and would cripple it for UI testing.
+  //
+  // CORRECTED after the review of daac4ac: this comment used to claim the branch was
+  // "covered by the caps.rs unit tests instead". It was not. caps.rs had no test
+  // module at all, which two reviewers checked and I had not. The tests now exist
+  // (validate_new_max_supply, 9 cases including the exactly-at-supply boundary), so
+  // the claim is finally true. Stated here because the wrong version of this sentence
+  // is exactly the kind of thing an auditor takes at face value.
 
   // 8. FIX A: emergency_tighten (lower budget) applies
   const budBefore = new BN(cfg.instantRedeemBudgetUsdc);
@@ -211,16 +230,26 @@ async function main() {
   // 11. restore the inventory wallet. Step 2 had to point it at the admin (the
   // premint destination ATA must be owned by config.inventory_wallet), so without
   // this the script silently leaves the live config pointing at the deployer.
-  if (inventoryBefore && inventoryBefore.toBase58() !== admin.toBase58()) {
+  //
+  // AUDIT review of daac4ac (P2): the restore was skipped when inventoryBefore was
+  // null, which is exactly the fresh-config first run the step exists for. It now
+  // falls back to the intended launch inventory wallet, so the config always ends in
+  // the posture it should be in rather than in the test's posture.
+  const INTENDED_INVENTORY = new PublicKey(
+    process.env.DOMINION_INVENTORY_WALLET ||
+      "EkDhR65JUL8tGhxRhnueaqri6zNzxMEJ82UU35pQ7V56",
+  );
+  const restoreTo = inventoryBefore ?? INTENDED_INVENTORY;
+  if (restoreTo.toBase58() !== admin.toBase58()) {
     await program.methods
-      .setInventoryWallet(inventoryBefore)
+      .setInventoryWallet(restoreTo)
       .accounts({ config: configPda, admin })
       .rpc();
     cfg = await acct.fetch(configPda);
     ok(
-      "inventory wallet restored to its pre-test value",
-      cfg.inventoryWallet.toBase58() === inventoryBefore.toBase58(),
-      inventoryBefore.toBase58(),
+      "inventory wallet restored (or set to the intended launch wallet)",
+      cfg.inventoryWallet.toBase58() === restoreTo.toBase58(),
+      restoreTo.toBase58(),
     );
   }
 

@@ -111,6 +111,9 @@ export interface ConfigAccount {
   // Split pause flags (mint vs redeem)
   mintPaused: boolean;
   redeemPaused: boolean;
+  // Guardians currently under notice of removal (audit review of daac4ac): the
+  // removal floor is evaluated against guardianCount - pendingRemovalCount.
+  pendingRemovalCount: number;
   version: number;
 }
 
@@ -352,10 +355,18 @@ export function formatSilv(raw: BN): string {
   const whole = Number(abs.div(MICRO).toString()).toLocaleString("en-US");
   const frac = abs.mod(MICRO).toNumber(); // 0..999_999
   if (frac === 0) return `${neg ? "-" : ""}${whole}`;
-  // Up to 4 decimals, trailing zeros trimmed, matching the previous display.
-  const decimals = String(Math.round(frac / 100))
-    .padStart(4, "0")
-    .replace(/0+$/, "");
+  // AUDIT review of daac4ac (P1, found independently by all three reviewers): this
+  // rounded to 4 decimals with `Math.round(frac / 100)`, which can return 10000.
+  // padStart(4) leaves "10000" untouched and the trailing-zero strip collapses it to
+  // "1", so 1.999999 rendered as "1.1" and 0.999999 as "0.1": roughly 0.9 oz low,
+  // silently, on the supply and cap figures an operator reads before setting a
+  // TIGHTEN-ONLY cap that cannot be undone.
+  //
+  // Fixed by not rounding at all. All six decimals are exact (the mint has 6), and
+  // trailing zeros are trimmed, so there is no carry to get wrong and no rounding
+  // for the operator to reason about. Displaying more precision than before is the
+  // right trade in a console where the number drives an irreversible action.
+  const decimals = String(frac).padStart(6, "0").replace(/0+$/, "");
   return decimals.length
     ? `${neg ? "-" : ""}${whole}.${decimals}`
     : `${neg ? "-" : ""}${whole}`;
@@ -372,3 +383,70 @@ export function formatPrice(scaled: BN): string {
 }
 
 export const PROGRAM_ID_STR = PROGRAM_ID.toBase58();
+
+/**
+ * One guardian's on-chain state, as the console needs to display it.
+ *
+ * AUDIT review of daac4ac (P1, integration reviewer): `pending_removal_at` is
+ * written on-chain and was read NOWHERE in either app. DOM-007's whole security
+ * property is "the targeted guardian has admin_timelock_seconds to react", and the
+ * console gave that guardian no way to see that a removal had been scheduled, who is
+ * targeted, or when it fires. A veto nobody can see is not a veto.
+ */
+export type GuardianView = {
+  guardian: PublicKey;
+  addedAt: BN;
+  cooldownUntil: BN;
+  pendingRemovalAt: BN;
+  selfCancelUsed: boolean;
+  /** Derived: active means the program will accept its powers. */
+  active: boolean;
+};
+
+/**
+ * Every guardian account owned by the program, newest-added first.
+ *
+ * Uses getProgramAccounts filtered by the GuardianAccount discriminator rather than
+ * a list of known pubkeys, because nothing on-chain enumerates guardians: the config
+ * holds only a COUNT, and the accounts are PDAs of keys the console does not know.
+ */
+export async function fetchGuardians(
+  connection: Connection,
+): Promise<GuardianView[]> {
+  const program = getReadOnlyProgram(connection);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows = await (program.account as any).guardianAccount.all();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return rows
+    .map((r: any) => {
+      const a = r.account;
+      return {
+        guardian: a.guardian as PublicKey,
+        addedAt: a.addedAt as BN,
+        cooldownUntil: a.cooldownUntil as BN,
+        pendingRemovalAt: a.pendingRemovalAt as BN,
+        selfCancelUsed: Boolean(a.selfCancelUsed),
+        active: (a.cooldownUntil as BN).isZero(),
+      } as GuardianView;
+    })
+    .sort((a: GuardianView, b: GuardianView) =>
+      b.addedAt.cmp(a.addedAt),
+    );
+}
+
+/** Seconds until `ts`, or null when nothing is scheduled. Negative once elapsed. */
+export function secondsUntil(ts: BN, nowSeconds?: number): number | null {
+  if (ts.isZero()) return null;
+  const now = nowSeconds ?? Math.floor(Date.now() / 1000);
+  return ts.toNumber() - now;
+}
+
+/** "in 23h 59m" / "elapsed 2h ago", for a countdown an operator can act on. */
+export function formatCountdown(seconds: number): string {
+  const abs = Math.abs(seconds);
+  const d = Math.floor(abs / 86400);
+  const h = Math.floor((abs % 86400) / 3600);
+  const m = Math.floor((abs % 3600) / 60);
+  const parts = d > 0 ? `${d}d ${h}h` : h > 0 ? `${h}h ${m}m` : `${m}m`;
+  return seconds >= 0 ? `in ${parts}` : `elapsed ${parts} ago`;
+}

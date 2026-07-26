@@ -48,6 +48,7 @@ for a in "$@"; do
 done
 SO="${ARGS[0]:-$ROOT/target/deploy/dominion_silver_mint.so}"
 IDL="${ARGS[1]:-$ROOT/target/idl/dominion_silver_mint.json}"
+LIB_RS="$ROOT/programs/dominion_silver_mint_v2/src/lib.rs"
 
 FORBIDDEN_IX=(probe_oracle_price dev_set_max_staleness dev_set_premiums)
 
@@ -72,7 +73,15 @@ else
   echo "1. Reproducible rebuild with the default feature set"
   TMPDIR_BUILD="$(mktemp -d)"
   trap 'rm -rf "$TMPDIR_BUILD"' EXIT
-  if ! cargo build-sbf --manifest-path "$MANIFEST" --sbf-out-dir "$TMPDIR_BUILD" >"$TMPDIR_BUILD/build.log" 2>&1; then
+  # AUDIT review of daac4ac (P1): --sbf-out-dir only changes where the FINAL .so is
+  # copied. Compilation still used the shared target/ dir, which CI restores from
+  # actions/cache under a key that hashes only Cargo.lock. A stale or tampered rlib
+  # in that cache would be linked into both the artifact AND its "clean reference",
+  # so the hashes would agree and this gate would pass. The reference build now gets
+  # its own CARGO_TARGET_DIR and shares no intermediate objects with the artifact
+  # under test. Costs a full cold rebuild; that is the point.
+  if ! CARGO_TARGET_DIR="$TMPDIR_BUILD/target" \
+      cargo build-sbf --manifest-path "$MANIFEST" --sbf-out-dir "$TMPDIR_BUILD" >"$TMPDIR_BUILD/build.log" 2>&1; then
     echo "   FAIL: the default-feature rebuild did not succeed"
     tail -5 "$TMPDIR_BUILD/build.log" | sed 's/^/     /'
     exit 1
@@ -122,16 +131,30 @@ if [[ ! -f "$IDL" ]]; then
   echo "   regenerate: (cd programs/dominion_silver_mint_v2 && anchor idl build -- --locked)"
   fail=1
 else
-  python3 - "$IDL" "${FORBIDDEN_IX[@]}" <<'PY'
-import json, sys
+  # AUDIT review of daac4ac (P1): this used to only PRINT idl.address. An IDL that
+  # describes a different program is exactly the drift that ships a console pointed
+  # at the wrong deployment, so it is now asserted against declare_id!.
+  python3 - "$IDL" "$LIB_RS" "${FORBIDDEN_IX[@]}" <<'PY'
+import json, re, sys
 idl = json.load(open(sys.argv[1]))
+src = open(sys.argv[2]).read()
 names = [i["name"] for i in idl.get("instructions", [])]
-bad = [n for n in sys.argv[2:] if n in names]
+bad = [n for n in sys.argv[3:] if n in names]
 for n in bad:
     print(f"   FAIL: '{n}' is present in the IDL")
 if not bad:
     print(f"   ok: {len(names)} instructions, none forbidden")
-print(f"   idl address: {idl.get('address')}")
+
+m = re.search(r'declare_id!\("([1-9A-HJ-NP-Za-km-z]+)"\)', src)
+if not m:
+    print("   FAIL: could not find declare_id! in the program source")
+    sys.exit(1)
+declared, addr = m.group(1), idl.get("address")
+if addr != declared:
+    print(f"   FAIL: idl address {addr} != declare_id! {declared}")
+    bad.append("address-mismatch")
+else:
+    print(f"   ok: idl address == declare_id! ({declared})")
 sys.exit(1 if bad else 0)
 PY
   [[ $? -eq 0 ]] || fail=1

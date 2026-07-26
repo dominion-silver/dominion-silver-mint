@@ -86,12 +86,35 @@ pub const REDEEM_QUEUE_DELAY_MIN_SECONDS: u32 = 3_600; // 1 hour, hard floor onl
 // somebody able to cancel. What deferral contributes: that somebody cannot be
 // silently replaced first.
 //
-// Residual, accepted: an admin can still schedule removals and, if no guardian
-// reacts within the window, reduce the set to this floor. That is the intended
-// trade-off, the same one the 24h admin timelock makes: detection plus a reaction
-// window rather than prevention. Run 2 or 3 guardians and monitor
-// GuardianRemovalScheduled events.
+// CORRECTED after the review of daac4ac. An earlier version of this comment implied
+// the floor guarantees a surviving INDEPENDENT guardian. It does not, and the
+// overclaim is worth stating plainly because an auditor will rely on it:
+//
+//   1. The floor counts REGISTRATIONS, and `add_guardian` accepts any 32 bytes. An
+//      admin can lift the count with a key it holds, or with an unsignable junk
+//      pubkey, purely to satisfy this check. Refusing `config.admin` in
+//      `add_guardian` blocks only the literal self-appointment.
+//   2. Therefore the floor bounds the COUNT, never the independence of the set. The
+//      only real protection is the deferral: every removal costs a full
+//      `admin_timelock_seconds` of public, cancellable notice.
+//   3. What the floor now does contribute, since the review: it is evaluated against
+//      guardians NOT already under notice (see `may_schedule_removal`), so an admin
+//      can no longer schedule the entire set inside one window and pay a single
+//      delay for the whole purge.
+//
+// Residual, accepted and NOT fixed here: guardian appointment is admin-unilateral,
+// so a determined compromised admin can still walk the set down over successive
+// windows. Making the guardian set independent of the admin is a governance change
+// (Phase 1), not something an on-chain count check can express. Run 2 or 3
+// guardians, hold them on separate keys, and monitor GuardianRemovalScheduled.
 pub const MIN_ACTIVE_GUARDIANS: u8 = 1;
+
+// AUDIT review of daac4ac (P1): a scheduled guardian removal used to stay armed
+// forever once its ETA passed, so an old schedule became a stored instant-removal
+// coupon (pre-arm quietly, evict later with no reaction window). A removal must be
+// applied inside this window after its ETA or it dies, exactly as a pending admin
+// transfer dies after PENDING_ADMIN_EXPIRY_SECONDS. Same value, same reasoning.
+pub const GUARDIAN_REMOVAL_EXEC_WINDOW_SECONDS: i64 = 7 * 86400; // 7 days
 
 // P2-05: per-field SILV metadata bounds (Token-2022 TokenMetadata extension).
 // Caps follow the Metaplex name/symbol convention (32/10). The URI cap is
@@ -316,9 +339,16 @@ pub struct ConfigAccount {
     pub mint_paused: bool,
     pub redeem_paused: bool,
 
+    // AUDIT review of daac4ac (P1): guardians currently scheduled for removal but not
+    // yet finalized. Carved out of `reserved` rather than appended, so the byte
+    // offsets of every existing field are unchanged and ConfigAccount::SIZE stays
+    // 800: an in-place upgrade decodes an existing config with this field reading 0,
+    // which is the correct value for a config that has no pending removals.
+    pub pending_removal_count: u8,
+
     // Schema
     pub version: u8,
-    pub reserved: [u8; 64],
+    pub reserved: [u8; 63],
 }
 
 impl ConfigAccount {
@@ -356,8 +386,9 @@ impl ConfigAccount {
         + 32 + 1 + (1 + 8)    // kyc_operator + kyc_enforced + pending_kyc_operator_nonce
         + 32 + 4 + 1 + (1 + 8) // por_feed + por_max_staleness + por_enforced + pending_por_feed_nonce
         + 1 + 1               // mint_paused + redeem_paused
+        + 1                   // pending_removal_count (carved out of reserved)
         + 1                   // version
-        + 64; // reserved
+        + 63; // reserved
 
     pub fn assert_premium_within_bounds(&self) -> Result<()> {
         require!(

@@ -17,6 +17,7 @@
 import { createRequire } from "module";
 import * as fs from "fs";
 import * as os from "os";
+import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 
 const APUB = "/Users/thomasblanc/1_app/dominion/apps/public/";
 const r = createRequire(APUB);
@@ -40,7 +41,7 @@ const { PythSolanaReceiver } = r("@pythnetwork/pyth-solana-receiver");
 const { BN } = anchor;
 
 const RPC = "https://api.devnet.solana.com";
-const PROGRAM_ID = new PublicKey("GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX");
+const PROGRAM_ID = SHARED_PROGRAM_ID;
 const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
 const SILV_MINT = new PublicKey("4bNYnE1d8XV1W4iJuWVqmxVi5qqvAopvxekifDVvB4Ew");
 const TOKEN = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");

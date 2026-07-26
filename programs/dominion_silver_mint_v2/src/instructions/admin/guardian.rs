@@ -43,8 +43,18 @@ pub fn add_handler(ctx: Context<AddGuardian>, guardian_pubkey: Pubkey) -> Result
     // This blocks the literal self-appointment path. It is a barrier, not the fix:
     // an admin holding any second key defeats it. The actual fix is the deferred
     // removal implemented in remove_handler below, which does not depend on being
-    // able to tell whether a key is independent.
+    // able to tell whether a key is independent. See the MIN_ACTIVE_GUARDIANS
+    // comment in state/config.rs for the honest statement of what is and is not
+    // closed here.
     require!(guardian_pubkey != config.admin, DominionError::Unauthorized);
+    // AUDIT review of daac4ac: also refuse the INCOMING admin. Without this the
+    // barrier above is trivially sidestepped by appointing K as guardian while A is
+    // admin and then completing an already-pending transfer of admin-ship to K.
+    // `GuardianAccount::may_act` is the backstop for the case where admin-ship moves
+    // after the appointment, which this check cannot see.
+    if let Some(pending) = config.pending_admin {
+        require!(guardian_pubkey != pending, DominionError::Unauthorized);
+    }
 
     // Cooldown enforcement (D32). cooldown_until is set on remove.
     if guardian.cooldown_until != 0 {
@@ -71,6 +81,11 @@ pub fn add_handler(ctx: Context<AddGuardian>, guardian_pubkey: Pubkey) -> Result
     guardian.added_at = now;
     guardian.cooldown_until = 0;
     guardian.pending_removal_at = 0;
+    // A re-appointment is a fresh mandate, so the self-defence budget resets. Only
+    // this instruction clears the flag, and it is admin-only and requires the removal
+    // cooldown to have elapsed, so a guardian can never restore its own budget.
+    guardian.self_cancel_used = false;
+    guardian.version = GUARDIAN_ACCOUNT_VERSION;
 
     config.guardian_count = config.guardian_count.saturating_add(1);
 
@@ -99,7 +114,6 @@ pub struct RemoveGuardian<'info> {
 }
 
 pub fn remove_handler(ctx: Context<RemoveGuardian>, guardian_pubkey: Pubkey) -> Result<()> {
-    let config = &ctx.accounts.config;
     let now = Clock::get()?.unix_timestamp;
 
     // AUDIT action 0.12b, the real DOM-007 fix. Removal is now SCHEDULED, not
@@ -115,20 +129,38 @@ pub fn remove_handler(ctx: Context<RemoveGuardian>, guardian_pubkey: Pubkey) -> 
     // so a targeted guardian retains full powers and can pause the protocol, cancel
     // the pending action the removal was meant to clear the way for, or cancel its
     // own removal.
+    let existing = ctx.accounts.guardian_account.pending_removal_at;
+    // An EXPIRED schedule unarms itself and may be replaced by a fresh one, which
+    // starts a fresh full window. Without this branch an expired schedule would block
+    // the guardian's removal forever, and `pending_removal_count` could never be
+    // brought back down (see cancel_removal_handler, which anyone may call once a
+    // schedule is dead).
     require!(
-        ctx.accounts.guardian_account.pending_removal_at == 0,
+        existing == 0 || removal_schedule_expired(existing, now),
         DominionError::GuardianRemovalAlreadyScheduled
-    );
-    // Early feedback only: the binding floor check is at finalize, because several
-    // removals can be scheduled concurrently and the count only changes there.
-    require!(
-        config.guardian_count > MIN_ACTIVE_GUARDIANS,
-        DominionError::GuardianFloorBreached
     );
 
     let effective_at = now
-        .checked_add(config.admin_timelock_seconds as i64)
+        .checked_add(ctx.accounts.config.admin_timelock_seconds as i64)
         .ok_or(error!(DominionError::ArithmeticOverflow))?;
+
+    if existing == 0 {
+        // A genuinely NEW notice. The floor is evaluated against guardians not
+        // already under notice, so the admin cannot schedule the whole set inside one
+        // window: at least MIN_ACTIVE_GUARDIANS guardians always remain free to
+        // react, cancel, and pause. Re-arming an expired notice does not change the
+        // count, so it deliberately skips both the check and the increment.
+        let config = &mut ctx.accounts.config;
+        require!(
+            may_schedule_removal(config.guardian_count, config.pending_removal_count),
+            DominionError::GuardianFloorBreached
+        );
+        config.pending_removal_count = config
+            .pending_removal_count
+            .checked_add(1)
+            .ok_or(error!(DominionError::ArithmeticOverflow))?;
+    }
+
     ctx.accounts.guardian_account.pending_removal_at = effective_at;
 
     emit!(GuardianRemovalScheduled {
@@ -167,10 +199,17 @@ pub fn finalize_removal_handler(
 
     require!(scheduled != 0, DominionError::GuardianRemovalNotScheduled);
     require!(now >= scheduled, DominionError::TimelockNotElapsed);
-    // BINDING floor check. It lives here rather than only at schedule time because
-    // removals can be scheduled concurrently: with three guardians an admin could
-    // schedule all three (each passing the count check at 3) and then finalize them
-    // one by one down to zero. Re-checking against the live count stops that.
+    // The notice must be acted on inside its window. A matured schedule left armed
+    // forever is a stored instant-removal coupon: the admin pre-arms during quiet
+    // operation and evicts later with no reaction window at all.
+    require!(
+        !removal_schedule_expired(scheduled, now),
+        DominionError::GuardianRemovalExpired
+    );
+    // BINDING floor check against the LIVE count, not the count at schedule time.
+    // `may_schedule_removal` already stops the whole set being put under notice at
+    // once; this is the second line, and it is what makes the floor hold even if the
+    // set shrank for another reason between schedule and finalize.
     require!(
         ctx.accounts.config.guardian_count > MIN_ACTIVE_GUARDIANS,
         DominionError::GuardianFloorBreached
@@ -187,6 +226,12 @@ pub fn finalize_removal_handler(
         .guardian_count
         .checked_sub(1)
         .ok_or(error!(DominionError::ArithmeticOverflow))?;
+    // `scheduled != 0` above proves this guardian was counted as pending, so this
+    // cannot underflow either.
+    config.pending_removal_count = config
+        .pending_removal_count
+        .checked_sub(1)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
 
     emit!(GuardianRemoved {
         guardian: guardian_pubkey,
@@ -198,7 +243,7 @@ pub fn finalize_removal_handler(
 #[derive(Accounts)]
 #[instruction(guardian_pubkey: Pubkey)]
 pub struct CancelGuardianRemoval<'info> {
-    #[account(seeds = [CONFIG_SEED], bump)]
+    #[account(mut, seeds = [CONFIG_SEED], bump)]
     pub config: Account<'info, ConfigAccount>,
 
     pub signer: Signer<'info>,
@@ -212,26 +257,69 @@ pub struct CancelGuardianRemoval<'info> {
     pub guardian_account: Account<'info, GuardianAccount>,
 }
 
-/// Cancel a scheduled removal. Callable by the ADMIN (changed its mind) or by the
-/// TARGETED GUARDIAN ITSELF, which is the point of the whole mechanism: the actor
-/// being removed can veto it, so a compromised admin cannot quietly clear the veto.
+/// Cancel a scheduled removal.
+///
+/// Three callers, in precedence order:
+///
+///  1. ANYONE, once the notice has expired. A dead schedule can no longer be
+///     finalized, so clearing it is pure housekeeping, and leaving it to the admin
+///     alone would let `pending_removal_count` stay permanently inflated (which would
+///     block future removals through the floor check).
+///  2. The ADMIN, which changed its mind. Free, and never consumes the target's
+///     self-defence budget.
+///  3. The TARGETED GUARDIAN ITSELF, ONCE. This is the point of the mechanism: the
+///     actor being removed can veto it, so a compromised admin cannot quietly clear
+///     the veto.
+///
+/// AUDIT review of daac4ac (P0, found independently by the correctness and the
+/// security reviewer): (3) was originally unlimited. That made a ROGUE guardian
+/// permanently unremovable, because the admin's only path is schedule-then-wait and
+/// the guardian could cancel inside every window forever, while `pause` (guardian) vs
+/// `unpause` (admin-only) gave it an indefinite protocol halt. The exit was a program
+/// upgrade. Capping the self-veto at one use bounds eviction to two windows (48h at
+/// launch) while keeping the property the deferral exists for: a single opportunistic
+/// removal cannot succeed without the admin publicly re-committing to it.
+///
+/// Alternative considered and rejected: rate-limiting the guardian `pause` power.
+/// That would have inverted the threat model, because an honest guardian re-pausing
+/// against a compromised admin is the primary reason the pause power exists.
 pub fn cancel_removal_handler(
     ctx: Context<CancelGuardianRemoval>,
     guardian_pubkey: Pubkey,
 ) -> Result<()> {
     let signer = ctx.accounts.signer.key();
+    let now = Clock::get()?.unix_timestamp;
     let is_admin = signer == ctx.accounts.config.admin;
     // The guardian account is PDA-derived from guardian_pubkey, so a caller cannot
     // spoof being the target: the seeds bind the account to the key.
     let is_target = signer == guardian_pubkey;
-    require!(is_admin || is_target, DominionError::Unauthorized);
 
-    let guardian = &mut ctx.accounts.guardian_account;
-    require!(
-        guardian.pending_removal_at != 0,
-        DominionError::GuardianRemovalNotScheduled
-    );
-    guardian.pending_removal_at = 0;
+    let scheduled = ctx.accounts.guardian_account.pending_removal_at;
+    require!(scheduled != 0, DominionError::GuardianRemovalNotScheduled);
+    let expired = removal_schedule_expired(scheduled, now);
+
+    if expired {
+        // Housekeeping, open to anyone.
+    } else if is_admin {
+        // Admin withdrawal. Deliberately checked BEFORE the target branch so that a
+        // key holding both roles does not burn the guardian's one veto.
+    } else if is_target {
+        require!(
+            !ctx.accounts.guardian_account.self_cancel_used,
+            DominionError::GuardianSelfCancelExhausted
+        );
+        ctx.accounts.guardian_account.self_cancel_used = true;
+    } else {
+        return Err(error!(DominionError::Unauthorized));
+    }
+
+    ctx.accounts.guardian_account.pending_removal_at = 0;
+    let config = &mut ctx.accounts.config;
+    // `scheduled != 0` proves this guardian was counted as pending.
+    config.pending_removal_count = config
+        .pending_removal_count
+        .checked_sub(1)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
 
     emit!(GuardianRemovalCancelled {
         guardian: guardian_pubkey,

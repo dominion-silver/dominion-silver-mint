@@ -7,10 +7,14 @@ import { BN } from "@coral-xyz/anchor";
 import {
   fetchDashboardSnapshot,
   fetchAllRedemptionRequests,
+  fetchGuardians,
   formatUsdc,
   formatSilv,
   formatPrice,
+  formatCountdown,
+  secondsUntil,
   type DashboardSnapshot,
+  type GuardianView,
   type RedemptionRequestView,
   type RedemptionQueueResult,
   type RedemptionStatusKind,
@@ -66,6 +70,22 @@ export function Dashboard() {
       dedupingInterval: 15_000,
     },
   );
+  // AUDIT review of daac4ac (P1): `pending_removal_at` was written on-chain and
+  // read by neither app. DOM-007's security property is that the TARGETED guardian
+  // has a full timelock window to react, which requires the console to show that a
+  // removal exists and when it fires. Cheap query (a handful of small accounts),
+  // and it is the only place a guardian can see it is under notice.
+  const { data: guardians } = useSWR<GuardianView[]>(
+    data ? "dominion-guardians" : null,
+    () => fetchGuardians(connection),
+    {
+      refreshInterval: 20_000,
+      revalidateOnFocus: false,
+      keepPreviousData: true,
+      dedupingInterval: 10_000,
+    },
+  );
+
   const queue: RedemptionQueueResult = {
     requests: redemptions ?? [],
     // degraded iff the latest fetch errored. requests may be last-good/stale.
@@ -115,7 +135,9 @@ export function Dashboard() {
       {tab === "redemptions" && (
         <RedemptionsTab data={data} queue={queue} />
       )}
-      {tab === "governance" && <GovernanceTab data={data} />}
+      {tab === "governance" && (
+        <GovernanceTab data={data} guardians={guardians ?? []} />
+      )}
       {tab === "actions" && <AdminActions />}
       {tab === "help" && <HelpTab />}
     </div>
@@ -447,7 +469,13 @@ function StatusPill({
 
 /* ---------------- Governance ---------------- */
 
-function GovernanceTab({ data }: { data: DashboardSnapshot }) {
+function GovernanceTab({
+  data,
+  guardians,
+}: {
+  data: DashboardSnapshot;
+  guardians: GuardianView[];
+}) {
   const { cfg } = data;
   const pendingProposals: { label: string; nonce: BN | null }[] = [
     { label: "Mint premium", nonce: cfg.pendingPremiumMintNonce },
@@ -486,8 +514,12 @@ function GovernanceTab({ data }: { data: DashboardSnapshot }) {
         />
         <Metric
           title="Guardians"
-          value={`${cfg.guardianCount} / ${cfg.maxGuardianCount}`}
-          tip="Trusted keys that can pause the protocol or cancel a pending change. They cannot move funds or change settings."
+          value={
+            cfg.pendingRemovalCount > 0
+              ? `${cfg.guardianCount} / ${cfg.maxGuardianCount} (${cfg.pendingRemovalCount} leaving)`
+              : `${cfg.guardianCount} / ${cfg.maxGuardianCount}`
+          }
+          tip="Trusted keys that can pause the protocol or cancel a pending change. They cannot move funds or change settings. Removal is not instant: it is scheduled, and a guardian under notice keeps every power until it is finalized."
         />
         <Metric
           title="Config version"
@@ -500,6 +532,8 @@ function GovernanceTab({ data }: { data: DashboardSnapshot }) {
           tip="Operator compliance flag for off-chain procedures. It does NOT add token freeze or transfer-restriction controls - this contract has no freeze path. Turning it ON only flips this flag and auto-pauses the protocol. Enforcement (seize/burn) is done via the permanent-delegate authority, not this switch."
         />
       </Section>
+
+      <GuardianRoster guardians={guardians} />
 
       <Section title="Price feed safety checks">
         <Metric
@@ -631,6 +665,99 @@ function HelpTab() {
         </p>
       </div>
     </div>
+  );
+}
+
+/**
+ * The guardian roster, with the removal countdown.
+ *
+ * AUDIT review of daac4ac (P1): DOM-007 defers guardian removal so the TARGETED
+ * guardian has a full timelock window to react, including cancelling its own
+ * removal. That property is worthless if the guardian cannot see it is under notice,
+ * and `pending_removal_at` was read nowhere in either app. This is the only surface
+ * that shows it.
+ */
+function GuardianRoster({ guardians }: { guardians: GuardianView[] }) {
+  if (!guardians.length) {
+    return (
+      <Section title="Guardian roster">
+        <p className="text-sm text-muted">
+          No guardian accounts found. The guardian veto is not configured, so
+          nothing can cancel a pending admin action except the admin itself.
+        </p>
+      </Section>
+    );
+  }
+  return (
+    <Section title="Guardian roster">
+      <div className="col-span-full overflow-x-auto">
+        <table className="w-full min-w-[40rem] text-left text-sm">
+          <thead className="text-xs uppercase text-muted">
+            <tr>
+              <th className="py-2 pr-4">Guardian</th>
+              <th className="py-2 pr-4">Status</th>
+              <th className="py-2 pr-4">Removal</th>
+              <th className="py-2">Self-veto</th>
+            </tr>
+          </thead>
+          <tbody>
+            {guardians.map((g) => {
+              const untilRemoval = secondsUntil(g.pendingRemovalAt);
+              const untilCooldown = secondsUntil(g.cooldownUntil);
+              return (
+                <tr
+                  key={g.guardian.toBase58()}
+                  className="border-t border-border align-top"
+                >
+                  <td className="py-2 pr-4 font-mono text-xs">
+                    {g.guardian.toBase58()}
+                  </td>
+                  <td className="py-2 pr-4">
+                    {g.active ? (
+                      <span className="text-accent">active</span>
+                    ) : (
+                      <span className="text-muted">
+                        removed
+                        {untilCooldown !== null && untilCooldown > 0
+                          ? ` (re-add ${formatCountdown(untilCooldown)})`
+                          : ""}
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-4">
+                    {untilRemoval === null ? (
+                      <span className="text-muted">not scheduled</span>
+                    ) : untilRemoval > 0 ? (
+                      <span className="text-amber-400">
+                        scheduled, fires {formatCountdown(untilRemoval)}
+                      </span>
+                    ) : (
+                      <span className="text-red-400">
+                        due now ({formatCountdown(untilRemoval)}), anyone may
+                        finalize
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-2">
+                    {g.selfCancelUsed ? (
+                      <span className="text-muted">used</span>
+                    ) : (
+                      <span className="text-accent">available</span>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+        <p className="mt-3 text-xs text-muted">
+          A guardian under notice keeps every power until the removal is
+          finalized, and may cancel its own removal ONCE. After that only the
+          admin can cancel it, so a rogue guardian cannot make itself
+          permanently unremovable.
+        </p>
+      </div>
+    </Section>
   );
 }
 

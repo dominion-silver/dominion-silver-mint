@@ -1,4 +1,29 @@
 /**
+ * SUPERSEDED. Do not use.
+ *
+ * AUDIT review of daac4ac (P2): this script calls instructions that no longer exist
+ * in the program ABI:
+ *   set_large_redeem_threshold / set_redeem_queue_delay (replaced by FIX A)
+ * It also held a program id retired one or two generations ago. It cannot work, and
+ * it fails deep inside with an opaque error that reads like a protocol fault rather
+ * than a stale script. Kept for its historical assertions only.
+ *
+ * Current equivalents:
+  scripts/e2e-fixa-devnet.ts        launch posture + FIX A, on the live program
+  scripts/e2e-guardian-devnet.ts    the guardian removal lifecycle (DOM-007)
+  scripts/t1-hostile-bootstrap.ts   the initialize authentication (DOM-001, P0)
+  scripts/read-config.ts            dump the live config
+ */
+if (!process.env.DOMINION_RUN_SUPERSEDED) {
+  console.error(
+    "scripts/ui-scenario.ts is SUPERSEDED: it calls instructions removed from the ABI.\n" +
+      "See the header for current equivalents. Set DOMINION_RUN_SUPERSEDED=1 to " +
+      "run it anyway (it will fail).",
+  );
+  process.exit(2);
+}
+
+/**
  * UI test scenario controller (devnet, admin-keyed). Flips on-chain params so
  * Thomas can manually exercise V2-specific UI paths, then restores §6.
  *
@@ -22,6 +47,7 @@
 import { createRequire } from "module";
 import * as fs from "fs";
 import * as os from "os";
+import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 
 const APUB = "/Users/thomasblanc/1_app/dominion/apps/public/";
 const r = createRequire(APUB);
@@ -31,7 +57,7 @@ const anchor = r("@coral-xyz/anchor");
 const { BN } = anchor;
 
 const RPC = "https://api.devnet.solana.com";
-const PID = new PublicKey("GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX");
+const PID = SHARED_PROGRAM_ID;
 const SILV = new PublicKey("4bNYnE1d8XV1W4iJuWVqmxVi5qqvAopvxekifDVvB4Ew");
 const CFG = PublicKey.findProgramAddressSync(
   [Buffer.from("config")],

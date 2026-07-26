@@ -1,8 +1,9 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import { AnchorProvider, Program, Idl } from "@coral-xyz/anchor";
 import fs from "fs";
+import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 
-const PID = new PublicKey("J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5");
+const PID = SHARED_PROGRAM_ID;
 
 async function main() {
   const c = new Connection("https://api.devnet.solana.com", "confirmed");

@@ -1,4 +1,29 @@
 /**
+ * SUPERSEDED. Do not use.
+ *
+ * AUDIT review of daac4ac (P2): this script calls instructions that no longer exist
+ * in the program ABI:
+ *   the four individual redeem-throttle setters (replaced by FIX A: emergency_tighten_redeem_limits + propose/execute_set_redeem_limits)
+ * It also held a program id retired one or two generations ago. It cannot work, and
+ * it fails deep inside with an opaque error that reads like a protocol fault rather
+ * than a stale script. Kept for its historical assertions only.
+ *
+ * Current equivalents:
+  scripts/e2e-fixa-devnet.ts        launch posture + FIX A, on the live program
+  scripts/e2e-guardian-devnet.ts    the guardian removal lifecycle (DOM-007)
+  scripts/t1-hostile-bootstrap.ts   the initialize authentication (DOM-001, P0)
+  scripts/read-config.ts            dump the live config
+ */
+if (!process.env.DOMINION_RUN_SUPERSEDED) {
+  console.error(
+    "scripts/test-v2-devnet.ts is SUPERSEDED: it calls instructions removed from the ABI.\n" +
+      "See the header for current equivalents. Set DOMINION_RUN_SUPERSEDED=1 to " +
+      "run it anyway (it will fail).",
+  );
+  process.exit(2);
+}
+
+/**
  * Live on-chain verification of the V2 (Option B) program on devnet.
  * Uses the deployer keypair (= the on-chain `admin` + PermanentDelegate for
  * this devnet test config). Exercises exactly the codex-flagged/fixed surface
@@ -34,9 +59,10 @@ import {
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 
 const RPC = "https://api.devnet.solana.com";
-const PROGRAM_ID = new PublicKey("GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX");
+const PROGRAM_ID = SHARED_PROGRAM_ID;
 
 let pass = 0;
 let fail = 0;

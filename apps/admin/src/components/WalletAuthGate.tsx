@@ -184,10 +184,24 @@ export function WalletAuthGate({ children }: { children: ReactNode }) {
         // account and require an active guardian, matching what the program
         // itself enforces (`g.cooldown_until == 0`).
         //
-        // GuardianAccount layout: 8-byte discriminator, guardian Pubkey (32),
-        // added_at i64 (8), cooldown_until i64 (8) = 56 bytes.
+        // GuardianAccount layout, offsets used here:
+        //   0..8    discriminator
+        //   8..40   guardian: Pubkey
+        //   40..48  added_at: i64
+        //   48..56  cooldown_until: i64   <- read below
+        //   56..64  pending_removal_at: i64
+        //   64      self_cancel_used: bool
+        //   65      version: u8
+        //   66..98  reserved
+        // The account has grown twice (56 -> 64 -> 98). Both growths APPENDED, so
+        // these offsets held, but that was luck rather than design: inserting a field
+        // before cooldown_until would have silently mis-authorized wallets. The
+        // minimum length asserted below is therefore the offset this code actually
+        // depends on, not the current total size, so a future append cannot make the
+        // guard wrong in either direction.
+        const COOLDOWN_END = 56;
         const gInfo = await connection.getAccountInfo(guardianPda(key));
-        if (gInfo && gInfo.data.length >= 56) {
+        if (gInfo && gInfo.data.length >= COOLDOWN_END) {
           const stored = new PublicKey(gInfo.data.subarray(8, 40));
           const cooldownUntil = gInfo.data.readBigInt64LE(48);
           if (stored.equals(key) && cooldownUntil === 0n) {

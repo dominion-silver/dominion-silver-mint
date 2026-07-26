@@ -474,8 +474,9 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.mint_paused = false;
     config.redeem_paused = false;
 
+    config.pending_removal_count = 0;
     config.version = 2; // launch spec 2026-07 schema
-    config.reserved = [0u8; 64];
+    config.reserved = [0u8; 63];
 
     msg!("dominion_silver_mint initialized");
     Ok(())

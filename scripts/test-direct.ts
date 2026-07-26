@@ -1,7 +1,33 @@
+/**
+ * SUPERSEDED. Do not use.
+ *
+ * AUDIT review of daac4ac (P2): this script calls instructions that no longer exist
+ * in the program ABI:
+ *   propose_set_treasury_min_reserve (replaced by the treasury FLOAT model)
+ * It also held a program id retired one or two generations ago. It cannot work, and
+ * it fails deep inside with an opaque error that reads like a protocol fault rather
+ * than a stale script. Kept for its historical assertions only.
+ *
+ * Current equivalents:
+  scripts/e2e-fixa-devnet.ts        launch posture + FIX A, on the live program
+  scripts/e2e-guardian-devnet.ts    the guardian removal lifecycle (DOM-007)
+  scripts/t1-hostile-bootstrap.ts   the initialize authentication (DOM-001, P0)
+  scripts/read-config.ts            dump the live config
+ */
+if (!process.env.DOMINION_RUN_SUPERSEDED) {
+  console.error(
+    "scripts/test-direct.ts is SUPERSEDED: it calls instructions removed from the ABI.\n" +
+      "See the header for current equivalents. Set DOMINION_RUN_SUPERSEDED=1 to " +
+      "run it anyway (it will fail).",
+  );
+  process.exit(2);
+}
+
 import {Connection,PublicKey,Keypair,Transaction,sendAndConfirmTransaction} from "@solana/web3.js";
 import {AnchorProvider,Program,BN,Idl,Wallet} from "@coral-xyz/anchor";
 import fs from "fs"; import os from "os";
-const PROGRAM_ID = new PublicKey("J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5");
+import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
+const PROGRAM_ID = SHARED_PROGRAM_ID;
 const c = new Connection("https://api.devnet.solana.com","confirmed");
 const deployer = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(os.homedir()+"/.config/solana/dominion-dev.json","utf8"))));
 const wallet: Wallet = {publicKey: deployer.publicKey, signTransaction: async (tx: any) => { tx.partialSign(deployer); return tx; }, signAllTransactions: async (txs: any) => { txs.forEach((t: any) => t.partialSign(deployer)); return txs; }, payer: deployer };

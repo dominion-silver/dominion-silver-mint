@@ -1,8 +1,9 @@
 import { Connection, PublicKey, Keypair, SystemProgram, Transaction, sendAndConfirmTransaction } from "@solana/web3.js";
 import { AnchorProvider, Program, BN, Idl, Wallet } from "@coral-xyz/anchor";
 import fs from "fs"; import path from "path"; import os from "os";
+import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 
-const PROGRAM_ID = new PublicKey("J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5");
+const PROGRAM_ID = SHARED_PROGRAM_ID;
 const conn = new Connection("https://api.devnet.solana.com", "confirmed");
 const deployer = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(os.homedir()+"/.config/solana/dominion-dev.json", "utf8"))));
 

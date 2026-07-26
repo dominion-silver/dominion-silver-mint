@@ -1,7 +1,8 @@
 import {Connection,PublicKey} from "@solana/web3.js";
 import {AnchorProvider,Program,Idl} from "@coral-xyz/anchor";
 import fs from "fs";
-const PID = new PublicKey("J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5");
+import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
+const PID = SHARED_PROGRAM_ID;
 const c = new Connection("https://api.devnet.solana.com","confirmed");
 const idl = JSON.parse(fs.readFileSync("target/idl/dominion_silver_mint.json","utf8"));
 const p = new Program(idl as Idl, new AnchorProvider(c,{publicKey:PublicKey.default,signTransaction:async()=>{throw 0;},signAllTransactions:async()=>{throw 0;}} as any,{commitment:"confirmed"}));

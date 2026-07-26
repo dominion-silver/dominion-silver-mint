@@ -5,7 +5,9 @@
  * every test with: attacker intent, expected behavior, severity, observed
  * outcome. Generates a JSON report consumed by scripts/generate-report.ts.
  *
- * Program: J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5 (devnet)
+ * Program: resolved from scripts/_program-id.ts (the generated IDL's address, or
+ * DOMINION_PROGRAM_ID). The header used to name a program id retired two
+ * generations ago, which is worse than naming none.
  * Run with:
  *   DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json npx tsx scripts/battle-test.ts
  */
@@ -27,9 +29,10 @@ import {
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 
 const RPC = "https://api.devnet.solana.com";
-const PROGRAM_ID = new PublicKey("J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5");
+const PROGRAM_ID = SHARED_PROGRAM_ID;
 
 type Severity = "info" | "low" | "medium" | "high" | "critical";
 type Outcome =
@@ -1245,10 +1248,11 @@ async function main() {
   await runAttack({
     id: "D2",
     category: "Guardian",
-    title: "admin add_guardian + remove_guardian (positive flow)",
+    title: "admin add_guardian + remove_guardian SCHEDULES (positive flow)",
     attackerIntent:
-      "Verify happy path: admin can add and remove guardians (proves the auth check is correctly tied to admin pubkey).",
-    expectedBehavior: "Both succeed.",
+      "Verify the happy path AND that removal is deferred, not instant. Rewritten after the review of daac4ac: the old version passed `guardian:` and `rentRecipient:` (account names that no longer exist) and asserted the INSTANT removal that DOM-007 deliberately deleted, so it was asserting the vulnerability as if it were the fix.",
+    expectedBehavior:
+      "add succeeds; remove succeeds but only SCHEDULES (pending_removal_at != 0, cooldown_until still 0, guardian_count unchanged).",
     expectedError: null,
     severityIfBypassed: "info",
     run: async () => {
@@ -1258,8 +1262,9 @@ async function main() {
         .addGuardian(g)
         .accounts({
           config: configPda,
-          guardian: gpda,
           admin: deployer.publicKey,
+          payer: deployer.publicKey,
+          guardianAccount: gpda,
           systemProgram: SystemProgram.programId,
         })
         .instruction();
@@ -1269,12 +1274,25 @@ async function main() {
         .removeGuardian(g)
         .accounts({
           config: configPda,
-          guardian: gpda,
-          rentRecipient: deployer.publicKey,
           admin: deployer.publicKey,
+          guardianAccount: gpda,
         })
         .instruction();
       await send(removeIx);
+
+      const ga = await (program.account as any).guardianAccount.fetch(gpda);
+      if (ga.pendingRemovalAt.isZero()) {
+        throw new Error(
+          "remove_guardian did NOT schedule: pending_removal_at is 0, so removal " +
+            "was applied instantly and DOM-007 has regressed",
+        );
+      }
+      if (!ga.cooldownUntil.isZero()) {
+        throw new Error(
+          "the scheduled guardian was deactivated immediately (cooldown_until != 0); " +
+            "it must keep its powers for the whole notice window",
+        );
+      }
     },
   });
 
@@ -1293,9 +1311,8 @@ async function main() {
         .removeGuardian(g)
         .accounts({
           config: configPda,
-          guardian: guardianPda(g),
-          rentRecipient: deployer.publicKey,
           admin: deployer.publicKey,
+          guardianAccount: guardianPda(g),
         })
         .instruction();
       await send(ix);

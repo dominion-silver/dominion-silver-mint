@@ -1,9 +1,36 @@
 #!/usr/bin/env bash
-# Hermetic runner for the Lazer behavioral harness. Builds BOTH SBF artifacts
-# with the correct features, asserts the probe is present, runs the litesvm
-# suite, then REBUILDS the default (no-feature) dominion .so so target/deploy is
-# never left holding a probe-contaminated "deploy" artifact.
+# Hermetic runner for the Lazer behavioral harness. Builds BOTH SBF artifacts with
+# the correct features into target/harness, asserts the probe IS present there, runs
+# the litesvm suite, then asserts target/deploy is still probe-free.
+#
+# It does NOT rebuild target/deploy: since the harness stopped writing there, there
+# is nothing to restore. (An earlier version of this header still claimed it did.)
+#
+# AUDIT review of daac4ac (P1, found independently by two reviewers): both probe
+# assertions used `strings f | grep -q TOKEN` under `set -euo pipefail`. grep -q exits
+# on first match, strings then dies of SIGPIPE, and pipefail reports 141 for the whole
+# pipeline. Read as a boolean that is "no match", which made the step-4 assertion fail
+# OPEN on a contaminated deploy artifact and the step-1 assertion fail spuriously when
+# the probe WAS present. scripts/verify-release-artifact.sh records this exact defect
+# in its own header, having been bitten by it first. Both sites now scan a materialized
+# file with no pipeline, so the exit code means what it says.
 set -euo pipefail
+
+# scan_for <file> <needle> -> exits 0 if present, 1 if absent, aborts if unreadable.
+scan_for() {
+  local f="$1" needle="$2" tmp
+  if [[ ! -f "$f" ]]; then
+    echo "ERROR: expected artifact does not exist: $f" >&2
+    exit 1
+  fi
+  tmp="$(mktemp)"
+  # No pipeline: strings writes to a file, grep reads it. Nothing can SIGPIPE.
+  strings "$f" > "$tmp"
+  if grep -q -- "$needle" "$tmp"; then
+    rm -f "$tmp"; return 0
+  fi
+  rm -f "$tmp"; return 1
+}
 cd "$(dirname "$0")/../.."
 
 echo "[1/4] build dominion (--features test-harness) + mock-lazer -> SBF"
@@ -13,8 +40,9 @@ cargo build-sbf --manifest-path programs/dominion_silver_mint_v2/Cargo.toml --sb
 cargo build-sbf --manifest-path tools/mock-lazer/Cargo.toml --sbf-out-dir target/harness
 # Anchor emits the PascalCase ix-name (ProbeOraclePrice) in the binary, NOT the
 # snake_case fn name - so this is the correct probe-presence token.
-strings target/harness/dominion_silver_mint.so | grep -q ProbeOraclePrice \
-  || { echo "ERROR: probe absent from the harness .so (feature build failed)"; exit 1; }
+if ! scan_for target/harness/dominion_silver_mint.so ProbeOraclePrice; then
+  echo "ERROR: probe absent from the harness .so (feature build failed)"; exit 1
+fi
 
 echo "[2/4] run litesvm harness (rustc 1.89; litesvm needs >= 1.86)"
 cargo +1.89.0 test --manifest-path tools/lazer-harness/Cargo.toml "$@"
@@ -23,7 +51,9 @@ echo "[3/4] target/deploy untouched by design (harness builds into target/harnes
 echo "      so there is nothing to restore. Verify the deploy artifact separately:"
 echo "        scripts/verify-release-artifact.sh"
 echo "[4/4] assert the deploy artifact is probe-free"
-if strings target/deploy/dominion_silver_mint.so | grep -q ProbeOraclePrice; then
+# scan_for aborts if the file is missing, which is deliberate: the previous form
+# printed "OK: ... is the clean deploy artifact" about a file that did not exist.
+if scan_for target/deploy/dominion_silver_mint.so ProbeOraclePrice; then
   echo "ERROR: default .so still contains the probe!"; exit 1
 fi
 echo "OK: target/deploy/dominion_silver_mint.so is the clean (no-probe) deploy artifact."

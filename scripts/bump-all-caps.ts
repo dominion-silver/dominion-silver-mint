@@ -1,4 +1,29 @@
 /**
+ * SUPERSEDED. Do not use.
+ *
+ * AUDIT review of daac4ac (P2): this script calls instructions that no longer exist
+ * in the program ABI:
+ *   set_mint_caps / set_redeem_caps / set_hourly_redeem_cap (Option A caps, deleted in V2)
+ * It also held a program id retired one or two generations ago. It cannot work, and
+ * it fails deep inside with an opaque error that reads like a protocol fault rather
+ * than a stale script. Kept for its historical assertions only.
+ *
+ * Current equivalents:
+  scripts/e2e-fixa-devnet.ts        launch posture + FIX A, on the live program
+  scripts/e2e-guardian-devnet.ts    the guardian removal lifecycle (DOM-007)
+  scripts/t1-hostile-bootstrap.ts   the initialize authentication (DOM-001, P0)
+  scripts/read-config.ts            dump the live config
+ */
+if (!process.env.DOMINION_RUN_SUPERSEDED) {
+  console.error(
+    "scripts/bump-all-caps.ts is SUPERSEDED: it calls instructions removed from the ABI.\n" +
+      "See the header for current equivalents. Set DOMINION_RUN_SUPERSEDED=1 to " +
+      "run it anyway (it will fail).",
+  );
+  process.exit(2);
+}
+
+/**
  * Lifts every soft-cap to a high value for testing. Devnet only.
  * REVERSE BEFORE MAINNET (or simply re-init at mainnet with prod values).
  *
@@ -8,8 +33,9 @@ import { AnchorProvider, BN, Program, Idl, Wallet } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import fs from "fs";
 import os from "os";
+import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 
-const PID = new PublicKey("J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5");
+const PID = SHARED_PROGRAM_ID;
 const MAX_USDC = new BN("1000000000000"); // 1M USDC raw (6 decimals)
 
 async function main() {

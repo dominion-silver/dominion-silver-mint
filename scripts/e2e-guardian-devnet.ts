@@ -2,11 +2,15 @@
  * T2: on-chain proof that audit DOM-007 (the guardian-set capture) is closed.
  *
  * DOM-007 was: the admin could add a puppet guardian and instantly remove every
- * real guardian, so the guardian veto was decorative. The fix is two-part:
- *   (a) the admin itself can never be added as a guardian, and
+ * real guardian, so the guardian veto was decorative. The fix, after the review of
+ * daac4ac corrected it twice:
+ *   (a) neither the current NOR the pending admin can be added as a guardian,
  *   (b) removal is DEFERRED by admin_timelock_seconds: schedule -> wait -> finalize,
- *       with the count floored at MIN_ACTIVE_GUARDIANS and a cancel path open to
- *       both the admin and the targeted guardian.
+ *   (c) the floor counts only guardians NOT already under notice, so the whole set
+ *       cannot be scheduled inside one window,
+ *   (d) the targeted guardian may veto its own removal ONCE. Unlimited self-veto
+ *       (the first version) made a ROGUE guardian permanently unremovable while it
+ *       held an indefinite pause, which was a P0 in the other direction.
  *
  * Run (devnet, admin keypair):
  *   DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json npx tsx scripts/e2e-guardian-devnet.ts
@@ -15,14 +19,22 @@
  * pending_removal_at == 0, because finalizing a removal needs a 24h wait.
  */
 import { AnchorProvider, Program, Wallet, Idl } from "@coral-xyz/anchor";
-import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import {
+  Connection,
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  Transaction,
+  sendAndConfirmTransaction,
+} from "@solana/web3.js";
 import fs from "fs";
 import os from "os";
 import path from "path";
+import { createHash } from "crypto";
 
 const RPC = "https://api.devnet.solana.com";
 const PROGRAM_ID = new PublicKey(
-  process.env.DOMINION_PROGRAM_ID || "gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc",
+  process.env.DOMINION_PROGRAM_ID || "6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh",
 );
 
 let pass = 0,
@@ -42,6 +54,15 @@ async function expectRevert(name: string, code: string, fn: () => Promise<unknow
 }
 
 async function main() {
+  // This script INSTALLS guardians and leaves them installed. That is acceptable on
+  // devnet and unacceptable anywhere else, so refuse to run against a non-devnet
+  // endpoint rather than trusting the operator's environment.
+  if (!/devnet/i.test(RPC)) {
+    throw new Error(
+      `refusing to run: ${RPC} is not a devnet endpoint. This script installs ` +
+        `real guardians and does not remove them (removal needs a 24h wait).`,
+    );
+  }
   const conn = new Connection(RPC, "confirmed");
   const kp = Keypair.fromSecretKey(
     Uint8Array.from(
@@ -85,9 +106,30 @@ async function main() {
       .rpc(),
   );
 
-  // --- 2. add G1. Derived from a fixed seed so the script is idempotent across runs.
-  const G1 = Keypair.fromSeed(Uint8Array.from(Buffer.alloc(32, 0xa1))).publicKey;
-  const G2 = Keypair.fromSeed(Uint8Array.from(Buffer.alloc(32, 0xa2))).publicKey;
+  // --- 2. add G1 and G2.
+  //
+  // AUDIT review of daac4ac (P0, found independently by two reviewers): these used to
+  // be Keypair.fromSeed(Buffer.alloc(32, 0xa1)) / 0xa2, i.e. DERIVABLE BY ANYONE WHO
+  // READS THIS FILE. The script leaves them installed, so for as long as they were
+  // live, any reader of the repo could `pause()` the program both apps point at,
+  // `cancel_timelocked_action` on any queued proposal, and `cancel_admin_transfer`.
+  // They also occupied real slots against max_guardian_count.
+  //
+  // Now derived from the ADMIN'S OWN SECRET KEY, which gives the same idempotence
+  // (the same operator gets the same test guardians every run, so the script does not
+  // leak slots) without the keys being recoverable from source. Only the holder of the
+  // admin keypair can derive or use them.
+  const testGuardian = (label: string) =>
+    Keypair.fromSeed(
+      createHash("sha256")
+        .update(kp.secretKey)
+        .update(`dominion-t2-guardian:${label}`)
+        .digest(),
+    );
+  const G1kp = testGuardian("1");
+  const G2kp = testGuardian("2");
+  const G1 = G1kp.publicKey;
+  const G2 = G2kp.publicKey;
   for (const [label, g] of [
     ["G1", G1],
     ["G2", G2],
@@ -182,21 +224,179 @@ async function main() {
       .rpc(),
   );
 
-  // --- 7. the floor: with the count at MIN_ACTIVE_GUARDIANS a schedule is refused.
-  //        Reached by scheduling G1 too, then checking a third would breach it.
-  //        Only assert the floor when the live count is exactly at it, so the test
-  //        stays honest on a config that has extra guardians.
+  // --- 7. THE FLOOR. This is the anti-purge check, and in the previous version of
+  // this script it was unreachable dead code: it was gated on `guardianCount === 1`
+  // while the script itself had just added two guardians and never finalized either,
+  // so the count was always >= 2 and the branch never ran. It printed SKIP, but the
+  // headline "10/10" implied the floor was covered. It was not covered anywhere: no
+  // Rust test referenced MIN_ACTIVE_GUARDIANS or GuardianFloorBreached either.
+  //
+  // The fix in this batch makes the check testable with the guardians we already
+  // have. The floor is now evaluated against guardians NOT ALREADY UNDER NOTICE, so
+  // with exactly 2 guardians the FIRST schedule is legal and the SECOND must be
+  // refused: one guardian has to stay free to react.
   const cfgN: any = await cfgAcct.fetch(configPda);
-  if (cfgN.guardianCount === 1) {
-    await expectRevert("removal at the floor is refused", "GuardianFloorBreached", () =>
-      program.methods
-        .removeGuardian(G1)
-        .accounts({ config: configPda, admin, guardianAccount: gPda(G1) })
-        .rpc(),
+  if (cfgN.guardianCount === 2) {
+    // Clean slate: neither guardian under notice.
+    for (const g of [G1, G2]) {
+      const ga: any = await gAcct.fetch(gPda(g));
+      if (ga.pendingRemovalAt.toString() !== "0") {
+        await program.methods
+          .cancelGuardianRemoval(g)
+          .accounts({ config: configPda, signer: admin, guardianAccount: gPda(g) })
+          .rpc();
+      }
+    }
+    await program.methods
+      .removeGuardian(G1)
+      .accounts({ config: configPda, admin, guardianAccount: gPda(G1) })
+      .rpc();
+    const mid: any = await cfgAcct.fetch(configPda);
+    ok(
+      "the first of two removals is accepted and counted",
+      mid.pendingRemovalCount === 1,
+      `pending_removal_count=${mid.pendingRemovalCount}`,
+    );
+    // The parallel purge from the review: scheduling BOTH would have cost one single
+    // 24h window for the whole guardian set.
+    await expectRevert(
+      "scheduling the LAST free guardian is refused (floor)",
+      "GuardianFloorBreached",
+      () =>
+        program.methods
+          .removeGuardian(G2)
+          .accounts({ config: configPda, admin, guardianAccount: gPda(G2) })
+          .rpc(),
+    );
+    // Restore: cancel as ADMIN so G1's one-shot self-veto is not consumed.
+    await program.methods
+      .cancelGuardianRemoval(G1)
+      .accounts({ config: configPda, signer: admin, guardianAccount: gPda(G1) })
+      .rpc();
+    const after: any = await cfgAcct.fetch(configPda);
+    ok(
+      "cancelling decrements pending_removal_count",
+      after.pendingRemovalCount === 0,
+      `pending_removal_count=${after.pendingRemovalCount}`,
+    );
+    const g1After: any = await gAcct.fetch(gPda(G1));
+    ok(
+      "an admin cancel does NOT consume the guardian's self-veto",
+      g1After.selfCancelUsed === false,
     );
   } else {
     console.log(
-      `  SKIP: floor check needs guardian_count == 1, live count is ${cfgN.guardianCount}`,
+      `  SKIP: the floor case needs exactly 2 guardians, live count is ${cfgN.guardianCount}`,
+    );
+    fail++; // never let a skipped security assertion look like a pass
+    console.log("  (counted as a FAILURE: this assertion must not be skipped silently)");
+  }
+
+  // --- 8. the one-shot self-veto (the P0 fix from the review of daac4ac).
+  {
+    await program.methods
+      .removeGuardian(G2)
+      .accounts({ config: configPda, admin, guardianAccount: gPda(G2) })
+      .rpc();
+    // G2 signs for itself. It needs lamports for the fee.
+    await sendAndConfirmTransaction(
+      conn,
+      new Transaction().add(
+        SystemProgram.transfer({
+          fromPubkey: admin,
+          toPubkey: G2,
+          lamports: 10_000_000,
+        }),
+      ),
+      [kp],
+      { commitment: "confirmed" },
+    );
+    const asG2 = new Program(
+      idl,
+      new AnchorProvider(conn, new Wallet(G2kp), { commitment: "confirmed" }),
+    );
+    await asG2.methods
+      .cancelGuardianRemoval(G2)
+      .accounts({ config: configPda, signer: G2, guardianAccount: gPda(G2) })
+      .rpc();
+    const g2a: any = await gAcct.fetch(gPda(G2));
+    ok(
+      "the targeted guardian can veto its own removal",
+      g2a.pendingRemovalAt.toString() === "0" && g2a.selfCancelUsed === true,
+      `self_cancel_used=${g2a.selfCancelUsed}`,
+    );
+
+    // Re-schedule. The SECOND self-veto must be refused: this is what stops a rogue
+    // guardian being permanently unremovable.
+    await program.methods
+      .removeGuardian(G2)
+      .accounts({ config: configPda, admin, guardianAccount: gPda(G2) })
+      .rpc();
+    await expectRevert(
+      "the SECOND self-veto is refused (rogue guardian is now evictable)",
+      "GuardianSelfCancelExhausted",
+      () =>
+        asG2.methods
+          .cancelGuardianRemoval(G2)
+          .accounts({ config: configPda, signer: G2, guardianAccount: gPda(G2) })
+          .rpc(),
+    );
+    // The admin can still cancel, so the guardian is not stuck under notice by
+    // accident. Leaves the config clean for the next run.
+    await program.methods
+      .cancelGuardianRemoval(G2)
+      .accounts({ config: configPda, signer: admin, guardianAccount: gPda(G2) })
+      .rpc();
+    const g2b: any = await gAcct.fetch(gPda(G2));
+    ok(
+      "the admin can still cancel after the self-veto is spent",
+      g2b.pendingRemovalAt.toString() === "0",
+    );
+    ok(
+      "the spent self-veto is NOT restored by an admin cancel",
+      g2b.selfCancelUsed === true,
+    );
+  }
+
+  // --- 9. add_guardian refuses the INCOMING admin, not just the current one.
+  // Without this, the "admin may not be a guardian" barrier is sidestepped by
+  // appointing K as guardian while A is admin and then completing a transfer of
+  // admin-ship to K. The test CREATES the condition (a real pending transfer) rather
+  // than skipping when none happens to exist, then cancels it to restore the config.
+  {
+    const incoming = testGuardian("incoming-admin").publicKey;
+    await program.methods
+      .proposeAdminTransfer(incoming)
+      .accounts({ config: configPda, admin })
+      .rpc();
+    const withPending: any = await cfgAcct.fetch(configPda);
+    ok(
+      "a pending admin transfer is staged for the test",
+      withPending.pendingAdmin?.toBase58() === incoming.toBase58(),
+      incoming.toBase58(),
+    );
+    await expectRevert(
+      "add_guardian refuses the PENDING admin",
+      "Unauthorized",
+      () =>
+        program.methods
+          .addGuardian(incoming)
+          .accounts({
+            config: configPda,
+            admin,
+            payer: admin,
+            guardianAccount: gPda(incoming),
+          })
+          .rpc(),
+    );
+    await program.methods
+      .cancelAdminTransfer()
+      .accounts({ config: configPda, signer: admin, guardian: null })
+      .rpc();
+    const restored: any = await cfgAcct.fetch(configPda);
+    ok(
+      "the pending admin transfer is cancelled again",
+      restored.pendingAdmin === null,
     );
   }
 

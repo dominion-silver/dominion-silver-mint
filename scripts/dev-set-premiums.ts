@@ -7,8 +7,9 @@
 import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction, sendAndConfirmTransaction } from "@solana/web3.js";
 import { createHash } from "crypto";
 import fs from "fs"; import os from "os";
+import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 
-const PID = new PublicKey("J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5");
+const PID = SHARED_PROGRAM_ID;
 function disc(name: string) { return createHash("sha256").update(`global:${name}`).digest().subarray(0,8); }
 
 async function main() {
