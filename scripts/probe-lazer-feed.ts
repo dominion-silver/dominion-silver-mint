@@ -17,7 +17,7 @@
  *   - is the print fresh, non-carried-forward, and not future-dated
  *
  * Run:
- *   npx tsx scripts/probe-lazer-feed.ts               # SILV (3304) with the live config's guards
+ *   npx tsx scripts/probe-lazer-feed.ts               # the live config's feed + its guards
  *   LAZER_FEED_ID=3154 npx tsx scripts/probe-lazer-feed.ts
  *
  * Reads PYTH_LAZER_API_KEY from apps/public/.env.local (server-only key, never
@@ -113,7 +113,7 @@ async function main() {
     console.log(`  FAIL  Lazer returned HTTP ${resp.status}`);
     if (resp.status === 403) {
       console.log(
-        "        403 usually means the key lacks feed-group access. Feed 3304 needs",
+        "        403 usually means the key lacks feed-group access. Feed 3154 needs",
       );
       console.log("        the `pyth-indices` group on the Pyth plan.");
     }

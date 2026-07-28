@@ -8,14 +8,16 @@
 // (2026-06-10): the ed25519-signed envelope is base64 at `solana.data`. Until
 // PYTH_LAZER_API_KEY is set this returns 503 so the client can detect "Lazer
 // not configured yet". NOTE: the key must have feed-group access to SILV (feed
-// 3304 needs the `pyth-indices` group); a key without it gets 403 from Lazer.
+// 3154 needs the `pyth-indices` group); a key without it gets 403 from Lazer.
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const LAZER_ENDPOINT = "https://pyth-lazer.dourolabs.app/v1/latest_price";
-const SILV_FEED_ID = 3304;
+// Metal.Index.SILVER/USD, pure spot (confirmed 2026-07-26). Requires the
+// `pyth-indices` entitlement group on the Pyth key: a key without it gets 403.
+const SILV_FEED_ID = 3154;
 
 // Short server-side cache for the default (SILV) feed. The UI price banner polls
 // every 5s and a mint fetches one envelope; without this, every poll burns a

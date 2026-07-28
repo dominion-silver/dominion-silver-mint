@@ -31,7 +31,13 @@ export const LAZER_STORAGE = new PublicKey("3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpP
 // current cluster's value. DEVNET here; swap to Gx4MBPb1... for mainnet.
 export const LAZER_TREASURY = new PublicKey("opsLibxVY7Vz5eYMmSfX8cLFCFVYTtH6fr6MiifMpA7");
 // SILV's Pyth Lazer feed id.
-export const LAZER_SILV_FEED_ID = 3304;
+// SILV oracle: Metal.Index.SILVER/USD, Lazer feed 3154. CONFIRMED by Thomas
+// 2026-07-26. PURE SPOT, no premium embedded in the feed. The retired 3304
+// (Crypto.Index.SILV/USD, "DOMINION SILVER / US DOLLAR") was measured to be
+// exactly 3154 x 1.05, i.e. it carried a hidden 5% premium. All of the protocol's
+// margin now lives in premium_bps_mint / premium_bps_redeem, where it is visible
+// on-chain instead of hidden inside a bespoke feed.
+export const LAZER_SILV_FEED_ID = 3154;
 
 // RPC endpoints.
 // Default = public devnet RPC (no API key required, rate-limited but fine for testing).

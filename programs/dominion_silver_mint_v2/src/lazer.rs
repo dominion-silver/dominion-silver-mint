@@ -391,7 +391,7 @@ mod tests {
     use super::*;
 
     const CH: u8 = 4; // fixed_rate@1000ms, our subscribed channel
-    const SILV: u32 = 3304;
+    const SILV: u32 = 3154; // Metal.Index.SILVER/USD (confirmed 2026-07-26)
 
     fn le16(v: u16) -> [u8; 2] {
         v.to_le_bytes()

@@ -37,7 +37,7 @@ async function fetchSilvEnvelope(): Promise<{ envelope: Uint8Array; priceUsd: nu
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.PYTH_LAZER_KEY}` },
     body: JSON.stringify({
-      priceFeedIds: [3304],
+      priceFeedIds: [3154], // Metal.Index.SILVER/USD (confirmed 2026-07-26)
       properties: ["price", "exponent", "publisherCount", "confidence", "feedUpdateTimestamp"],
       chains: ["solana"], channel: "fixed_rate@1000ms",
     }),

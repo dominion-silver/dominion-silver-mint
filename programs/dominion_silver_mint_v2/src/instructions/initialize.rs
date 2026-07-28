@@ -26,7 +26,13 @@ pub struct InitializeArgs {
 
     // Oracle (Pyth Lazer). The program/storage/treasury are compile-time
     // constants; only the numeric feed id is an init arg.
-    pub pyth_lazer_feed_id: u32, // SILV = 3304
+    // SILV oracle: Metal.Index.SILVER/USD, Lazer feed 3154. CONFIRMED by Thomas
+    // 2026-07-26. PURE SPOT, no premium embedded in the feed. The retired 3304
+    // (Crypto.Index.SILV/USD, "DOMINION SILVER / US DOLLAR") was measured to be
+    // exactly 3154 x 1.05, i.e. it carried a hidden 5% premium. All of the protocol's
+    // margin now lives in premium_bps_mint / premium_bps_redeem, where it is visible
+    // on-chain instead of hidden inside a bespoke feed.
+    pub pyth_lazer_feed_id: u32,
 
     // Option B (CONFIRMED_SPEC.md): per-tx/daily/hourly caps + on-chain
     // reserve REMOVED. All Option B economic params default at init and are

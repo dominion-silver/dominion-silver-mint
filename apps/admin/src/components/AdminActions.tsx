@@ -307,7 +307,7 @@ const ACTIONS: ActionDesc[] = [
     group: "Delayed (24h)",
     mode: "squads",
     fields: [
-      { name: "feed", label: "Lazer feed id (u32, SILV = 3304)", kind: "int" },
+      { name: "feed", label: "Lazer feed id (u32, 3154 = Metal.Index.SILVER/USD)", kind: "int" },
     ],
     tip: "Change the Pyth Lazer feed id. The Lazer program is a fixed contract constant (no receiver arg).",
     current: (c) => `feed ${c.pythLazerFeedId}`,

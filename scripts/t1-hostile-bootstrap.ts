@@ -169,7 +169,7 @@ async function main() {
     complianceMode: false,
     premiumBpsMint: 150,
     premiumBpsRedeem: 200,
-    pythLazerFeedId: 3304,
+    pythLazerFeedId: 3154, // Metal.Index.SILVER/USD, pure spot (confirmed 2026-07-26)
     adminTimelockSeconds: 24 * 3600,
     maxGuardianCount: 5,
   });

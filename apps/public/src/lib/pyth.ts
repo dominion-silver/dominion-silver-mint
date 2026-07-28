@@ -1,5 +1,5 @@
 // Live SILV/USD price for display + the mint/redeem preview. Fetched from the
-// SAME feed the contract uses on-chain: the Pyth Lazer SILV feed (id 3304), via
+// SAME feed the contract uses on-chain: Metal.Index.SILVER/USD (id 3154), via
 // our same-origin /api/lazer proxy (which holds the API key). NOT the retired
 // Core XAG/USD Hermes feed - showing a different price than the contract mints at
 // would mislead the preview and risk a slippage revert.
@@ -15,7 +15,7 @@ export async function fetchSilverPrice(): Promise<SilverPrice> {
   const res = await fetch("/api/lazer", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: "{}", // default feed = SILV (3304)
+    body: "{}", // default feed = Metal.Index.SILVER/USD (3154)
   });
   if (res.status === 503) throw new Error("Pyth Lazer is not configured yet");
   if (!res.ok) throw new Error(`Lazer price fetch failed: ${res.status}`);

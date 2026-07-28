@@ -361,7 +361,7 @@ async function main() {
   console.log("\n== Step 2: Call program.initialize() (Lazer args) ==");
 
   // Pyth Lazer InitializeArgs: the Core pyth_feed_id[32] + pyth_receiver_program
-  // were replaced by a single numeric pyth_lazer_feed_id (SILV = 3304); the
+  // were replaced by a single numeric pyth_lazer_feed_id (SILV = 3154); the
   // program/storage/treasury are compile-time constants in the contract. All
   // Option B economic params default on-chain + are admin-tunable post-deploy.
   // launch spec 2026-07: premium 1.5%/2% within ceilings (300/500); admin timelock 24h in [86400, 604800].
@@ -375,7 +375,10 @@ async function main() {
       complianceMode: false,
       premiumBpsMint: 150, // 1.5% (launch spec 2026-07; ceiling 300)
       premiumBpsRedeem: 200, // 2% (ceiling 500)
-      pythLazerFeedId: 3304, // SILV
+      // Metal.Index.SILVER/USD, pure spot. CONFIRMED 2026-07-26. The old 3304
+      // (Crypto.Index.SILV/USD) was measured to be 3154 x 1.05: a hidden 5%
+      // premium. Margin now lives entirely in premium_bps_*, visible on-chain.
+      pythLazerFeedId: 3154,
       adminTimelockSeconds: 24 * 3600, // 24h
       maxGuardianCount: 5,
     })

@@ -240,8 +240,14 @@ pub struct ConfigAccount {
 
     // Oracle (Pyth Lazer / Pyth Pro). The Lazer program / storage / treasury are
     // compile-time CONSTANTS (lazer_cpi.rs), not stored. Section 5.7.
-    pub pyth_lazer_feed_id: u32,                 // SILV = 3304
-    pub min_publishers: u16,                     // operating floor (>= MIN_PUBLISHERS_FLOOR_HARD)
+    // SILV oracle: Metal.Index.SILVER/USD, Lazer feed 3154. CONFIRMED by Thomas
+    // 2026-07-26. PURE SPOT, no premium embedded in the feed. The retired 3304
+    // (Crypto.Index.SILV/USD, "DOMINION SILVER / US DOLLAR") was measured to be
+    // exactly 3154 x 1.05, i.e. it carried a hidden 5% premium. All of the protocol's
+    // margin now lives in premium_bps_mint / premium_bps_redeem, where it is visible
+    // on-chain instead of hidden inside a bespoke feed.
+    pub pyth_lazer_feed_id: u32,
+    pub min_publishers: u16, // operating floor (>= MIN_PUBLISHERS_FLOOR_HARD)
     pub last_used_feed_update_timestamp_us: u64, // 5.4 non-decreasing high-water mark
 
     // Token program ids (pinned)

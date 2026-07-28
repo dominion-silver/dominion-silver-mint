@@ -570,7 +570,7 @@ function GovernanceTab({
         <Metric
           title="Lazer feed id"
           value={`${cfg.pythLazerFeedId}`}
-          tip="The Pyth Lazer feed id the protocol prices from (SILV = 3304)."
+          tip="The Pyth Lazer feed id the protocol prices from. 3154 = Metal.Index.SILVER/USD, pure spot with NO premium baked in: all protocol margin lives in the premium settings instead."
         />
       </Section>
 

@@ -47,7 +47,7 @@ mod harness {
     const STORAGE_FEE_OFFSET: usize = 72;
     const LAZER_FEE_CEILING: u64 = 10_000;
     const LAZER_CHANNEL_ID: u8 = 4;
-    const SILV_FEED_ID: u32 = 3304;
+    const SILV_FEED_ID: u32 = 3154; // Metal.Index.SILVER/USD (confirmed 2026-07-26)
     const PRICE_SCALE: i32 = 9;
     // Fixed wall clock for the harness (litesvm clock set to match), so feed
     // timestamps land inside the staleness window deterministically.
