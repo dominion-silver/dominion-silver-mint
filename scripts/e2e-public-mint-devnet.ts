@@ -215,19 +215,20 @@ async function main() {
     );
     ok("the mint is still closed after the cancel", cfg.publicMintEnabled === false);
   } else {
-    console.log("  NOTE: public mint is currently OPEN, so the open-proposal half is");
-    console.log("  skipped. Exercising the instant close instead, then re-opening is");
-    console.log("  NOT possible without a 24h wait, so this run leaves it CLOSED.");
-    await program.methods
-      .setPublicMintEnabled(false)
-      .accounts({ config: configPda, admin })
-      .rpc();
-    cfg = await acct.fetch(configPda);
-    ok("instant close applied", cfg.publicMintEnabled === false);
-    fail++;
-    console.log(
-      "  (counted as a FAILURE: this run changed the launch posture and cannot restore it)",
-    );
+    // DESIGN CORRECTION, learned the hard way on 2026-07-29. This branch used to
+    // exercise the instant close when it found the mint already OPEN, then count a
+    // failure because it could not restore the posture. That is worse than useless: it
+    // CLOSED a mint that had just been opened through a 24h timelock, and reopening
+    // costs another 24h. A test must never take an action whose undo is a day long.
+    //
+    // The instant-close path is covered by the unit tests in caps.rs
+    // (public_mint_tests) and by the "closing an already-closed mint is refused" case
+    // above when the mint is closed. Here we refuse and say why.
+    console.log("  REFUSING to run the destructive half: public mint is currently OPEN.");
+    console.log("  Exercising the instant close would shut a mint that took a 24h");
+    console.log("  timelock to open, and reopening costs another 24h. The close path is");
+    console.log("  covered by caps.rs::public_mint_tests instead.");
+    console.log("  To test the open flow, run this against a config with mint CLOSED.");
   }
 
   const finalCfg: any = await acct.fetch(configPda);

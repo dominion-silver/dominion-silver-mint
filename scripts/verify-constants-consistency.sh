@@ -162,6 +162,10 @@ print("5. Retired program ids")
 # exists precisely to catch that. WHEN YOU RETIRE AN ID, ADD IT HERE IN THE SAME
 # COMMIT: the check is worthless one generation behind.
 RETIRED = {
+    # Review-of-fixes F1 again, and the lesson did not stick the first time: this list
+    # was missing 2ujQg, and scripts/e2e-lazer-mint.ts still pointed at it. The gate
+    # cannot catch what it does not know. ADD THE ID IN THE SAME COMMIT THAT RETIRES IT.
+    "2ujQgKtxvaU9Ax3jL22374SypSyTR9J4yztqYkX23oMT": "devnet, the original Lazer deploy",
     "gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc": "devnet 2026-07-26, CLOSED on-chain",
     "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W": "devnet 2026-07-25, CLOSED on-chain",
     "GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX": "devnet, pre-Lazer",

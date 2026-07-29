@@ -18,11 +18,16 @@ import * as path from "path";
 import idl from "../target/idl/dominion_silver_mint.json";
 import { lazerMessageData } from "../apps/public/src/lib/lazer-assembly";
 import { assembleLazerOracleIxs, ED25519_IX_INDEX } from "../apps/public/src/lib/lazer-tx";
+import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 
 const RPC = "https://api.devnet.solana.com";
-const PROGRAM_ID = new PublicKey("2ujQgKtxvaU9Ax3jL22374SypSyTR9J4yztqYkX23oMT");
+// Resolved, never hardcoded: this line held 2ujQg, the ORIGINAL retired program, and
+// no gate caught it because 2ujQg was missing from the retired list too.
+const PROGRAM_ID = SHARED_PROGRAM_ID;
 const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
-const SILV_MINT = new PublicKey("5xiznEZfDRYojUL1WD2amruBZHonHphViH1SdnefyFx");
+// Read from the live config in main(): only the chain knows which mint a given
+// program is bound to.
+let SILV_MINT: PublicKey;
 const LAZER_PROGRAM = new PublicKey("pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt");
 const LAZER_STORAGE = new PublicKey("3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpPuSCQVyQL");
 const LAZER_TREASURY = new PublicKey("opsLibxVY7Vz5eYMmSfX8cLFCFVYTtH6fr6MiifMpA7"); // devnet (mainnet: Gx4MBPb1...)
@@ -54,8 +59,12 @@ async function fetchSilvEnvelope(): Promise<{ envelope: Uint8Array; priceUsd: nu
 
 async function main() {
   const conn = new Connection(RPC, "confirmed");
-  const kp = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(
-    fs.readFileSync(path.join(os.homedir(), ".config/solana/dominion-test-user.json"), "utf8"))));
+  const kpPath = process.env.DOMINION_KEYPAIR
+    ?? [path.join(os.homedir(), ".config/solana/dominion-test-user.json"),
+        path.join(os.homedir(), ".config/solana/dominion-dev.json")].find((p) => fs.existsSync(p));
+  if (!kpPath) throw new Error("no keypair: set DOMINION_KEYPAIR");
+  console.log("signer keypair:", kpPath);
+  const kp = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(kpPath, "utf8"))));
   const wallet = new anchor.Wallet(kp);
   const provider = new anchor.AnchorProvider(conn, wallet, { commitment: "confirmed" });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -66,7 +75,9 @@ async function main() {
   // 1. Config state.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cfg: any = await (program.account as any).configAccount.fetch(configPda);
-  console.log("config: paused =", cfg.paused, "| feed =", cfg.pythLazerFeedId, "| minPublishers =", cfg.minPublishers);
+  SILV_MINT = cfg.silvMint as PublicKey;
+  console.log("config: paused =", cfg.paused, "| feed =", cfg.pythLazerFeedId,
+    "| minPublishers =", cfg.minPublishers, "| silvMint =", SILV_MINT.toBase58());
 
   // 2. Unpause if needed.
   if (cfg.paused) {
@@ -111,6 +122,21 @@ async function main() {
   ];
   // Same assembly as the frontend: [cb_limit, cb_price, ed25519, ...ataIxs, dominion].
   const tx = new Transaction().add(...assembleLazerOracleIxs(dominionIx, envelope, ataIxs));
+  // Simulate first. A priced mint touches the ed25519 pre-instruction, the Lazer verify
+  // CPI, the payload parse, the feed-id match and six policy guards before it moves a
+  // single token, and a send-only failure surfaces as an opaque revert. Simulating first
+  // prints the program logs, which name the guard that rejected it.
+  tx.feePayer = user;
+  tx.recentBlockhash = (await conn.getLatestBlockhash()).blockhash;
+  const presim = await conn.simulateTransaction(tx, [kp]);
+  if (presim.value.err !== null) {
+    console.log("\n  SIMULATION FAILED:", JSON.stringify(presim.value.err));
+    for (const l of presim.value.logs ?? []) {
+      if (/Program log:|invoke \[|[Ee]rror/.test(l)) console.log("   ", l.slice(0, 160));
+    }
+    throw new Error("mint would revert; see the logs above");
+  }
+  console.log("  simulation clean, CU:", presim.value.unitsConsumed);
   const sig = await provider.sendAndConfirm(tx, []);
   console.log("\n  ✅ MINT TX:", sig);
 
@@ -128,6 +154,18 @@ async function main() {
   const { envelope: redeemEnv, priceUsd: redeemPrice } = await fetchSilvEnvelope();
   const minUsdcOut = Math.floor(0.05 * redeemPrice * (1 - 200 / 10_000) * (1 - 50 / 10_000) * 1e6);
   console.log("  min_usdc_out (0.5% slip @ envelope price):", minUsdcOut / 1e6);
+  // Redemptions are CLOSED at launch and `set_redemptions_enabled` refuses to enable
+  // them in the deployed bytecode, so the redeem half of this script is unreachable
+  // until the Phase 1 upgrade. Skip it rather than fail: the mint half is the part that
+  // proves the oracle, and reporting a red run for a deliberately closed path trains
+  // people to ignore the script.
+  if (!cfg.redemptionsEnabled) {
+    console.log("\n  SKIP redeem half: redemptions_enabled = false (closed at launch,");
+    console.log("  and enabling is blocked on-chain until the Phase 1 upgrade).");
+    console.log("\n  MINT PROVEN END TO END with a real signed Lazer envelope.");
+    return;
+  }
+
   const redeemMsg = Buffer.from(lazerMessageData(redeemEnv));
   const redeemIx = await (program.methods as any)
     .redeemSilv(new anchor.BN(50_000), new anchor.BN(minUsdcOut), redeemMsg, ED25519_IX_INDEX, 0) // 0.05 SILV
