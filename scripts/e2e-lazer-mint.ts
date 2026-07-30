@@ -19,6 +19,7 @@ import idl from "../target/idl/dominion_silver_mint.json";
 import { lazerMessageData } from "../apps/public/src/lib/lazer-assembly";
 import { assembleLazerOracleIxs, ED25519_IX_INDEX } from "../apps/public/src/lib/lazer-tx";
 import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
+import { requireDevnet, assertReversible, intentFromEnv } from "./_guard";
 
 const RPC = "https://api.devnet.solana.com";
 // Resolved, never hardcoded: this line held 2ujQg, the ORIGINAL retired program, and
@@ -58,6 +59,10 @@ async function fetchSilvEnvelope(): Promise<{ envelope: Uint8Array; priceUsd: nu
 }
 
 async function main() {
+  // RULE 1 (scripts/_guard.ts): refuse any cluster but devnet unless
+  // DOMINION_ALLOW_MAINNET is explicitly set.
+  requireDevnet(RPC, "priced mint E2E");
+  const INTENT = intentFromEnv();
   const conn = new Connection(RPC, "confirmed");
   const kpPath = process.env.DOMINION_KEYPAIR
     ?? [path.join(os.homedir(), ".config/solana/dominion-test-user.json"),

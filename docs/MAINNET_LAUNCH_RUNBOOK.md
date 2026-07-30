@@ -1,0 +1,306 @@
+# Dominion SILV: mainnet launch runbook
+
+Every step in order, with the exact command, what it proves, and what breaks if it is
+skipped. Written against the six launch requirements Thomas confirmed on 2026-07-29.
+
+**Read the two hard rules first, then the four things that are IRREVERSIBLE, then run
+the steps in order. Do not reorder them: several steps only work in one sequence.**
+
+---
+
+## The two hard rules
+
+**RULE 1. Nothing touches mainnet unless the command says so.** Every E2E script now
+calls `requireDevnet()` from `scripts/_guard.ts` and refuses a non-devnet RPC unless
+`DOMINION_ALLOW_MAINNET=i-understand` is set.
+
+**RULE 2. No script takes an action whose undo is slow, unless you sanction it.**
+`assertReversible()` classifies each action and throws by default. Sanction one with
+`DOMINION_INTENT=<action>`.
+
+Both rules exist because on 2026-07-29 a TEST closed the public mint that had just been
+opened through a 24h timelock, and reopening cost another 24h. The direction of the
+asymmetry is deliberate in the program (safety is instant, unsafe is slow), so a script
+can always break something in one transaction and then need a day to fix it.
+
+**The operational consequence you must internalise before mainnet:** closing is instant,
+opening is 24h. `pause` is instant, `unpause` is instant. But **open public mint, loosen
+a redeem limit, and change the oracle feed all cost 24h.** Plan the launch so nothing
+needs to be reopened in a hurry.
+
+---
+
+## The four IRREVERSIBLE decisions
+
+| Decision | Where it is fixed | Consequence of getting it wrong |
+|---|---|---|
+| SILV mint: decimals, extension set, **freeze authority**, **permanent delegate** | at mint creation, step 4 | No fix. A new mint means a new token, a new pool, and every holder re-onboarded. |
+| `config.admin`, `permanent_delegate_expected`, `freeze_authority_expected`, feed id, premiums, timelock | at `initialize`, step 6, which runs ONCE per program id | Recoverable only by a program upgrade that re-initialises. |
+| `max_silv_supply` = 100,000 oz | tighten-only, forever | Raising it needs a program upgrade. |
+| Upgrade authority transfer | step 12 | If the multisig is lost, the program can never be upgraded, so **redemptions can never be opened**. |
+
+---
+
+## Requirement check: what you asked for vs what the code does
+
+| Your requirement | Status | What it needs |
+|---|---|---|
+| 1. SILV token deployed and live | ✅ ready | steps 3-6 |
+| 2. Pre-mint freely, send to inventory, seed a ~100K USDC Sunrise pool | ✅ ready | ~1,760 oz at $57/oz, far under the 100,000 oz cap. Steps 7-8. |
+| 3. Public mint, no KYC, KYC enableable later | ⚠️ **partly** | Public mint: yes, but it costs a 24h timelock to open (step 9). **KYC is NOT wired: `kyc_enforced` is read by zero instructions, so enabling KYC later needs a PROGRAM UPGRADE, not a config change.** |
+| 4. Redeem closed now, open later by upgrade | ✅ exactly this | `set_redemptions_enabled` refuses `true` in the deployed bytecode. Opening is a code change by construction. |
+| 5. Admin portal live for admin wallet + guardians + multisig | ✅ ready | step 11. Needs `NEXT_PUBLIC_OPS_SQUADS` set, else the Squads-member path is inert. |
+| 6. Revoke the deployer, upgrade authority to the multisig | ✅ ready, **ordering matters** | step 12, and it MUST be last: `initialize` requires the signer to BE the upgrade authority. |
+
+**The one thing to decide before step 6:** what `config.admin` is.
+
+- **Recommended: `admin = 65g5nNX` (Ops Squads) from `initialize`.** Every admin action
+  is then a Squads ceremony from day one. Your deployer is a signer of that Squads, so
+  you can propose, approve and execute yourself. No admin transfer needed later, no
+  extra 24h, and the deployer never holds unilateral admin power.
+- Alternative: `admin = deployer` for the setup, then `propose_admin_transfer` to the
+  Squads. Faster clicks during setup, but it costs a 24h timelock plus an acceptance
+  transaction signed by the Squads, and it leaves a window where one key is admin.
+
+---
+
+## Pre-flight (do these BEFORE touching mainnet)
+
+```bash
+# 0a. Authorities, funding, cluster constants. Must be 0 failures.
+npx tsx scripts/verify-mainnet-authorities.ts
+
+# 0b. The build is reproducible and carries no dev hatch.
+scripts/verify-release-artifact.sh
+
+# 0c. Every hand-copied address agrees with declare_id!.
+scripts/verify-constants-consistency.sh
+
+# 0d. The feed satisfies every on-chain guard, on MAINNET data.
+DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/probe-lazer-feed.ts
+```
+
+**Blockers to clear by hand:**
+
+- [ ] Deployer `2Lp91Fy…` funded with **~9.2 SOL** on mainnet (rent is recoverable via
+      `solana program close`; measured, not estimated).
+- [ ] The Pyth key in Vercel Production has the **`pyth-indices` entitlement** for feed
+      3154. Test: `curl -X POST https://<app>/api/lazer -d '{}'` must return a price,
+      not a 403.
+- [ ] Sunrise has confirmed they accept a Token-2022 mint carrying **freeze authority +
+      permanent delegate**. If not, there is no venue and the launch model fails.
+- [ ] `https://dominion.market/silv-metadata.json` resolves (it is baked into the mint
+      permanently).
+- [ ] Site copy discloses the **freeze and seize** powers (SolidProof MEDIUM #2, and the
+      head-dev's requirement). Fix the over-claimed Chainlink PoR while you are there.
+- [ ] At least 2 guardian keys exist, held independently, on hardware.
+
+---
+
+## The launch sequence
+
+### 1. Generate the mainnet program keypair
+
+```bash
+solana-keygen new --no-bip39-passphrase -o ~/.config/solana/dominion-mainnet-program.json
+solana-keygen pubkey ~/.config/solana/dominion-mainnet-program.json
+```
+
+Back this file up before continuing. Losing it before step 3 costs nothing; losing it
+after means you cannot upgrade the program ever.
+
+### 2. Point the source at the new id, rebuild, verify
+
+Update `declare_id!` in `programs/dominion_silver_mint_v2/src/lib.rs`, add
+`[programs.mainnet]` to `Anchor.toml`, and set `PROGRAM_ID` in both apps' `constants.ts`.
+Then:
+
+```bash
+cargo build-sbf --manifest-path programs/dominion_silver_mint_v2/Cargo.toml
+(cd programs/dominion_silver_mint_v2 && anchor idl build -- --locked > ../../target/idl/dominion_silver_mint.json)
+cp target/idl/dominion_silver_mint.json apps/admin/src/lib/idl/
+cp target/idl/dominion_silver_mint.json apps/public/src/lib/idl/
+scripts/verify-constants-consistency.sh   # must pass
+scripts/verify-release-artifact.sh        # must print ARTIFACT OK
+```
+
+Also swap the two cluster-specific constants that are easy to miss:
+
+- `USDC_MINT` → `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v` in **both** apps
+- `LAZER_TREASURY` → `Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak` in `apps/public`
+
+### 3. Deploy
+
+```bash
+solana program deploy target/deploy/dominion_silver_mint.so \
+  --program-id ~/.config/solana/dominion-mainnet-program.json \
+  -k ~/.config/solana/dominion-dev.json -u mainnet-beta
+```
+
+Then verify the bytes actually on chain, which is not optional:
+
+```bash
+solana program dump <PROGRAM_ID> /tmp/onchain.so -u mainnet-beta
+LEN=$(stat -f%z target/deploy/dominion_silver_mint.so)
+head -c "$LEN" /tmp/onchain.so > /tmp/onchain-trim.so
+shasum -a 256 target/deploy/dominion_silver_mint.so /tmp/onchain-trim.so   # must match
+solana program show <PROGRAM_ID> -u mainnet-beta                            # Authority = deployer
+```
+
+### 4 + 5 + 6. T1 hostile bootstrap, which CREATES THE MINT and INITIALISES
+
+**This is the step people get wrong.** `initialize` succeeds exactly once per program
+id, so the window between step 3 and initialisation is the ONLY chance to prove the
+DOM-001 P0 fix. T1's case 5 performs the real `initialize`, so **a passing T1 IS your
+initialisation.** Run it BEFORE any init script.
+
+```bash
+DOMINION_ALLOW_MAINNET=i-understand \
+DOMINION_PROGRAM_ID=<PROGRAM_ID> \
+DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json \
+npx tsx scripts/t1-hostile-bootstrap.ts
+```
+
+Before running it on mainnet, edit its `args()` so the recorded authorities are the REAL
+ones, not the dev wallet:
+
+```
+admin:                       65g5nNXTtqtFz3jggKAqyvS6oCoVUXuXqAU9B8jHqPPS   (Ops Squads)
+upgradeAuthorityInfo:        FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3
+permanentDelegateExpected:   FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3   (compliance)
+freezeAuthorityExpected:     FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3   (compliance)
+pythLazerFeedId:             3154
+premiumBpsMint:              150
+premiumBpsRedeem:            500     <- Mark's 5%; the CEILING is also 500
+adminTimelockSeconds:        86400
+```
+
+and `scripts/_t1-mint-helper.ts` so the mint's freeze authority and permanent delegate
+are the compliance vault rather than the payer. **Those two are permanent.**
+
+Expect 17/17. Then record everything:
+
+```bash
+DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/read-config.ts
+spl-token display <SILV_MINT> -u mainnet-beta
+```
+
+Check by eye: decimals 6, mint authority = the `silv_mint_authority` PDA, freeze
+authority = compliance vault, extensions exactly {PermanentDelegate, MetadataPointer,
+TokenMetadata}, `paused = true`, `public_mint_enabled = false`,
+`redemptions_enabled = false`, `max_silv_supply = 100000000000`.
+
+### 7. Propose the public-mint open NOW, so the 24h runs during setup
+
+Do this immediately, not at the end. It costs nothing and saves a day.
+
+```bash
+# via Squads, since admin is the Ops vault: propose_set_public_mint(true)
+```
+
+### 8. Register the guardians, set the inventory wallet, unpause
+
+```
+add_guardian(<guardian 1>)
+add_guardian(<guardian 2>)
+set_inventory_wallet(EkDhR65JUL8tGhxRhnueaqri6zNzxMEJ82UU35pQ7V56)
+set_treasury_min_float_usdc(<non-zero>)   # SolidProof LOW #4
+unpause
+```
+
+`treasury_min_float_usdc` defaults to 0, which means a withdrawal can drain the whole
+treasury. Set it before any USDC arrives.
+
+### 9. Pre-mint and seed the pool
+
+For a ~100,000 USDC pool at ~$57/oz you need ~1,760 oz. Pre-mint a round number above
+it, e.g. 2,000 oz:
+
+```
+admin_premint(2_000_000_000)     # 2,000 oz at 6dp
+```
+
+Then from the inventory wallet, create the Sunrise SILV/USDC pool with the SILV and your
+100,000 USDC. The inventory wallet is a **plain single-signer wallet** and will hold the
+entire pre-minted supply, so treat its key as equal in value to the pool.
+
+### 10. Execute the public-mint open (24h after step 7)
+
+```
+execute_set_public_mint(<nonce>)
+```
+
+Then prove the priced path works with real money, smallest possible amount:
+
+```bash
+DOMINION_ALLOW_MAINNET=i-understand \
+DOMINION_RPC=https://api.mainnet-beta.solana.com \
+npx tsx scripts/e2e-lazer-mint.ts
+```
+
+It simulates before sending, so a failure names the guard that rejected it instead of an
+opaque revert. Confirm the implied premium comes out at 1.500%.
+
+### 11. Deploy both apps, pointed at mainnet
+
+```bash
+# Vercel env, per app:
+#   NEXT_PUBLIC_HELIUS_RPC   = a mainnet RPC (the public endpoint will rate-limit you)
+#   NEXT_PUBLIC_OPS_SQUADS   = 65g5nNXTtqtFz3jggKAqyvS6oCoVUXuXqAU9B8jHqPPS
+#   NEXT_PUBLIC_UPGRADE_SQUADS = FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3
+#   PYTH_LAZER_API_KEY       = the entitled key (public app only)
+(cd apps/public && vercel --prod --yes)
+(cd apps/admin && vercel --prod --yes)
+
+DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/verify-oracle-sync.ts
+```
+
+`NEXT_PUBLIC_OPS_SQUADS` is what makes the console admit Squads members. Without it the
+portal only admits `config.admin` and active guardians.
+
+### 12. LAST: move the upgrade authority to the multisig
+
+Only after everything above works. `initialize` needed the deployer to be the upgrade
+authority, so this cannot come earlier.
+
+```bash
+solana program set-upgrade-authority <PROGRAM_ID> \
+  --new-upgrade-authority FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3 \
+  -k ~/.config/solana/dominion-dev.json -u mainnet-beta
+
+solana program show <PROGRAM_ID> -u mainnet-beta   # Authority must now be FqFNX
+```
+
+**Do NOT use `--final`.** That makes the program immutable, and redemptions can only ever
+be opened by an upgrade. Immutability is a decision for after the redeem flow ships.
+
+---
+
+## What is still NOT possible after this launch, and why
+
+| Thing | Why not | Cost to change |
+|---|---|---|
+| Enable KYC | `kyc_enforced` is read by zero instructions. The field exists; the gate does not. | program upgrade |
+| Open redemptions | `set_redemptions_enabled` refuses `true` in bytecode, by design | program upgrade |
+| Raise the 100,000 oz cap | tighten-only, by design | program upgrade |
+| A minimum redemption size (Mark's 5,000 oz) | does not exist; only `amount > 0` | program upgrade, same batch as redeem |
+| Lower the redeem queue delay below 1h | `REDEEM_QUEUE_DELAY_MIN_SECONDS` hard floor | program upgrade |
+| `min_publishers` below 2 | `MIN_PUBLISHERS_FLOOR_HARD` | program upgrade |
+| Mint premium above 3% | `PREMIUM_BPS_MINT_CEILING = 300` | program upgrade |
+| Redeem premium above 5% | `PREMIUM_BPS_REDEEM_CEILING = 500`, and Mark's 5% is AT it | program upgrade |
+
+All of these are deliberate. They exist so a compromised admin cannot do them either.
+Group them into one Phase 1 upgrade rather than shipping several.
+
+## Known accepted risks at launch
+
+1. **`FqFNX` holds upgrade authority AND compliance AND guardian.** SolidProof MEDIUM #1
+   asks for these to be split. A compromise of that one vault can rewrite the program
+   and freeze or seize any holder. Accepted by Thomas 2026-07-26; recorded in
+   `config/mainnet-authorities.json`. What it still defends: the hot Ops key is separate.
+2. **Pyth guarantees only 1 publisher on feed 3154; the contract requires 2.** It
+   observes 3 today. A legitimate degradation to 1 halts every priced operation.
+3. **The inventory wallet is a single-signer key holding the whole pre-mint.**
+4. **`admin_settle_redemption_offchain` can void a payable claim** (all three audits).
+   Unreachable while redemptions are closed. Must be fixed before they open.
+5. **The queued redeem path does no volume accounting.** The delay is its only throttle.

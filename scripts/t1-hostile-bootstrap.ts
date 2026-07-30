@@ -53,6 +53,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { createSilvMintForTest } from "./_t1-mint-helper";
+import { requireDevnet, assertReversible, intentFromEnv } from "./_guard";
 
 const RPC = "https://api.devnet.solana.com";
 const PROGRAM_ID = new PublicKey(
@@ -81,6 +82,10 @@ function programData(id: PublicKey): PublicKey {
 }
 
 async function main() {
+  // RULE 1 (scripts/_guard.ts): refuse any cluster but devnet unless
+  // DOMINION_ALLOW_MAINNET is explicitly set.
+  requireDevnet(RPC, "T1 hostile bootstrap");
+  const INTENT = intentFromEnv();
   if (!process.env.DOMINION_PROGRAM_ID) {
     throw new Error("set DOMINION_PROGRAM_ID to the freshly deployed program id");
   }
