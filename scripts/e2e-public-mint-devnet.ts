@@ -94,9 +94,15 @@ async function main() {
   // and must NOT have shifted `version`. Getting this wrong bricks guardian removal
   // (see the ConfigAccount carve-out note in state/config.rs).
   ok("config still decodes with version == 2 after the layout carve-out", cfg.version === 2, `version=${cfg.version}`);
+  // This asserts the carve-out DECODES, not that it is None: a legitimately pending
+  // proposal makes it Some, and the first version of this check treated that as a
+  // failure. What matters for the layout is that `version` is still 2 (above) and that
+  // this field is either null or a plausible small nonce rather than garbage.
+  const pn = cfg.pendingPublicMintNonce;
   ok(
-    "pending_public_mint_nonce read as None from the old reserved bytes",
-    cfg.pendingPublicMintNonce === null,
+    "pending_public_mint_nonce decodes cleanly from the carved-out bytes",
+    pn === null || (Number(pn) >= 0 && Number(pn) < 1_000_000),
+    pn === null ? "null" : `Some(${pn.toString()})`,
   );
 
   // --- 1. Opening instantly is refused. This is the core asymmetry.
@@ -130,7 +136,22 @@ async function main() {
     },
   );
 
-  if (!startedOpen) {
+  // RULE 2 (scripts/_guard.ts). If a proposal is ALREADY pending, this script must not
+  // touch it: cancelling it costs another 24h to re-propose, which is exactly the
+  // slow-to-undo action the guard exists to prevent. The first version instead tried to
+  // create a second proposal and crashed on ProposalAlreadyActive after printing 4
+  // PASSes, which is the worst of both worlds.
+  const alreadyPending = cfg.pendingPublicMintNonce !== null;
+  if (alreadyPending) {
+    console.log(
+      `\n  SKIPPING the propose/cancel half: a proposal is already pending (nonce ` +
+        `${cfg.pendingPublicMintNonce.toString()}).`,
+    );
+    console.log("  Cancelling it to run the test would cost another 24h to re-propose.");
+    console.log("  The asymmetry checks above already ran and are the important half.");
+  }
+
+  if (!startedOpen && !alreadyPending) {
     // --- 3. A no-op close is refused, so an operator gets a clear error rather than a
     // silent success that implies something happened.
     await expectRevert(
@@ -219,22 +240,21 @@ async function main() {
       cfg.pendingPublicMintNonce === null,
     );
     ok("the mint is still closed after the cancel", cfg.publicMintEnabled === false);
-  } else {
+  } else if (startedOpen) {
     // DESIGN CORRECTION, learned the hard way on 2026-07-29. This branch used to
     // exercise the instant close when it found the mint already OPEN, then count a
     // failure because it could not restore the posture. That is worse than useless: it
     // CLOSED a mint that had just been opened through a 24h timelock, and reopening
     // costs another 24h. A test must never take an action whose undo is a day long.
     //
-    // The instant-close path is covered by the unit tests in caps.rs
-    // (public_mint_tests) and by the "closing an already-closed mint is refused" case
-    // above when the mint is closed. Here we refuse and say why.
-    console.log("  REFUSING to run the destructive half: public mint is currently OPEN.");
+    // The instant-close path is covered by caps.rs::public_mint_tests, where undoing
+    // costs nothing.
+    console.log("\n  REFUSING the destructive half: public mint is currently OPEN.");
     console.log("  Exercising the instant close would shut a mint that took a 24h");
-    console.log("  timelock to open, and reopening costs another 24h. The close path is");
-    console.log("  covered by caps.rs::public_mint_tests instead.");
-    console.log("  To test the open flow, run this against a config with mint CLOSED.");
+    console.log("  timelock to open. Covered by caps.rs::public_mint_tests instead.");
   }
+  // The remaining case (mint closed AND a proposal already pending) was reported by the
+  // alreadyPending block above; saying anything more here would be a duplicate.
 
   const finalCfg: any = await acct.fetch(configPda);
   console.log(`\n=== T3 result: ${pass} passed, ${fail} failed ===`);
@@ -244,6 +264,10 @@ async function main() {
     "| pending nonce =",
     String(finalCfg.pendingPublicMintNonce),
   );
+  if (alreadyPending && finalCfg.pendingPublicMintNonce === null) {
+    console.log("ERROR: this run consumed a pending proposal it was told not to touch.");
+    process.exit(1);
+  }
   if (finalCfg.publicMintEnabled !== startedOpen) {
     console.log("WARNING: this run changed public_mint_enabled. That should not happen.");
     process.exit(1);
