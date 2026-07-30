@@ -10,9 +10,7 @@
     "desirable: anyone can check that the deployed program's authorities match what was",
     "announced. No secret material belongs in this file, ever."
   ],
-
   "cluster": "mainnet-beta",
-
   "authorities": {
     "ops_admin": {
       "pubkey": "65g5nNXTtqtFz3jggKAqyvS6oCoVUXuXqAU9B8jHqPPS",
@@ -57,7 +55,6 @@
       "notes": "BLOCKER: needs funding before any mainnet deploy. A ~1.05 MB program needs about 7.5 SOL of rent, plus the buffer at peak. Budget 9 SOL."
     }
   },
-
   "risk_accepted": {
     "upgrade_equals_compliance": {
       "what": "upgrade_authority and compliance are the SAME vault (FqFNX...), and it is also the guardian.",
@@ -67,11 +64,14 @@
       "status": "ACCEPTED for launch by Thomas 2026-07-26, with the split tracked as a follow-up."
     }
   },
-
   "mint_creation_ceremony": {
     "_note": "Every value here is FIXED FOREVER at mint creation. There is no second chance.",
     "decimals": 6,
-    "extensions": ["MetadataPointer", "TokenMetadata", "PermanentDelegate"],
+    "extensions": [
+      "MetadataPointer",
+      "TokenMetadata",
+      "PermanentDelegate"
+    ],
     "freeze_authority": "compliance vault (FqFNX...)",
     "permanent_delegate": "compliance vault (FqFNX...)",
     "mint_authority": "the program's silv_mint_authority PDA (derived, never a wallet)",
@@ -81,18 +81,19 @@
     "uri": "https://dominion.market/silv-metadata.json",
     "uri_must_resolve_before_launch": true
   },
-
   "launch_posture": {
     "paused": true,
     "public_mint_enabled": false,
     "redemptions_enabled": false,
-    "max_silv_supply": "100000000000 (100,000 oz at 6dp)",
+    "max_silv_supply": "150000000000 (150,000 oz at 6dp). CONFIRMED Thomas 2026-07-29. Set by DEFAULT_MAX_SILV_SUPPLY in state/config.rs, NOT an initialize arg, so it must be right before the mainnet build. TIGHTEN-ONLY and a ONE-WAY RATCHET: lowering it makes the lower value the new permanent ceiling.",
     "premium_bps_mint": 150,
     "premium_bps_redeem": 200,
     "admin_timelock_seconds": 86400,
     "min_publishers": 2,
     "treasury_min_float_usdc": "SET A NON-ZERO VALUE before enabling any withdrawal (SolidProof LOW #4)",
     "usdc_mint_mainnet": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    "lazer_treasury_mainnet": "Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak"
+    "lazer_treasury_mainnet": "Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak",
+    "premint_plan": "$6.75M worth of SILV at launch, which is ~115,705 oz at $58.34 spot, i.e. ~77% of the 150,000 oz cap. Compute the exact ounce figure at ceremony time with scripts/premint-sizing.ts: the budget is in dollars, the cap is in ounces, so a fall in the silver price increases the ounces needed. Leaves ~34,300 oz (~$2.03M) of headroom, which is the hard ceiling on PUBLIC MINT volume since mint_silv draws on the same cap.",
+    "pyth_lazer_feed_id": 3154
   }
 }

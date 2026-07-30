@@ -228,7 +228,10 @@ pub fn emergency_tighten_redeem_limits_handler(
 mod tests {
     use super::*;
 
-    const CAP: u64 = 100_000_000_000; // 100k oz at 6dp, the launch cap
+    // Mirrors DEFAULT_MAX_SILV_SUPPLY. Kept as a local so the boundary cases below read
+    // clearly, and pinned to the real constant by the_shipped_launch_cap_is_the_one_being_tested
+    // so it can never silently drift again (it caught the 100k -> 150k change).
+    const CAP: u64 = 150_000_000_000; // 150k oz at 6dp, the launch cap (Thomas 2026-07-29)
     const SUPPLY: u64 = 3_000_000_000; // 3000 oz minted
 
     fn code(e: anchor_lang::error::Error) -> u32 {

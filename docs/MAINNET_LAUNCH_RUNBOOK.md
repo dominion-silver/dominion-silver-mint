@@ -36,7 +36,7 @@ needs to be reopened in a hurry.
 |---|---|---|
 | SILV mint: decimals, extension set, **freeze authority**, **permanent delegate** | at mint creation, step 4 | No fix. A new mint means a new token, a new pool, and every holder re-onboarded. |
 | `config.admin`, `permanent_delegate_expected`, `freeze_authority_expected`, feed id, premiums, timelock | at `initialize`, step 6, which runs ONCE per program id | Recoverable only by a program upgrade that re-initialises. |
-| `max_silv_supply` = 100,000 oz | tighten-only, forever | Raising it needs a program upgrade. |
+| `max_silv_supply` = **150,000 oz** | tighten-only, forever, and a ONE-WAY RATCHET | Raising it needs a program upgrade + re-audit. Lowering it is instant but makes the lower value the new permanent ceiling, so never lower it casually. |
 | Upgrade authority transfer | step 12 | If the multisig is lost, the program can never be upgraded, so **redemptions can never be opened**. |
 
 ---
@@ -46,7 +46,7 @@ needs to be reopened in a hurry.
 | Your requirement | Status | What it needs |
 |---|---|---|
 | 1. SILV token deployed and live | ✅ ready | steps 3-6 |
-| 2. Pre-mint freely, send to inventory, seed a ~100K USDC Sunrise pool | ✅ ready | ~1,760 oz at $57/oz, far under the 100,000 oz cap. Steps 7-8. |
+| 2. Pre-mint freely, send to inventory, seed a ~100K USDC Sunrise pool | ✅ ready | the plan is $6.75M worth, ~115,705 oz at $58.34 spot, 77% of the 150,000 oz cap. Steps 7-9. |
 | 3. Public mint, no KYC, KYC enableable later | ⚠️ **partly** | Public mint: yes, but it costs a 24h timelock to open (step 9). **KYC is NOT wired: `kyc_enforced` is read by zero instructions, so enabling KYC later needs a PROGRAM UPGRADE, not a config change.** |
 | 4. Redeem closed now, open later by upgrade | ✅ exactly this | `set_redemptions_enabled` refuses `true` in the deployed bytecode. Opening is a code change by construction. |
 | 5. Admin portal live for admin wallet + guardians + multisig | ✅ ready | step 11. Needs `NEXT_PUBLIC_OPS_SQUADS` set, else the Squads-member path is inert. |
@@ -213,12 +213,27 @@ treasury. Set it before any USDC arrives.
 
 ### 9. Pre-mint and seed the pool
 
-For a ~100,000 USDC pool at ~$57/oz you need ~1,760 oz. Pre-mint a round number above
-it, e.g. 2,000 oz:
+The plan is **$6.75M worth of SILV** (Thomas 2026-07-29). Do NOT reuse a figure agreed
+days earlier: the budget is in dollars and the cap is in ounces, so the ounce count moves
+with the silver price. Compute it at ceremony time:
 
+```bash
+DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/premint-sizing.ts
 ```
-admin_premint(2_000_000_000)     # 2,000 oz at 6dp
-```
+
+At $58.34 spot that is **~115,705 oz**, i.e. `admin_premint(115705029311)`, and 77% of the
+150,000 oz cap. The script prints the atomic value (an off-by-1e6 there is a 1,000,000x
+error) and refuses if the cap could not absorb it.
+
+**Two consequences to hold in mind:**
+
+- It leaves ~34,300 oz of headroom, and `mint_silv` draws on the SAME cap. So site sales
+  are hard-capped at roughly **$2.03M** before `SupplyCapExceeded`, and raising the cap
+  then needs a program upgrade.
+- Only ~1,750 oz (~$100k) goes into the Sunrise pool. The other ~114,000 oz (~$6.65M)
+  would sit in the inventory wallet, which is a **single-signer key**. Consider
+  pre-minting in tranches instead: `admin_premint` is callable as often as you like, so
+  there is no need to create supply before it has a use.
 
 Then from the inventory wallet, create the Sunrise SILV/USDC pool with the SILV and your
 100,000 USDC. The inventory wallet is a **plain single-signer wallet** and will hold the

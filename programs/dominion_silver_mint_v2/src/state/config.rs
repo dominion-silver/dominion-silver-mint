@@ -178,10 +178,28 @@ pub const DEFAULT_PRICE_UPDATE_MIN_AMOUNT_USDC: u64 = 1_000_000_000; // $1000 in
 pub const DEFAULT_ADMIN_TIMELOCK_SECONDS: u32 = 86400; // 24 hours
 
 // Option B launch defaults (all admin-tunable post-deploy from the panel).
-// Launch spec 2026-07: hard cap of 100,000 oz = the institutional allocation.
-// Stands in for the live PoR at launch (a manually-set backing bound). The
-// cap-RAISE is timelocked in this batch (FIX A) so it can't be lifted instantly.
-pub const DEFAULT_MAX_SILV_SUPPLY: u64 = 100_000_000_000; // 100,000 oz at 6 decimals
+// Hard cap = the institutional allocation. Stands in for the live PoR at launch (a
+// manually-set backing bound), because `por_enforced` is reserved and unwired, so this
+// cap is the ONLY on-chain bound on unbacked SILV: admin_premint checks exactly
+// `supply_post <= config.max_silv_supply` and nothing else.
+//
+// 150,000 oz confirmed by Thomas 2026-07-29 (was 100,000). It is NOT an initialize
+// argument, so changing it means editing this constant and rebuilding, which is why it
+// has to be right BEFORE the mainnet build.
+//
+// TIGHTEN-ONLY, and it is a ONE-WAY RATCHET: `set_max_silv_supply` compares against the
+// CURRENT value, so lowering it makes the lower number the new permanent ceiling. Going
+// 150k -> 100k is instant from the panel; going back to 150k afterwards is refused
+// (SupplyCapRaiseBlocked) and costs a program upgrade plus a re-audit. Do not lower this
+// casually.
+//
+// Launch plan against this cap (Thomas 2026-07-29): pre-mint $6.75M worth of SILV,
+// which is ~115,665 oz at $58.36 spot, i.e. ~77% of the cap. The remainder is the
+// headroom PUBLIC MINTS draw from, since mint_silv checks the same cap. Compute the
+// exact ounce figure at ceremony time with scripts/premint-sizing.ts: the budget is in
+// dollars but the cap is in ounces, so a fall in the silver price increases the ounces
+// required for the same budget.
+pub const DEFAULT_MAX_SILV_SUPPLY: u64 = 150_000_000_000; // 150,000 oz at 6 decimals
                                                           // The launch posture for the public mint path. FALSE at launch: users buy pre-minted
                                                           // SILV on the DEX, and opening the direct mint is a deliberate 24h-timelocked,
                                                           // guardian-cancellable act (propose_set_public_mint). Pinned as a named constant so the
