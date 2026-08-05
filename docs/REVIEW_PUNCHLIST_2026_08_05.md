@@ -39,7 +39,7 @@ Fix: re-check the switch direction at execute against `config.redemptions_enable
 Note this is the ONE place a direction re-check is correct, and the existing comment explaining
 why the numeric fields are NOT re-checked must be preserved and narrowed.
 
-### [ ] A3. The window is fixed, not rolling: the documented ceiling is 2x understated
+### [x] A3. The window is fixed, not rolling: the documented ceiling is 2x understated
 `instant_window_start` re-anchors to `now` only on the first redemption after expiry. Drain the
 remaining budget at `window_end - 1`, then drain the full budget again one slot later:
 **2 x budget in ~one second**. At defaults that is $40k, not $20k, and it scales linearly with
@@ -48,7 +48,7 @@ Fix: either implement a genuine sliding window, or clamp the burst, or rename it
 "fixed window" everywhere and document the 2x. Cheapest honest option is the rename plus a
 carry-forward clamp.
 
-### [ ] A4. The redeem premium leg bypasses `treasury_min_float_usdc`
+### [x] A4. The redeem premium leg bypasses `treasury_min_float_usdc`
 `execute_withdraw_usdc` enforces `treasury_post >= treasury_min_float_usdc`. The redeem premium
 leg (`treasury -> fee_vault`) enforces nothing, and once in the vault it is withdrawable
 instantly. So the float is not the floor the panel and the docs present: 1.5% of every

@@ -550,7 +550,20 @@ pub struct ConfigAccount {
     // The setter maintains `kyc_enforced == (kyc_scope_flags != 0)` as an invariant, so a
     // panel or an external reader can trust either one and they can never disagree.
     pub kyc_scope_flags: u8,
-    pub reserved: [u8; 53],
+
+    // The PREVIOUS bucket's redemption usage, for the sliding-window counter in
+    // state/redeem_window.rs. Carved out of `reserved` and declared AFTER `version`, per THE RULE
+    // above.
+    //
+    // It exists because the limiter was a FIXED window pretending to be a rolling one: draining
+    // the budget just before a boundary and again just after yielded TWICE the configured ceiling
+    // in about one second. On the only hard brake between a bad oracle print and the treasury,
+    // that was worth 8 bytes.
+    //
+    // An in-place upgrade over an existing config decodes this as 0, which is correct: it means
+    // "no prior bucket", so the first window after the upgrade is simply unweighted.
+    pub instant_used_prev_usdc: u64,
+    pub reserved: [u8; 45],
 }
 
 impl ConfigAccount {
@@ -592,7 +605,8 @@ impl ConfigAccount {
         + 1                   // version
         + (1 + 8)             // pending_public_mint_nonce (carved out of reserved)
         + 1                   // kyc_scope_flags (carved out of reserved)
-        + 53; // reserved
+        + 8                   // instant_used_prev_usdc (carved out of reserved)
+        + 45; // reserved
 
     pub fn assert_premium_within_bounds(&self) -> Result<()> {
         require!(

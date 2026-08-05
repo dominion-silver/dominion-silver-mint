@@ -158,6 +158,16 @@ pub struct WithdrawFees<'info> {
     )]
     pub destination: Box<Account<'info, TokenAccount>>,
 
+    // A4: the treasury, read-only, purely so the sweep can be gated on its float.
+    //
+    // The problem this closes: the redeem premium leg moves USDC OUT of the treasury and into the
+    // vault, and `execute_withdraw_usdc` is the only path that enforces
+    // `treasury_post >= treasury_min_float_usdc`. So 1.5% of every redemption routed AROUND that
+    // floor into an account that is withdrawable instantly, which made the float not the floor the
+    // panel and the docs present it as.
+    #[account(address = config.usdc_treasury)]
+    pub usdc_treasury: Box<Account<'info, TokenAccount>>,
+
     #[account(address = config.classic_token_program)]
     pub classic_token_program: Program<'info, Token>,
 }
@@ -188,6 +198,26 @@ pub fn withdraw_fees_handler(ctx: Context<WithdrawFees>, amount: u64) -> Result<
     // rule applied to the same class of action.
     require!(!ctx.accounts.config.paused, DominionError::Paused);
     require!(amount > 0, DominionError::ZeroAmount);
+
+    // A4. Premium revenue is only Dominion's to take once the REDEMPTION BUFFER is healthy.
+    //
+    // Without this, `treasury_min_float_usdc` was not the floor it is presented as: the redeem
+    // premium leg drains the treasury with no float check, and the vault it lands in is
+    // withdrawable instantly, so the premium on every redemption routed around the floor.
+    //
+    // Gating the SWEEP rather than the redeem leg is deliberate. Blocking the premium transfer
+    // inside `redeem_silv` would make a user's redemption fail because of an ADMIN-facing
+    // threshold, which inverts the priority this program has held throughout: users come ahead of
+    // the admin's ability to move cash out. Here the cost lands on the admin instead, which is
+    // where it belongs, and the revenue is not lost, only deferred until the buffer recovers.
+    //
+    // Note the float is read as a raw balance, NOT balance-minus-amount: the question is whether
+    // the buffer is currently healthy, not whether it would survive this sweep. A treasury sitting
+    // exactly at its floor should not fund a fee withdrawal at all.
+    require!(
+        ctx.accounts.usdc_treasury.amount >= ctx.accounts.config.treasury_min_float_usdc,
+        DominionError::FloorBreached
+    );
 
     // A sweep to the vault itself succeeds as a token-program no-op, and the event below would
     // then report `remaining = available - amount`, a balance that never existed. Since the

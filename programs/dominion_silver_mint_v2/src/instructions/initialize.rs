@@ -492,7 +492,9 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     // 0 = KYC required nowhere. Must stay consistent with `kyc_enforced = false` above;
     // set_kyc_scope maintains that invariant thereafter.
     config.kyc_scope_flags = 0;
-    config.reserved = [0u8; 53];
+    // No prior bucket at genesis. See state/redeem_window.rs.
+    config.instant_used_prev_usdc = 0;
+    config.reserved = [0u8; 45];
 
     msg!("dominion_silver_mint initialized");
     Ok(())

@@ -262,17 +262,20 @@ pub fn handler(
     // Debited by GROSS, not by the user's leg. The budget exists to limit TREASURY OUTFLOW
     // and both legs leave the treasury; debiting only the user's share would let the
     // effective outflow exceed the configured ceiling by the premium.
-    let window_end = config
-        .instant_window_start
-        .checked_add(config.instant_redeem_window_seconds as i64)
-        .ok_or(error!(DominionError::ArithmeticOverflow))?;
-    let window_expired = now >= window_end;
-    let effective_used: u64 = if window_expired {
-        0
-    } else {
-        config.instant_used_usdc
-    };
-    let new_used = effective_used
+    // The limiter is a SLIDING window counter (state/redeem_window.rs), not the fixed window this
+    // used to be. The fixed version reset the counter to zero the moment it expired, so draining
+    // the budget just before a boundary and again just after yielded TWICE the configured ceiling
+    // in about one second. On the only hard brake between a bad oracle print and the treasury,
+    // that was worth fixing rather than documenting.
+    let win = roll_window(
+        now,
+        config.instant_window_start,
+        config.instant_redeem_window_seconds,
+        config.instant_used_usdc,
+        config.instant_used_prev_usdc,
+    );
+    let new_used = win
+        .effective_used
         .checked_add(gross_usdc)
         .ok_or(error!(DominionError::ArithmeticOverflow))?;
 
@@ -299,12 +302,20 @@ pub fn handler(
         DominionError::InsufficientTreasury
     );
 
-    // 8. Commit the window BEFORE the CPIs. Atomic: any CPI failure reverts this write along
-    // with everything else. Anchor the window to `now` on the first redemption after expiry.
-    if window_expired {
-        config.instant_window_start = now;
-    }
-    config.instant_used_usdc = new_used;
+    // 8. Commit the window BEFORE the CPIs. Atomic: any CPI failure reverts these writes along
+    // with everything else.
+    //
+    // SUBTLE, and the reason this is not just `= new_used`: the CURRENT bucket accumulates the
+    // GROSS of this request on top of `rolled_current`, NOT the effective usage. `effective_used`
+    // includes the WEIGHTED carry-over from the previous bucket, and writing that into the current
+    // bucket would promote a decaying figure into a permanent one, so the same volume would be
+    // counted again and again as the window slid forward and the limiter would ratchet shut.
+    config.instant_window_start = win.new_window_start;
+    config.instant_used_prev_usdc = win.rolled_prev;
+    config.instant_used_usdc = win
+        .rolled_current
+        .checked_add(gross_usdc)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
 
     // 9. Dust-filter price update (feeds the circuit breaker; D38). Uses the pre-premium
     // oracle value, which is exactly `gross_usdc`, so the V1 dust threshold keeps its

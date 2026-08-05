@@ -306,6 +306,10 @@ export async function withdrawFees(
         true,
         TOKEN_PROGRAM_ID,
       ),
+      // Read-only, and required since 2026-08-05: the sweep is now gated on the treasury's
+      // float. Premium revenue is only Dominion's to take once the redemption buffer is healthy,
+      // because the redeem premium leg drains the treasury without a float check of its own.
+      usdcTreasury: treasuryUsdcAta(),
       classicTokenProgram: TOKEN_PROGRAM_ID,
     })
     .instruction();
