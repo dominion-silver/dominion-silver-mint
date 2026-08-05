@@ -28,6 +28,7 @@ import {
 import {
   buildLazerMintTx,
   buildLazerRedeemTx,
+  resolveWalletFlags,
 } from "@/lib/lazer-tx";
 import { fetchAndExecuteLazer } from "@/lib/lazer-execute";
 import { toast } from "@/components/Toaster";
@@ -138,11 +139,27 @@ export function MintRedeemCard() {
   }, [mode, price, amount, premiumBpsRedeem]);
   const redeemUsdcOutBn = redeemAmounts?.net ?? null;
 
+  // The caller's on-chain per-wallet accounts. Needed so `classifyRedeem` can answer the KYC
+  // question for THIS wallet instead of only reporting that the gate is armed. Cheap: one batched
+  // RPC call, and only meaningful once an admin arms the gate.
+  const { data: walletFlags } = useSWR(
+    wallet.publicKey ? `wallet-flags-${wallet.publicKey.toBase58()}` : null,
+    () => resolveWalletFlags(connection, wallet.publicKey!),
+    { refreshInterval: 30_000, keepPreviousData: true },
+  );
+  const kycAttested = walletFlags ? walletFlags.kyc != null : undefined;
+
   const redeemRoute: RedeemRoute | null = useMemo(() => {
     if (mode !== "redeem" || !cfg || !treasury || !redeemAmounts) return null;
     // GROSS, not net. See the note above.
-    return classifyRedeem(cfg, treasury, redeemAmounts.gross, nowSecs);
-  }, [mode, cfg, treasury, redeemAmounts, nowSecs]);
+    return classifyRedeem(
+      cfg,
+      treasury,
+      redeemAmounts.gross,
+      nowSecs,
+      kycAttested,
+    );
+  }, [mode, cfg, treasury, redeemAmounts, nowSecs, kycAttested]);
 
   // Max instantly-redeemable, shown as USDC (and approx SILV via price).
   const maxInstant = useMemo(() => {

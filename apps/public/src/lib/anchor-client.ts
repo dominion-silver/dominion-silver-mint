@@ -298,12 +298,23 @@ export function classifyRedeem(
   treasuryBalanceUsdc: BN,
   grossUsdc: BN,
   nowUnixSecs: number,
+  /** Whether THIS wallet holds a KYC attestation. `undefined` = not resolved yet.
+   *
+   *  Required, not optional, so a caller cannot forget it: an earlier version of this function
+   *  returned "kyc" whenever the gate was armed, regardless of the caller, and a comment claimed
+   *  the component resolved the per-wallet answer. It did not. Every attested user would have been
+   *  told they cannot redeem the moment the gate was armed. Dormant today, wrong the day it is
+   *  turned on, which is the worst time to find out. */
+  kycAttested: boolean | undefined,
 ): RedeemRoute {
   if (cfg.paused || !cfg.redemptionsEnabled) return "disabled";
-  // The dormant KYC gate. Bit 1 is the redeem side (state/side.rs). Predicting it needs the
-  // caller's attestation, which this function does not have, so it only reports that the gate is
-  // armed; MintRedeemCard resolves the per-wallet answer.
-  if (((cfg.kycScopeFlags ?? 0) & 2) !== 0) return "kyc";
+  // The KYC gate, dormant at launch. Bit 1 is the redeem side (state/side.rs).
+  //
+  // `undefined` (still resolving, or an RPC failure) is treated as NOT attested. That is the right
+  // direction: "verification required" briefly flipping to "Redeem" once the lookup lands is
+  // self-correcting and harmless, whereas promising "instant" and then reverting with a raw
+  // KycRequired costs the user a Lazer fee to discover.
+  if (((cfg.kycScopeFlags ?? 0) & 2) !== 0 && kycAttested !== true) return "kyc";
   const windowEnd =
     cfg.instantWindowStart.toNumber() + cfg.instantRedeemWindowSeconds;
   const used = nowUnixSecs >= windowEnd ? new BN(0) : cfg.instantUsedUsdc;
