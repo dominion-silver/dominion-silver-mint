@@ -40,10 +40,28 @@
 //! `current + previous <= budget` still holds. The burst is gone. As the bucket fills up the old
 //! usage decays out linearly, which is what makes it a sliding limit rather than a step function.
 //!
-//! It costs one extra `u64` in ConfigAccount and no extra accounts. It is an approximation, not an
-//! exact per-request log: usage inside a bucket is treated as uniformly spread. The error is
-//! bounded by one bucket's worth of skew and it is always on the CONSERVATIVE side at the boundary,
-//! which is the side that matters.
+//! It costs one extra `u64` in ConfigAccount and no extra accounts.
+//!
+//! # The exact guarantee, derived rather than asserted
+//!
+//! This is an APPROXIMATION, not a per-request log: usage inside a bucket is treated as uniformly
+//! spread, so concentrated usage can be under-counted. The worst case is worth deriving, because an
+//! earlier version of this comment claimed the error "is always on the CONSERVATIVE side", and that
+//! is only true at a bucket boundary.
+//!
+//! Let the previous bucket be fully used (`prev = budget`) with all of it spent at the very END of
+//! that bucket, so all of it genuinely falls inside a trailing window that starts mid-bucket. At
+//! `into = w/2` the weight is 1/2, so the counter believes only `budget/2` is outstanding and will
+//! admit another `budget/2`. The true usage in that trailing window is then
+//! `budget + budget/2 = 1.5 x budget`.
+//!
+//! So: **1.5 x budget worst case, over a deliberately-constructed alignment.** At a bucket boundary
+//! (`into = 0`) the previous bucket counts in full and the bound is exactly `budget`.
+//!
+//! That is a strict improvement on the fixed window it replaces, which allowed 2 x budget with no
+//! construction needed at all: just wait for the reset. Closing the remaining 0.5x needs an exact
+//! sliding log, i.e. unbounded per-request storage, which is not worth an account per redemption.
+//! Size the budget with the 1.5x in mind and the limiter behaves as documented.
 
 /// The decision for one redemption attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,9 +231,12 @@ mod tests {
                 .filter(|&&(t, _)| t >= t0 && t < t0 + WI)
                 .map(|&(_, a)| a)
                 .sum();
+            // The DERIVED bound is 1.5x (see the module docs), not 2x. The looser 2x this
+            // originally asserted would have passed even if the sliding window were not working at
+            // all, since 2x is exactly what the fixed window it replaced allowed.
             assert!(
-                in_span <= BUDGET * 2,
-                "a {WI}s span starting at {t0} allowed {in_span}, over the bound"
+                in_span <= BUDGET + BUDGET / 2,
+                "a {WI}s span starting at {t0} allowed {in_span}, above the 1.5x bound"
             );
         }
         // And the headline property: the FIRST full window can never exceed the budget.
@@ -225,6 +246,88 @@ mod tests {
             .map(|&(_, a)| a)
             .sum();
         assert!(first <= BUDGET, "first window allowed {first} > {BUDGET}");
+    }
+
+    #[test]
+    fn the_worst_case_alignment_tops_out_at_the_derived_1_5x_and_no_higher() {
+        // Construct the exact attack the module docs derive: fill the previous bucket entirely at
+        // its very end, then spend again half a window later when the weight has decayed to 1/2.
+        // This must reach 1.5x and MUST NOT exceed it.
+        let mut start = 1i64;
+        let mut cur = 0u64;
+        let mut prev = 0u64;
+
+        // Spend the whole budget at the end of bucket 1.
+        let t1 = start + WI - 1;
+        let d = roll_window(t1, start, W, cur, prev);
+        assert!(d.effective_used + BUDGET <= BUDGET);
+        start = d.new_window_start;
+        cur = d.rolled_current + BUDGET;
+        prev = d.rolled_prev;
+
+        // Half a window later the weight is ~1/2, so ~half the budget is available again.
+        let t2 = t1 + WI / 2;
+        let d = roll_window(t2, start, W, cur, prev);
+        let available = BUDGET - d.effective_used;
+        // Approximately half. The tolerance is 0.1% of the budget, not "within 2 units": `into` is
+        // 43199 rather than 43200 because the first spend landed one second before the boundary, and
+        // that one second propagates through the weighting as ~0.23 USDC. The first version of this
+        // assertion demanded exactness and failed on the code being right, which is the second time
+        // this pass that my test was wrong rather than the implementation.
+        let half = BUDGET / 2;
+        let tol = BUDGET / 1_000;
+        assert!(
+            available <= half + tol,
+            "available {available} exceeds half the budget by more than the tolerance"
+        );
+        assert!(
+            available >= half - tol,
+            "available {available} is below half the budget by more than the tolerance"
+        );
+
+        // Total inside the trailing window [t2 - WI, t2]: the whole of bucket 1 plus this.
+        let total = BUDGET + available;
+        assert!(
+            total <= BUDGET + half + tol,
+            "worst-case alignment let {total} out, above the derived 1.5x bound"
+        );
+    }
+
+    #[test]
+    fn many_tiny_requests_cannot_beat_the_limiter() {
+        // Salami-slicing: 10_000 requests of budget/10_000 inside one window must total exactly the
+        // budget and no more. Rounding in the weighting must not leak per-request.
+        let step = BUDGET / 10_000;
+        let mut start = 1i64;
+        let mut cur = 0u64;
+        let mut prev = 0u64;
+        let mut allowed = 0u64;
+        for i in 0..12_000 {
+            let now = 1 + (i as i64) % WI;
+            let d = roll_window(now, start, W, cur, prev);
+            if d.effective_used + step <= BUDGET {
+                start = d.new_window_start;
+                cur = d.rolled_current + step;
+                prev = d.rolled_prev;
+                allowed += step;
+            }
+        }
+        assert!(
+            allowed <= BUDGET,
+            "salami-slicing let {allowed} out of a {BUDGET} budget in one window"
+        );
+    }
+
+    #[test]
+    fn a_long_gap_does_not_grant_a_double_budget_on_return() {
+        // Idle for ten windows, then hammer. The re-anchor must give ONE budget, not a
+        // compensating catch-up.
+        let allowed = simulate(&[
+            (1_000, BUDGET),
+            (1_000 + 10 * WI, BUDGET),
+            (1_000 + 10 * WI + 1, BUDGET), // immediately again: must be refused
+        ]);
+        assert_eq!(allowed, 2 * BUDGET, "the return burst got more than one budget");
     }
 
     #[test]
