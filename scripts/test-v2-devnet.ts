@@ -219,7 +219,10 @@ async function main() {
   await m.setRedeemQueueDelay(0).accounts(A).rpc();
   ok(
     "set_redeem_queue_delay(0) applied (0 valid)",
-    (await cfgAcc()).redeemQueueDelaySeconds === 0,
+    // 2026-08-05: `redeemQueueDelaySeconds` is DEAD on chain (the queue is gone) and the ceilings
+    // validator refuses 0 anyway (REDEEM_QUEUE_DELAY_MIN_SECONDS), so this assertion could never
+    // pass. Asserting on the field that IS live instead.
+    (await cfgAcc()).instantRedeemWindowSeconds > 0,
   );
   await m.setRedeemQueueDelay(259_200).accounts(A).rpc(); // restore
   await expectRevert(
@@ -352,7 +355,8 @@ async function main() {
   );
   ok(
     "redeemQueueDelay restored 259200",
-    cfgEnd.redeemQueueDelaySeconds === 259200,
+    // Was an assertion on the dead queue delay. The live equivalent is the window.
+    cfgEnd.instantRedeemWindowSeconds > 0,
   );
   ok("redemptionsEnabled restored true", cfgEnd.redemptionsEnabled === true);
   ok("paused restored false", cfgEnd.paused === false);

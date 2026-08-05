@@ -357,7 +357,8 @@ export function parseRedeemError(errText: string): RedeemRoute | null {
  * config.max_staleness_seconds). Hit on ANY Pyth-priced path (mint,
  * redeem, claim) when too much wall-clock passes between fetching the
  * signed Lazer price and the consumer tx landing. max_staleness is 15s on
- * the deployed devnet program (mainnet init value: 60s), so a human slow to
+ * the deployed devnet program (MAX_STALENESS_CEILING_SECONDS is 30, so 60s was never a
+ * possible value: the comment predated that ceiling), so a human slow to
  * approve the single wallet prompt trips it. Detect it so the UI shows a
  * clear "be faster / retry" message instead of the raw
  * `Simulation reverted: {...Custom:12004...}` dump.

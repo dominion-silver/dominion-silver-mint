@@ -58,6 +58,29 @@ async function fetchSilvEnvelope(): Promise<{ envelope: Uint8Array; priceUsd: nu
   return { envelope: new Uint8Array(Buffer.from(j.solana.data, "base64")), priceUsd };
 }
 
+// The four accounts added on 2026-08-05, resolved the SAME way the app resolves them.
+//
+// D1: this script omitted all four, and because `.accounts()` is NOT strict in Anchor 0.31.1 (it
+// delegates to `accountsPartial`) the resolver silently DERIVED `fee_exempt` and `kyc` from the IDL
+// seeds and passed those real PDA addresses instead of the program id. The program then ran
+// `Account::try_from` on uninitialised accounts and reverted AccountNotInitialized, so the script
+// that the deploy checklist treats as PROOF THAT THE PRICED MINT WORKS could not pass on any wallet
+// without both a fee exemption and a KYC attestation. Omission is invisible to the client-vs-IDL
+// gate, which can only validate the keys that ARE present, so it has to be right here.
+//
+// Optional accounts MUST be null when absent. Passing the address of a non-existent account is
+// strictly worse than passing null, which is the whole failure above.
+const feeVaultPda = pda("fee_vault");
+const feeVaultAta = getAssociatedTokenAddressSync(USDC_MINT, feeVaultPda, true, TOKEN_PROGRAM);
+async function walletFlagAccounts(conn: anchor.web3.Connection, wallet: PublicKey) {
+  const fe = PublicKey.findProgramAddressSync(
+    [Buffer.from("fee_exempt"), wallet.toBuffer()], PROGRAM_ID)[0];
+  const ky = PublicKey.findProgramAddressSync(
+    [Buffer.from("kyc"), wallet.toBuffer()], PROGRAM_ID)[0];
+  const infos = await conn.getMultipleAccountsInfo([fe, ky]);
+  return { feeExempt: infos[0] ? fe : null, kyc: infos[1] ? ky : null };
+}
+
 async function main() {
   // RULE 1 (scripts/_guard.ts): refuse any cluster but devnet unless
   // DOMINION_ALLOW_MAINNET is explicitly set.
@@ -108,11 +131,14 @@ async function main() {
   // 5. Build the mint tx (mirrors buildLazerMintTx in lazer-tx.ts).
   const usdcTreasuryAta = getAssociatedTokenAddressSync(USDC_MINT, pda("treasury"), true, TOKEN_PROGRAM);
   const messageData = Buffer.from(lazerMessageData(envelope));
+  const flags = await walletFlagAccounts(provider.connection, user);
   const dominionIx = await (program.methods as any)
     .mintSilv(new anchor.BN(10_000_000), new anchor.BN(minSilvOut), messageData, ED25519_IX_INDEX, 0) // 10 USDC
     .accounts({
       config: configPda, user, usdcMint: USDC_MINT, silvMint: SILV_MINT,
       usdcTreasury: usdcTreasuryAta, userUsdcAta, userSilvAta,
+      feeVaultPda, feeVault: feeVaultAta,
+      feeExempt: flags.feeExempt, kyc: flags.kyc,
       silvMintAuthority: pda("silv_mint_authority"),
       lazerProgram: LAZER_PROGRAM, lazerStorage: LAZER_STORAGE, lazerTreasury: LAZER_TREASURY,
       lazerFeePayer: pda("lazer_fee_payer"), instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
@@ -172,11 +198,14 @@ async function main() {
   }
 
   const redeemMsg = Buffer.from(lazerMessageData(redeemEnv));
+  const redeemFlags = await walletFlagAccounts(provider.connection, user);
   const redeemIx = await (program.methods as any)
     .redeemSilv(new anchor.BN(50_000), new anchor.BN(minUsdcOut), redeemMsg, ED25519_IX_INDEX, 0) // 0.05 SILV
     .accounts({
       config: configPda, user, usdcMint: USDC_MINT, silvMint: SILV_MINT,
       usdcTreasury: usdcTreasuryAta, userUsdcAta, userSilvAta,
+      feeVaultPda, feeVault: feeVaultAta,
+      feeExempt: redeemFlags.feeExempt, kyc: redeemFlags.kyc,
       treasuryPda: pda("treasury"),
       lazerProgram: LAZER_PROGRAM, lazerStorage: LAZER_STORAGE, lazerTreasury: LAZER_TREASURY,
       lazerFeePayer: pda("lazer_fee_payer"), instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,

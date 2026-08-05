@@ -356,8 +356,11 @@ async function main() {
     ok("case 8: guardian floor field present", typeof cfg.guardianCount === "number");
     ok(
       "case 8: queue delay respects the new floor",
-      cfg.redeemQueueDelaySeconds >= 3600,
-      String(cfg.redeemQueueDelaySeconds),
+      // Was `redeemQueueDelaySeconds >= 3600`. That passed, which is exactly why it was worse
+      // than useless: the field is DEAD on chain since 2026-08-05, so a green check here was a
+      // false assurance about a throttle nothing reads. The live throttle is the rolling window.
+      cfg.instantRedeemWindowSeconds >= 60,
+      String(cfg.instantRedeemWindowSeconds),
     );
     // AUDIT review of daac4ac (P1): this line used to read
     //   ok("case 8: supply is zero", new BN(0).eq(new BN(0)))

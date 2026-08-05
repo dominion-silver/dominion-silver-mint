@@ -88,7 +88,23 @@ function loadPayer(): Keypair {
 }
 
 async function main() {
-  requireDevnet(RPC, "create-fee-vault");
+  // D4: this is one of the very few scripts that is a MANDATORY MAINNET STEP, so a bare
+  // requireDevnet throw is the wrong ergonomics: an operator following the runbook would hit an
+  // opaque refusal on the one script the launch cannot proceed without. The guard is KEPT (running
+  // it against the wrong cluster by accident is still worth preventing), but the refusal now names
+  // the exact override and says why it exists.
+  try {
+    requireDevnet(RPC, "create-fee-vault");
+  } catch (e) {
+    console.error(
+      "\nThis script IS a required mainnet step: mint_silv and redeem_silv both take the fee\n" +
+        "vault as a REQUIRED account, so without it every mint and every redeem reverts.\n" +
+        "It is also idempotent and cannot be closed once created, so running it is one-way and safe.\n\n" +
+        "To run it on mainnet, set the same acknowledgement every other mainnet action uses:\n" +
+        "  DOMINION_ALLOW_MAINNET=i-understand DOMINION_RPC=<mainnet-rpc> npx tsx scripts/create-fee-vault.ts\n",
+    );
+    throw e;
+  }
   // Creating the vault is cheap and required, but it still goes through the guard so that the
   // action is declared rather than assumed. See ACTION_COST in _guard.ts.
   assertReversible("create_fee_vault", intentFromEnv());

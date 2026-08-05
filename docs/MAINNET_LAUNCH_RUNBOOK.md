@@ -47,7 +47,7 @@ needs to be reopened in a hurry.
 |---|---|---|
 | 1. SILV token deployed and live | ✅ ready | steps 3-6 |
 | 2. Pre-mint freely, send to inventory, seed a ~100K USDC Sunrise pool | ✅ ready | the plan is $6.75M worth, ~115,705 oz at $58.34 spot, 77% of the 150,000 oz cap. Steps 7-9. |
-| 3. Public mint, no KYC, KYC enableable later | ⚠️ **partly** | Public mint: yes, but it costs a 24h timelock to open (step 9). **KYC is NOT wired: `kyc_enforced` is read by zero instructions, so enabling KYC later needs a PROGRAM UPGRADE, not a config change.** |
+| 3. Public mint, no KYC, KYC enableable later | ✅ **yes** | Public mint: yes, and opening it costs a 24h timelock (step 9). KYC: the gate SHIPPED DORMANT on 2026-08-05. `kyc_scope_flags = 0` at init and it IS read, by `mint_silv` and `redeem_silv`, so arming it later is a CONFIG CHANGE, not a program upgrade and not a second audit. Order matters: set the attestor, write the attestations, THEN arm the scope. Arming first locks out every existing holder. |
 | 4. Redeem closed now, open later by upgrade | ✅ exactly this | `set_redemptions_enabled` refuses `true` in the deployed bytecode. Opening is a code change by construction. |
 | 5. Admin portal live for admin wallet + guardians + multisig | ✅ ready | step 11. Needs `NEXT_PUBLIC_OPS_SQUADS` set, else the Squads-member path is inert. |
 | 6. Revoke the deployer, upgrade authority to the multisig | ✅ ready, **ordering matters** | step 12, and it MUST be last: `initialize` requires the signer to BE the upgrade authority. |
@@ -295,7 +295,7 @@ be opened by an upgrade. Immutability is a decision for after the redeem flow sh
 
 | Thing | Why not | Cost to change |
 |---|---|---|
-| Enable KYC | `kyc_enforced` is read by zero instructions. The field exists; the gate does not. | program upgrade |
+| Enable KYC | The gate ships DORMANT and IS read by mint and redeem. Arm with `set_kyc_operator` then attestations then `set_kyc_scope` (bit 0 mint, bit 1 redeem). | config change, instant |
 | Open redemptions | `set_redemptions_enabled` refuses `true` in bytecode, by design | program upgrade |
 | Raise the 100,000 oz cap | tighten-only, by design | program upgrade |
 | A minimum redemption size (Mark's 5,000 oz) | does not exist; only `amount > 0` | program upgrade, same batch as redeem |
@@ -306,6 +306,58 @@ be opened by an upgrade. Immutability is a decision for after the redeem flow sh
 
 All of these are deliberate. They exist so a compromised admin cannot do them either.
 Group them into one Phase 1 upgrade rather than shipping several.
+
+## PREREQUISITES ADDED 2026-08-05 (the bundled pre-mainnet upgrade)
+
+These are new and none of them existed when the numbered steps below were written. Two of them
+are hard blockers.
+
+### P1. Create the fee vault. BLOCKER, before step 9 or 10.
+
+`mint_silv` and `redeem_silv` both take the premium fee vault as a REQUIRED account. If it does
+not exist, EVERY mint and EVERY redeem reverts `AccountNotInitialized`, which reads like a broken
+product rather than a missing setup step. Nothing creates it automatically: `initialize` does not
+touch it.
+
+```
+DOMINION_ALLOW_MAINNET=i-understand DOMINION_RPC=<mainnet> npx tsx scripts/create-fee-vault.ts
+```
+
+Idempotent, one-way and permanent: the vault is a PDA-owned associated token account, so once it
+exists it can never be closed. The admin panel shows a red banner while it is missing, so check
+the dashboard before opening anything.
+
+### P2. Set `treasury_min_float_usdc` to a non-zero value. BLOCKER before opening redeem.
+
+It was cosmetic while redeem was closed. It is not any more, and premium revenue no longer
+accumulates inside the treasury to cushion it: mint and redeem now route the premium OUT to the
+fee vault. The float is what stops `withdraw_usdc` from emptying the redemption buffer, and it now
+also gates `withdraw_fees`.
+
+### P3. Fees are `initialize` ARGUMENTS: 1% mint, 1.5% redeem.
+
+`premium_bps_mint = 100`, `premium_bps_redeem = 150` (Mark, 2026-07-30). Both ceilings are 5%.
+Both remain 24h-timelock changeable, so nothing is locked in. The fee is 1% OF WHAT FLOWS THROUGH,
+taken off the top on both sides, not folded into a marked-up price.
+
+### P4. Opening redemption no longer needs an upgrade.
+
+`set_redemptions_enabled` still refuses `true`, but the 24h-timelocked `SetRedeemLimits` action now
+carries the switch: `propose_set_redeem_limits` with `redemptionsEnabled = true`, wait 24h,
+execute. The admin panel has a dedicated "OPEN redemptions (propose, 24h)" card. Closing is
+instant and ALSO disarms any pending open.
+
+### P5. The fee-exemption whitelist exists, and prefer mint-only.
+
+Per-wallet, per-side, instant both ways. A wallet exempt on BOTH sides trades at exact spot each
+way, which hands it a free option on oracle movement paid by the treasury. Exempt the MINT side
+alone unless there is a specific reason not to.
+
+### P6. Sweep the fee vault with `withdraw_fees`, not `withdraw_usdc`.
+
+Two different accounts. `withdraw_usdc` moves the BACKING and is 24h-timelocked;
+`withdraw_fees` moves earned revenue and is instant, but it refuses while paused and while the
+treasury is below its float. Sweep on a cadence so the standing balance stays small.
 
 ## Known accepted risks at launch
 

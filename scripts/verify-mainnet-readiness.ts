@@ -13,6 +13,11 @@
  * Run: npx tsx scripts/verify-mainnet-readiness.ts
  */
 import { Connection, PublicKey } from "@solana/web3.js";
+import {
+  getAssociatedTokenAddressSync,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
+import { PROGRAM_ID } from "./_program-id";
 import fs from "fs";
 import path from "path";
 import { execFileSync } from "child_process";
@@ -188,11 +193,53 @@ async function main() {
     "3. public mint with no KYC",
     "works, but opening it costs a 24h timelock (propose at step 7, execute at step 10)",
   );
-  no(
+  // 2026-08-05: this was recorded as BLOCKED, and any blocked item exits 1 with "Do NOT start the
+  // ceremony". It is now satisfied: `kyc_scope_flags` IS read, by mint_silv and redeem_silv, and
+  // `set_kyc_scope` arms it instantly. Leaving the stale `no()` here would have hard-failed the
+  // launch gate on a requirement the batch delivered.
+  ok(
     "3b. enable KYC LATER",
-    "kyc_enforced is read by ZERO instructions: this needs a PROGRAM UPGRADE, not a config change",
+    "the gate SHIPPED DORMANT (kyc_scope_flags = 0, read by mint_silv + redeem_silv). Arming it " +
+      "is a config change, not an upgrade: set_kyc_operator then attest wallets then " +
+      "set_kyc_scope. ORDER MATTERS - attest BEFORE arming or every holder is locked out",
   );
-  ok("4. redeem closed now, open later by upgrade", "enabling is refused in bytecode");
+  // P1 from the runbook prerequisites, checked mechanically rather than left as prose. The fee
+  // vault is the one setup step whose absence turns the whole product off: mint_silv and
+  // redeem_silv both take it as a REQUIRED account, so a missing vault means every mint and every
+  // redeem reverts AccountNotInitialized the moment the mint is opened.
+  //
+  // Checked against the CLUSTER THIS SCRIPT IS POINTED AT, so a green here on devnet says nothing
+  // about mainnet. That is the honest behaviour: the detail line names the cluster.
+  {
+    const feeVaultAuthority = PublicKey.findProgramAddressSync(
+      [Buffer.from("fee_vault")],
+      PROGRAM_ID,
+    )[0];
+    const vault = getAssociatedTokenAddressSync(
+      new PublicKey(USDC_MAINNET),
+      feeVaultAuthority,
+      true, // allowOwnerOffCurve: the owner is a PDA
+      TOKEN_PROGRAM_ID,
+    );
+    const info = await conn.getAccountInfo(vault).catch(() => null);
+    if (info) {
+      ok("3c. the MAINNET fee vault exists", vault.toBase58());
+    } else {
+      no(
+        "3c. the MAINNET fee vault does NOT exist",
+        `${vault.toBase58()} -- run scripts/create-fee-vault.ts AFTER the deploy and BEFORE opening ` +
+          `mint or redeem, or every mint and every redeem reverts AccountNotInitialized`,
+      );
+    }
+  }
+
+  ok(
+    "4. redeem: closed now, open later WITHOUT an upgrade",
+    "set_redemptions_enabled still refuses true, but the 24h-timelocked SetRedeemLimits action " +
+      "now carries the switch (propose_set_redeem_limits with redemptionsEnabled=true). " +
+      "PRECONDITIONS: the fee vault must exist (scripts/create-fee-vault.ts), the treasury must " +
+      "hold USDC, and treasury_min_float_usdc must be non-zero",
+  );
   ok("5. admin portal for admin + guardians + Squads members", "step 11");
   ok(
     "6. revoke the deployer, upgrade authority to the multisig",

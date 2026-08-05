@@ -191,7 +191,7 @@ footgun for anyone grepping for a mint builder.
 
 ## D. Scripts and docs
 
-### [ ] D1. The on-chain E2E proof script reverts for a reason unrelated to the program
+### [x] D1. The on-chain E2E proof script reverts for a reason unrelated to the program
 `scripts/e2e-lazer-mint.ts` omits `feeVaultPda`, `feeVault`, `feeExempt`, `kyc`. Because
 `.accounts()` is NOT strict in Anchor 0.31.1 (it delegates to `accountsPartial`), the resolver
 DERIVES the `fee_exempt` and `kyc` PDAs and passes real addresses instead of the program id. The
@@ -199,38 +199,38 @@ program then runs `Account::try_from` on an uninitialised account and reverts
 `AccountNotInitialized`. The deploy checklist treats this script as the evidence that the priced
 mint works.
 
-### [ ] D2. The mainnet-readiness gate hard-fails on a requirement this batch satisfied
+### [x] D2. The mainnet-readiness gate hard-fails on a requirement this batch satisfied
 `scripts/verify-mainnet-readiness.ts:191-194` records "kyc_enforced is read by ZERO
 instructions: this needs a PROGRAM UPGRADE" as BLOCKED, and any blocked item exits 1 with
 "Do NOT start the ceremony". `kyc_scope_flags` is now read by both mint and redeem. Line 197 on
 redeem is also now false.
 
-### [ ] D3. The runbook denies capabilities the program now has, and omits the fee vault
+### [x] D3. The runbook denies capabilities the program now has, and omits the fee vault
 `docs/MAINNET_LAUNCH_RUNBOOK.md:50,298` still say enabling KYC needs a program upgrade. Nothing
 in the runbook or `private/DEPLOY_CHECKLIST.md` mentions the fee vault, the whitelist, or
 `withdraw_fees`. The fee vault is a hard prerequisite: runbook step 10 opens the public mint, and
 then every mint reverts `AccountNotInitialized`.
 
-### [ ] D4. `scripts/create-fee-vault.ts` cannot run on mainnet
+### [x] D4. `scripts/create-fee-vault.ts` cannot run on mainnet
 `requireDevnet` throws unless the operator happens to know to set
 `DOMINION_ALLOW_MAINNET=i-understand`. It is a mandatory mainnet step. Needs an explicit,
 documented mainnet path.
 
-### [ ] D5. Named deploy-gate scripts call removed instructions
+### [x] D5. Named deploy-gate scripts call removed instructions
 `test-v2-lifecycle.ts` calls `redeemSilvQueued`, `claimRedemption`,
 `adminSettleRedemptionOffchain` and fetches `redemptionRequest`: it throws.
 `test-v2-devnet.ts:222` asserts `redeemQueueDelaySeconds === 0`, which the ceiling validator
 refuses. `t1-hostile-bootstrap.ts:359` asserts on the dead delay: it passes, but it is a false
 assurance. `private/DEPLOY_CHECKLIST.md` names these as gates.
 
-### [ ] D6. No CI gate catches client-vs-IDL drift
+### [x] D6. No CI gate catches client-vs-IDL drift
 The existing gate checks IDL byte-identity and address consistency but nothing cross-references
 the instruction names, account names and error codes the clients use against the IDL. A short
 script walking every `.methods.<name>(` and `.accounts({` key in both apps against the committed
 IDL would have caught D1, B6 and D5 mechanically. This is the single highest-leverage item on
 the list, because it prevents the whole class rather than these instances.
 
-### [ ] D7. Stale comment
+### [x] D7. Stale comment
 `apps/public/src/lib/anchor-client.ts` claims "mainnet init value: 60s" for `max_staleness`,
 which `MAX_STALENESS_CEILING_SECONDS = 30` makes impossible.
 
