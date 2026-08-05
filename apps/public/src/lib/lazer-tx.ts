@@ -292,31 +292,7 @@ export async function buildLazerRedeemTx(
   return finalize(connection, user, assembleLazerOracleIxs(dominionIx, args.envelope, ataIxs));
 }
 
-export interface BuildLazerClaimTxArgs {
-  request: RedemptionRequestView;
-  envelope: Uint8Array;
-}
-
-/** DEAD PATH. Throws unconditionally.
- *
- * Kept as a throwing stub rather than deleted so the removal is a LOUD, explained failure
- * instead of a silent one, and so the remaining queue UI in MintRedeemCard still compiles while
- * it is being removed. It is unreachable in practice: `fetchRedemptionRequests` now returns an
- * empty list, so no Claim button ever renders.
- *
- * TODO: delete this together with the queued-redemption UI in MintRedeemCard.tsx. */
-export async function buildLazerClaimTx(
-  _connection: Connection,
-  _wallet: WalletContextState,
-  _args: BuildLazerClaimTxArgs,
-): Promise<Transaction> {
-  throw new Error(
-    "The queued redemption path was removed on 2026-08-05. Redemption is now a single " +
-      "instant transaction: burn SILV, receive USDC, or it reverts. There is nothing to claim.",
-  );
-}
-
-// The claimRedemption transaction builder was REMOVED on 2026-08-05 with the whole queued
+// The claim-redemption builder and its args type were REMOVED on 2026-08-05 with the whole queued
 // redemption path. `claim_redemption` no longer exists in the program or the IDL, so calling it
 // threw at runtime rather than failing at build time -- the exact stale-client failure mode the
 // constants gate guards against elsewhere.

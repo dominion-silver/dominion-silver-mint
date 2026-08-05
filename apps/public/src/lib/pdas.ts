@@ -50,7 +50,7 @@ export function silvMetadataAuthorityPda(): PublicKey {
  */
 export function feeVaultPda(): PublicKey {
   return PublicKey.findProgramAddressSync(
-    [Buffer.from("fee_vault")],
+    [Buffer.from(SEEDS.feeVault)],
     PROGRAM_ID,
   )[0];
 }
@@ -58,7 +58,7 @@ export function feeVaultPda(): PublicKey {
 /** Per-wallet fee exemption. Seeds = [b"fee_exempt", wallet]. Present = exempt. */
 export function feeExemptPda(wallet: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync(
-    [Buffer.from("fee_exempt"), wallet.toBuffer()],
+    [Buffer.from(SEEDS.feeExempt), wallet.toBuffer()],
     PROGRAM_ID,
   )[0];
 }
@@ -66,7 +66,7 @@ export function feeExemptPda(wallet: PublicKey): PublicKey {
 /** Per-wallet KYC attestation. Seeds = [b"kyc", wallet]. Present = approved. */
 export function kycPda(wallet: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync(
-    [Buffer.from("kyc"), wallet.toBuffer()],
+    [Buffer.from(SEEDS.kyc), wallet.toBuffer()],
     PROGRAM_ID,
   )[0];
 }

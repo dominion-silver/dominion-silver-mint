@@ -56,7 +56,15 @@ export const SEEDS = {
   silvMetadataAuthority: "silv_metadata_authority",
   timelock: "timelock",
   guardian: "guardian",
-  redeemRequest: "redeem_request",
+  // 2026-08-05: `redeemRequest` removed with the queued path; these three added. Kept here
+  // rather than hardcoded at the derivation sites so BOTH apps read the seeds from ONE place per
+  // app, and so `scripts/verify-constants-consistency.sh` has a single symbol to compare.
+  /** Authority of the premium fee vault. The vault is this PDA's USDC ATA (off-curve owner). */
+  feeVault: "fee_vault",
+  /** Per-wallet fee exemption. Seeds = [b"fee_exempt", wallet]. Present = exempt. */
+  feeExempt: "fee_exempt",
+  /** Per-wallet KYC attestation. Seeds = [b"kyc", wallet]. Present = approved. */
+  kyc: "kyc",
   lazerFeePayer: "lazer_fee_payer",
 } as const;
 

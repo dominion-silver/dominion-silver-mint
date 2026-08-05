@@ -62,14 +62,20 @@ export interface ConfigAccount {
   treasuryMinFloatUsdc: BN;
   // D11: manual redemptions switch
   redemptionsEnabled: boolean;
-  // routing + fixed-reset-window instant budget
+  // Fixed-reset-window redemption budget. "Fixed", NOT sliding: the true worst case across a
+  // window boundary is TWICE the budget (drain it just before the reset, then again just after).
+  /** DEAD ON CHAIN since 2026-08-05: no instruction reads it. It still DECODES and still holds its
+   *  $5,000 default, which is exactly how it did damage: the PUBLIC app read it and silently
+   *  blocked every redemption at or above $5,000. Never read it, and never display it as live
+   *  state. */
   largeRedeemThresholdUsdc: BN;
   instantRedeemBudgetUsdc: BN;
   instantRedeemWindowSeconds: number;
+  /** DEAD ON CHAIN since 2026-08-05 (there is no queue). Do not read. */
   redeemQueueDelaySeconds: number;
   instantWindowStart: BN;
   instantUsedUsdc: BN;
-  // D5/D9: queued-redemption nonce
+  /** DEAD ON CHAIN since 2026-08-05 (there is no queue). Do not read. */
   nextRedeemRequestNonce: BN;
   // Timelock + guardians
   adminTimelockSeconds: number;
@@ -99,8 +105,10 @@ export interface ConfigAccount {
   // Inventory + public-mint gate
   inventoryWallet: PublicKey;
   publicMintEnabled: boolean;
-  // KYC
+  // KYC gate (2026-08-05). Dormant at launch: kycScopeFlags == 0.
   kycOperator: PublicKey;
+  /** DERIVED, never set independently: the program maintains
+   *  `kycEnforced == (kycScopeFlags != 0)`, so the two can never disagree. */
   kycEnforced: boolean;
   pendingKycOperatorNonce: BN | null;
   // Proof-of-reserves feed
@@ -117,19 +125,15 @@ export interface ConfigAccount {
   version: number;
   /** Single-active guard for the timelocked public-mint OPEN. */
   pendingPublicMintNonce: BN | null;
+  /** KYC scope bitfield: bit 0 = mint, bit 1 = redeem, 0 = off (the launch posture).
+   *
+   *  Declared explicitly because the panel reads it through an `any`-typed `current?: (c: any)`
+   *  callback, where a typo would silently render "scope 0 (dormant)" for an ARMED gate and still
+   *  typecheck. Optional because a config written before this upgrade decodes it as 0. */
+  kycScopeFlags?: number;
 }
 
-export type RedemptionStatusKind = "pending" | "claimed" | "settledOffchain";
 
-export interface RedemptionRequestView {
-  pubkey: PublicKey;
-  owner: PublicKey;
-  amountSilv: BN;
-  requestedAt: number;
-  claimableAt: number;
-  nonce: BN;
-  status: RedemptionStatusKind;
-}
 
 export interface DashboardSnapshot {
   cfg: ConfigAccount;
@@ -243,97 +247,12 @@ export async function fetchDashboardSnapshot(
   };
 }
 
-function statusKind(s: unknown): RedemptionStatusKind {
-  const k = Object.keys(s as object)[0];
-  if (k === "claimed") return "claimed";
-  if (k === "settledOffchain") return "settledOffchain";
-  return "pending";
-}
 
-/**
- * ALL redemption requests across every user (admin OTC-queue view). The owner
- * filter is intentionally absent: the admin needs the full Pending list,
- * especially requests past claimable_at that the on-chain treasury cannot
- * cover (those become OTC IOUs settled via admin_settle_redemption_offchain).
- * Sorted oldest-requested first so the operator works the backlog in order.
- */
-/**
- * CODEX P2-01 (+ review-of-fixes): the UI must distinguish "genuinely empty
- * queue" from "the read failed / RPC degraded" - a queued redemption already
- * burned SILV and is a durable on-chain IOU that must NOT be hidden.
- *
- * IMPORTANT: this fetcher THROWS on failure (it does NOT resolve with a
- * degraded-empty object). A resolved value is treated by SWR as success and
- * BYPASSES `keepPreviousData`, which would overwrite the last good queue
- * with empty and HIDE real IOUs (the exact P2-01 bug). By throwing, SWR
- * keeps the last successful `data` and exposes `error`; the Dashboard then
- * shows the last-known queue WITH a degraded banner, instead of an empty
- * one. `RedemptionQueueResult` remains the prop shape the Dashboard builds
- * from (last-good requests + degraded = SWR error state).
- */
-export interface RedemptionQueueResult {
-  requests: RedemptionRequestView[];
-  degraded: boolean; // derived from SWR error; requests may be last-good/stale
-  error?: string;
-}
 
-/**
- * ALWAYS EMPTY since 2026-08-05. Redemption became a single instant route, so the
- * `RedemptionRequest` account type no longer exists in the program or the IDL.
- *
- * Kept as a function returning `[]` rather than deleted, because Dashboard's SWR wiring and
- * the `RedemptionQueueResult` shape flow through several call sites and gutting the read is the
- * change with no blast radius. It performs NO RPC call: keeping the old
- * `program.account.redemptionRequest.all()` would throw at runtime now that the type is gone
- * from the IDL, which is exactly the kind of stale-client failure the constants gate exists to
- * catch elsewhere.
- */
-export async function fetchAllRedemptionRequests(
-  _connection: Connection,
-): Promise<RedemptionRequestView[]> {
-  return [];
-}
-
-async function fetchAllRedemptionRequests_DELETED(
-  connection: Connection,
-): Promise<RedemptionRequestView[]> {
-  const program = getReadOnlyProgram(connection);
-  try {
-    // getProgramAccounts is heavy and the public devnet RPC frequently
-    // rate-limits or blocks it. Bound it so a hung/blocked call fails fast
-    // (-> SWR error -> keepPreviousData retains the last good queue)
-    // instead of hanging the SWR forever.
-    const timeout = new Promise<never>((_, rej) =>
-      setTimeout(() => rej(new Error("redemptionRequest.all timed out")), 12_000),
-    );
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const all = (await Promise.race([
-      (program.account as any).redemptionRequest.all(),
-      timeout,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ])) as any[];
-    return all
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .map((a: any) => ({
-        pubkey: a.publicKey as PublicKey,
-        owner: a.account.owner as PublicKey,
-        amountSilv: a.account.amountSilv as BN,
-        requestedAt: (a.account.requestedAt as BN).toNumber(),
-        claimableAt: (a.account.claimableAt as BN).toNumber(),
-        nonce: a.account.nonce as BN,
-        status: statusKind(a.account.status),
-      }))
-      .sort(
-        (x: RedemptionRequestView, y: RedemptionRequestView) =>
-          x.requestedAt - y.requestedAt,
-      );
-  } catch (e) {
-    console.error("fetchAllRedemptionRequests error", e);
-    throw e instanceof Error
-      ? e
-      : new Error(String(e));
-  }
-}
+// The queued-redemption READ path (fetchAllRedemptionRequests, RedemptionQueueResult,
+// RedemptionRequestView, RedemptionStatusKind, statusKind) was REMOVED on 2026-08-05 with the
+// queue itself. The `RedemptionRequest` account type no longer exists in the program or the IDL,
+// so the old `program.account.redemptionRequest.all()` call would throw at runtime.
 
 // ---- formatting ----
 

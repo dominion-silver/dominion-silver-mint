@@ -18,22 +18,16 @@ import {
   redeemGrossUsdc,
   classifyRedeem,
   parseRedeemError,
-  isQueuedNonceRaceError,
   isStaleOracleError,
   STALE_ORACLE_USER_MESSAGE,
   errorToText,
-  fetchRedemptionRequests,
-  buildRedeemQueuedTx,
-  buildCloseSettledRedemptionTx,
   parseUsdcAmount,
   parseSilvAmount,
   type RedeemRoute,
-  type RedemptionRequestView,
 } from "@/lib/anchor-client";
 import {
   buildLazerMintTx,
   buildLazerRedeemTx,
-  buildLazerClaimTx,
 } from "@/lib/lazer-tx";
 import { fetchAndExecuteLazer } from "@/lib/lazer-execute";
 import { toast } from "@/components/Toaster";
@@ -64,12 +58,6 @@ export function MintRedeemCard() {
     { refreshInterval: 30_000, revalidateOnFocus: false },
   );
 
-  // The user's queued redemption requests (Pending panel).
-  const { data: requests, mutate: refreshRequests } = useSWR(
-    wallet.publicKey ? `redemptions-${wallet.publicKey.toBase58()}` : null,
-    () => fetchRedemptionRequests(connection, wallet.publicKey!),
-    { refreshInterval: 15_000, revalidateOnFocus: false },
-  );
 
   const [mode, setMode] = useState<Mode>("mint");
   const [amount, setAmount] = useState<string>("");
@@ -419,98 +407,6 @@ export function MintRedeemCard() {
     }
   }
 
-  async function handleClaim(req: RedemptionRequestView) {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setErrorMsg(null);
-    try {
-      const r = await fetchAndExecuteLazer(
-        connection,
-        wallet,
-        (envelope) =>
-          buildLazerClaimTx(connection, wallet, {
-            request: req,
-            envelope,
-          }),
-      );
-      toast({
-        message: "Redemption claimed",
-        variant: "success",
-        href: `https://solscan.io/tx/${r.consumerSig}?cluster=devnet`,
-        hrefLabel: "View on Solscan",
-      });
-      refreshRequests();
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      // Classify on the FLATTENED text (message + program logs +
-      // structured err): a landed-but-reverted claim carries the signal
-      // in logs/onChainErr, so the InsufficientTreasury -> OTC hint works
-      // (CODEX P1-01).
-      const flat = errorToText(e);
-      const reroute = parseRedeemError(flat);
-      const friendly = isStaleOracleError(flat)
-        ? STALE_ORACLE_USER_MESSAGE
-        : reroute === "otc"
-          ? `Treasury can't cover this claim yet. It stays queued (on-chain IOU); contact ${OTC_EMAIL} for OTC settlement.`
-          : msg;
-      showError(friendly);
-      toast({ message: `Claim failed: ${friendly.split("\n")[0].slice(0, 120)}`, variant: "error" });
-    } finally {
-      inFlight.current = false;
-    }
-  }
-
-  // P2-03: the owner reclaims the PDA rent of a request the admin already
-  // settled OTC (status SettledOffchain). No funds move, no oracle, no Pyth.
-  async function handleCloseSettled(req: RedemptionRequestView) {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setErrorMsg(null);
-    try {
-      const tx = await buildCloseSettledRedemptionTx(connection, wallet, req);
-      const signed = await wallet.signTransaction!(tx);
-      const sig = await connection.sendRawTransaction(signed.serialize(), {
-        skipPreflight: false,
-        maxRetries: 3,
-      });
-      const conf = await connection.confirmTransaction(
-        {
-          signature: sig,
-          blockhash: tx.recentBlockhash!,
-          lastValidBlockHeight: tx.lastValidBlockHeight!,
-        },
-        "confirmed",
-      );
-      // confirmTransaction resolves on INCLUSION, not success: a
-      // landed-but-reverted tx has a non-null err. Never treat that as
-      // success (CODEX P1-01 pattern, mirrors the queued-redeem path).
-      if (conf.value?.err != null) {
-        throw new Error("Close reverted on-chain");
-      }
-      toast({
-        message: "Request closed, rent reclaimed",
-        variant: "success",
-        href: `https://solscan.io/tx/${sig}?cluster=devnet`,
-        hrefLabel: "View on Solscan",
-      });
-      refreshRequests();
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      showError(msg);
-      toast({
-        message: `Close failed: ${msg.split("\n")[0].slice(0, 120)}`,
-        variant: "error",
-      });
-    } finally {
-      inFlight.current = false;
-    }
-  }
-
-  const pending = (requests ?? []).filter((r) => r.status === "pending");
-  const settled = (requests ?? []).filter(
-    (r) => r.status === "settledOffchain",
-  );
-
   return (
     <div className="rounded-xl border border-border bg-card p-6">
       {/* Genuine halt states (guardian pause / premium-update window) render
@@ -751,101 +647,14 @@ export function MintRedeemCard() {
                           : "Redeem SILV"}
       </button>
 
-      {/* Pending queued redemptions. */}
-      {wallet.publicKey && pending.length > 0 && (
-        <div className="mt-6 border-t border-border pt-4">
-          <div className="mb-2 text-xs uppercase tracking-wide text-muted">
-            Pending redemptions ({pending.length})
-          </div>
-          <div className="space-y-2">
-            {pending.map((r) => {
-              const claimable = nowSecs >= r.claimableAt;
-              const inDays = Math.max(
-                0,
-                Math.ceil((r.claimableAt - nowSecs) / 86400),
-              );
-              return (
-                <div
-                  key={r.pubkey.toBase58()}
-                  className="flex items-center justify-between rounded-md border border-border bg-bg/50 px-3 py-2 text-xs"
-                >
-                  <div>
-                    <div className="font-mono text-white">
-                      {(r.amountSilv.toNumber() / 1e6).toLocaleString(undefined, {
-                        maximumFractionDigits: 4,
-                      })}{" "}
-                      SILV
-                    </div>
-                    <div className="text-muted">
-                      {claimable
-                        ? "Ready to claim (priced at claim)"
-                        : `Claimable in ~${inDays} day(s)`}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    disabled={!claimable || submitting}
-                    onClick={() => handleClaim(r)}
-                    className="rounded-md bg-accent px-3 py-1 font-semibold text-bg transition hover:bg-accentDim disabled:cursor-not-allowed disabled:opacity-30"
-                  >
-                    Claim
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-          <div className="mt-2 text-[11px] text-muted/80">
-            If the treasury can&apos;t cover a claim, it stays queued (on-chain
-            IOU); contact{" "}
-            <a href={`mailto:${OTC_EMAIL}`} className="text-accent underline">
-              {OTC_EMAIL}
-            </a>{" "}
-            for OTC settlement.
-          </div>
-        </div>
-      )}
+      {/* The queued-redemption UI (pending table, Claim, settled table, reclaim-rent) was
+          REMOVED on 2026-08-05 with the queue itself. Redemption is one instant transaction:
+          it settles or it reverts, so there is no request state for a user to track.
 
-      {/* P2-03: requests settled OTC by the desk. The owner reclaims the
-          small PDA rent (no funds move, no oracle). */}
-      {wallet.publicKey && settled.length > 0 && (
-        <div className="mt-6 border-t border-border pt-4">
-          <div className="mb-2 text-xs uppercase tracking-wide text-muted">
-            Settled (reclaim rent) ({settled.length})
-          </div>
-          <div className="space-y-2">
-            {settled.map((r) => (
-              <div
-                key={r.pubkey.toBase58()}
-                className="flex items-center justify-between rounded-md border border-border bg-bg/50 px-3 py-2 text-xs"
-              >
-                <div>
-                  <div className="font-mono text-white">
-                    {(r.amountSilv.toNumber() / 1e6).toLocaleString(undefined, {
-                      maximumFractionDigits: 4,
-                    })}{" "}
-                    SILV
-                  </div>
-                  <div className="text-muted">
-                    Settled off-chain. You were paid by the OTC desk.
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  disabled={submitting}
-                  onClick={() => handleCloseSettled(r)}
-                  className="rounded-md bg-accent px-3 py-1 font-semibold text-bg transition hover:bg-accentDim disabled:cursor-not-allowed disabled:opacity-30"
-                >
-                  Close
-                </button>
-              </div>
-            ))}
-          </div>
-          <div className="mt-2 text-[11px] text-muted/80">
-            This only frees the small Solana rent of the request account. Your
-            redemption was already settled by the desk.
-          </div>
-        </div>
-      )}
+          It was already unreachable, because the request fetch returned an empty list, but
+          unreachable is not the same as harmless: it kept two calls to instructions that no
+          longer exist in the IDL alive in shipped code, where they would have failed with a
+          bare TypeError rather than an explained error. */}
     </div>
   );
 }

@@ -135,13 +135,14 @@ const ACTIONS: ActionDesc[] = [
   },
   {
     id: "set-redemptions",
-    label: "Set redemptions on/off",
+    label: "CLOSE redemptions (instant)",
     group: "Instant",
+    danger: true,
     mode: "squads",
-    fields: [{ name: "on", label: "Enabled", kind: "bool" }],
-    tip: "Master switch for user redemptions.",
-    current: (c) => (c.redemptionsEnabled ? "on" : "off"),
-    build: (c, p) => actions.setRedemptionsEnabled(c, boolField(p, "on")),
+    fields: [],
+    tip: "Emergency close, effective immediately. This is CLOSE-ONLY: the deployed program refuses `true` (RedemptionsEnableBlocked), so the bool this card used to offer had one working value and the other reverted. To OPEN, use 'OPEN redemptions (propose, 24h)' under Delayed. Closing also DISARMS any pending open proposal, so an open cannot land later without a fresh decision.",
+    current: (c) => (c.redemptionsEnabled ? "currently OPEN" : "currently closed"),
+    build: (c) => actions.setRedemptionsEnabled(c, false),
   },
   {
     id: "set-max-supply",
@@ -161,24 +162,24 @@ const ACTIONS: ActionDesc[] = [
     fields: [
       { name: "budget", label: "Instant budget USDC - DOWN only (blank=keep)", kind: "usdc" },
       { name: "window", label: "Instant window s - UP only (blank=keep)", kind: "int" },
-      { name: "threshold", label: "Large-redeem threshold USDC - DOWN only (blank=keep)", kind: "usdc" },
-      { name: "delay", label: "Queue delay s - UP only (blank=keep)", kind: "int" },
     ],
-    tip: "Instant TIGHTEN only: budget DOWN, window UP, threshold DOWN, queue delay UP. LOOSENING in any direction requires the 24h timelock (see 'Propose redeem limits' under Delayed). Leave a field blank to keep it.",
+    // "Large-redeem threshold" and "Queue delay" inputs REMOVED 2026-08-05. Both still write to
+    // config and change nothing on chain, so offering them was misleading in itself. Worse:
+    // `largeRedeemThresholdUsdc` was what the PUBLIC app read to decide whether to route a
+    // redemption to the deleted queue, so an operator "tightening the threshold to $500" in an
+    // incident would have moved a client-side cliff to $500 with no indication that the effect was
+    // entirely in the front end and nothing on chain had changed.
+    tip: "Instant TIGHTEN only: budget DOWN, window UP. LOOSENING either one requires the 24h timelock (see 'Propose redeem limits' under Delayed). Leave a field blank to keep it. Closing redemptions outright is the separate CLOSE card above.",
     current: (c) =>
-      `budget ${Number(c.instantRedeemBudgetUsdc) / 1e6} USDC · window ${c.instantRedeemWindowSeconds}s · threshold ${Number(c.largeRedeemThresholdUsdc) / 1e6} USDC · delay ${c.redeemQueueDelaySeconds}s`,
+      `budget ${Number(c.instantRedeemBudgetUsdc) / 1e6} USDC · window ${c.instantRedeemWindowSeconds}s`,
     build: (c, p) => {
       const args = {
         instantRedeemBudgetUsdc: optAtomic(p.budget, 6),
         instantRedeemWindowSeconds: optNum(p.window, U32),
-        largeRedeemThresholdUsdc: optAtomic(p.threshold, 6),
-        redeemQueueDelaySeconds: optNum(p.delay, U32),
       };
       if (
         args.instantRedeemBudgetUsdc == null &&
-        args.instantRedeemWindowSeconds == null &&
-        args.largeRedeemThresholdUsdc == null &&
-        args.redeemQueueDelaySeconds == null
+        args.instantRedeemWindowSeconds == null
       )
         throw new Error("Set at least one field to tighten");
       return actions.emergencyTightenRedeemLimits(c, args);
@@ -351,24 +352,24 @@ const ACTIONS: ActionDesc[] = [
     fields: [
       { name: "budget", label: "Instant budget USDC (blank=keep)", kind: "usdc" },
       { name: "window", label: "Instant window s (blank=keep)", kind: "int" },
-      { name: "threshold", label: "Large-redeem threshold USDC (blank=keep)", kind: "usdc" },
-      { name: "delay", label: "Queue delay s (blank=keep)", kind: "int" },
+
     ],
-    tip: "24h-timelocked path to LOOSEN redeem limits (budget up, window down, threshold up, queue delay down). To tighten instantly instead, use 'Emergency tighten redeem limits' under Instant. Leave a field blank to keep it.",
+    // Threshold and queue-delay inputs REMOVED 2026-08-05: dead on chain (see the note on the
+    // emergency card above). The REDEEM SWITCH is deliberately NOT offered here either, even
+    // though the same on-chain action carries it: it has its own card, because it is the most
+    // consequential switch in the program and bundling it into a four-field form is how it gets
+    // flipped by accident.
+    tip: "24h-timelocked path to LOOSEN the redeem limits (budget UP, window DOWN). To tighten instantly instead, use 'Emergency tighten redeem limits' under Instant. Leave a field blank to keep it.",
     current: (c) =>
-      `budget ${Number(c.instantRedeemBudgetUsdc) / 1e6} USDC · window ${c.instantRedeemWindowSeconds}s · threshold ${Number(c.largeRedeemThresholdUsdc) / 1e6} USDC · delay ${c.redeemQueueDelaySeconds}s`,
+      `budget ${Number(c.instantRedeemBudgetUsdc) / 1e6} USDC · window ${c.instantRedeemWindowSeconds}s`,
     build: (c, p) => {
       const args = {
         instantRedeemBudgetUsdc: optAtomic(p.budget, 6),
         instantRedeemWindowSeconds: optNum(p.window, U32),
-        largeRedeemThresholdUsdc: optAtomic(p.threshold, 6),
-        redeemQueueDelaySeconds: optNum(p.delay, U32),
       };
       if (
         args.instantRedeemBudgetUsdc == null &&
-        args.instantRedeemWindowSeconds == null &&
-        args.largeRedeemThresholdUsdc == null &&
-        args.redeemQueueDelaySeconds == null
+        args.instantRedeemWindowSeconds == null
       )
         throw new Error("Set at least one field");
       return actions.proposeSetRedeemLimits(c, args);

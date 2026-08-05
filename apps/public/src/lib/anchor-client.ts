@@ -3,15 +3,19 @@
  *
  * Mint: pay USDC -> receive SILV at Pyth XAG/USD * (1 + premium_mint). Bounded
  *   by a HARD supply cap (no daily/reserve).
- * Redeem (§4.3): `redeem_silv` is the INSTANT path only. It reverts
- *   `MustUseQueue` (amount >= large threshold OR fixed-window budget
- *   exhausted) or `InsufficientTreasury` (treasury can't cover). The client
- *   pre-flights via config to predict the path and routes:
- *     - instant      -> buildRedeemTx (Pyth-priced, pays now)
- *     - queue (T+3)   -> buildRedeemQueuedTx (burns SILV now, NO Pyth)
- *     - OTC           -> InsufficientTreasury -> contact support
- *   Queued requests are later claimed via buildClaimRedemptionTx (Pyth-priced
- *   at claim time, D9).
+ * Redeem (2026-08-05): ONE instant route. `redeem_silv` burns the SILV and pays the USDC in the
+ *   same transaction, or the whole thing reverts. There is no queue, no IOU and no off-chain
+ *   settlement step. The client pre-flights via config to predict the outcome and to say so
+ *   before the user signs, but the program is the source of truth and re-checks everything, so
+ *   `parseRedeemError` must keep handling an on-send revert.
+ *
+ *   The three routes it can predict: "limit" (the rolling window budget is used up, retry when it
+ *   rolls), "otc" (the treasury cannot cover it), "kyc" (the dormant gate is armed on redeem).
+ *
+ *   NOTE: the transaction builders live in lazer-tx.ts, not here. The pre-Lazer `buildMintTx` /
+ *   `buildRedeemTx` that used to sit in this file were deleted: they took two args against a
+ *   five-arg instruction, passed a `priceUpdate` account that no longer exists, and had no fee
+ *   vault. Exported and unused, they were a footgun for anyone grepping for a mint builder.
  */
 import { AnchorProvider, Program, BN, Idl } from "@coral-xyz/anchor";
 import {
@@ -410,349 +414,19 @@ export function errorToText(e: unknown): string {
   return parts.join(" | ");
 }
 
-/**
- * Codex P2-02 race detector. The global `next_redeem_request_nonce` is shared
- * by all users; if another user's `redeem_silv_queued` lands between our
- * config read and our send, our `request_nonce` is stale.
- *
- * IMPORTANT (fund-safety): the ONLY safe retry signal is the contract's own
- * `NonceMismatch`. In `redeem_queued.rs` the `require!(request_nonce ==
- * config.next_redeem_request_nonce, NonceMismatch)` (lines 99-101) runs BEFORE
- * the SILV burn (line 112), and `config` is `&mut` so Solana write-lock-
- * serializes any two queued txs (a same-nonce `init` collision can't precede
- * the nonce check). So a NonceMismatch revert PROVABLY means nothing was
- * burned -> a fresh-nonce retry cannot double-burn. `NonceMismatch` is also
- * this program's own error-variant NAME, so it cannot collide with a generic
- * `0x0` / "already in use" string emitted by a DIFFERENT program or by a tx
- * that actually landed+burned (those broad matches were removed: they could
- * match a landed tx's downstream error and trigger a double-burn retry).
- *
- * The three patterns below are the three faithful encodings of the SAME
- * specific program error (Anchor code 12042 = 0x2f0a = `NonceMismatch`):
- *  - the symbolic NAME (program logs / AnchorError.message / errorCode.code),
- *  - the hex `custom program error: 0x2f0a` (SendTransactionError.message on
- *    the preflight-simulation-failure path, when `.logs` is not attached),
- *  - the numeric `Custom: 12042` (confirmTransaction's structured `value.err`
- *    / our attached `onChainErr`, and Anchor `errorCode.number`).
- * 12042 is in Anchor's user-error range and is THIS program's unique code,
- * so it cannot collide with a generic `0x0` from another program. All three
- * denote the pre-burn nonce-check revert, so a fresh-nonce retry is safe.
- */
-export function isQueuedNonceRaceError(err: unknown): boolean {
-  const t = errorToText(err);
-  return (
-    /\bNonceMismatch\b/.test(t) ||
-    /custom program error:\s*0x2f0a\b/i.test(t) ||
-    /\bCustom"?\s*[:=(]\s*12042\b/.test(t) ||
-    /\bnumber:12042\b/.test(t)
-  );
-}
 
 // ---- transaction builders ----
 
-export interface BuildMintTxArgs {
-  amountUsdc: BN;
-  minSilvOut: BN;
-  priceUpdate: PublicKey;
-}
 
-export async function buildMintTx(
-  connection: Connection,
-  wallet: WalletContextState,
-  args: BuildMintTxArgs,
-): Promise<Transaction> {
-  if (!wallet.publicKey) throw new Error("Wallet not connected");
-  const program = getProgram(connection, wallet);
-  const user = wallet.publicKey;
 
-  const usdcTreasuryAta = getAssociatedTokenAddressSync(
-    USDC_MINT,
-    treasuryPda(),
-    true,
-    TOKEN_PROGRAM_ID,
-  );
-  const userUsdcAta = getAssociatedTokenAddressSync(
-    USDC_MINT,
-    user,
-    false,
-    TOKEN_PROGRAM_ID,
-  );
-  const userSilvAta = getAssociatedTokenAddressSync(
-    SILV_MINT,
-    user,
-    false,
-    TOKEN_2022_PROGRAM_ID,
-  );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ix = await (program.methods as any)
-    .mintSilv(args.amountUsdc, args.minSilvOut)
-    .accounts({
-      config: configPda(),
-      user,
-      usdcMint: USDC_MINT,
-      silvMint: SILV_MINT,
-      usdcTreasury: usdcTreasuryAta,
-      userUsdcAta,
-      userSilvAta,
-      silvMintAuthority: silvMintAuthorityPda(),
-      priceUpdate: args.priceUpdate,
-      classicTokenProgram: TOKEN_PROGRAM_ID,
-      token2022Program: TOKEN_2022_PROGRAM_ID,
-      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-    })
-    .instruction();
 
-  const tx = new Transaction().add(
-    ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
-    createAssociatedTokenAccountIdempotentInstruction(
-      user,
-      userSilvAta,
-      user,
-      SILV_MINT,
-      TOKEN_2022_PROGRAM_ID,
-    ),
-    createAssociatedTokenAccountIdempotentInstruction(
-      user,
-      userUsdcAta,
-      user,
-      USDC_MINT,
-      TOKEN_PROGRAM_ID,
-    ),
-    ix,
-  );
-  const { blockhash, lastValidBlockHeight } =
-    await connection.getLatestBlockhash("confirmed");
-  tx.recentBlockhash = blockhash;
-  tx.lastValidBlockHeight = lastValidBlockHeight;
-  tx.feePayer = user;
-  return tx;
-}
 
-export interface BuildRedeemTxArgs {
-  amountSilv: BN;
-  minUsdcOut: BN;
-  priceUpdate: PublicKey;
-}
 
-/** INSTANT redeem path (§4.3). Reverts MustUseQueue / InsufficientTreasury. */
-export async function buildRedeemTx(
-  connection: Connection,
-  wallet: WalletContextState,
-  args: BuildRedeemTxArgs,
-): Promise<Transaction> {
-  if (!wallet.publicKey) throw new Error("Wallet not connected");
-  const program = getProgram(connection, wallet);
-  const user = wallet.publicKey;
 
-  const usdcTreasuryAta = getAssociatedTokenAddressSync(
-    USDC_MINT,
-    treasuryPda(),
-    true,
-    TOKEN_PROGRAM_ID,
-  );
-  const userUsdcAta = getAssociatedTokenAddressSync(
-    USDC_MINT,
-    user,
-    false,
-    TOKEN_PROGRAM_ID,
-  );
-  const userSilvAta = getAssociatedTokenAddressSync(
-    SILV_MINT,
-    user,
-    false,
-    TOKEN_2022_PROGRAM_ID,
-  );
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ix = await (program.methods as any)
-    .redeemSilv(args.amountSilv, args.minUsdcOut)
-    .accounts({
-      config: configPda(),
-      user,
-      usdcMint: USDC_MINT,
-      silvMint: SILV_MINT,
-      usdcTreasury: usdcTreasuryAta,
-      userUsdcAta,
-      userSilvAta,
-      treasuryPda: treasuryPda(),
-      priceUpdate: args.priceUpdate,
-      classicTokenProgram: TOKEN_PROGRAM_ID,
-      token2022Program: TOKEN_2022_PROGRAM_ID,
-      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-    })
-    .instruction();
 
-  const tx = new Transaction().add(
-    ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
-    createAssociatedTokenAccountIdempotentInstruction(
-      user,
-      userUsdcAta,
-      user,
-      USDC_MINT,
-      TOKEN_PROGRAM_ID,
-    ),
-    ix,
-  );
-  const { blockhash, lastValidBlockHeight } =
-    await connection.getLatestBlockhash("confirmed");
-  tx.recentBlockhash = blockhash;
-  tx.lastValidBlockHeight = lastValidBlockHeight;
-  tx.feePayer = user;
-  return tx;
-}
 
-export interface BuildRedeemQueuedTxArgs {
-  amountSilv: BN;
-  /** read from config.nextRedeemRequestNonce immediately before building */
-  requestNonce: BN;
-}
-
-/** DEAD PATH. Throws unconditionally.
- *
- * `redeem_silv_queued` was removed from the program on 2026-08-05: redemption is now a single
- * instant route. Kept as a throwing stub so the removal is a LOUD, explained failure while the
- * queued UI in MintRedeemCard.tsx is being taken out, rather than a silent
- * "instruction does not exist" at signing time.
- *
- * TODO: delete with the queued-redemption UI. */
-export async function buildRedeemQueuedTx(
-  ..._args: unknown[]
-): Promise<Transaction> {
-  throw new Error(
-    "The queued redemption path was removed on 2026-08-05. Use the instant redeem: it burns " +
-      "SILV and pays USDC in one transaction, or reverts if the treasury or the rolling " +
-      "budget cannot cover it.",
-  );
-}
-
-export interface BuildClaimRedemptionTxArgs {
-  request: RedemptionRequestView;
-  priceUpdate: PublicKey;
-}
-
-/**
- * Claim a matured queued request. Priced at the CLAIM oracle (D9). Reverts
- * InsufficientTreasury if the treasury can't cover (request stays Pending =
- * on-chain IOU, admin settles OTC).
- */
-export async function buildClaimRedemptionTx(
-  connection: Connection,
-  wallet: WalletContextState,
-  args: BuildClaimRedemptionTxArgs,
-): Promise<Transaction> {
-  if (!wallet.publicKey) throw new Error("Wallet not connected");
-  const program = getProgram(connection, wallet);
-  const owner = wallet.publicKey;
-
-  const usdcTreasuryAta = getAssociatedTokenAddressSync(
-    USDC_MINT,
-    treasuryPda(),
-    true,
-    TOKEN_PROGRAM_ID,
-  );
-  const ownerUsdcAta = getAssociatedTokenAddressSync(
-    USDC_MINT,
-    owner,
-    false,
-    TOKEN_PROGRAM_ID,
-  );
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ix = await (program.methods as any)
-    .claimRedemption()
-    .accounts({
-      config: configPda(),
-      owner,
-      redemptionRequest: args.request.pubkey,
-      usdcMint: USDC_MINT,
-      usdcTreasury: usdcTreasuryAta,
-      ownerUsdcAta,
-      treasuryPda: treasuryPda(),
-      priceUpdate: args.priceUpdate,
-      classicTokenProgram: TOKEN_PROGRAM_ID,
-      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-    })
-    .instruction();
-
-  const tx = new Transaction().add(
-    ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
-    createAssociatedTokenAccountIdempotentInstruction(
-      owner,
-      ownerUsdcAta,
-      owner,
-      USDC_MINT,
-      TOKEN_PROGRAM_ID,
-    ),
-    ix,
-  );
-  const { blockhash, lastValidBlockHeight } =
-    await connection.getLatestBlockhash("confirmed");
-  tx.recentBlockhash = blockhash;
-  tx.lastValidBlockHeight = lastValidBlockHeight;
-  tx.feePayer = owner;
-  return tx;
-}
-
-/**
- * P2-03: the OWNER closes a request the admin already settled OTC
- * (status == SettledOffchain) and reclaims the PDA rent. No funds move, no
- * oracle, no config. Only valid in the terminal SettledOffchain state.
- */
-export async function buildCloseSettledRedemptionTx(
-  connection: Connection,
-  wallet: WalletContextState,
-  request: RedemptionRequestView,
-): Promise<Transaction> {
-  if (!wallet.publicKey) throw new Error("Wallet not connected");
-  const program = getProgram(connection, wallet);
-  const owner = wallet.publicKey;
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ix = await (program.methods as any)
-    .closeSettledRedemption()
-    .accounts({
-      owner,
-      redemptionRequest: request.pubkey,
-    })
-    .instruction();
-
-  const tx = new Transaction().add(
-    ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
-    ix,
-  );
-  const { blockhash, lastValidBlockHeight } =
-    await connection.getLatestBlockhash("confirmed");
-  tx.recentBlockhash = blockhash;
-  tx.lastValidBlockHeight = lastValidBlockHeight;
-  tx.feePayer = owner;
-  return tx;
-}
-
-function statusKind(s: unknown): RedemptionStatusKind {
-  const k = Object.keys(s as object)[0];
-  if (k === "claimed") return "claimed";
-  if (k === "settledOffchain") return "settledOffchain";
-  return "pending";
-}
-
-/** ALWAYS EMPTY since 2026-08-05. The `RedemptionRequest` account type no longer exists in the
- * program or the IDL, so the previous `program.account.redemptionRequest.all(...)` call would
- * throw at runtime.
- *
- * Returning `[]` keeps every SWR call site working and makes the queue UI render empty, which is
- * the truth: there is no queue. Redemption is one instant transaction.
- *
- * TODO: delete with the queued-redemption UI in MintRedeemCard.tsx. */
-export async function fetchRedemptionRequests(
-  _connection: Connection,
-  _owner: PublicKey,
-): Promise<RedemptionRequestView[]> {
-  return [];
-}
 
 // ---- parsing ----
 

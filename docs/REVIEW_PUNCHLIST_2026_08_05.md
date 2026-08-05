@@ -128,7 +128,7 @@ gets `Simulation reverted: {"InstructionError":[5,{"Custom":12103}]}` plus raw p
 program's own message is actionable and none of it reaches the user. Also remove the dead
 `MustUseQueue` (12061) mapping and the copy it feeds.
 
-### [ ] B6. Two removed instructions are still called by shipped code
+### [x] B6. Two removed instructions are still called by shipped code
 `buildClaimRedemptionTx` calls `.claimRedemption()` and `buildCloseSettledRedemptionTx` calls
 `.closeSettledRedemption()`. Both are `undefined` on `program.methods` under the current IDL, so
 the failure is a bare `TypeError`, not the explained error the other stubs give. The latter is
@@ -147,7 +147,7 @@ So if the gate is armed on redeem, the UI reports "instant" while every transact
 a raw `Custom:12104`. The public config interface also still declares the three dead fields as
 live.
 
-### [ ] B9. Two apps derive the same three new PDAs from two different sources of truth
+### [x] B9. Two apps derive the same three new PDAs from two different sources of truth
 `apps/public` hardcodes the seed strings inline and its `SEEDS` still carries the dead
 `redeemRequest`; `apps/admin` reads them from `SEEDS`. No gate compares them.
 
@@ -162,25 +162,25 @@ path. Assert: key count, name-to-index mapping, `fee_exempt === programId` when 
 
 ## C. Admin app
 
-### [ ] C1. `fetchFeeVaultBalance` has zero call sites
+### [x] C1. `fetchFeeVaultBalance` has zero call sites
 Added specifically to surface the null-vault deploy blocker, and the panel never computes it.
 No balance metric, no "vault missing" banner, no way for an operator to check the precondition
 before executing the redemptions open. The only trace is prose in a tooltip.
 
-### [ ] C2. Dead config fields displayed as live metrics with false tips
+### [x] C2. Dead config fields displayed as live metrics with false tips
 `Dashboard.tsx:293-297,325-329` — "Any single redemption worth this much or more is
 automatically sent to the delayed queue" and "How long a queued redemption must wait". Both
 false, and they sit immediately above the panel that correctly says the queue was deleted. Two
 contradictory answers on one screen, and the wrong one renders as live state.
 
-### [ ] C3. The panel still offers threshold and queue-delay inputs
+### [x] C3. The panel still offers threshold and queue-delay inputs
 Both write to config and change nothing on chain, BUT `largeRedeemThresholdUsdc` is exactly what
 the public app's `classifyRedeem` reads, so an operator "tightening the threshold to $500" moves
 the B1 cliff to $500 with no indication the effect is entirely client-side. Also `:137-145`
 still offers "Set redemptions on/off" as a bool whose `true` reverts `RedemptionsEnableBlocked`
 (unmapped), while the real open lives in a separate card.
 
-### [ ] C4. Dead code left behind
+### [x] C4. Dead code left behind
 `fetchAllRedemptionRequests_DELETED` (still containing the `redemptionRequest.all()` call),
 `statusKind`, `RedemptionStatusKind`, `RedemptionRequestView`, `StatusPill`, and in the public
 app `statusKind` and `isQueuedNonceRaceError`. Plus the pre-Lazer legacy `buildMintTx` /

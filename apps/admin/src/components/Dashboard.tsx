@@ -6,7 +6,6 @@ import { useConnection } from "@solana/wallet-adapter-react";
 import { BN } from "@coral-xyz/anchor";
 import {
   fetchDashboardSnapshot,
-  fetchAllRedemptionRequests,
   fetchGuardians,
   formatUsdc,
   formatSilv,
@@ -15,10 +14,9 @@ import {
   secondsUntil,
   type DashboardSnapshot,
   type GuardianView,
-  type RedemptionRequestView,
-  type RedemptionQueueResult,
-  type RedemptionStatusKind,
 } from "../lib/anchor-client";
+import { fetchFeeVaultBalance } from "../lib/admin-actions";
+import { REFRESH_INTERVAL_MS } from "../lib/constants";
 import { AdminActions } from "./AdminActions";
 
 
@@ -58,18 +56,6 @@ export function Dashboard() {
   // keepPreviousData, SWR then keeps the last successful `redemptions`
   // array AND sets `redemptionsError`, so the operator keeps seeing the
   // real burned-SILV IOUs with a degraded banner instead of an empty queue.
-  const { data: redemptions, error: redemptionsError } = useSWR<
-    RedemptionRequestView[]
-  >(
-    data ? "dominion-redemptions" : null,
-    () => fetchAllRedemptionRequests(connection),
-    {
-      refreshInterval: 30_000,
-      revalidateOnFocus: false,
-      keepPreviousData: true,
-      dedupingInterval: 15_000,
-    },
-  );
   // AUDIT review of daac4ac (P1): `pending_removal_at` was written on-chain and
   // read by neither app. DOM-007's security property is that the TARGETED guardian
   // has a full timelock window to react, which requires the console to show that a
@@ -86,16 +72,6 @@ export function Dashboard() {
     },
   );
 
-  const queue: RedemptionQueueResult = {
-    requests: redemptions ?? [],
-    // degraded iff the latest fetch errored. requests may be last-good/stale.
-    degraded: !!redemptionsError,
-    error: redemptionsError
-      ? redemptionsError instanceof Error
-        ? redemptionsError.message
-        : String(redemptionsError)
-      : undefined,
-  };
 
   if (error && !data) {
     return (
@@ -133,7 +109,7 @@ export function Dashboard() {
 
       {tab === "overview" && <OverviewTab data={data} />}
       {tab === "redemptions" && (
-        <RedemptionsTab data={data} queue={queue} />
+        <RedemptionsTab data={data} />
       )}
       {tab === "governance" && (
         <GovernanceTab
@@ -272,14 +248,86 @@ function OverviewTab({ data }: { data: DashboardSnapshot }) {
   );
 }
 
+/* ---------------- Premium fee vault ---------------- */
+
+/**
+ * The fee vault, and specifically whether it EXISTS.
+ *
+ * This panel is here because `fetchFeeVaultBalance` was written to surface a deploy blocker and
+ * then never called from anywhere, so the blocker stayed invisible: `mint_silv` and `redeem_silv`
+ * both take the vault as a REQUIRED account, and if it does not exist every mint and every redeem
+ * reverts with a constraint error that reads like a client bug. An operator had no way to check
+ * the precondition before opening the mint.
+ *
+ * Hence the deliberate three-state render. `null` is NOT "zero": it means the account is absent
+ * and the protocol is one open away from being unusable, so it gets a danger banner and the fix
+ * command, not a dash.
+ */
+function FeeVault() {
+  const { connection } = useConnection();
+  const { data, error, isLoading } = useSWR(
+    "fee-vault-balance",
+    () => fetchFeeVaultBalance(connection),
+    { refreshInterval: REFRESH_INTERVAL_MS, keepPreviousData: true },
+  );
+
+  const missing = data === null && !isLoading && !error;
+
+  return (
+    <div className="rounded-xl border border-border bg-card p-6">
+      <h3 className="mb-2 flex items-center text-sm uppercase tracking-wide text-muted">
+        Premium fee vault
+        <Tip text="Where the mint and redeem premiums accrue. It is a program-owned account (the USDC ATA of the fee_vault PDA), so it can never be closed and no admin typo can redirect it. Sweep it with the 'Withdraw accrued fees' action; the destination is chosen per sweep." />
+      </h3>
+
+      {missing ? (
+        <div className="rounded-md border border-danger bg-danger/10 p-4 text-sm text-danger">
+          <div className="font-semibold">
+            THE FEE VAULT DOES NOT EXIST. Do not open public mint or redemption.
+          </div>
+          <div className="mt-2">
+            Both mint_silv and redeem_silv require this account. Until it is
+            created, every mint and every redeem will revert
+            (AccountNotInitialized), which looks like a broken product rather
+            than a missing setup step.
+          </div>
+          <div className="mt-2 font-mono text-xs">
+            npx tsx scripts/create-fee-vault.ts
+          </div>
+          <div className="mt-2">
+            It only has to be created once per cluster. A PDA-owned token
+            account cannot be closed, so this can never regress afterwards.
+          </div>
+        </div>
+      ) : error ? (
+        <div className="rounded-md border border-warning bg-warning/10 p-4 text-sm text-warning">
+          Could not read the fee vault (RPC error, retrying). This is NOT
+          &quot;the vault is missing&quot;: the two states are different and
+          only the missing one blocks a launch.
+        </div>
+      ) : (
+        <>
+          <div className="text-2xl">
+            ${data != null ? formatUsdc(new BN(data.toString())) : "..."}
+          </div>
+          <p className="mt-2 text-xs text-muted">
+            Accrued premium, withdrawable instantly by the admin. It backs
+            nothing: user redemptions draw on the treasury, not on this. Sweep
+            on a regular cadence so the standing balance stays small, since
+            this is the one instant money movement in the program.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
 /* ---------------- Redemptions ---------------- */
 
 function RedemptionsTab({
   data,
-  queue,
 }: {
   data: DashboardSnapshot;
-  queue: RedemptionQueueResult;
 }) {
   const {
     cfg,
@@ -290,20 +338,20 @@ function RedemptionsTab({
   return (
     <div className="space-y-6">
       <Section title="Redemption routing">
-        <Metric
-          title="Large-redeem threshold"
-          value={`$${formatUsdc(cfg.largeRedeemThresholdUsdc)}`}
-          tip="Any single redemption worth this much or more is automatically sent to the delayed queue instead of paid instantly."
-        />
+        {/* "Large-redeem threshold" and "Queue delay" REMOVED 2026-08-05. Both fields still
+            decode and still hold their old defaults, but no on-chain instruction reads them, and
+            their tips described a queue that no longer exists. They sat immediately above the
+            panel that says the queue was deleted, so the operator got two contradictory answers
+            on one screen and the wrong one rendered as a live metric. */}
         <Metric
           title="Instant budget per window"
           value={`$${formatUsdc(cfg.instantRedeemBudgetUsdc)}`}
-          tip="Maximum total value of instant redemptions allowed within each fixed reset window, across all users combined."
+          tip="Maximum total treasury OUTFLOW per window, across all users combined. Debited by the GROSS value leaving the treasury (the payout plus the premium leg), not by what the user receives. Exceeding it reverts: there is no queue to fall back to."
         />
         <Metric
           title="Window length"
           value={`${(cfg.instantRedeemWindowSeconds / 3600).toFixed(1)}h`}
-          tip="Length of the fixed window after which the instant budget fully resets (not a continuous sliding limiter)."
+          tip="Length of the window after which the redemption budget fully resets. This is a FIXED window, not a sliding one, so the true worst case across a boundary is TWICE the budget: drain it just before the reset, then again just after."
         />
         <Metric
           title="Instant used this window"
@@ -321,14 +369,11 @@ function RedemptionsTab({
           value={`$${formatUsdc(instantBudgetRemainingUsdc)}`}
           tip="Instant redemption value still available in the current window."
         />
-        <Metric
-          title="Queue delay"
-          value={`${(cfg.redeemQueueDelaySeconds / SECS_PER_DAY).toFixed(1)} days`}
-          tip="How long a queued redemption must wait before the user can claim their USDC."
-        />
       </Section>
 
-      <RedemptionQueue queue={queue} />
+      <FeeVault />
+
+      <RedemptionQueue />
     </div>
   );
 }
@@ -341,8 +386,7 @@ function RedemptionsTab({
 // would otherwise find the tab silently missing a section and wonder whether it failed to
 // load. It also states what replaced the queue, because "the queue is gone" on its own invites
 // the wrong mental model: the limits did not disappear, they changed shape.
-function RedemptionQueue({ queue }: { queue: RedemptionQueueResult }) {
-  void queue; // no longer read: there is no queue to fetch.
+function RedemptionQueue() {
   return (
     <div className="rounded-xl border border-border bg-card p-6">
       <h3 className="mb-2 flex items-center text-sm uppercase tracking-wide text-muted">
@@ -362,23 +406,6 @@ function RedemptionQueue({ queue }: { queue: RedemptionQueueResult }) {
   );
 }
 
-function StatusPill({
-  status,
-  overdue,
-}: {
-  status: RedemptionStatusKind;
-  overdue: boolean;
-}) {
-  if (status === "claimed")
-    return <span className="text-xs text-muted">claimed</span>;
-  if (status === "settledOffchain")
-    return <span className="text-xs text-accent">settled off-chain</span>;
-  return (
-    <span className={`text-xs ${overdue ? "text-danger" : "text-white"}`}>
-      {overdue ? "waiting (overdue)" : "waiting"}
-    </span>
-  );
-}
 
 /* ---------------- Governance ---------------- */
 
