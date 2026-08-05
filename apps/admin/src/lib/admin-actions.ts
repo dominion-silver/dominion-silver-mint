@@ -31,8 +31,10 @@ import {
 } from "./constants";
 import {
   configPda,
+  feeExemptPda,
+  feeVaultPda,
   guardianPda,
-  redemptionRequestPda,
+  kycPda,
   silvMetadataAuthorityPda,
   silvMintAuthorityPda,
   timelockPda,
@@ -169,8 +171,19 @@ export const setInventoryWallet = (c: BuildCtx, wallet: PublicKey): Ix =>
 export interface RedeemLimitsInput {
   instantRedeemBudgetUsdc?: bigint;
   instantRedeemWindowSeconds?: number;
+  /** DEAD on chain since 2026-08-05 (the per-size tier went with the queue). Still encoded
+   *  because removing it would change the borsh layout of the timelocked action data. */
   largeRedeemThresholdUsdc?: bigint;
+  /** DEAD on chain since 2026-08-05 (there is no queue). Same reason. */
   redeemQueueDelaySeconds?: number;
+  /** THE REDEEM SWITCH (2026-08-05). `true` is a LOOSENING, so it is only reachable through
+   *  proposeSetRedeemLimits + the 24h wait + executeSetRedeemLimits;
+   *  emergencyTightenRedeemLimits rejects it with LooseningRequiresTimelock. `false` is a
+   *  tightening and works on either path.
+   *
+   *  This is the ONLY way to open redemptions: setRedemptionsEnabled still refuses `true`
+   *  in the deployed bytecode. */
+  redemptionsEnabled?: boolean;
 }
 export function redeemLimitsArgsObject(a: RedeemLimitsInput) {
   return {
@@ -184,6 +197,10 @@ export function redeemLimitsArgsObject(a: RedeemLimitsInput) {
         ? new BN(a.largeRedeemThresholdUsdc.toString())
         : null,
     redeemQueueDelaySeconds: a.redeemQueueDelaySeconds ?? null,
+    // `?? null` and NOT `|| null`: `false` is a meaningful value here and `||` would
+    // silently convert it to null, dropping the field with no error. Same camelCase trap the
+    // comment above describes, one step further along.
+    redemptionsEnabled: a.redemptionsEnabled ?? null,
   };
 }
 // Instant TIGHTEN-only. Accounts: { config(auto), admin }.
@@ -192,6 +209,175 @@ export const emergencyTightenRedeemLimits = (
   a: RedeemLimitsInput,
 ): Ix =>
   instant(c, "emergencyTightenRedeemLimits", redeemLimitsArgsObject(a));
+
+// ---------------------------------------------------------------------------
+// Premium fee vault + fee-exemption whitelist (Thomas, 2026-08-05).
+// ---------------------------------------------------------------------------
+
+/** The premium fee vault: the USDC ATA of the fee_vault PDA.
+ *
+ *  allowOwnerOffCurve = true is MANDATORY (the owner is a PDA); omitting it throws
+ *  TokenOwnerOffCurveError, which has already cost this project a debugging session on the
+ *  treasury ATA. */
+export function feeVaultUsdcAta(): PublicKey {
+  return getAssociatedTokenAddressSync(
+    USDC_MINT,
+    feeVaultPda(),
+    true,
+    TOKEN_PROGRAM_ID,
+  );
+}
+
+/** Accrued premium in USDC atomic units, or NULL when the vault account does not exist.
+ *
+ *  The null case is not cosmetic and the UI must surface it loudly: mint_silv and redeem_silv
+ *  both REQUIRE this account, so a missing vault makes every mint and every redeem revert. It
+ *  has to be created once (createAssociatedTokenAccountIdempotent, allowOwnerOffCurve) before
+ *  public mint or redeem is opened. Once created it can never be closed. */
+export async function fetchFeeVaultBalance(
+  connection: Connection,
+): Promise<bigint | null> {
+  const r = await connection
+    .getTokenAccountBalance(feeVaultUsdcAta())
+    .catch(() => null);
+  return r ? BigInt(r.value.amount) : null;
+}
+
+/** Grant or update a fee exemption. `flags`: 1 = mint, 2 = redeem, 3 = both.
+ *
+ *  Instant, admin-only. Prefer 1 (mint only) unless there is a specific reason to waive both:
+ *  a both-sides exemption makes a round trip free, which hands that wallet a free option on
+ *  oracle movement, paid by the treasury. See state/fee_exempt.rs. */
+export async function setFeeExempt(
+  c: BuildCtx,
+  wallet: PublicKey,
+  flags: number,
+): Ix {
+  const ix = await (getProgram(c.connection).methods as any)
+    .setFeeExempt(wallet, flags)
+    .accountsPartial({
+      admin: c.admin ?? adminAuthority(),
+      feeExempt: feeExemptPda(wallet),
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction();
+  return one(ix);
+}
+
+/** Revoke an exemption entirely and reclaim its rent. Instant. There is no "set flags to 0":
+ *  the contract rejects zero flags, because an existing-but-empty account would still read as
+ *  whitelisted in any roster listing. */
+export async function removeFeeExempt(c: BuildCtx, wallet: PublicKey): Ix {
+  const ix = await (getProgram(c.connection).methods as any)
+    .removeFeeExempt(wallet)
+    .accountsPartial({
+      admin: c.admin ?? adminAuthority(),
+      feeExempt: feeExemptPda(wallet),
+    })
+    .instruction();
+  return one(ix);
+}
+
+/** Sweep accrued premium to `destinationOwner`'s USDC ATA. Instant, admin-only.
+ *
+ *  Instant on purpose: the vault backs nothing (it holds earned revenue, not the collateral
+ *  users redeem against) and the admin is already a Squads multisig, so a 24h delay would
+ *  protect Dominion from itself rather than protecting users. `withdraw_usdc`, which touches
+ *  the TREASURY, remains 24h-timelocked for exactly the opposite reason.
+ *
+ *  The destination ATA must already exist. Passing an owner whose ATA is missing fails the
+ *  transaction, which is harmless: unlike a stored fee destination, a bad address here cannot
+ *  affect mint or redeem. */
+export async function withdrawFees(
+  c: BuildCtx,
+  destinationOwner: PublicKey,
+  amount: bigint,
+): Ix {
+  const ix = await (getProgram(c.connection).methods as any)
+    .withdrawFees(new BN(amount.toString()))
+    .accountsPartial({
+      admin: c.admin ?? adminAuthority(),
+      usdcMint: USDC_MINT,
+      feeVaultPda: feeVaultPda(),
+      feeVault: feeVaultUsdcAta(),
+      destination: getAssociatedTokenAddressSync(
+        USDC_MINT,
+        destinationOwner,
+        true,
+        TOKEN_PROGRAM_ID,
+      ),
+      classicTokenProgram: TOKEN_PROGRAM_ID,
+    })
+    .instruction();
+  return one(ix);
+}
+
+// ---------------------------------------------------------------------------
+// KYC gate (2026-08-05). DORMANT until set_kyc_scope is armed.
+// ---------------------------------------------------------------------------
+
+/** Set or rotate the attestor key. Instant, admin-only.
+ *
+ *  Instant because the realistic failure is that this key LEAKS (it lives on a server and
+ *  signs every approval), and a timelock on rotation would mean 24h with a compromised
+ *  attestor live. Pass PublicKey.default to decommission it. */
+export const setKycOperator = (c: BuildCtx, operator: PublicKey): Ix =>
+  instant(c, "setKycOperator", operator);
+
+/** Arm or disarm the gate. `flags`: 0 = off, 1 = mint, 2 = redeem, 3 = both.
+ *
+ *  ORDER MATTERS AND THE CONTRACT CANNOT ENFORCE IT: write the attestations FIRST. Arming
+ *  before any attestation exists locks out every holder instantly. The contract only refuses
+ *  the extreme case where no attestor is configured at all.
+ *
+ *  Instant in both directions. Arming grants no griefing power the admin lacks (it can already
+ *  halt redemptions with pause), and disarming must be fast because it is the only way to
+ *  unbrick a wrongly-armed gate. */
+export const setKycScope = (c: BuildCtx, flags: number): Ix =>
+  instant(c, "setKycScope", flags);
+
+/** Record an approval. Signed by the ATTESTOR, not the admin, so this is only buildable from
+ *  the panel when the connected wallet holds the operator key. Normally Mark's backend calls it.
+ *
+ *  `reference` is a 32-byte HASH of the provider's record id. NEVER PII, not even hashed PII:
+ *  an email hash is brute-forceable and Solana cannot honour a GDPR erasure request. All-zero
+ *  is valid and means "no reference". */
+export async function attestKyc(
+  c: BuildCtx,
+  attestor: PublicKey,
+  wallet: PublicKey,
+  reference: Uint8Array,
+): Ix {
+  if (reference.length !== 32) {
+    throw new Error(
+      `attestKyc: reference must be exactly 32 bytes, got ${reference.length}`,
+    );
+  }
+  const ix = await (getProgram(c.connection).methods as any)
+    .attestKyc(wallet, Array.from(reference))
+    .accountsPartial({
+      attestor,
+      kyc: kycPda(wallet),
+      systemProgram: SystemProgram.programId,
+    })
+    .instruction();
+  return one(ix);
+}
+
+/** Withdraw an approval. Signable by EITHER the attestor or the admin: the attestor is the
+ *  normal path (offboarding), the admin is the incident path, so a compromised attestor's
+ *  writes can be undone without waiting to rotate it first. */
+export async function revokeKyc(
+  c: BuildCtx,
+  signer: PublicKey,
+  wallet: PublicKey,
+): Ix {
+  const ix = await (getProgram(c.connection).methods as any)
+    .revokeKyc(wallet)
+    .accountsPartial({ signer, kyc: kycPda(wallet) })
+    .instruction();
+  return one(ix);
+}
 
 // ---------------------------------------------------------------------------
 // admin_premint: admin-only mint of SILV directly into the inventory owner's
@@ -325,24 +511,14 @@ export async function unpause(c: BuildCtx): Ix {
     .instruction();
   return one(ix);
 }
-// Mark a Pending queued redemption as settled off-chain (OTC). The user's SILV
-// is already burned; this confirms they were paid off-chain so the request can
-// no longer be claimed on-chain (Fable audit P2-F: closes the double-pay risk).
-// owner + nonce identify the request PDA. Admin-signed (the Ops vault).
-export async function settleRedemptionOffchain(
-  c: BuildCtx,
-  owner: PublicKey,
-  nonce: bigint,
-): Ix {
-  const ix = await (getProgram(c.connection).methods as any)
-    .adminSettleRedemptionOffchain()
-    .accountsPartial({
-      admin: c.admin ?? adminAuthority(),
-      redemptionRequest: redemptionRequestPda(owner, nonce),
-    })
-    .instruction();
-  return one(ix);
-}
+// `settleRedemptionOffchain` REMOVED 2026-08-05. The instruction it called
+// (`admin_settle_redemption_offchain`) no longer exists on chain: the whole queued path was
+// deleted when redemption became a single instant route.
+//
+// It was also SolidProof TrustNet MEDIUM #4 -- the admin marking a request settled with no
+// on-chain proof while the user's SILV was already burned -- so removing the queue removed the
+// finding rather than justifying it. Nothing to migrate: redemptions were never enabled on any
+// cluster, so no request account exists anywhere and this builder was never successfully used.
 export async function cancelTimelockedAction(
   c: BuildCtx,
   nonce: bigint,

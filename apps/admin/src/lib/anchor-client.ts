@@ -277,7 +277,24 @@ export interface RedemptionQueueResult {
   error?: string;
 }
 
+/**
+ * ALWAYS EMPTY since 2026-08-05. Redemption became a single instant route, so the
+ * `RedemptionRequest` account type no longer exists in the program or the IDL.
+ *
+ * Kept as a function returning `[]` rather than deleted, because Dashboard's SWR wiring and
+ * the `RedemptionQueueResult` shape flow through several call sites and gutting the read is the
+ * change with no blast radius. It performs NO RPC call: keeping the old
+ * `program.account.redemptionRequest.all()` would throw at runtime now that the type is gone
+ * from the IDL, which is exactly the kind of stale-client failure the constants gate exists to
+ * catch elsewhere.
+ */
 export async function fetchAllRedemptionRequests(
+  _connection: Connection,
+): Promise<RedemptionRequestView[]> {
+  return [];
+}
+
+async function fetchAllRedemptionRequests_DELETED(
   connection: Connection,
 ): Promise<RedemptionRequestView[]> {
   const program = getReadOnlyProgram(connection);

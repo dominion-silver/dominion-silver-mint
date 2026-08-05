@@ -28,8 +28,9 @@ export const DEVNET_RPC = "https://api.devnet.solana.com";
 export const HELIUS_RPC = process.env.NEXT_PUBLIC_HELIUS_RPC || DEVNET_RPC;
 export const TRITON_RPC = process.env.NEXT_PUBLIC_TRITON_RPC || DEVNET_RPC;
 
-// PDA seeds.
-// V2 (Option B): daily/hourly seeds removed; redeem_request added.
+// PDA seeds. Must match programs/dominion_silver_mint_v2/src/state/config.rs.
+// V2 (Option B): daily/hourly seeds removed.
+// 2026-08-05: redeem_request removed with the queued path; fee_vault, fee_exempt and kyc added.
 export const SEEDS = {
   config: "config",
   treasury: "treasury",
@@ -37,8 +38,19 @@ export const SEEDS = {
   silvMetadataAuthority: "silv_metadata_authority",
   timelock: "timelock",
   guardian: "guardian",
-  redeemRequest: "redeem_request",
+  /** Authority of the premium fee vault. The vault itself is this PDA's USDC ATA. */
+  feeVault: "fee_vault",
+  /** Per-wallet fee exemption. Seeds = [b"fee_exempt", wallet]. */
+  feeExempt: "fee_exempt",
+  /** Per-wallet KYC attestation. Seeds = [b"kyc", wallet]. */
+  kyc: "kyc",
 } as const;
+
+/** Fee-exemption and KYC scope bits. Mirrors state/side.rs; both bitfields share the
+ *  layout deliberately, so one set of constants serves both. */
+export const SIDE_MINT_BIT = 1;
+export const SIDE_REDEEM_BIT = 2;
+export const SIDE_BOTH_BITS = 3;
 
 // UI defaults.
 export const DEFAULT_SLIPPAGE_BPS = 50; // 0.5%

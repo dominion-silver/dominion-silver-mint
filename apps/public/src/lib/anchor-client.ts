@@ -35,7 +35,6 @@ import {
   configPda,
   treasuryPda,
   silvMintAuthorityPda,
-  redemptionRequestPda,
 } from "./pdas";
 
 // ---- types (mirror programs/dominion_silver_mint_v2/src/state/config.rs) ----
@@ -549,54 +548,22 @@ export interface BuildRedeemQueuedTxArgs {
   requestNonce: BN;
 }
 
-/**
- * QUEUED redeem: burns SILV NOW, creates a RedemptionRequest PDA. No Pyth
- * (priced at claim, D9). No USDC moves now. Single wallet popup.
- */
+/** DEAD PATH. Throws unconditionally.
+ *
+ * `redeem_silv_queued` was removed from the program on 2026-08-05: redemption is now a single
+ * instant route. Kept as a throwing stub so the removal is a LOUD, explained failure while the
+ * queued UI in MintRedeemCard.tsx is being taken out, rather than a silent
+ * "instruction does not exist" at signing time.
+ *
+ * TODO: delete with the queued-redemption UI. */
 export async function buildRedeemQueuedTx(
-  connection: Connection,
-  wallet: WalletContextState,
-  args: BuildRedeemQueuedTxArgs,
+  ..._args: unknown[]
 ): Promise<Transaction> {
-  if (!wallet.publicKey) throw new Error("Wallet not connected");
-  const program = getProgram(connection, wallet);
-  const user = wallet.publicKey;
-
-  const userSilvAta = getAssociatedTokenAddressSync(
-    SILV_MINT,
-    user,
-    false,
-    TOKEN_2022_PROGRAM_ID,
+  throw new Error(
+    "The queued redemption path was removed on 2026-08-05. Use the instant redeem: it burns " +
+      "SILV and pays USDC in one transaction, or reverts if the treasury or the rolling " +
+      "budget cannot cover it.",
   );
-  const reqPda = redemptionRequestPda(
-    user,
-    BigInt(args.requestNonce.toString()),
-  );
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ix = await (program.methods as any)
-    .redeemSilvQueued(args.amountSilv, args.requestNonce)
-    .accounts({
-      config: configPda(),
-      user,
-      silvMint: SILV_MINT,
-      userSilvAta,
-      redemptionRequest: reqPda,
-      token2022Program: TOKEN_2022_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-    })
-    .instruction();
-
-  const tx = new Transaction().add(
-    ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT }),
-    ix,
-  );
-  const { blockhash, lastValidBlockHeight } =
-    await connection.getLatestBlockhash("confirmed");
-  tx.recentBlockhash = blockhash;
-  tx.lastValidBlockHeight = lastValidBlockHeight;
-  tx.feePayer = user;
-  return tx;
 }
 
 export interface BuildClaimRedemptionTxArgs {
@@ -710,31 +677,19 @@ function statusKind(s: unknown): RedemptionStatusKind {
   return "pending";
 }
 
-/** All of `owner`'s redemption requests (owner is the 1st field after the 8B disc). */
+/** ALWAYS EMPTY since 2026-08-05. The `RedemptionRequest` account type no longer exists in the
+ * program or the IDL, so the previous `program.account.redemptionRequest.all(...)` call would
+ * throw at runtime.
+ *
+ * Returning `[]` keeps every SWR call site working and makes the queue UI render empty, which is
+ * the truth: there is no queue. Redemption is one instant transaction.
+ *
+ * TODO: delete with the queued-redemption UI in MintRedeemCard.tsx. */
 export async function fetchRedemptionRequests(
-  connection: Connection,
-  owner: PublicKey,
+  _connection: Connection,
+  _owner: PublicKey,
 ): Promise<RedemptionRequestView[]> {
-  const program = getReadOnlyProgram(connection);
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const all = await (program.account as any).redemptionRequest.all([
-      { memcmp: { offset: 8, bytes: owner.toBase58() } },
-    ]);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return all.map((a: any) => ({
-      pubkey: a.publicKey as PublicKey,
-      owner: a.account.owner as PublicKey,
-      amountSilv: a.account.amountSilv as BN,
-      requestedAt: (a.account.requestedAt as BN).toNumber(),
-      claimableAt: (a.account.claimableAt as BN).toNumber(),
-      nonce: a.account.nonce as BN,
-      status: statusKind(a.account.status),
-    }));
-  } catch (e) {
-    console.error("fetchRedemptionRequests error", e);
-    return [];
-  }
+  return [];
 }
 
 // ---- parsing ----

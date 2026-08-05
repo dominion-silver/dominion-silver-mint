@@ -333,122 +333,31 @@ function RedemptionsTab({
   );
 }
 
+// The QUEUED redemption path was DELETED on 2026-08-05: redemption is now a single instant
+// route, so the program has no RedemptionRequest account type left and there is nothing to
+// list here.
+//
+// This panel is KEPT rather than deleted, on purpose. An operator who remembers the queue
+// would otherwise find the tab silently missing a section and wonder whether it failed to
+// load. It also states what replaced the queue, because "the queue is gone" on its own invites
+// the wrong mental model: the limits did not disappear, they changed shape.
 function RedemptionQueue({ queue }: { queue: RedemptionQueueResult }) {
-  const { requests, degraded } = queue;
-  const nowSecs = Math.floor(Date.now() / 1000);
-  const pending = requests.filter((r) => r.status === "pending");
-  const overdueCount = pending.filter((r) => nowSecs >= r.claimableAt).length;
-
+  void queue; // no longer read: there is no queue to fetch.
   return (
     <div className="rounded-xl border border-border bg-card p-6">
-      <div className="mb-1 flex items-baseline justify-between">
-        <h3 className="flex items-center text-sm uppercase tracking-wide text-muted">
-          Redemption queue{" "}
-          {degraded
-            ? requests.length > 0
-              ? `(${pending.length} pending - STALE)`
-              : "(unavailable)"
-            : `(${pending.length} pending)`}
-          <Tip text="Redemptions waiting out the queue delay. The user's SILV is already burned; their USDC amount is set at claim time. If the treasury cannot cover a claim, the request stays open and is settled off-chain by the admin." />
-        </h3>
-        {overdueCount > 0 && (
-          <span className="text-xs text-danger">
-            {overdueCount} past claimable time{degraded ? " (stale)" : ""}
-          </span>
-        )}
-      </div>
-      <p className="mb-4 text-xs text-muted">
-        Requests past their claimable time that the treasury cannot cover are
-        paid off-chain, then marked settled here so they cannot be claimed
-        again.
+      <h3 className="mb-2 flex items-center text-sm uppercase tracking-wide text-muted">
+        Redemption queue (removed)
+        <Tip text="The T+3 queue, the per-size tier and the admin off-chain settlement path were all deleted on 2026-08-05. That also removed SolidProof MEDIUM #4, where the admin could mark a request settled with no on-chain proof while the user's SILV was already burned." />
+      </h3>
+      <p className="mb-3 text-xs text-muted">
+        Redemption is a single instant route: burn SILV, receive USDC, in one
+        transaction. There are no pending requests to track, no burned SILV
+        sitting on an IOU, and no off-chain settlement step.
       </p>
-      {/* P2-01 (review-of-fixes): on RPC failure SWR keepPreviousData
-          retains the last good queue. Show a degraded banner AND keep
-          rendering the last-known table so real burned-SILV IOUs are never
-          hidden - only show "no data yet" when there is genuinely none. */}
-      {degraded && (
-        <div className="mb-4 rounded-md border border-warning bg-warning/10 p-4 text-sm text-warning">
-          {requests.length > 0
-            ? "Live queue read failed / RPC rate-limiting (retrying). Showing the LAST KNOWN state below - it may be STALE. Do not treat it as current truth until this clears."
-            : 'Queue read failed / RPC rate-limiting (retrying) and no snapshot has loaded yet. This is NOT "no redemptions": there may be pending/overdue IOUs not shown.'}
-          {queue.error ? (
-            <div className="mt-1 font-mono text-xs text-muted">
-              {queue.error}
-            </div>
-          ) : null}
-        </div>
-      )}
-      {requests.length === 0 ? (
-        degraded ? null : (
-          <p className="text-sm text-muted">No redemption requests.</p>
-        )
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="text-xs uppercase tracking-wide text-muted">
-              <tr>
-                <th className="py-2 pr-4">User</th>
-                <th className="py-2 pr-4">SILV</th>
-                <th className="py-2 pr-4">Requested</th>
-                <th className="py-2 pr-4">Claimable in</th>
-                <th className="py-2 pr-4">Status</th>
-                <th className="py-2 pr-4">Action</th>
-              </tr>
-            </thead>
-            <tbody className="font-mono">
-              {requests.map((r) => {
-                const overdue =
-                  r.status === "pending" && nowSecs >= r.claimableAt;
-                const claimEta = r.claimableAt - nowSecs;
-                return (
-                  <tr
-                    key={r.pubkey.toBase58()}
-                    className="border-t border-border"
-                  >
-                    <td className="py-2 pr-4">
-                      {r.owner.toBase58().slice(0, 6)}…
-                      {r.owner.toBase58().slice(-4)}
-                    </td>
-                    <td className="py-2 pr-4">{formatSilv(r.amountSilv)}</td>
-                    <td className="py-2 pr-4">
-                      {new Date(r.requestedAt * 1000).toLocaleDateString()}
-                    </td>
-                    <td className="py-2 pr-4">
-                      {r.status !== "pending"
-                        ? "-"
-                        : overdue
-                          ? "now"
-                          : `${Math.ceil(claimEta / 3600)}h`}
-                    </td>
-                    <td className="py-2 pr-4">
-                      <StatusPill status={r.status} overdue={overdue} />
-                    </td>
-                    <td className="py-2 pr-4">
-                      {r.status === "pending" ? (
-                        <button
-                          onClick={() => {
-                            navigator.clipboard
-                              ?.writeText(r.owner.toBase58())
-                              .catch(() => {});
-                            alert(
-                              `Settle off-chain (the user's SILV is already burned):\n\nowner: ${r.owner.toBase58()}  (copied to clipboard)\nnonce: ${r.nonce.toString()}\n\nUse the "Settle redemption off-chain" action in the Admin Actions panel below (paste owner + enter nonce). It submits via the Ops Squads multisig. Do this ONLY after the user has been paid off-chain, so the request can no longer be claimed on-chain.`,
-                            );
-                          }}
-                          className="rounded border border-border px-2 py-1 text-xs transition hover:bg-bg/40"
-                        >
-                          Settle off-chain
-                        </button>
-                      ) : (
-                        <span className="text-xs text-muted">-</span>
-                      )}
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+      <p className="text-xs text-muted">
+        What bounds a redemption now: the global rolling budget shown above, and
+        the treasury USDC balance. Exceeding either reverts the transaction.
+      </p>
     </div>
   );
 }

@@ -12,6 +12,7 @@
 import {
   ComputeBudgetProgram,
   Connection,
+  PublicKey,
   SystemProgram,
   SYSVAR_INSTRUCTIONS_PUBKEY,
   Transaction,
@@ -29,6 +30,9 @@ import {
   lazerFeePayerPda,
   silvMintAuthorityPda,
   treasuryPda,
+  feeExemptPda,
+  feeVaultPda,
+  kycPda,
 } from "./pdas";
 import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
@@ -113,6 +117,51 @@ async function finalize(
   return tx;
 }
 
+/** The premium fee vault: the USDC ATA of the fee_vault PDA.
+ *
+ * allowOwnerOffCurve = true is MANDATORY (the owner is a PDA); omitting it throws
+ * TokenOwnerOffCurveError. mint_silv and redeem_silv both REQUIRE this account to exist, so if
+ * it was never created every mint and every redeem reverts. */
+export function feeVaultUsdcAta(): PublicKey {
+  return getAssociatedTokenAddressSync(
+    USDC_MINT,
+    feeVaultPda(),
+    true,
+    TOKEN_PROGRAM_ID,
+  );
+}
+
+/** Resolve the caller's OPTIONAL per-wallet accounts (fee exemption, KYC attestation).
+ *
+ * Anchor optional accounts must be `null` when absent. Passing the PDA address of an account
+ * that does NOT exist is worse than passing null: the program would try to deserialize it and
+ * fail. So this checks existence first, with ONE batched RPC call.
+ *
+ * Resolving from chain rather than from a caller-supplied flag makes the client self-healing: a
+ * wallet that gets whitelisted or approved starts benefiting on its next transaction with no
+ * front-end change and no cache to invalidate.
+ *
+ * On RPC failure both fall back to null, which is the safe direction: the caller pays the full
+ * fee (never a wrong discount), and if the KYC gate is armed the transaction fails with a clear
+ * KycRequired rather than silently pricing wrong. */
+export async function resolveWalletFlags(
+  connection: Connection,
+  user: PublicKey,
+): Promise<{ feeExempt: PublicKey | null; kyc: PublicKey | null }> {
+  const fe = feeExemptPda(user);
+  const ky = kycPda(user);
+  try {
+    const infos = await connection.getMultipleAccountsInfo([fe, ky]);
+    return {
+      feeExempt: infos[0] ? fe : null,
+      kyc: infos[1] ? ky : null,
+    };
+  } catch {
+    return { feeExempt: null, kyc: null };
+  }
+}
+
+
 export interface BuildLazerMintTxArgs {
   amountUsdc: BN;
   minSilvOut: BN;
@@ -134,10 +183,15 @@ export async function buildLazerMintTx(
   const messageData = Buffer.from(lazerMessageData(args.envelope));
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const opt = await resolveWalletFlags(connection, user);
   const dominionIx = await (program.methods as any)
     .mintSilv(args.amountUsdc, args.minSilvOut, messageData, ED25519_IX_INDEX, 0)
     .accounts({
       config: configPda(),
+      feeVaultPda: feeVaultPda(),
+      feeVault: feeVaultUsdcAta(),
+      feeExempt: opt.feeExempt,
+      kyc: opt.kyc,
       user,
       usdcMint: USDC_MINT,
       silvMint: SILV_MINT,
@@ -181,10 +235,15 @@ export async function buildLazerRedeemTx(
   const messageData = Buffer.from(lazerMessageData(args.envelope));
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const opt = await resolveWalletFlags(connection, user);
   const dominionIx = await (program.methods as any)
     .redeemSilv(args.amountSilv, args.minUsdcOut, messageData, ED25519_IX_INDEX, 0)
     .accounts({
       config: configPda(),
+      feeVaultPda: feeVaultPda(),
+      feeVault: feeVaultUsdcAta(),
+      feeExempt: opt.feeExempt,
+      kyc: opt.kyc,
       user,
       usdcMint: USDC_MINT,
       silvMint: SILV_MINT,
@@ -211,39 +270,29 @@ export interface BuildLazerClaimTxArgs {
   envelope: Uint8Array;
 }
 
+/** DEAD PATH. Throws unconditionally.
+ *
+ * Kept as a throwing stub rather than deleted so the removal is a LOUD, explained failure
+ * instead of a silent one, and so the remaining queue UI in MintRedeemCard still compiles while
+ * it is being removed. It is unreachable in practice: `fetchRedemptionRequests` now returns an
+ * empty list, so no Claim button ever renders.
+ *
+ * TODO: delete this together with the queued-redemption UI in MintRedeemCard.tsx. */
 export async function buildLazerClaimTx(
-  connection: Connection,
-  wallet: WalletContextState,
-  args: BuildLazerClaimTxArgs,
+  _connection: Connection,
+  _wallet: WalletContextState,
+  _args: BuildLazerClaimTxArgs,
 ): Promise<Transaction> {
-  if (!wallet.publicKey) throw new Error("Wallet not connected");
-  const program = getProgram(connection, wallet);
-  const owner = wallet.publicKey;
-
-  const usdcTreasuryAta = getAssociatedTokenAddressSync(USDC_MINT, treasuryPda(), true, TOKEN_PROGRAM_ID);
-  const ownerUsdcAta = getAssociatedTokenAddressSync(USDC_MINT, owner, false, TOKEN_PROGRAM_ID);
-  const messageData = Buffer.from(lazerMessageData(args.envelope));
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const dominionIx = await (program.methods as any)
-    .claimRedemption(messageData, ED25519_IX_INDEX, 0)
-    .accounts({
-      config: configPda(),
-      owner,
-      redemptionRequest: args.request.pubkey,
-      usdcMint: USDC_MINT,
-      usdcTreasury: usdcTreasuryAta,
-      ownerUsdcAta,
-      treasuryPda: treasuryPda(),
-      ...lazerOracleAccounts(),
-      classicTokenProgram: TOKEN_PROGRAM_ID,
-      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-    })
-    .instruction();
-
-  const ataIxs = [
-    createAssociatedTokenAccountIdempotentInstruction(owner, ownerUsdcAta, owner, USDC_MINT, TOKEN_PROGRAM_ID),
-  ];
-  return finalize(connection, owner, assembleLazerOracleIxs(dominionIx, args.envelope, ataIxs));
+  throw new Error(
+    "The queued redemption path was removed on 2026-08-05. Redemption is now a single " +
+      "instant transaction: burn SILV, receive USDC, or it reverts. There is nothing to claim.",
+  );
 }
+
+// The claimRedemption transaction builder was REMOVED on 2026-08-05 with the whole queued
+// redemption path. `claim_redemption` no longer exists in the program or the IDL, so calling it
+// threw at runtime rather than failing at build time -- the exact stale-client failure mode the
+// constants gate guards against elsewhere.
+//
+// Redemption is now one instant transaction: buildLazerRedeemTx above burns the SILV and pays
+// the USDC in the same transaction, or the whole thing reverts.

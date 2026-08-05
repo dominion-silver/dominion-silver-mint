@@ -38,21 +38,35 @@ export function silvMetadataAuthorityPda(): PublicKey {
   )[0];
 }
 
+// `redemptionRequestPda` REMOVED 2026-08-05 with the queued redemption path. No such account
+// exists on any cluster: redemptions were never enabled, so none was ever created.
+
 /**
- * V2 queued-redemption request PDA.
- * Seeds = [b"redeem_request", owner, nonce_u64_le] - matches
- * programs/dominion_silver_mint_v2/src/instructions/redeem_queued.rs.
- * `nonce` is the global `config.next_redeem_request_nonce` (u64) at request
- * time; the client reads it, passes it as request_nonce, and derives this PDA.
+ * Authority of the premium fee vault. Seeds = [b"fee_vault"].
+ *
+ * The VAULT is this PDA's USDC associated token account, not this address. Derive it with
+ * allowOwnerOffCurve = true: the owner is a PDA, and omitting that flag throws
+ * TokenOwnerOffCurveError.
  */
-export function redemptionRequestPda(
-  owner: PublicKey,
-  nonce: bigint,
-): PublicKey {
-  const nonceBuf = Buffer.alloc(8);
-  nonceBuf.writeBigUInt64LE(nonce, 0);
+export function feeVaultPda(): PublicKey {
   return PublicKey.findProgramAddressSync(
-    [Buffer.from(SEEDS.redeemRequest), owner.toBuffer(), nonceBuf],
+    [Buffer.from("fee_vault")],
+    PROGRAM_ID,
+  )[0];
+}
+
+/** Per-wallet fee exemption. Seeds = [b"fee_exempt", wallet]. Present = exempt. */
+export function feeExemptPda(wallet: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("fee_exempt"), wallet.toBuffer()],
+    PROGRAM_ID,
+  )[0];
+}
+
+/** Per-wallet KYC attestation. Seeds = [b"kyc", wallet]. Present = approved. */
+export function kycPda(wallet: PublicKey): PublicKey {
+  return PublicKey.findProgramAddressSync(
+    [Buffer.from("kyc"), wallet.toBuffer()],
     PROGRAM_ID,
   )[0];
 }

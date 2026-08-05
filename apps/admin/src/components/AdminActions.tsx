@@ -374,24 +374,150 @@ const ACTIONS: ActionDesc[] = [
       return actions.proposeSetRedeemLimits(c, args);
     },
   },
+  // "Settle redemption off-chain" REMOVED 2026-08-05 with the whole queued path. It was also
+  // SolidProof MEDIUM #4, so deleting the queue deleted the finding.
+
+  // --- Open redemptions. The ONLY path: set_redemptions_enabled still refuses `true` in the
+  // deployed bytecode, so opening rides the 24h-timelocked SetRedeemLimits action. Given its
+  // own card rather than a checkbox on the limits card, because it is the single most
+  // consequential switch in the program: it opens the only user-facing path that pays out
+  // treasury cash. ---
   {
-    id: "settle-offchain",
-    label: "Settle redemption off-chain",
-    group: "Emergency & ops",
+    id: "propose-open-redemptions",
+    label: "OPEN redemptions (propose, 24h)",
+    group: "Delayed (24h)",
+    danger: true,
+    mode: "squads",
+    fields: [],
+    tip: "Opens public redemption after a 24h delay, guardian-cancellable. BEFORE executing: (1) the fee vault ATA must exist or every redeem reverts, (2) fund the treasury with USDC, (3) set a non-zero treasury min float, since premium revenue no longer accumulates in the treasury to cushion it. Closing again is instant via the Instant card.",
+    current: (c) =>
+      c.redemptionsEnabled ? "currently OPEN" : "currently CLOSED",
+    build: (c) =>
+      actions.proposeSetRedeemLimits(c, { redemptionsEnabled: true }),
+  },
+
+  // --- Premium fee vault + fee-exemption whitelist (2026-08-05) ---
+  {
+    id: "fee-exempt-set",
+    label: "Fee exemption: grant / update",
+    group: "Instant",
     mode: "squads",
     fields: [
-      { name: "owner", label: "Request owner (pubkey)", kind: "pubkey" },
-      { name: "nonce", label: "Request nonce (u64)", kind: "optbig" },
+      { name: "wallet", label: "Wallet to exempt (pubkey)", kind: "pubkey" },
+      { name: "flags", label: "Scope: 1=mint, 2=redeem, 3=both", kind: "int" },
     ],
-    tip: "Mark a Pending queued redemption settled off-chain (paid via OTC) so it can no longer be claimed on-chain. Copy owner + nonce from the Redemptions table.",
+    tip: "Waives the premium for one wallet. PREFER 1 (mint only): a both-sides exemption makes a round trip free, which hands that wallet a free option on oracle movement paid by the treasury, whereas the normal fees require a ~2.5% move before a round trip profits. Instant, because the worst case is foregone revenue, not a loss of principal.",
     build: (c, p) => {
-      if (!p.nonce || !p.nonce.trim()) throw new Error("Nonce is required");
-      return actions.settleRedemptionOffchain(
-        c,
-        pk(p.owner),
-        parseBigUint(p.nonce),
-      );
+      const f = parseUint(p.flags, 3);
+      if (f !== 1 && f !== 2 && f !== 3) {
+        throw new Error("Scope must be 1 (mint), 2 (redeem) or 3 (both)");
+      }
+      return actions.setFeeExempt(c, pk(p.wallet), f);
     },
+  },
+  {
+    id: "fee-exempt-remove",
+    label: "Fee exemption: revoke",
+    group: "Instant",
+    mode: "squads",
+    fields: [{ name: "wallet", label: "Wallet (pubkey)", kind: "pubkey" }],
+    tip: "Closes the exemption account and reclaims its rent. There is no 'set scope to 0': the contract rejects zero flags, because an existing-but-empty account would still read as whitelisted in a roster listing.",
+    build: (c, p) => actions.removeFeeExempt(c, pk(p.wallet)),
+  },
+  {
+    id: "withdraw-fees",
+    label: "Withdraw accrued fees",
+    group: "Instant",
+    mode: "squads",
+    fields: [
+      {
+        name: "dest",
+        label: "Destination wallet (owner pubkey)",
+        kind: "pubkey",
+      },
+      { name: "amount", label: "Amount (USDC)", kind: "usdc" },
+    ],
+    tip: "Sweeps premium revenue out of the program-owned fee vault. The destination's USDC ATA must already exist. Instant, unlike the treasury withdrawal: this vault backs nothing (it holds earned revenue, not the collateral users redeem against) and the admin is already a multisig. Sweep on a regular cadence so the standing balance stays small.",
+    build: (c, p) => actions.withdrawFees(c, pk(p.dest), parseAtomic(p.amount, 6)),
+  },
+
+  // --- KYC gate. DORMANT until armed. ---
+  {
+    id: "kyc-set-operator",
+    label: "KYC: set attestor key",
+    group: "Instant",
+    mode: "squads",
+    fields: [
+      {
+        name: "operator",
+        label: "Attestor pubkey (11111... to decommission)",
+        kind: "pubkey",
+      },
+    ],
+    tip: "The hot key that writes approvals. It can ONLY add and remove attestations: it cannot mint, pause, move funds, change a fee, or arm the gate. Instant on purpose, because the realistic failure is that this key leaks and a timelock on rotation would mean 24h with a compromised attestor live.",
+    build: (c, p) => actions.setKycOperator(c, pk(p.operator)),
+  },
+  {
+    id: "kyc-set-scope",
+    label: "KYC: arm / disarm gate",
+    group: "Instant",
+    danger: true,
+    mode: "squads",
+    fields: [
+      {
+        name: "flags",
+        label: "Scope: 0=off, 1=mint, 2=redeem, 3=both",
+        kind: "int",
+      },
+    ],
+    tip: "WRITE THE ATTESTATIONS FIRST. Arming before any approval exists locks out every holder instantly, and the contract can only catch the extreme case where no attestor is configured at all. Redeem-only (2) is the usual first step, so public mint stays open for DEX arbitrage.",
+    current: (c) =>
+      `scope ${c.kycScopeFlags ?? 0}${c.kycEnforced ? " (ARMED)" : " (dormant)"}`,
+    build: (c, p) => {
+      const f = parseUint(p.flags, 3);
+      if (f > 3) throw new Error("Scope must be 0, 1, 2 or 3");
+      return actions.setKycScope(c, f);
+    },
+  },
+  {
+    id: "kyc-attest",
+    label: "KYC: attest wallet",
+    group: "Emergency & ops",
+    // DIRECT, not squads: the required signer is the ATTESTOR key, not config.admin. This card
+    // only works when the connected wallet IS the attestor. Normally Mark's backend calls it.
+    mode: "direct",
+    fields: [
+      { name: "wallet", label: "Wallet to approve (pubkey)", kind: "pubkey" },
+      {
+        name: "ref",
+        label: "Reference: 32-byte hex hash of the provider record id",
+        kind: "hex32",
+      },
+    ],
+    tip: "NEVER put PII here, not even hashed. An email hash is brute-forceable, on-chain data is permanent and public, and Solana cannot honour a GDPR erasure request. Only a hash of the provider's internal record id, which is meaningless without their database. All zeros is valid and means 'no reference'.",
+    build: (c, p, me) => {
+      const hex = (p.ref ?? "").trim().replace(/^0x/i, "");
+      const ref =
+        hex === ""
+          ? new Uint8Array(32)
+          : Uint8Array.from(Buffer.from(hex, "hex"));
+      if (ref.length !== 32) {
+        throw new Error(
+          `Reference must be exactly 32 bytes (64 hex chars), got ${ref.length}`,
+        );
+      }
+      return actions.attestKyc(c, me, pk(p.wallet), ref);
+    },
+  },
+  {
+    id: "kyc-revoke",
+    label: "KYC: revoke attestation",
+    group: "Emergency & ops",
+    mode: "squads",
+    fields: [{ name: "wallet", label: "Wallet (pubkey)", kind: "pubkey" }],
+    tip: "Closes the attestation account, so revocation takes effect in the same slot with no flag for a stale cache to misread. Signable by the admin as well as the attestor, so a compromised attestor's writes can be undone without waiting to rotate it first.",
+    build: (c, p) =>
+      actions.revokeKyc(c, c.admin ?? actions.adminAuthority(), pk(p.wallet)),
   },
   {
     id: "propose-admin-transfer",
