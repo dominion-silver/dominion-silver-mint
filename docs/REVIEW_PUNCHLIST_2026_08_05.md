@@ -65,7 +65,7 @@ radius, zero on-chain remedy.
 Fix options: route the premium to the treasury when the vault transfer fails, or add a
 `fee_routing_enabled` flag that falls back to the old in-treasury behaviour.
 
-### [ ] A7. NEW, found while fixing A2: no `execute_*` handler is bound to its config nonce
+### [x] A7. NEW, found while fixing A2: no `execute_*` handler is bound to its config nonce
 Every `execute_*` in `admin/execute.rs` only ever WRITES its `pending_*_nonce` (to None at the
 end) and never READS it. So clearing a pending nonce does not prevent execution.
 

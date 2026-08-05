@@ -58,6 +58,14 @@ pub fn execute_set_premium_mint_handler(ctx: Context<ExecutePremium>, nonce: u64
         tl.action_disc == TimelockAction::SetPremiumMint as u8,
         DominionError::NonceMismatch
     );
+    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_premium_mint_nonce`
+    // does not stop the proposal: this handler only ever WROTE that field (to None at the
+    // end) and never read it, so a cleared slot still executed. That made every
+    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    require!(
+        config.pending_premium_mint_nonce == Some(nonce),
+        DominionError::NonceMismatch
+    );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
 
     let new_bps = decode_u16(&tl.action_data)?;
@@ -92,6 +100,14 @@ pub fn execute_set_premium_redeem_handler(ctx: Context<ExecutePremium>, nonce: u
     require!(tl.nonce == nonce, DominionError::NonceMismatch);
     require!(
         tl.action_disc == TimelockAction::SetPremiumRedeem as u8,
+        DominionError::NonceMismatch
+    );
+    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_premium_redeem_nonce`
+    // does not stop the proposal: this handler only ever WROTE that field (to None at the
+    // end) and never read it, so a cleared slot still executed. That made every
+    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    require!(
+        config.pending_premium_redeem_nonce == Some(nonce),
         DominionError::NonceMismatch
     );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
@@ -178,6 +194,14 @@ pub fn execute_withdraw_usdc_handler(ctx: Context<ExecuteWithdraw>, nonce: u64) 
     require!(tl.nonce == nonce, DominionError::NonceMismatch);
     require!(
         tl.action_disc == TimelockAction::WithdrawUsdc as u8,
+        DominionError::NonceMismatch
+    );
+    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_withdraw_nonce`
+    // does not stop the proposal: this handler only ever WROTE that field (to None at the
+    // end) and never read it, so a cleared slot still executed. That made every
+    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    require!(
+        config.pending_withdraw_nonce == Some(nonce),
         DominionError::NonceMismatch
     );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
@@ -286,6 +310,14 @@ pub fn execute_set_compliance_mode_handler(
         tl.action_disc == TimelockAction::SetComplianceMode as u8,
         DominionError::NonceMismatch
     );
+    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_compliance_nonce`
+    // does not stop the proposal: this handler only ever WROTE that field (to None at the
+    // end) and never read it, so a cleared slot still executed. That made every
+    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    require!(
+        config.pending_compliance_nonce == Some(nonce),
+        DominionError::NonceMismatch
+    );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
 
     let new_value = tl.action_data.first().copied().unwrap_or(0) != 0;
@@ -349,6 +381,14 @@ pub fn execute_set_oracle_guards_handler(
     require!(tl.nonce == nonce, DominionError::NonceMismatch);
     require!(
         tl.action_disc == TimelockAction::SetOracleGuards as u8,
+        DominionError::NonceMismatch
+    );
+    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_oracle_guards_nonce`
+    // does not stop the proposal: this handler only ever WROTE that field (to None at the
+    // end) and never read it, so a cleared slot still executed. That made every
+    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    require!(
+        config.pending_oracle_guards_nonce == Some(nonce),
         DominionError::NonceMismatch
     );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
@@ -864,6 +904,14 @@ pub fn execute_set_treasury_min_float_handler(
         tl.action_disc == TimelockAction::SetTreasuryFloat as u8,
         DominionError::NonceMismatch
     );
+    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_treasury_float_nonce`
+    // does not stop the proposal: this handler only ever WROTE that field (to None at the
+    // end) and never read it, so a cleared slot still executed. That made every
+    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    require!(
+        config.pending_treasury_float_nonce == Some(nonce),
+        DominionError::NonceMismatch
+    );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
 
     let new_float_usdc = decode_u64(&tl.action_data)?;
@@ -918,6 +966,14 @@ pub fn execute_set_admin_timelock_handler(
     require!(tl.nonce == nonce, DominionError::NonceMismatch);
     require!(
         tl.action_disc == TimelockAction::SetAdminTimelock as u8,
+        DominionError::NonceMismatch
+    );
+    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_admin_timelock_nonce`
+    // does not stop the proposal: this handler only ever WROTE that field (to None at the
+    // end) and never read it, so a cleared slot still executed. That made every
+    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    require!(
+        config.pending_admin_timelock_nonce == Some(nonce),
         DominionError::NonceMismatch
     );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
@@ -990,6 +1046,14 @@ pub fn execute_set_public_mint_handler(ctx: Context<ExecutePublicMint>, nonce: u
         tl.action_disc == TimelockAction::SetPublicMint as u8,
         DominionError::NonceMismatch
     );
+    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_public_mint_nonce`
+    // does not stop the proposal: this handler only ever WROTE that field (to None at the
+    // end) and never read it, so a cleared slot still executed. That made every
+    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    require!(
+        config.pending_public_mint_nonce == Some(nonce),
+        DominionError::NonceMismatch
+    );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
 
     require!(
@@ -1053,6 +1117,14 @@ pub fn execute_set_pyth_feed_handler(ctx: Context<ExecutePythFeed>, nonce: u64) 
     require!(tl.nonce == nonce, DominionError::NonceMismatch);
     require!(
         tl.action_disc == TimelockAction::SetPythFeed as u8,
+        DominionError::NonceMismatch
+    );
+    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_pyth_feed_nonce`
+    // does not stop the proposal: this handler only ever WROTE that field (to None at the
+    // end) and never read it, so a cleared slot still executed. That made every
+    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    require!(
+        config.pending_pyth_feed_nonce == Some(nonce),
         DominionError::NonceMismatch
     );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
@@ -1136,6 +1208,14 @@ pub fn execute_update_metadata_handler(
     require!(tl.nonce == nonce, DominionError::NonceMismatch);
     require!(
         tl.action_disc == TimelockAction::UpdateMetadata as u8,
+        DominionError::NonceMismatch
+    );
+    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_metadata_nonce`
+    // does not stop the proposal: this handler only ever WROTE that field (to None at the
+    // end) and never read it, so a cleared slot still executed. That made every
+    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    require!(
+        config.pending_metadata_nonce == Some(nonce),
         DominionError::NonceMismatch
     );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
