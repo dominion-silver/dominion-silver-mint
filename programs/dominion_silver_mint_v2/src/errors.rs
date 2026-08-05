@@ -250,4 +250,24 @@ pub enum DominionError {
     PublicMintUnchanged,
     #[msg("Opening the public mint requires the 24h timelock; only CLOSING it is instant")]
     PublicMintOpenRequiresTimelock,
+    // Pre-mainnet upgrade (2026-08-05): instant-only redeem, fee routing, fee-exempt
+    // whitelist, dormant KYC. APPEND ONLY - never reorder.
+    #[msg("This redemption would exceed the global rolling redeem budget for the current window; retry after the window rolls or ask the admin to raise it")]
+    RedeemLimitExceeded,
+    #[msg("This wallet has no KYC attestation and KYC is currently required for this action")]
+    KycRequired,
+    #[msg("KYC cannot be enabled while config.kyc_operator is unset: enabling it with no attestor would lock out every holder with no way to approve anyone")]
+    KycAttestorNotSet,
+    // NOTE for whoever writes the next variant: these messages go through a FORMAT string
+    // inside Anchor's #[error_code] expansion, so a literal brace is parsed as a
+    // placeholder and fails the build with "invalid format string". Write "mint and redeem",
+    // never "{mint, redeem}". Escaping as {{ }} also works but reads badly in logs.
+    #[msg("KYC scope value is unchanged, or sets bits other than mint and redeem")]
+    KycScopeInvalid,
+    #[msg("Fee-exemption flags are unchanged, zero, or set bits other than mint and redeem; use remove_fee_exempt to revoke an exemption entirely")]
+    FeeExemptFlagsInvalid,
+    #[msg("Fee vault balance is below the requested sweep amount")]
+    InsufficientFeeVault,
+    #[msg("Attestation account does not belong to the signing wallet")]
+    AttestationWalletMismatch,
 }

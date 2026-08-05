@@ -6,7 +6,7 @@
 // premium_bps_mint via the timelocked setter (D4), no special logic here.
 
 use crate::assertions::assert_silv_mint_invariants;
-use crate::cpi::{silv_mint_to, usdc_transfer_user_to_treasury};
+use crate::cpi::{silv_mint_to, usdc_transfer_user_to_fee_vault, usdc_transfer_user_to_treasury};
 use crate::errors::DominionError;
 use crate::events::MintEvent;
 use crate::lazer_cpi::{LazerVerifyAccounts, LAZER_FEE_PAYER_SEED};
@@ -47,6 +47,31 @@ pub struct MintSilv<'info> {
     #[account(mut, address = config.usdc_treasury)]
     pub usdc_treasury: Box<Account<'info, TokenAccount>>,
 
+    // --- Premium destination (Thomas, 2026-08-05) ---
+    //
+    // The vault is the ASSOCIATED TOKEN ACCOUNT of the fee_vault PDA, so it is fully
+    // derivable and deliberately NOT stored in ConfigAccount (see FEE_VAULT_SEED).
+    //
+    // Deliberately NOT `init_if_needed`: it is created once at deploy time by a script. Two
+    // reasons. Making the first minter pay its rent would be a surprise, and an
+    // `init_if_needed` on an account the user does not own is an attack surface. Requiring
+    // it to pre-exist is safe here in a way it would not be for a plain wallet destination,
+    // because a PDA-owned ATA can never be CLOSED: closing needs the owner's signature and
+    // this program never signs a CloseAccount for this PDA. So it must exist once, and after
+    // that it always will.
+    /// CHECK: PDA authority of the fee vault. It never signs on this path (the vault only
+    /// receives here); it signs only in withdraw_fees.
+    #[account(seeds = [FEE_VAULT_SEED], bump)]
+    pub fee_vault_pda: AccountInfo<'info>,
+
+    #[account(
+        mut,
+        associated_token::mint = usdc_mint,
+        associated_token::authority = fee_vault_pda,
+        associated_token::token_program = classic_token_program,
+    )]
+    pub fee_vault: Box<Account<'info, TokenAccount>>,
+
     // User's USDC ATA (classic SPL).
     #[account(
         mut,
@@ -84,6 +109,21 @@ pub struct MintSilv<'info> {
     pub lazer_fee_payer: UncheckedAccount<'info>,
     /// CHECK: pinned to the instructions sysvar in verify_and_get_payload.
     pub instructions_sysvar: UncheckedAccount<'info>,
+
+    // --- Optional per-wallet flags (2026-08-05) ---
+    //
+    // Both are PDA-seeded FROM `user`, so neither can be presented on somebody else's
+    // behalf: there is nothing to spoof, and no ownership check beyond the seeds is needed.
+    //
+    // Both are OPTIONAL, and in both cases omitting the account yields the SAFE default:
+    // no exemption means the full premium is charged, and no attestation means the action is
+    // denied if the KYC gate is armed. A client that forgets to pass them can lose a
+    // discount or be refused, never gain a privilege.
+    #[account(seeds = [FEE_EXEMPT_SEED, user.key().as_ref()], bump)]
+    pub fee_exempt: Option<Account<'info, FeeExemptAccount>>,
+
+    #[account(seeds = [KYC_SEED, user.key().as_ref()], bump)]
+    pub kyc: Option<Account<'info, KycAccount>>,
 
     #[account(address = config.classic_token_program)]
     pub classic_token_program: Program<'info, Token>,
@@ -133,6 +173,19 @@ pub fn handler(
         DominionError::MintPaused
     );
 
+    // 2b. KYC gate. DORMANT at launch: `kyc_scope_flags == 0` admits everyone, which is why
+    // "mint at launch without KYC" needs no special casing here.
+    //
+    // Checked BEFORE the oracle read on purpose. The Lazer verify CPI costs the caller a
+    // fee, and somebody who cannot pass the gate should not pay it to find out.
+    let user_key = ctx.accounts.user.key();
+    enforce_kyc(
+        ctx.accounts.config.kyc_scope_flags,
+        Side::Mint,
+        ctx.accounts.kyc.as_deref(),
+        &user_key,
+    )?;
+
     // 3. Zero-amount guard. (Per-tx min/max + daily caps removed in Option B;
     // the HARD supply cap below is the sole mint-side limit, D2.)
     require!(amount_usdc > 0, DominionError::ZeroAmount);
@@ -177,9 +230,37 @@ pub fn handler(
     // 6. Runtime SILV mint extension + authority assertions.
     assert_silv_mint_invariants(&ctx.accounts.silv_mint, config, ctx.program_id)?;
 
-    // 7. Pricing math (ceil price -> floor silv_out, protocol favor).
-    let eff_price = effective_mint_price_scaled(oracle_price, config.premium_bps_mint)?;
-    let silv_out = mint_silv_out(amount_usdc, eff_price)?;
+    // 7. Fee split, then price at PURE SPOT (Thomas, 2026-08-05).
+    //
+    // The premium comes OFF THE TOP of the incoming USDC and is routed to the fee vault;
+    // SILV is minted on the NET at the raw oracle price. This replaces pricing through a
+    // marked-up `effective_mint_price_scaled`, for two reasons documented in
+    // math.rs::fee_from_amount:
+    //
+    //   - the old form produced no fee AMOUNT to route. The user's whole payment went to the
+    //     treasury and they simply received less SILV, so the fee existed as under-issuance
+    //     rather than as money. Sending premium revenue anywhere needs an explicit amount.
+    //   - "1%" now means 1% of what the user sends, on both sides. The old mint form charged
+    //     1% of the NET, i.e. 0.9901% of the gross: a 1 bp discrepancy that was invisible and
+    //     impossible to explain to anyone.
+    //
+    // The user's SILV is unchanged to within one atomic unit either way. What changed is
+    // where the premium ends up.
+    let premium_bps = effective_premium_bps(
+        config.premium_bps_mint,
+        ctx.accounts.fee_exempt.as_deref(),
+        &user_key,
+        Side::Mint,
+    );
+    let fee_usdc = fee_from_amount(amount_usdc, premium_bps)?;
+    // `fee_from_amount` is proven never to exceed its input (math.rs), so this cannot
+    // underflow. Checked anyway: an unchecked subtraction here would wrap into a colossal
+    // net on any future change to that guarantee.
+    let net_usdc = amount_usdc
+        .checked_sub(fee_usdc)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
+    require!(net_usdc > 0, DominionError::ZeroAmount);
+    let silv_out = mint_silv_out(net_usdc, oracle_price)?;
     require!(silv_out > 0, DominionError::ZeroAmount);
 
     // 8. Slippage check.
@@ -204,16 +285,36 @@ pub fn handler(
     maybe_update_last_price(config, oracle_price, amount_usdc, now);
 
     // 11. CPIs.
-    // 11a. USDC: user -> treasury.
+    // 11a. USDC: user -> treasury. The BACKING leg, net of premium. The treasury now
+    // receives exactly what backs the SILV just issued, with no premium mixed in.
     usdc_transfer_user_to_treasury(
         ctx.accounts.classic_token_program.to_account_info(),
         ctx.accounts.user_usdc_ata.to_account_info(),
         ctx.accounts.usdc_treasury.to_account_info(),
         ctx.accounts.usdc_mint.to_account_info(),
         ctx.accounts.user.to_account_info(),
-        amount_usdc,
+        net_usdc,
         ctx.accounts.usdc_mint.decimals,
     )?;
+
+    // 11a-bis. USDC: user -> fee vault. The REVENUE leg.
+    //
+    // Skipped entirely at zero rather than transferring 0: a zero-amount transfer_checked is
+    // legal but burns compute and writes a log line on every single mint by an exempt wallet.
+    //
+    // Both legs are in the same transaction as the mint, so there is no state in which the
+    // user has paid and received nothing: any failure here reverts the SILV mint too.
+    if fee_usdc > 0 {
+        usdc_transfer_user_to_fee_vault(
+            ctx.accounts.classic_token_program.to_account_info(),
+            ctx.accounts.user_usdc_ata.to_account_info(),
+            ctx.accounts.fee_vault.to_account_info(),
+            ctx.accounts.usdc_mint.to_account_info(),
+            ctx.accounts.user.to_account_info(),
+            fee_usdc,
+            ctx.accounts.usdc_mint.decimals,
+        )?;
+    }
 
     // 11b. SILV: PDA mints to user.
     let bump = ctx.bumps.silv_mint_authority;
@@ -231,11 +332,15 @@ pub fn handler(
 
     // 12. Event.
     emit!(MintEvent {
-        user: ctx.accounts.user.key(),
+        user: user_key,
+        // GROSS, i.e. what the user authorised. net = amount_usdc - fee_usdc.
         amount_usdc,
         amount_silv: silv_out,
         price_used_scaled: oracle_price,
-        premium_bps_used: config.premium_bps_mint,
+        // The EFFECTIVE premium, not config.premium_bps_mint: 0 here means the caller used a
+        // mint-side fee exemption. This is the field to read when auditing whitelist usage.
+        premium_bps_used: premium_bps,
+        fee_usdc,
         timestamp: now,
     });
 

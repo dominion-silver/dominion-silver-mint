@@ -495,8 +495,32 @@ pub struct OracleGuardsArgs {
 pub struct RedeemLimitsArgs {
     pub instant_redeem_budget_usdc: Option<u64>,
     pub instant_redeem_window_seconds: Option<u32>,
+    /// DEAD since 2026-08-05 (the per-size tier was removed with the queue). Still accepted
+    /// and still applied to the now-unread config field, because removing it would change
+    /// this struct's borsh layout. See the note on `redemptions_enabled` below.
     pub large_redeem_threshold_usdc: Option<u64>,
+    /// DEAD since 2026-08-05 (there is no queue). Same reasoning.
     pub redeem_queue_delay_seconds: Option<u32>,
+    /// THE REDEEM SWITCH (Thomas, 2026-08-05). Appended, deliberately, to this action rather
+    /// than given its own timelocked instruction and its own `pending_*_nonce`.
+    ///
+    /// Why it belongs here: enabling redemptions IS loosening a redeem throttle, which is
+    /// precisely what this action exists for. It gets the 24h delay, the guardian-cancel
+    /// window, the single-active-nonce guard and the ceiling re-validation for free, and it
+    /// adds no bytes to ConfigAccount, whose `reserved` is down to 53.
+    ///
+    /// `Some(false)` counts as a TIGHTEN, so it is also available on the instant
+    /// `emergency_tighten_redeem_limits` path, alongside the dedicated
+    /// `set_redemptions_enabled(false)`. `Some(true)` is a LOOSEN and is refused there.
+    ///
+    /// BORSH CAVEAT, worth knowing before appending anything else here: this struct is
+    /// serialized into `TimelockQueueAccount.action_data`, so appending a field makes any
+    /// proposal that was queued under the OLD layout fail to deserialize at execute
+    /// (`SerializationFailure`), because the stored bytes are one short. Cancelling such a
+    /// proposal still works, since `cancel_timelocked_action` never decodes `action_data`.
+    /// Before deploying this upgrade, check for a live SetRedeemLimits proposal and cancel it
+    /// rather than leaving it stuck.
+    pub redemptions_enabled: Option<bool>,
 }
 
 /// True if at least one field is provided (else the call is a pure no-op).
@@ -505,6 +529,7 @@ pub fn redeem_limits_any_set(args: &RedeemLimitsArgs) -> bool {
         || args.instant_redeem_window_seconds.is_some()
         || args.large_redeem_threshold_usdc.is_some()
         || args.redeem_queue_delay_seconds.is_some()
+        || args.redemptions_enabled.is_some()
 }
 
 /// Pure directional check for the INSTANT tighten path. Every PROVIDED field must
@@ -543,6 +568,18 @@ pub fn redeem_limits_all_tighten(
         if v < cur_queue_delay {
             return false;
         }
+    }
+    // The redeem switch. Turning redemptions OFF is the safe direction and stays available
+    // instantly; turning them ON is the single largest loosening this program has, because it
+    // opens the only user-facing path that pays out treasury cash. It must cost the 24h delay
+    // and the guardian-cancel window.
+    //
+    // Note the asymmetry with the current value: this is a PURE directional check and does
+    // not compare against `config.redemptions_enabled`. Proposing Some(false) while already
+    // disabled is a harmless no-op tighten, which is the same tolerance the numeric fields
+    // above have.
+    if args.redemptions_enabled == Some(true) {
+        return false;
     }
     true
 }
@@ -640,6 +677,18 @@ pub fn execute_set_redeem_limits_handler(
     }
     if let Some(v) = args.redeem_queue_delay_seconds {
         config.redeem_queue_delay_seconds = v;
+    }
+    if let Some(v) = args.redemptions_enabled {
+        let old_enabled = config.redemptions_enabled;
+        config.redemptions_enabled = v;
+        // Same event the instant FALSE-only setter emits (SolidProof LOW #3), so a monitor
+        // watching for the redeem switch changing state sees BOTH paths and does not have to
+        // know which instruction moved it.
+        emit!(crate::events::RedemptionsEnabledChanged {
+            old_enabled,
+            new_enabled: v,
+            by: ctx.accounts.admin.key(),
+        });
     }
 
     // NO auto-pause (unlike oracle-guards / pyth-feed / compliance). Those affect
@@ -1270,13 +1319,81 @@ mod fix_a_tests {
     }
 
     #[test]
-    fn all_four_tighten_together_passes() {
+    fn all_fields_tightening_together_passes() {
         let all = RedeemLimitsArgs {
             instant_redeem_budget_usdc: Some(CUR_BUDGET - 1),
             instant_redeem_window_seconds: Some(CUR_WINDOW + 1),
             large_redeem_threshold_usdc: Some(CUR_THRESHOLD - 1),
             redeem_queue_delay_seconds: Some(CUR_DELAY + 1),
+            // Disabling redemptions is the SAFE direction, so it belongs on the instant path.
+            redemptions_enabled: Some(false),
         };
         assert!(tighten(&all));
+    }
+
+    // -----------------------------------------------------------------
+    // The redeem switch (Thomas, 2026-08-05). Enabling redemptions rides this action so it
+    // inherits the 24h delay, the guardian-cancel window and the single-active-nonce guard.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn enabling_redemptions_is_a_loosening_and_is_refused_instantly() {
+        // THE test for this feature. If it ever passes, `emergency_tighten_redeem_limits`
+        // becomes a one-transaction way to open the only path that pays out treasury cash,
+        // defeating the entire reason the switch was blocked in the bytecode until now.
+        let open = RedeemLimitsArgs {
+            redemptions_enabled: Some(true),
+            ..Default::default()
+        };
+        assert!(!tighten(&open));
+    }
+
+    #[test]
+    fn disabling_redemptions_stays_available_on_the_instant_path() {
+        let close = RedeemLimitsArgs {
+            redemptions_enabled: Some(false),
+            ..Default::default()
+        };
+        assert!(tighten(&close));
+    }
+
+    #[test]
+    fn enabling_redemptions_poisons_an_otherwise_all_tighten_batch() {
+        // A caller must not be able to smuggle the loosening through by bundling it with
+        // genuine tightenings.
+        let mixed = RedeemLimitsArgs {
+            instant_redeem_budget_usdc: Some(CUR_BUDGET - 1),
+            instant_redeem_window_seconds: Some(CUR_WINDOW + 1),
+            redemptions_enabled: Some(true),
+            ..Default::default()
+        };
+        assert!(!tighten(&mixed));
+    }
+
+    #[test]
+    fn the_redeem_switch_alone_is_not_a_no_op_proposal() {
+        // Without this, `propose_set_redeem_limits` with only the switch set would be
+        // rejected as an empty proposal and the enable path would be unreachable.
+        let only_switch = RedeemLimitsArgs {
+            redemptions_enabled: Some(true),
+            ..Default::default()
+        };
+        assert!(redeem_limits_any_set(&only_switch));
+
+        let nothing = RedeemLimitsArgs::default();
+        assert!(!redeem_limits_any_set(&nothing));
+    }
+
+    #[test]
+    fn the_redeem_switch_has_no_fat_finger_ceiling_to_violate() {
+        // A bool cannot be out of range, so the ceiling validator must accept both values
+        // rather than accidentally rejecting the field it does not know about.
+        for v in [true, false] {
+            let args = RedeemLimitsArgs {
+                redemptions_enabled: Some(v),
+                ..Default::default()
+            };
+            assert!(validate_redeem_limits_ceilings(&args).is_ok());
+        }
     }
 }

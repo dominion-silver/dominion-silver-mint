@@ -58,6 +58,103 @@ pub fn usdc_transfer_treasury_to_user<'info>(
     classic::transfer_checked(cpi_ctx, amount, decimals)
 }
 
+// ---------------------------------------------------------------------------
+// Premium routing (Thomas, 2026-08-05). Three wrappers, mechanically identical to the two
+// above, kept SEPARATE and named for their destination rather than folded into a generic
+// `usdc_transfer`.
+//
+// The reason is that this file's whole purpose is to make the money flow readable at the
+// CALL SITE. `usdc_transfer_user_to_treasury(...)` next to
+// `usdc_transfer_user_to_fee_vault(...)` inside mint_silv says exactly what the split does.
+// A single generic helper called twice with different account arguments would hide the one
+// thing a reviewer needs to check: that the backing leg and the revenue leg go to different
+// accounts.
+// ---------------------------------------------------------------------------
+
+/// Transfer the MINT premium from the user's USDC ATA to the program-owned fee vault.
+///
+/// The other leg of the same split is `usdc_transfer_user_to_treasury`, which carries the
+/// net. Together they must sum to exactly what the user authorised.
+pub fn usdc_transfer_user_to_fee_vault<'info>(
+    classic_token_program: AccountInfo<'info>,
+    from: AccountInfo<'info>,
+    to_fee_vault: AccountInfo<'info>,
+    usdc_mint: AccountInfo<'info>,
+    user_authority: AccountInfo<'info>,
+    amount: u64,
+    decimals: u8,
+) -> Result<()> {
+    let cpi_ctx = CpiContext::new(
+        classic_token_program,
+        classic::TransferChecked {
+            from,
+            mint: usdc_mint,
+            to: to_fee_vault,
+            authority: user_authority,
+        },
+    );
+    classic::transfer_checked(cpi_ctx, amount, decimals)
+}
+
+/// Transfer the REDEEM premium from the treasury to the fee vault. Treasury PDA signs.
+///
+/// Note what this means for treasury outflow, because it is the one non-obvious
+/// consequence of routing fees out: on redemption the treasury now pays the FULL spot value
+/// of the burned SILV, split between the user and this vault. Before routing it paid only
+/// the user's share and kept the premium. The solvency check must therefore cover the sum,
+/// not just the user's leg.
+pub fn usdc_transfer_treasury_to_fee_vault<'info>(
+    classic_token_program: AccountInfo<'info>,
+    from_treasury: AccountInfo<'info>,
+    to_fee_vault: AccountInfo<'info>,
+    usdc_mint: AccountInfo<'info>,
+    treasury_pda: AccountInfo<'info>,
+    treasury_seeds: &[&[&[u8]]],
+    amount: u64,
+    decimals: u8,
+) -> Result<()> {
+    let cpi_ctx = CpiContext::new_with_signer(
+        classic_token_program,
+        classic::TransferChecked {
+            from: from_treasury,
+            mint: usdc_mint,
+            to: to_fee_vault,
+            authority: treasury_pda,
+        },
+        treasury_seeds,
+    );
+    classic::transfer_checked(cpi_ctx, amount, decimals)
+}
+
+/// Sweep accrued premium out of the fee vault to an admin-chosen destination.
+///
+/// This is the ONLY path out of the vault, and the fee-vault PDA signs it. The destination
+/// is an instruction argument rather than stored config, so a wrong address costs one
+/// misdirected sweep instead of breaking mint and redeem (which is what a stored, wrong fee
+/// destination would do, since the fee transfer happens inside those instructions).
+pub fn usdc_transfer_fee_vault_to_destination<'info>(
+    classic_token_program: AccountInfo<'info>,
+    from_fee_vault: AccountInfo<'info>,
+    to_destination: AccountInfo<'info>,
+    usdc_mint: AccountInfo<'info>,
+    fee_vault_pda: AccountInfo<'info>,
+    fee_vault_seeds: &[&[&[u8]]],
+    amount: u64,
+    decimals: u8,
+) -> Result<()> {
+    let cpi_ctx = CpiContext::new_with_signer(
+        classic_token_program,
+        classic::TransferChecked {
+            from: from_fee_vault,
+            mint: usdc_mint,
+            to: to_destination,
+            authority: fee_vault_pda,
+        },
+        fee_vault_seeds,
+    );
+    classic::transfer_checked(cpi_ctx, amount, decimals)
+}
+
 /// Mint SILV (Token-2022) to user ATA via the official anchor_spl wrapper.
 /// Mint authority is a program PDA that signs via seeds.
 pub fn silv_mint_to<'info>(

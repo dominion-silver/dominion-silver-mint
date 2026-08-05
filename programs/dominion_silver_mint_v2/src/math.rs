@@ -37,6 +37,52 @@ pub fn effective_redeem_price_scaled(oracle_scaled: u128, premium_bps_redeem: u1
         .ok_or(error!(DominionError::ArithmeticOverflow))
 }
 
+/// fee = ceil(amount * bps / 10_000), taken OFF THE TOP of `amount`.
+///
+/// This is the ONE fee formula, used identically on both sides (Thomas, 2026-08-05):
+///
+///   mint   : fee on the USDC coming IN,  net = amount - fee, then mint net/spot
+///   redeem : fee on the USDC value going OUT, user gets gross - fee
+///
+/// It replaces the old asymmetric model, where the mint fee was expressed as a
+/// marked-UP price (`effective_mint_price_scaled`) and the redeem fee as a marked-DOWN
+/// price (`effective_redeem_price_scaled`). Those two functions are retained for
+/// quoting and for their tests, but the instructions no longer price through them.
+///
+/// Two reasons the change was worth making:
+///
+///   1. **A price-embedded fee is not routable.** On the mint side the old form produced
+///      no fee amount at all: the user's whole payment went to the treasury and they
+///      simply received less SILV, so the fee existed as under-issuance rather than as
+///      money. Sending premium revenue to a separate destination requires an explicit
+///      amount, which only this form produces.
+///   2. **"1%" now means 1% of what you send**, on both sides, which is what a user and
+///      an auditor both assume. The old mint form charged 1% of the NET
+///      (`amount/(1+bps)`), i.e. 0.9901% of the gross, a 1 bp discrepancy that was
+///      invisible and impossible to explain.
+///
+/// CEIL, not floor: the odd atomic unit goes to the protocol. This matches the
+/// direction of the `ceil` in `effective_mint_price_scaled`, which existed for the same
+/// reason. Rounding a fee DOWN would let a caller shave one unit per transaction, which
+/// is negligible per call and unbounded across calls.
+///
+/// `bps == 0` short-circuits to 0. That is the fee-exempt whitelist path and it must
+/// never allocate a 1-unit fee out of the ceiling.
+pub fn fee_from_amount(amount: u64, bps: u16) -> Result<u64> {
+    if bps == 0 {
+        return Ok(0);
+    }
+    let numerator = (amount as u128)
+        .checked_mul(bps as u128)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
+    let out = numerator
+        .checked_add(BPS_DENOM - 1)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?
+        .checked_div(BPS_DENOM)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
+    u64::try_from(out).map_err(|_| error!(DominionError::ArithmeticOverflow))
+}
+
 /// silv_out (in SILV atomic, 6dec) = floor(amount_usdc * 10^9 / effective_mint_price_scaled)
 /// where amount_usdc is USDC atomic (6dec) and price scaled 1e9.
 /// Result units: USDC_atomic * 1e9 / (USD/oz * 1e9) = SILV_atomic.
@@ -117,6 +163,130 @@ mod tests {
         let oracle = 30_000_000_001u128;
         let eff = effective_mint_price_scaled(oracle, 1).unwrap();
         assert_eq!(eff, 30_003_000_002u128);
+    }
+
+    // ---------------------------------------------------------------------
+    // fee_from_amount: the single fee formula used by both mint and redeem.
+    // ---------------------------------------------------------------------
+
+    /// Spot used across the worked examples: $58.34/oz, 9-dec scaled.
+    const SPOT: u128 = 58_340_000_000;
+    /// Launch fees confirmed by Mark 2026-07-30.
+    const MINT_BPS: u16 = 100; // 1%
+    const REDEEM_BPS: u16 = 150; // 1.5%
+
+    #[test]
+    fn one_percent_of_one_hundred_is_exactly_one() {
+        // The whole point of the new formula: "1%" means 1% of what you send.
+        assert_eq!(fee_from_amount(100_000_000, 100).unwrap(), 1_000_000);
+        assert_eq!(fee_from_amount(10_000_000_000, 100).unwrap(), 100_000_000);
+    }
+
+    #[test]
+    fn zero_bps_is_free_and_never_ceils_to_one() {
+        // The fee-exempt whitelist path. A naive ceil would charge 1 atomic unit.
+        assert_eq!(fee_from_amount(100_000_000, 0).unwrap(), 0);
+        assert_eq!(fee_from_amount(1, 0).unwrap(), 0);
+        assert_eq!(fee_from_amount(u64::MAX, 0).unwrap(), 0);
+    }
+
+    #[test]
+    fn fee_ceils_in_protocol_favor() {
+        // 1 atomic unit at 1% is 0.0001 units of fee. Floor would be 0, which lets a
+        // caller shave the fee entirely by splitting into 1-unit transactions.
+        assert_eq!(fee_from_amount(1, 100).unwrap(), 1);
+        // 150 bps on 7 units = 0.105 -> 1.
+        assert_eq!(fee_from_amount(7, 150).unwrap(), 1);
+        // Exact multiples must NOT be pushed up by the ceil.
+        assert_eq!(fee_from_amount(10_000, 100).unwrap(), 100);
+    }
+
+    #[test]
+    fn fee_never_exceeds_the_amount_at_any_legal_bps() {
+        // bps is bounded by PREMIUM_BPS_*_CEILING (500), but assert the property well
+        // past that: `net = amount - fee` must never underflow.
+        for bps in [1u16, 100, 150, 500, 1000, 10_000] {
+            for amount in [1u64, 2, 7, 999, 1_000_000, u64::MAX / 20_000] {
+                let fee = fee_from_amount(amount, bps).unwrap();
+                assert!(
+                    fee <= amount,
+                    "fee {fee} > amount {amount} at {bps} bps: net would underflow"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn worked_mint_example_matches_the_spec_table() {
+        // 100 USDC in, 1% fee, spot $58.34.
+        // fee 1.00 to the fee vault, 99.00 to the treasury, SILV minted on 99.00 at
+        // PURE spot (no marked-up price any more).
+        let amount_usdc = 100_000_000u64;
+        let fee = fee_from_amount(amount_usdc, MINT_BPS).unwrap();
+        assert_eq!(fee, 1_000_000); // $1.00
+        let net = amount_usdc - fee;
+        assert_eq!(net, 99_000_000); // $99.00
+        let silv_out = mint_silv_out(net, SPOT).unwrap();
+        // 99.00 / 58.34 = 1.696948... oz
+        assert_eq!(silv_out, 1_696_948);
+    }
+
+    #[test]
+    fn worked_redeem_example_matches_the_spec_table() {
+        // 100 SILV (100 oz) out at spot $58.34, 1.5% fee.
+        // Treasury pays the FULL spot value; the user gets spot minus fee.
+        let amount_silv = 100_000_000u64; // 100 oz
+        let gross = silv_to_usdc_at_oracle(amount_silv, SPOT).unwrap();
+        assert_eq!(gross, 5_834_000_000); // $5,834.00
+        let fee = fee_from_amount(gross, REDEEM_BPS).unwrap();
+        assert_eq!(fee, 87_510_000); // $87.51
+        let to_user = gross - fee;
+        assert_eq!(to_user, 5_746_490_000); // $5,746.49
+    }
+
+    #[test]
+    fn round_trip_conserves_value_and_leaves_the_treasury_flat() {
+        // THE economic property of routing fees out: on a mint-then-redeem round trip
+        // the treasury nets ~zero and every dollar the user paid is in the fee vault.
+        // Before routing, that same surplus stayed inside the treasury, mixed with the
+        // redemption backing. This test is what stops a future edit from silently
+        // reintroducing the mixing.
+        let brought = 10_000_000_000u64; // $10,000
+
+        // Mint.
+        let mint_fee = fee_from_amount(brought, MINT_BPS).unwrap();
+        let to_treasury = brought - mint_fee;
+        let silv = mint_silv_out(to_treasury, SPOT).unwrap();
+
+        // Redeem the whole position.
+        let gross = silv_to_usdc_at_oracle(silv, SPOT).unwrap();
+        let redeem_fee = fee_from_amount(gross, REDEEM_BPS).unwrap();
+        let to_user = gross - redeem_fee;
+
+        let treasury_delta = to_treasury as i128 - gross as i128;
+        let fee_vault_total = mint_fee + redeem_fee;
+        let user_cost = brought - to_user;
+
+        // 1. Conservation: nothing is created or destroyed. Every unit the user paid
+        //    is either in the fee vault or left behind in the treasury.
+        assert_eq!(user_cost as i128, fee_vault_total as i128 + treasury_delta);
+
+        // 2. The treasury is flat to within rounding dust, and the dust is POSITIVE
+        //    (the floors favour the protocol, never the caller).
+        assert!(
+            treasury_delta >= 0,
+            "treasury lost {treasury_delta} on a round trip: a rounding direction is \
+             inverted and the position is drainable by repetition"
+        );
+        assert!(
+            treasury_delta < 1_000,
+            "treasury kept {treasury_delta} atomic units, more than rounding dust: \
+             fee routing is leaking revenue back into the backing"
+        );
+
+        // 3. The user paid ~2.5% all-in (1% + 1.5%), which is the headline number.
+        let bps_paid = (user_cost as u128 * 10_000) / brought as u128;
+        assert_eq!(bps_paid, 248); // 2.48%, the two fees compounding
     }
 
     #[test]

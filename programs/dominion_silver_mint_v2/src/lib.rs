@@ -83,39 +83,66 @@ pub mod dominion_silver_mint {
         )
     }
 
-    // Option B queued-redemption lifecycle (§4.3 ENQUEUE + §4.4).
-    pub fn redeem_silv_queued(
-        ctx: Context<RedeemSilvQueued>,
-        amount_silv: u64,
-        request_nonce: u64,
-    ) -> Result<()> {
-        instructions::redeem_queued::queued_handler(ctx, amount_silv, request_nonce)
+    // REMOVED 2026-08-05, with the whole queued-redemption lifecycle:
+    //   redeem_silv_queued, claim_redemption, admin_settle_redemption_offchain,
+    //   close_settled_redemption.
+    //
+    // Redemption is now a single instant route (`redeem_silv`). Removing
+    // `admin_settle_redemption_offchain` also removes SolidProof TrustNet MEDIUM #4, where the
+    // admin could mark a request settled with no on-chain proof while the user's SILV was
+    // already burned. That finding is now absent from the program rather than justified in an
+    // audit response.
+    //
+    // Removing instructions is an ABI-breaking change. It is free here because redemptions
+    // were never enabled on any cluster: `set_redemptions_enabled` has always refused `true`,
+    // so no client ever successfully called any of the four, and no RedemptionRequest account
+    // exists anywhere.
+
+    // === Fee-exemption whitelist (Mark 2026-07-30, per-side split by Thomas 2026-08-05) ===
+    // Both instant. Rationale at the handlers: the worst case is foregone revenue, not a loss
+    // of principal, which is a different risk class from the loosenings this program delays.
+
+    pub fn set_fee_exempt(ctx: Context<SetFeeExempt>, wallet: Pubkey, flags: u8) -> Result<()> {
+        instructions::admin::fee_whitelist::set_fee_exempt_handler(ctx, wallet, flags)
     }
 
-    pub fn claim_redemption(
-        ctx: Context<ClaimRedemption>,
-        message_data: Vec<u8>,
-        ed25519_instruction_index: u16,
-        signature_index: u8,
-    ) -> Result<()> {
-        instructions::redeem_queued::claim_handler(
-            ctx,
-            message_data,
-            ed25519_instruction_index,
-            signature_index,
-        )
+    pub fn remove_fee_exempt(ctx: Context<RemoveFeeExempt>, wallet: Pubkey) -> Result<()> {
+        instructions::admin::fee_whitelist::remove_fee_exempt_handler(ctx, wallet)
     }
 
-    pub fn admin_settle_redemption_offchain(
-        ctx: Context<AdminSettleRedemptionOffchain>,
-    ) -> Result<()> {
-        instructions::redeem_queued::settle_offchain_handler(ctx)
+    /// Sweep accrued premium out of the program-owned fee vault to a destination chosen per
+    /// call from the admin panel. Instant: the vault backs nothing and `config.admin` is
+    /// already a multisig. See the handler for the full argument.
+    pub fn withdraw_fees(ctx: Context<WithdrawFees>, amount: u64) -> Result<()> {
+        instructions::admin::fee_whitelist::withdraw_fees_handler(ctx, amount)
     }
 
-    // P2-03: owner reclaims the rent of a request the admin already settled
-    // off-chain (SettledOffchain). Owner-gated, terminal-state only.
-    pub fn close_settled_redemption(ctx: Context<CloseSettledRedemption>) -> Result<()> {
-        instructions::redeem_queued::close_settled_redemption_handler(ctx)
+    // === KYC gate (shipped 2026-08-05, DORMANT: kyc_scope_flags == 0) ===
+    // Arming it later is a config change rather than a program upgrade and a second audit,
+    // which is the entire reason it ships now. The attestor key can ONLY write and revoke
+    // attestations: it cannot mint, pause, move funds, change a fee, or arm the gate.
+
+    pub fn set_kyc_operator(ctx: Context<SetKycOperator>, operator: Pubkey) -> Result<()> {
+        instructions::admin::kyc_admin::set_kyc_operator_handler(ctx, operator)
+    }
+
+    /// `flags` is a Side bitfield: bit 0 mint, bit 1 redeem, 0 = off. Instant in BOTH
+    /// directions; the handler explains why that inverts the usual asymmetry.
+    pub fn set_kyc_scope(ctx: Context<SetKycScope>, flags: u8) -> Result<()> {
+        instructions::admin::kyc_admin::set_kyc_scope_handler(ctx, flags)
+    }
+
+    /// `reference` is a HASH of the provider's record id. NEVER PII, not even hashed PII.
+    pub fn attest_kyc(
+        ctx: Context<AttestKyc>,
+        wallet: Pubkey,
+        reference: [u8; 32],
+    ) -> Result<()> {
+        instructions::admin::kyc_admin::attest_kyc_handler(ctx, wallet, reference)
+    }
+
+    pub fn revoke_kyc(ctx: Context<RevokeKyc>, wallet: Pubkey) -> Result<()> {
+        instructions::admin::kyc_admin::revoke_kyc_handler(ctx, wallet)
     }
 
     pub fn deposit_usdc(ctx: Context<DepositUsdc>, amount: u64) -> Result<()> {

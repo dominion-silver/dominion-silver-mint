@@ -5,7 +5,7 @@ pub mod initialize;
 pub mod mint_silv;
 #[cfg(feature = "test-harness")]
 pub mod probe;
-pub mod redeem_queued;
+// `redeem_queued` deleted 2026-08-05: redemption is a single instant route.
 pub mod redeem_silv;
 
 pub use admin::*;
@@ -15,5 +15,4 @@ pub use initialize::*;
 pub use mint_silv::*;
 #[cfg(feature = "test-harness")]
 pub use probe::*;
-pub use redeem_queued::*;
 pub use redeem_silv::*;

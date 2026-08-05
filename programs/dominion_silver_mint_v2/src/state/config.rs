@@ -6,8 +6,29 @@ use anchor_lang::prelude::*;
 // CODEX P1-01: per-side premium ceilings aligned to CONFIRMED_SPEC.md §6
 // (premium_bps_mint 0..2000, premium_bps_redeem 0..1000). Was a single
 // 3000-bps ceiling for both, which diverged from the locked spec.
-pub const PREMIUM_BPS_MINT_CEILING: u16 = 300; // 3% (launch spec 2026-07: mint 1.5%, hard cap 3%)
-pub const PREMIUM_BPS_REDEEM_CEILING: u16 = 500; // 5% (launch spec 2026-07: redeem 2%, hard cap 5%)
+// Both raised to 5% (Thomas, 2026-08-05). The mint ceiling was 3%.
+//
+// What these ceilings ARE: a promise written into the bytecode that bounds what a
+// compromised or coerced admin can charge users. Changing one costs a program upgrade,
+// which is slow and publicly visible, so the number is a genuine commitment rather than
+// a setting.
+//
+// What raising the mint ceiling COSTS, stated plainly because it is a reduction in user
+// protection and an auditor will ask: the worst case a compromised admin can impose on a
+// minter goes from 3% to 5%. It buys no operational capability that will realistically be
+// used, since minting at spot +5% is worse than any DEX price, so nobody would mint there.
+//
+// Why it is nonetheless acceptable: the meaningful control on a premium change is not the
+// ceiling, it is that BOTH premium setters are 24h-timelocked and guardian-cancellable
+// (propose_set_premium_mint / execute_set_premium_mint). A move toward the ceiling is
+// announced a day in advance and can be vetoed. The ceiling only bounds where that
+// announced move can land. Symmetry between the two sides is also easier to reason about
+// and to explain than 3%/5%.
+//
+// Launch values are 1% mint / 1.5% redeem (Mark, 2026-07-30), i.e. both sit at a fifth
+// and a third of their ceiling respectively. There is deliberate headroom.
+pub const PREMIUM_BPS_MINT_CEILING: u16 = 500; // 5% (Thomas 2026-08-05; launch value 1%)
+pub const PREMIUM_BPS_REDEEM_CEILING: u16 = 500; // 5% (launch value 1.5%)
                                                  // Combined premium floor REMOVED (launch spec 2026-07): mint 1.5% + redeem 2% =
                                                  // 3.5% sits below the old 5% floor, so the floor conflicts with the target fees.
                                                  // Set to 0 so the existing `sum >= FLOOR` checks (config.rs, initialize, propose,
@@ -159,8 +180,21 @@ pub const LAZER_CHANNEL_ID: u8 = 4;
 pub const DEFAULT_MIN_PUBLISHERS: u16 = 2;
 
 // Default launch values.
-pub const DEFAULT_PREMIUM_MINT_BPS: u16 = 150; // 1.5% (launch spec 2026-07)
-pub const DEFAULT_PREMIUM_REDEEM_BPS: u16 = 200; // 2%
+// Launch fees confirmed by Mark 2026-07-30: 1% mint, 1.5% redeem.
+//
+// These are DEFAULTS, not the source of truth: `premium_bps_mint` and
+// `premium_bps_redeem` are both `InitializeArgs` fields, so the value that actually ships
+// is whatever the deploy ceremony passes (see config/mainnet-authorities.json). They are
+// kept in sync here anyway, because several scripts and the unit tests read them, and a
+// stale default is how a devnet run ends up silently priced differently from mainnet.
+//
+// Both are 24h-timelock changeable after launch, so nothing here is locked in.
+//
+// Read fee_from_amount in math.rs for what "1%" means mechanically: 1% of the amount
+// flowing through, taken off the top, on BOTH sides. It is no longer folded into a
+// marked-up or marked-down price.
+pub const DEFAULT_PREMIUM_MINT_BPS: u16 = 100; // 1% (Mark, 2026-07-30)
+pub const DEFAULT_PREMIUM_REDEEM_BPS: u16 = 150; // 1.5% (Mark, 2026-07-30)
                                                  // Lazer migration (5.4): operating target ~15s, hard-capped at
                                                  // MAX_STALENESS_CEILING_SECONDS (30). The "single-digit" idea was
                                                  // retracted: this is a human-approved flow (proxy fetch -> build tx
@@ -219,6 +253,39 @@ pub const SILV_MINT_AUTHORITY_SEED: &[u8] = b"silv_mint_authority";
 pub const SILV_METADATA_AUTHORITY_SEED: &[u8] = b"silv_metadata_authority";
 pub const TIMELOCK_SEED: &[u8] = b"timelock";
 pub const GUARDIAN_SEED: &[u8] = b"guardian";
+
+// Premium revenue destination (Thomas, 2026-08-05). Authority PDA of the fee vault.
+//
+// The vault itself is the ASSOCIATED TOKEN ACCOUNT of this PDA for `config.usdc_mint`,
+// and it is deliberately NOT stored in ConfigAccount, unlike `usdc_treasury`. Two
+// reasons: it is fully derivable, so a stored pointer could only ever be wrong or stale;
+// and `reserved` is down to its last few dozen bytes, which Phase 2 still needs.
+//
+// The property that makes this shape safe, and the reason it was chosen over transferring
+// premiums straight to an admin-configured wallet: a PDA-owned ATA cannot be closed.
+// Closing a token account requires the owner's signature, and this program never signs a
+// CloseAccount for this PDA. A plain destination wallet could have its USDC ATA missing
+// or closed, and since the fee transfer happens inside mint and redeem, that would make
+// EVERY mint and EVERY redeem revert. One wrong address in the admin panel would brick
+// the product. Here that is structurally impossible.
+//
+// The configurable destination Thomas asked for is the `withdraw_fees` argument instead,
+// chosen per sweep. A wrong address there costs one misdirected sweep, not the product.
+pub const FEE_VAULT_SEED: &[u8] = b"fee_vault";
+
+// Per-wallet fee exemption (Mark, 2026-07-30: "whitelist specific wallets to bypass the
+// fee"). One PDA per wallet, seeded by the wallet, so the account cannot be presented on
+// behalf of somebody else. See state/fee_exempt.rs.
+pub const FEE_EXEMPT_SEED: &[u8] = b"fee_exempt";
+
+// Per-wallet KYC attestation, dormant at launch. One PDA per wallet, same shape as the
+// fee exemption. See state/kyc.rs.
+pub const KYC_SEED: &[u8] = b"kyc";
+
+// DEPRECATED (2026-08-05): the queued redemption path was deleted along with
+// `RedemptionRequest`. Kept declared because removing a `pub const` is a source-breaking
+// change for the scripts, and because leaving the seed visible documents that the seed
+// namespace `redeem_request` was once in use and must not be reused for anything else.
 pub const REDEEM_REQUEST_SEED: &[u8] = b"redeem_request";
 
 #[account]
@@ -299,13 +366,39 @@ pub struct ConfigAccount {
     // D11: manual redemptions switch (NO auto-expiry, Mark's explicit choice).
     pub redemptions_enabled: bool,
 
-    // D8/D10: redemption routing + Sybil-proof global rolling-window instant budget.
-    pub large_redeem_threshold_usdc: u64, // single redeem >= this is forced to T+3 queue
-    pub instant_redeem_budget_usdc: u64,  // max instant per window, all users combined
-    pub instant_redeem_window_seconds: u32,
-    pub redeem_queue_delay_seconds: u32, // T+3 default
-    pub instant_window_start: i64,       // current window start (rolling, reset-based)
-    pub instant_used_usdc: u64,          // cumulative instant redeemed in current window
+    // D10: Sybil-proof global rolling-window redeem budget. STILL LIVE.
+    //
+    // 2026-08-05: redemption became a SINGLE INSTANT ROUTE (Thomas: "on va rester tres
+    // simple"). Two of the six fields below are now DEAD, but every one of them stays
+    // DECLARED. Deleting a field shifts the byte offset of every field after it and would
+    // force a realloc of every deployed config, which is the same trap the
+    // `pending_removal_count` comment below documents. Dead does not mean removable.
+    //
+    // DEAD, never read: `large_redeem_threshold_usdc` was the per-size tier that forced
+    // large redemptions into the queue. Removed deliberately: it discriminated on amount,
+    // which is exactly what the simple design rejects, and it was also a structuring
+    // incentive (split one $10k redeem into three $4k ones).
+    //
+    // DEAD, never read: `redeem_queue_delay_seconds` gated the queue, and there is no
+    // queue.
+    //
+    // STILL LIVE and load-bearing: `instant_redeem_budget_usdc`,
+    // `instant_redeem_window_seconds`, `instant_window_start`, `instant_used_usdc`. This
+    // is ONE global ceiling per rolling window, applied identically to every caller
+    // whatever their size, so it is not amount discrimination. It is the only brake
+    // between a bad oracle print and the entire treasury leaving in a single transaction:
+    // the oracle guards (staleness, publisher floor, price-delta breaker) are filters, not
+    // limiters, and `pause` requires a human to notice inside one block. Exceeding the
+    // budget now REVERTS (RedeemLimitExceeded) where it used to route to the queue.
+    //
+    // Kept GLOBAL rather than per-wallet so it is Sybil-proof: splitting across a hundred
+    // fresh wallets cannot exceed one shared counter.
+    pub large_redeem_threshold_usdc: u64, // DEAD since 2026-08-05, do not read
+    pub instant_redeem_budget_usdc: u64,  // LIVE: max redeemed per window, all users
+    pub instant_redeem_window_seconds: u32, // LIVE
+    pub redeem_queue_delay_seconds: u32,  // DEAD since 2026-08-05, do not read
+    pub instant_window_start: i64,        // LIVE: current window start (rolling)
+    pub instant_used_usdc: u64,           // LIVE: cumulative redeemed in current window
 
     // D5/D9: queued-redemption request PDA uniqueness nonce.
     pub next_redeem_request_nonce: u64,
@@ -439,7 +532,25 @@ pub struct ConfigAccount {
     // `reserved` (opaque zeros) moves, so an in-place upgrade over an existing config
     // reads None, which is the correct value for "no proposal pending".
     pub pending_public_mint_nonce: Option<u64>,
-    pub reserved: [u8; 54],
+
+    // KYC scope, dormant at launch (Thomas, 2026-08-05). Bit 0 = required on mint,
+    // bit 1 = required on redeem. 0 = KYC off everywhere, which is the launch posture and
+    // also what an in-place upgrade over an existing config decodes, since `reserved` is
+    // zeros. Safe in both directions: the fail-closed default here is "no gate", and that
+    // is correct because the gate does not exist yet off-chain.
+    //
+    // Declared AFTER `version`, immediately before `reserved`, per THE RULE above.
+    //
+    // Why two bits rather than one bool: Mark's likely first step is KYC on REDEEM only,
+    // since redeem is the leg that pays out treasury cash, while public mint stays open to
+    // preserve DEX arbitrage. A single switch would force both at once.
+    //
+    // Relationship to `kyc_enforced`, which already existed as a Phase 1 hook: that field
+    // is kept as the human-readable master signal and is DERIVED, never set independently.
+    // The setter maintains `kyc_enforced == (kyc_scope_flags != 0)` as an invariant, so a
+    // panel or an external reader can trust either one and they can never disagree.
+    pub kyc_scope_flags: u8,
+    pub reserved: [u8; 53],
 }
 
 impl ConfigAccount {
@@ -480,7 +591,8 @@ impl ConfigAccount {
         + 1                   // pending_removal_count (carved out of reserved)
         + 1                   // version
         + (1 + 8)             // pending_public_mint_nonce (carved out of reserved)
-        + 54; // reserved
+        + 1                   // kyc_scope_flags (carved out of reserved)
+        + 53; // reserved
 
     pub fn assert_premium_within_bounds(&self) -> Result<()> {
         require!(

@@ -218,16 +218,19 @@
       ]
     },
     {
-      "name": "admin_settle_redemption_offchain",
+      "name": "attest_kyc",
+      "docs": [
+        "`reference` is a HASH of the provider's record id. NEVER PII, not even hashed PII."
+      ],
       "discriminator": [
+        73,
+        151,
         205,
-        144,
-        123,
-        14,
-        204,
-        72,
-        20,
-        91
+        185,
+        3,
+        84,
+        221,
+        47
       ],
       "accounts": [
         {
@@ -249,51 +252,50 @@
           }
         },
         {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "config"
-          ]
+          "name": "attestor",
+          "writable": true,
+          "signer": true
         },
         {
-          "name": "redemption_request",
+          "name": "kyc",
           "writable": true,
           "pda": {
             "seeds": [
               {
                 "kind": "const",
                 "value": [
-                  114,
-                  101,
-                  100,
-                  101,
-                  101,
-                  109,
-                  95,
-                  114,
-                  101,
-                  113,
-                  117,
-                  101,
-                  115,
-                  116
+                  107,
+                  121,
+                  99
                 ]
               },
               {
-                "kind": "account",
-                "path": "redemption_request.owner",
-                "account": "RedemptionRequest"
-              },
-              {
-                "kind": "account",
-                "path": "redemption_request.nonce",
-                "account": "RedemptionRequest"
+                "kind": "arg",
+                "path": "wallet"
               }
             ]
           }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "wallet",
+          "type": "pubkey"
+        },
+        {
+          "name": "reference",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "cancel_admin_transfer",
@@ -536,296 +538,6 @@
           "type": "u64"
         }
       ]
-    },
-    {
-      "name": "claim_redemption",
-      "discriminator": [
-        109,
-        110,
-        9,
-        188,
-        195,
-        217,
-        112,
-        83
-      ],
-      "accounts": [
-        {
-          "name": "config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "owner",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "redemption_request"
-          ]
-        },
-        {
-          "name": "redemption_request",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  114,
-                  101,
-                  100,
-                  101,
-                  101,
-                  109,
-                  95,
-                  114,
-                  101,
-                  113,
-                  117,
-                  101,
-                  115,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "owner"
-              },
-              {
-                "kind": "account",
-                "path": "redemption_request.nonce",
-                "account": "RedemptionRequest"
-              }
-            ]
-          }
-        },
-        {
-          "name": "usdc_mint",
-          "writable": true
-        },
-        {
-          "name": "usdc_treasury",
-          "writable": true
-        },
-        {
-          "name": "owner_usdc_ata",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "owner"
-              },
-              {
-                "kind": "account",
-                "path": "classic_token_program"
-              },
-              {
-                "kind": "account",
-                "path": "usdc_mint"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
-          "name": "treasury_pda",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  114,
-                  101,
-                  97,
-                  115,
-                  117,
-                  114,
-                  121
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "lazer_program"
-        },
-        {
-          "name": "lazer_storage"
-        },
-        {
-          "name": "lazer_treasury",
-          "writable": true
-        },
-        {
-          "name": "lazer_fee_payer",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  108,
-                  97,
-                  122,
-                  101,
-                  114,
-                  95,
-                  102,
-                  101,
-                  101,
-                  95,
-                  112,
-                  97,
-                  121,
-                  101,
-                  114
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "instructions_sysvar"
-        },
-        {
-          "name": "classic_token_program",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        },
-        {
-          "name": "associated_token_program",
-          "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
-        }
-      ],
-      "args": [
-        {
-          "name": "message_data",
-          "type": "bytes"
-        },
-        {
-          "name": "ed25519_instruction_index",
-          "type": "u16"
-        },
-        {
-          "name": "signature_index",
-          "type": "u8"
-        }
-      ]
-    },
-    {
-      "name": "close_settled_redemption",
-      "discriminator": [
-        138,
-        129,
-        74,
-        95,
-        143,
-        29,
-        186,
-        193
-      ],
-      "accounts": [
-        {
-          "name": "owner",
-          "writable": true,
-          "signer": true,
-          "relations": [
-            "redemption_request"
-          ]
-        },
-        {
-          "name": "redemption_request",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  114,
-                  101,
-                  100,
-                  101,
-                  101,
-                  109,
-                  95,
-                  114,
-                  101,
-                  113,
-                  117,
-                  101,
-                  115,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "owner"
-              },
-              {
-                "kind": "account",
-                "path": "redemption_request.nonce",
-                "account": "RedemptionRequest"
-              }
-            ]
-          }
-        }
-      ],
-      "args": []
     },
     {
       "name": "close_timelock_account",
@@ -2206,6 +1918,87 @@
           "writable": true
         },
         {
+          "name": "fee_vault_pda",
+          "docs": [
+            "receives here); it signs only in withdraw_fees."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  101,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "fee_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "fee_vault_pda"
+              },
+              {
+                "kind": "account",
+                "path": "classic_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
           "name": "user_usdc_ata",
           "writable": true,
           "pda": {
@@ -2390,6 +2183,53 @@
         },
         {
           "name": "instructions_sysvar"
+        },
+        {
+          "name": "fee_exempt",
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  101,
+                  101,
+                  95,
+                  101,
+                  120,
+                  101,
+                  109,
+                  112,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "kyc",
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  107,
+                  121,
+                  99
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
         },
         {
           "name": "classic_token_program",
@@ -3483,6 +3323,87 @@
           "writable": true
         },
         {
+          "name": "fee_vault_pda",
+          "docs": [
+            "this path); it signs only in withdraw_fees."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  101,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "fee_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "fee_vault_pda"
+              },
+              {
+                "kind": "account",
+                "path": "classic_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
           "name": "user_usdc_ata",
           "writable": true,
           "pda": {
@@ -3658,6 +3579,53 @@
           "name": "instructions_sysvar"
         },
         {
+          "name": "fee_exempt",
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  101,
+                  101,
+                  95,
+                  101,
+                  120,
+                  101,
+                  109,
+                  112,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
+          "name": "kyc",
+          "optional": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  107,
+                  121,
+                  99
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "user"
+              }
+            ]
+          }
+        },
+        {
           "name": "classic_token_program",
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         },
@@ -3698,21 +3666,20 @@
       ]
     },
     {
-      "name": "redeem_silv_queued",
+      "name": "remove_fee_exempt",
       "discriminator": [
-        185,
-        3,
-        84,
-        121,
-        188,
-        104,
-        44,
-        96
+        39,
+        145,
+        93,
+        156,
+        151,
+        125,
+        29,
+        217
       ],
       "accounts": [
         {
           "name": "config",
-          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -3730,123 +3697,45 @@
           }
         },
         {
-          "name": "user",
+          "name": "admin",
           "writable": true,
-          "signer": true
+          "signer": true,
+          "relations": [
+            "config"
+          ]
         },
         {
-          "name": "silv_mint",
-          "writable": true
-        },
-        {
-          "name": "user_silv_ata",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "account",
-                "path": "user"
-              },
-              {
-                "kind": "account",
-                "path": "token_2022_program"
-              },
-              {
-                "kind": "account",
-                "path": "silv_mint"
-              }
-            ],
-            "program": {
-              "kind": "const",
-              "value": [
-                140,
-                151,
-                37,
-                143,
-                78,
-                36,
-                137,
-                241,
-                187,
-                61,
-                16,
-                41,
-                20,
-                142,
-                13,
-                131,
-                11,
-                90,
-                19,
-                153,
-                218,
-                255,
-                16,
-                132,
-                4,
-                142,
-                123,
-                216,
-                219,
-                233,
-                248,
-                89
-              ]
-            }
-          }
-        },
-        {
-          "name": "redemption_request",
+          "name": "fee_exempt",
           "writable": true,
           "pda": {
             "seeds": [
               {
                 "kind": "const",
                 "value": [
-                  114,
+                  102,
                   101,
-                  100,
                   101,
+                  95,
+                  101,
+                  120,
                   101,
                   109,
-                  95,
-                  114,
-                  101,
-                  113,
-                  117,
-                  101,
-                  115,
+                  112,
                   116
                 ]
               },
               {
-                "kind": "account",
-                "path": "user"
-              },
-              {
                 "kind": "arg",
-                "path": "request_nonce"
+                "path": "wallet"
               }
             ]
           }
-        },
-        {
-          "name": "token_2022_program",
-          "address": "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
-        },
-        {
-          "name": "system_program",
-          "address": "11111111111111111111111111111111"
         }
       ],
       "args": [
         {
-          "name": "amount_silv",
-          "type": "u64"
-        },
-        {
-          "name": "request_nonce",
-          "type": "u64"
+          "name": "wallet",
+          "type": "pubkey"
         }
       ]
     },
@@ -3928,6 +3817,152 @@
       ]
     },
     {
+      "name": "revoke_kyc",
+      "discriminator": [
+        170,
+        100,
+        20,
+        190,
+        192,
+        242,
+        236,
+        232
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "signer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "kyc",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  107,
+                  121,
+                  99
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "wallet"
+              }
+            ]
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "wallet",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_fee_exempt",
+      "discriminator": [
+        224,
+        228,
+        88,
+        87,
+        69,
+        164,
+        109,
+        92
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "fee_exempt",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  101,
+                  101,
+                  95,
+                  101,
+                  120,
+                  101,
+                  109,
+                  112,
+                  116
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "wallet"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "wallet",
+          "type": "pubkey"
+        },
+        {
+          "name": "flags",
+          "type": "u8"
+        }
+      ]
+    },
+    {
       "name": "set_inventory_wallet",
       "discriminator": [
         145,
@@ -3971,6 +4006,104 @@
         {
           "name": "wallet",
           "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_kyc_operator",
+      "discriminator": [
+        90,
+        136,
+        3,
+        234,
+        31,
+        234,
+        233,
+        28
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "operator",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
+      "name": "set_kyc_scope",
+      "docs": [
+        "`flags` is a Side bitfield: bit 0 mint, bit 1 redeem, 0 = off. Instant in BOTH",
+        "directions; the handler explains why that inverts the usual asymmetry."
+      ],
+      "discriminator": [
+        247,
+        144,
+        54,
+        161,
+        195,
+        200,
+        228,
+        100
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "flags",
+          "type": "u8"
         }
       ]
     },
@@ -4167,6 +4300,149 @@
         }
       ],
       "args": []
+    },
+    {
+      "name": "withdraw_fees",
+      "docs": [
+        "Sweep accrued premium out of the program-owned fee vault to a destination chosen per",
+        "call from the admin panel. Instant: the vault backs nothing and `config.admin` is",
+        "already a multisig. See the handler for the full argument."
+      ],
+      "discriminator": [
+        198,
+        212,
+        171,
+        109,
+        144,
+        215,
+        174,
+        89
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "usdc_mint"
+        },
+        {
+          "name": "fee_vault_pda",
+          "docs": [
+            "instruction in which it signs."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  102,
+                  101,
+                  101,
+                  95,
+                  118,
+                  97,
+                  117,
+                  108,
+                  116
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "fee_vault",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "account",
+                "path": "fee_vault_pda"
+              },
+              {
+                "kind": "account",
+                "path": "classic_token_program"
+              },
+              {
+                "kind": "account",
+                "path": "usdc_mint"
+              }
+            ],
+            "program": {
+              "kind": "const",
+              "value": [
+                140,
+                151,
+                37,
+                143,
+                78,
+                36,
+                137,
+                241,
+                187,
+                61,
+                16,
+                41,
+                20,
+                142,
+                13,
+                131,
+                11,
+                90,
+                19,
+                153,
+                218,
+                255,
+                16,
+                132,
+                4,
+                142,
+                123,
+                216,
+                219,
+                233,
+                248,
+                89
+              ]
+            }
+          }
+        },
+        {
+          "name": "destination",
+          "writable": true
+        },
+        {
+          "name": "classic_token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
     }
   ],
   "accounts": [
@@ -4184,6 +4460,19 @@
       ]
     },
     {
+      "name": "FeeExemptAccount",
+      "discriminator": [
+        225,
+        192,
+        121,
+        56,
+        202,
+        173,
+        143,
+        115
+      ]
+    },
+    {
       "name": "GuardianAccount",
       "discriminator": [
         161,
@@ -4197,16 +4486,16 @@
       ]
     },
     {
-      "name": "RedemptionRequest",
+      "name": "KycAccount",
       "discriminator": [
-        117,
-        157,
-        214,
-        214,
-        64,
-        160,
-        31,
-        58
+        123,
+        111,
+        35,
+        238,
+        194,
+        3,
+        211,
+        78
       ]
     },
     {
@@ -4342,6 +4631,45 @@
       ]
     },
     {
+      "name": "FeeExemptRemoved",
+      "discriminator": [
+        89,
+        113,
+        68,
+        144,
+        230,
+        186,
+        107,
+        123
+      ]
+    },
+    {
+      "name": "FeeExemptSet",
+      "discriminator": [
+        253,
+        67,
+        32,
+        130,
+        84,
+        68,
+        232,
+        59
+      ]
+    },
+    {
+      "name": "FeesWithdrawn",
+      "discriminator": [
+        234,
+        15,
+        0,
+        119,
+        148,
+        241,
+        40,
+        21
+      ]
+    },
+    {
       "name": "GuardianAdded",
       "discriminator": [
         151,
@@ -4404,6 +4732,58 @@
         91,
         115,
         232
+      ]
+    },
+    {
+      "name": "KycAttested",
+      "discriminator": [
+        27,
+        233,
+        91,
+        124,
+        91,
+        173,
+        128,
+        81
+      ]
+    },
+    {
+      "name": "KycOperatorChanged",
+      "discriminator": [
+        245,
+        155,
+        237,
+        227,
+        235,
+        89,
+        46,
+        33
+      ]
+    },
+    {
+      "name": "KycRevoked",
+      "discriminator": [
+        205,
+        46,
+        180,
+        9,
+        213,
+        21,
+        197,
+        62
+      ]
+    },
+    {
+      "name": "KycScopeChanged",
+      "discriminator": [
+        103,
+        132,
+        161,
+        31,
+        193,
+        202,
+        191,
+        70
       ]
     },
     {
@@ -5169,6 +5549,41 @@
       "code": 12102,
       "name": "PublicMintOpenRequiresTimelock",
       "msg": "Opening the public mint requires the 24h timelock; only CLOSING it is instant"
+    },
+    {
+      "code": 12103,
+      "name": "RedeemLimitExceeded",
+      "msg": "This redemption would exceed the global rolling redeem budget for the current window; retry after the window rolls or ask the admin to raise it"
+    },
+    {
+      "code": 12104,
+      "name": "KycRequired",
+      "msg": "This wallet has no KYC attestation and KYC is currently required for this action"
+    },
+    {
+      "code": 12105,
+      "name": "KycAttestorNotSet",
+      "msg": "KYC cannot be enabled while config.kyc_operator is unset: enabling it with no attestor would lock out every holder with no way to approve anyone"
+    },
+    {
+      "code": 12106,
+      "name": "KycScopeInvalid",
+      "msg": "KYC scope value is unchanged, or sets bits other than mint and redeem"
+    },
+    {
+      "code": 12107,
+      "name": "FeeExemptFlagsInvalid",
+      "msg": "Fee-exemption flags are unchanged, zero, or set bits other than mint and redeem; use remove_fee_exempt to revoke an exemption entirely"
+    },
+    {
+      "code": 12108,
+      "name": "InsufficientFeeVault",
+      "msg": "Fee vault balance is below the requested sweep amount"
+    },
+    {
+      "code": 12109,
+      "name": "AttestationWalletMismatch",
+      "msg": "Attestation account does not belong to the signing wallet"
     }
   ],
   "types": [
@@ -5631,11 +6046,15 @@
             }
           },
           {
+            "name": "kyc_scope_flags",
+            "type": "u8"
+          },
+          {
             "name": "reserved",
             "type": {
               "array": [
                 "u8",
-                54
+                53
               ]
             }
           }
@@ -5668,6 +6087,182 @@
           {
             "name": "value_b",
             "type": "u64"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FeeExemptAccount",
+      "docs": [
+        "Waives the mint premium, the redeem premium, or both, for ONE wallet.",
+        "",
+        "Requested by Mark 2026-07-30 (\"we need to be able to whitelist specific wallets to",
+        "bypass the fee\"), with the per-side split added by Thomas 2026-08-05 so the admin panel",
+        "chooses which fee is waived. Market makers seeding and rebalancing the DEX pool are the",
+        "motivating case: charging them 1% each way widens the spread they can quote for",
+        "everybody else.",
+        "",
+        "One account PER wallet, PDA-derived FROM that wallet. That shape is deliberate:",
+        "",
+        "- It scales without bound. A fixed-size array inside ConfigAccount would cap the list",
+        "and eat the `reserved` bytes Phase 2 still needs.",
+        "- The PDA seeds BIND the account to the wallet, so a caller cannot present somebody",
+        "else's exemption. There is nothing to spoof.",
+        "- Mint and redeem take it as an OPTION. A caller who omits it simply pays the fee,",
+        "which is the safe default: forgetting the account can never accidentally exempt",
+        "anyone, and the fee-paying path is the one that needs no privileges.",
+        "",
+        "Both add and remove are INSTANT admin actions, deliberately NOT timelocked, which is a",
+        "departure from how this program treats other loosenings. The reason is that the worst",
+        "case here is FOREGONE FEE REVENUE, not a loss of principal, backing, or user funds: an",
+        "exempt wallet still pays the full oracle price for its SILV and still receives the full",
+        "oracle price when redeeming. Compare the loosenings that ARE timelocked (opening the",
+        "mint, raising the redeem budget, changing the oracle feed), every one of which can move",
+        "value or change what users are charged. A day-long ceremony to onboard a market maker",
+        "would buy nothing.",
+        "",
+        "KNOWN CONSEQUENCE, flagged to Thomas 2026-08-05 and accepted: a wallet exempt on BOTH",
+        "sides can mint at exact spot and redeem at exact spot, so its round trip is free. That",
+        "hands it a free option on oracle movement, paid by the treasury: with the normal fees a",
+        "round trip must overcome ~2.5% before it profits, at 0% any favourable move is profit.",
+        "The per-side flags are the mitigation, because exempting the MINT side only leaves the",
+        "redeem fee as the cost of closing the loop. Prefer `SIDE_MINT_BIT` alone unless there is",
+        "a specific reason to waive both."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "docs": [
+              "The exempt wallet. Always equals the PDA seed; re-checked in `exempts`."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "flags",
+            "docs": [
+              "Bitfield over `Side`. See state/side.rs. Never zero: a zero-flag exemption is",
+              "rejected on write, because it would be dead rent that still shows up in a roster."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "added_at",
+            "type": "i64"
+          },
+          {
+            "name": "added_by",
+            "docs": [
+              "Who granted it. Kept for forensics: an unexplained exemption is a red flag, and the",
+              "event alone stops being enough once RPC logs age out."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Room for a future per-wallet fee OVERRIDE (a reduced rate rather than zero) or an",
+              "expiry, without changing the account size. Learned from GuardianAccount, which grew",
+              "twice and had neither."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "FeeExemptRemoved",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "previous_flags",
+            "docs": [
+              "The flags in force at revocation, so a log reader can see what was withdrawn",
+              "without correlating against the earlier grant."
+            ],
+            "type": "u8"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FeeExemptSet",
+      "docs": [
+        "Emitted on both grant and update. `flags` is a `Side` bitfield (state/side.rs)."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "flags",
+            "type": "u8"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FeesWithdrawn",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "destination",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "remaining",
+            "docs": [
+              "Vault balance AFTER the sweep. Makes \"was this the whole balance or a partial",
+              "sweep?\" answerable from the event alone."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
           },
           {
             "name": "timestamp",
@@ -5850,6 +6445,222 @@
       }
     },
     {
+      "name": "KycAccount",
+      "docs": [
+        "A per-wallet KYC attestation. DORMANT at launch: the on-chain mechanism ships in the",
+        "pre-mainnet upgrade (2026-08-05) with `config.kyc_scope_flags == 0`, so nothing is",
+        "gated until Mark's off-chain provider exists and the admin arms it.",
+        "",
+        "# Why it ships dormant instead of later",
+        "",
+        "SolidProof audited an older version of this program. Every upgrade after launch is",
+        "either unaudited or costs another audit round. Shipping the gate now, switched off,",
+        "means arming it later is a config change rather than a new contract version. It is also",
+        "nearly free to build alongside the fee-exemption whitelist, which has the identical",
+        "shape (one PDA per wallet, admin-managed, optional account on mint and redeem).",
+        "",
+        "# THE PII RULE, and it is not negotiable",
+        "",
+        "Nothing on this account identifies a person. Not a name, not an email, not a document",
+        "number, and NOT A HASH of any of those: an email hash is trivially reversed by brute",
+        "force because the input space is small and guessable. `reference` holds a hash of the",
+        "PROVIDER'S INTERNAL RECORD ID, which is high-entropy and meaningless without the",
+        "provider's own database.",
+        "",
+        "This matters because on-chain data is permanent and world-readable. A GDPR erasure",
+        "request cannot be honoured on Solana. Of everything in this batch it is the only part",
+        "that is genuinely unfixable if it is got wrong, which is why the constraint lives here",
+        "in the type rather than in a document somebody may not read.",
+        "",
+        "# What the off-chain side must produce for this to work",
+        "",
+        "The contract deliberately depends on the SMALLEST possible fact: \"this wallet is",
+        "approved, attested by this key, referencing record H\". It never learns who the person",
+        "is, which provider was used, or which jurisdiction applies. That is what makes it",
+        "provider-agnostic: whatever Mark picks, and whatever he switches to later, plugs in",
+        "without touching this code.",
+        "",
+        "The interface Mark's flow must satisfy is three items, one of which is easy to miss:",
+        "",
+        "1. The Solana wallet address.",
+        "2. The provider's record id, hashed into `reference`.",
+        "3. **Proof that the approved person controls that wallet.** A KYC provider verifies a",
+        "PERSON, not a WALLET. Without a step where the user signs a nonce with the wallet",
+        "and the backend verifies that signature before attesting, wallet X gets approved",
+        "for person A and person B uses it. The gate is then decorative. This program cannot",
+        "check it, which is exactly why it has to be stated as a requirement on the",
+        "off-chain side.",
+        "",
+        "# Operational footgun",
+        "",
+        "Write attestations BEFORE arming `kyc_scope_flags`. Arming the gate first locks out",
+        "every existing holder instantly, because none of them has an attestation yet.",
+        "`set_kyc_scope` refuses to arm while `config.kyc_operator` is unset, which catches the",
+        "worst version of this mistake but not the general one."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "docs": [
+              "The approved wallet. Always equals the PDA seed; re-checked in `attests`."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "approved_at",
+            "type": "i64"
+          },
+          {
+            "name": "attestor",
+            "docs": [
+              "The attestor key that wrote this record. Kept per-record rather than trusting the",
+              "current `config.kyc_operator`, so rotating the operator does not retroactively",
+              "change who is on the hook for an approval, and a compromised-key incident can be",
+              "scoped to the records that key actually wrote."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "reference",
+            "docs": [
+              "Opaque 32 bytes: a hash of the PROVIDER'S RECORD ID. Never PII. See the type docs.",
+              "All-zero is permitted and means \"no reference supplied\", which a manual approval",
+              "process may legitimately have."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "version",
+            "type": "u8"
+          },
+          {
+            "name": "reserved",
+            "docs": [
+              "Room for an expiry (periodic re-screening is normal in this domain) or a risk tier,",
+              "without changing the account size."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "KycAttested",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "attestor",
+            "type": "pubkey"
+          },
+          {
+            "name": "reference",
+            "docs": [
+              "Hash of the provider's record id. NEVER PII: see state/kyc.rs."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "KycOperatorChanged",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "new_operator",
+            "type": "pubkey"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "KycRevoked",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "KycScopeChanged",
+      "docs": [
+        "The KYC gate being armed or disarmed. This is the highest-signal admin event in the",
+        "program for a holder: arming it can lock people out of redeeming."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_flags",
+            "type": "u8"
+          },
+          {
+            "name": "new_flags",
+            "type": "u8"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
       "name": "MaxSupplyChanged",
       "type": {
         "kind": "struct",
@@ -5914,6 +6725,10 @@
           },
           {
             "name": "amount_usdc",
+            "docs": [
+              "TOTAL USDC the user authorised, i.e. gross. The treasury received",
+              "`amount_usdc - fee_usdc`; the fee vault received `fee_usdc`."
+            ],
             "type": "u64"
           },
           {
@@ -5922,11 +6737,29 @@
           },
           {
             "name": "price_used_scaled",
+            "docs": [
+              "The oracle price, now PURE SPOT. Before 2026-08-05 the premium was folded into a",
+              "marked-up price and this field carried the raw oracle read anyway, so its meaning is",
+              "unchanged; what changed is that `amount_silv` is computed directly from it."
+            ],
             "type": "u128"
           },
           {
             "name": "premium_bps_used",
+            "docs": [
+              "The premium ACTUALLY applied. 0 when the caller holds a mint-side fee exemption, so",
+              "this is the field to read when auditing whitelist usage rather than",
+              "`config.premium_bps_mint`."
+            ],
             "type": "u16"
+          },
+          {
+            "name": "fee_usdc",
+            "docs": [
+              "Premium routed to the fee vault (2026-08-05). Appended, so older decoders that stop",
+              "after `timestamp` still parse the prefix."
+            ],
+            "type": "u64"
           },
           {
             "name": "timestamp",
@@ -6123,6 +6956,10 @@
           },
           {
             "name": "amount_usdc",
+            "docs": [
+              "USDC the user RECEIVED, i.e. net. The treasury paid out `amount_usdc + fee_usdc` in",
+              "total, because the premium leg also comes from the treasury."
+            ],
             "type": "u64"
           },
           {
@@ -6131,7 +6968,17 @@
           },
           {
             "name": "premium_bps_used",
+            "docs": [
+              "The premium ACTUALLY applied. 0 when the caller holds a redeem-side exemption."
+            ],
             "type": "u16"
+          },
+          {
+            "name": "fee_usdc",
+            "docs": [
+              "Premium routed to the fee vault (2026-08-05)."
+            ],
+            "type": "u64"
           },
           {
             "name": "timestamp",
@@ -6159,14 +7006,49 @@
           },
           {
             "name": "large_redeem_threshold_usdc",
+            "docs": [
+              "DEAD since 2026-08-05 (the per-size tier was removed with the queue). Still accepted",
+              "and still applied to the now-unread config field, because removing it would change",
+              "this struct's borsh layout. See the note on `redemptions_enabled` below."
+            ],
             "type": {
               "option": "u64"
             }
           },
           {
             "name": "redeem_queue_delay_seconds",
+            "docs": [
+              "DEAD since 2026-08-05 (there is no queue). Same reasoning."
+            ],
             "type": {
               "option": "u32"
+            }
+          },
+          {
+            "name": "redemptions_enabled",
+            "docs": [
+              "THE REDEEM SWITCH (Thomas, 2026-08-05). Appended, deliberately, to this action rather",
+              "than given its own timelocked instruction and its own `pending_*_nonce`.",
+              "",
+              "Why it belongs here: enabling redemptions IS loosening a redeem throttle, which is",
+              "precisely what this action exists for. It gets the 24h delay, the guardian-cancel",
+              "window, the single-active-nonce guard and the ceiling re-validation for free, and it",
+              "adds no bytes to ConfigAccount, whose `reserved` is down to 53.",
+              "",
+              "`Some(false)` counts as a TIGHTEN, so it is also available on the instant",
+              "`emergency_tighten_redeem_limits` path, alongside the dedicated",
+              "`set_redemptions_enabled(false)`. `Some(true)` is a LOOSEN and is refused there.",
+              "",
+              "BORSH CAVEAT, worth knowing before appending anything else here: this struct is",
+              "serialized into `TimelockQueueAccount.action_data`, so appending a field makes any",
+              "proposal that was queued under the OLD layout fail to deserialize at execute",
+              "(`SerializationFailure`), because the stored bytes are one short. Cancelling such a",
+              "proposal still works, since `cancel_timelocked_action` never decodes `action_data`.",
+              "Before deploying this upgrade, check for a live SetRedeemLimits proposal and cancel it",
+              "rather than leaving it stuck."
+            ],
+            "type": {
+              "option": "bool"
             }
           }
         ]
@@ -6289,55 +7171,6 @@
       }
     },
     {
-      "name": "RedemptionRequest",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "owner",
-            "type": "pubkey"
-          },
-          {
-            "name": "amount_silv",
-            "type": "u64"
-          },
-          {
-            "name": "requested_at",
-            "type": "i64"
-          },
-          {
-            "name": "claimable_at",
-            "type": "i64"
-          },
-          {
-            "name": "nonce",
-            "type": "u64"
-          },
-          {
-            "name": "status",
-            "type": {
-              "defined": {
-                "name": "RedemptionStatus"
-              }
-            }
-          },
-          {
-            "name": "bump",
-            "type": "u8"
-          },
-          {
-            "name": "reserved",
-            "type": {
-              "array": [
-                "u8",
-                32
-              ]
-            }
-          }
-        ]
-      }
-    },
-    {
       "name": "RedemptionSettledOffchain",
       "type": {
         "kind": "struct",
@@ -6361,23 +7194,6 @@
           {
             "name": "timestamp",
             "type": "i64"
-          }
-        ]
-      }
-    },
-    {
-      "name": "RedemptionStatus",
-      "type": {
-        "kind": "enum",
-        "variants": [
-          {
-            "name": "Pending"
-          },
-          {
-            "name": "Claimed"
-          },
-          {
-            "name": "SettledOffchain"
           }
         ]
       }

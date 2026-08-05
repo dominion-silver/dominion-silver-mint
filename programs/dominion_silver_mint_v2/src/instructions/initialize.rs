@@ -467,7 +467,13 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.inventory_wallet = Pubkey::default();
     // Public direct mint closed at launch (opens with KYC in Phase 1).
     config.public_mint_enabled = DEFAULT_PUBLIC_MINT_ENABLED;
-    // Phase 1 KYC hooks (reserved, unused at launch).
+    // KYC gate: shipped 2026-08-05 but DORMANT. The mechanism exists on-chain so that
+    // turning it on later is a config change rather than a program upgrade and a second
+    // audit; the off-chain half (Mark's provider) does not exist yet.
+    //
+    // `kyc_operator` unset is what BLOCKS enabling: set_kyc_scope refuses to arm the gate
+    // while there is no attestor (KycAttestorNotSet), because a gate with no way to
+    // approve anybody locks out every holder.
     config.kyc_operator = Pubkey::default();
     config.kyc_enforced = false;
     config.pending_kyc_operator_nonce = None;
@@ -483,7 +489,10 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.pending_removal_count = 0;
     config.version = 2; // launch spec 2026-07 schema
     config.pending_public_mint_nonce = None;
-    config.reserved = [0u8; 54];
+    // 0 = KYC required nowhere. Must stay consistent with `kyc_enforced = false` above;
+    // set_kyc_scope maintains that invariant thereafter.
+    config.kyc_scope_flags = 0;
+    config.reserved = [0u8; 53];
 
     msg!("dominion_silver_mint initialized");
     Ok(())

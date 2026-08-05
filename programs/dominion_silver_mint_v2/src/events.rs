@@ -3,10 +3,21 @@ use anchor_lang::prelude::*;
 #[event]
 pub struct MintEvent {
     pub user: Pubkey,
+    /// TOTAL USDC the user authorised, i.e. gross. The treasury received
+    /// `amount_usdc - fee_usdc`; the fee vault received `fee_usdc`.
     pub amount_usdc: u64,
     pub amount_silv: u64,
+    /// The oracle price, now PURE SPOT. Before 2026-08-05 the premium was folded into a
+    /// marked-up price and this field carried the raw oracle read anyway, so its meaning is
+    /// unchanged; what changed is that `amount_silv` is computed directly from it.
     pub price_used_scaled: u128,
+    /// The premium ACTUALLY applied. 0 when the caller holds a mint-side fee exemption, so
+    /// this is the field to read when auditing whitelist usage rather than
+    /// `config.premium_bps_mint`.
     pub premium_bps_used: u16,
+    /// Premium routed to the fee vault (2026-08-05). Appended, so older decoders that stop
+    /// after `timestamp` still parse the prefix.
+    pub fee_usdc: u64,
     pub timestamp: i64,
 }
 
@@ -24,9 +35,80 @@ pub struct PremintEvent {
 pub struct RedeemEvent {
     pub user: Pubkey,
     pub amount_silv: u64,
+    /// USDC the user RECEIVED, i.e. net. The treasury paid out `amount_usdc + fee_usdc` in
+    /// total, because the premium leg also comes from the treasury.
     pub amount_usdc: u64,
     pub price_used_scaled: u128,
+    /// The premium ACTUALLY applied. 0 when the caller holds a redeem-side exemption.
     pub premium_bps_used: u16,
+    /// Premium routed to the fee vault (2026-08-05).
+    pub fee_usdc: u64,
+    pub timestamp: i64,
+}
+
+// --- Premium routing, fee-exemption whitelist and dormant KYC (2026-08-05) ---
+
+/// Emitted on both grant and update. `flags` is a `Side` bitfield (state/side.rs).
+#[event]
+pub struct FeeExemptSet {
+    pub wallet: Pubkey,
+    pub flags: u8,
+    pub by: Pubkey,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct FeeExemptRemoved {
+    pub wallet: Pubkey,
+    /// The flags in force at revocation, so a log reader can see what was withdrawn
+    /// without correlating against the earlier grant.
+    pub previous_flags: u8,
+    pub by: Pubkey,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct FeesWithdrawn {
+    pub destination: Pubkey,
+    pub amount: u64,
+    /// Vault balance AFTER the sweep. Makes "was this the whole balance or a partial
+    /// sweep?" answerable from the event alone.
+    pub remaining: u64,
+    pub by: Pubkey,
+    pub timestamp: i64,
+}
+
+/// The KYC gate being armed or disarmed. This is the highest-signal admin event in the
+/// program for a holder: arming it can lock people out of redeeming.
+#[event]
+pub struct KycScopeChanged {
+    pub old_flags: u8,
+    pub new_flags: u8,
+    pub by: Pubkey,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct KycAttested {
+    pub wallet: Pubkey,
+    pub attestor: Pubkey,
+    /// Hash of the provider's record id. NEVER PII: see state/kyc.rs.
+    pub reference: [u8; 32],
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct KycRevoked {
+    pub wallet: Pubkey,
+    pub by: Pubkey,
+    pub timestamp: i64,
+}
+
+#[event]
+pub struct KycOperatorChanged {
+    pub old_operator: Pubkey,
+    pub new_operator: Pubkey,
+    pub by: Pubkey,
     pub timestamp: i64,
 }
 
