@@ -52,10 +52,27 @@ pub struct FeeExemptAccount {
     /// event alone stops being enough once RPC logs age out.
     pub added_by: Pubkey,
     pub version: u8,
-    /// Room for a future per-wallet fee OVERRIDE (a reduced rate rather than zero) or an
-    /// expiry, without changing the account size. Learned from GuardianAccount, which grew
-    /// twice and had neither.
-    pub reserved: [u8; 32],
+    /// Unix timestamp after which this exemption stops applying. 0 = NEVER EXPIRES.
+    ///
+    /// A6. The `reserved` bytes were sized for this and it was left unwired, which the security
+    /// review flagged: instant grant + no expiry + no rate limit means a compromised admin
+    /// self-exempts and runs the mint-side capture loop until a human happens to read a
+    /// `FeeExemptSet` event. An expiry converts that from "until someone notices" into "until the
+    /// clock runs out", which is the difference between an open-ended leak and a bounded one.
+    ///
+    /// It also fits how these are actually used: a market-maker exemption is part of a liquidity
+    /// arrangement with a term, not an unconditional permanent favour.
+    ///
+    /// 0 is still permitted, because a genuinely indefinite exemption is a real operational choice
+    /// and forcing a fake far-future date would be worse: it would look like an expiry while
+    /// behaving like none. The admin panel makes the choice explicit.
+    ///
+    /// An in-place upgrade over an existing exemption decodes this as 0 from the zeroed `reserved`,
+    /// i.e. "never expires", which preserves the current behaviour of every live exemption.
+    pub expires_at: i64,
+    /// Room for a future per-wallet fee OVERRIDE (a reduced rate rather than zero) without
+    /// changing the account size.
+    pub reserved: [u8; 24],
 }
 
 impl FeeExemptAccount {
@@ -65,15 +82,26 @@ impl FeeExemptAccount {
         + 8  // added_at
         + 32 // added_by
         + 1  // version
-        + 32; // reserved
+        + 8  // expires_at
+        + 24; // reserved
 
-    /// Whether this account genuinely exempts `signer` on `side`.
+    /// Whether this exemption has passed its expiry at `now`. Always false when `expires_at` is 0.
+    pub fn is_expired(&self, now: i64) -> bool {
+        self.expires_at != 0 && now >= self.expires_at
+    }
+
+    /// Whether this account genuinely exempts `signer` on `side` at `now`.
     ///
     /// The wallet re-check is defence in depth. PDA seeds already bind the account, so a
     /// mismatch is unreachable today; this is the assertion that has to hold if the seeds
     /// are ever relaxed, and it costs 32 bytes of comparison.
-    pub fn exempts(&self, signer: &Pubkey, side: Side) -> bool {
-        self.wallet == *signer && side.is_set_in(self.flags)
+    ///
+    /// An EXPIRED exemption simply stops applying: the caller pays the full premium and the
+    /// transaction still succeeds. It is deliberately not an error. Reverting would turn a lapsed
+    /// commercial arrangement into a broken product for that wallet, and the account lingering is
+    /// harmless once it no longer grants anything.
+    pub fn exempts(&self, signer: &Pubkey, side: Side, now: i64) -> bool {
+        self.wallet == *signer && side.is_set_in(self.flags) && !self.is_expired(now)
     }
 }
 
@@ -105,9 +133,10 @@ pub fn effective_premium_bps(
     exemption: Option<&FeeExemptAccount>,
     signer: &Pubkey,
     side: Side,
+    now: i64,
 ) -> u16 {
     match exemption {
-        Some(e) if e.exempts(signer, side) => 0,
+        Some(e) if e.exempts(signer, side, now) => 0,
         _ => configured_bps,
     }
 }
@@ -121,6 +150,7 @@ mod tests {
     const OTHER: Pubkey = Pubkey::new_from_array([9u8; 32]);
     const ADMIN: Pubkey = Pubkey::new_from_array([1u8; 32]);
 
+    /// Never expires, which is what every test below wants unless it says otherwise.
     fn exemption(wallet: Pubkey, flags: u8) -> FeeExemptAccount {
         FeeExemptAccount {
             wallet,
@@ -128,20 +158,31 @@ mod tests {
             added_at: 1,
             added_by: ADMIN,
             version: FEE_EXEMPT_ACCOUNT_VERSION,
-            reserved: [0u8; 32],
+            expires_at: 0,
+            reserved: [0u8; 24],
         }
     }
 
+    fn expiring(wallet: Pubkey, flags: u8, expires_at: i64) -> FeeExemptAccount {
+        FeeExemptAccount {
+            expires_at,
+            ..exemption(wallet, flags)
+        }
+    }
+
+    /// `now` for the tests that do not care about time.
+    const T: i64 = 1_000;
+
     #[test]
     fn size_matches_the_struct() {
-        assert_eq!(FeeExemptAccount::SIZE, 8 + 32 + 1 + 8 + 32 + 1 + 32);
+        assert_eq!(FeeExemptAccount::SIZE, 8 + 32 + 1 + 8 + 32 + 1 + 8 + 24);
         assert_eq!(FeeExemptAccount::SIZE, 114);
     }
 
     #[test]
     fn no_exemption_supplied_charges_the_full_premium() {
-        assert_eq!(effective_premium_bps(100, None, &WALLET, Side::Mint), 100);
-        assert_eq!(effective_premium_bps(150, None, &WALLET, Side::Redeem), 150);
+        assert_eq!(effective_premium_bps(100, None, &WALLET, Side::Mint, T), 100);
+        assert_eq!(effective_premium_bps(150, None, &WALLET, Side::Redeem, T), 150);
     }
 
     #[test]
@@ -149,9 +190,9 @@ mod tests {
         // The recommended configuration: waiving mint alone keeps the redeem fee as the
         // cost of closing a round trip, so the free-option problem does not arise.
         let e = exemption(WALLET, SIDE_MINT_BIT);
-        assert_eq!(effective_premium_bps(100, Some(&e), &WALLET, Side::Mint), 0);
+        assert_eq!(effective_premium_bps(100, Some(&e), &WALLET, Side::Mint, T), 0);
         assert_eq!(
-            effective_premium_bps(150, Some(&e), &WALLET, Side::Redeem),
+            effective_premium_bps(150, Some(&e), &WALLET, Side::Redeem, T),
             150
         );
     }
@@ -160,11 +201,11 @@ mod tests {
     fn a_redeem_only_exemption_waives_redeem_and_NOT_mint() {
         let e = exemption(WALLET, SIDE_REDEEM_BIT);
         assert_eq!(
-            effective_premium_bps(100, Some(&e), &WALLET, Side::Mint),
+            effective_premium_bps(100, Some(&e), &WALLET, Side::Mint, T),
             100
         );
         assert_eq!(
-            effective_premium_bps(150, Some(&e), &WALLET, Side::Redeem),
+            effective_premium_bps(150, Some(&e), &WALLET, Side::Redeem, T),
             0
         );
     }
@@ -172,9 +213,9 @@ mod tests {
     #[test]
     fn a_both_sides_exemption_waives_both() {
         let e = exemption(WALLET, SIDE_ALL_BITS);
-        assert_eq!(effective_premium_bps(100, Some(&e), &WALLET, Side::Mint), 0);
+        assert_eq!(effective_premium_bps(100, Some(&e), &WALLET, Side::Mint, T), 0);
         assert_eq!(
-            effective_premium_bps(150, Some(&e), &WALLET, Side::Redeem),
+            effective_premium_bps(150, Some(&e), &WALLET, Side::Redeem, T),
             0
         );
     }
@@ -185,11 +226,11 @@ mod tests {
         // must hold if the seeds are ever relaxed.
         let e = exemption(OTHER, SIDE_ALL_BITS);
         assert_eq!(
-            effective_premium_bps(100, Some(&e), &WALLET, Side::Mint),
+            effective_premium_bps(100, Some(&e), &WALLET, Side::Mint, T),
             100
         );
         assert_eq!(
-            effective_premium_bps(150, Some(&e), &WALLET, Side::Redeem),
+            effective_premium_bps(150, Some(&e), &WALLET, Side::Redeem, T),
             150
         );
     }
@@ -200,12 +241,12 @@ mod tests {
         // wrong-side account block a legitimate mint: a client bug becoming a DoS.
         let wrong_wallet = exemption(OTHER, SIDE_MINT_BIT);
         assert_eq!(
-            effective_premium_bps(100, Some(&wrong_wallet), &WALLET, Side::Mint),
+            effective_premium_bps(100, Some(&wrong_wallet), &WALLET, Side::Mint, T),
             100
         );
         let wrong_side = exemption(WALLET, SIDE_REDEEM_BIT);
         assert_eq!(
-            effective_premium_bps(100, Some(&wrong_side), &WALLET, Side::Mint),
+            effective_premium_bps(100, Some(&wrong_side), &WALLET, Side::Mint, T),
             100
         );
     }
@@ -213,8 +254,8 @@ mod tests {
     #[test]
     fn a_zero_configured_premium_stays_zero_either_way() {
         let e = exemption(WALLET, SIDE_ALL_BITS);
-        assert_eq!(effective_premium_bps(0, None, &WALLET, Side::Mint), 0);
-        assert_eq!(effective_premium_bps(0, Some(&e), &WALLET, Side::Mint), 0);
+        assert_eq!(effective_premium_bps(0, None, &WALLET, Side::Mint, T), 0);
+        assert_eq!(effective_premium_bps(0, Some(&e), &WALLET, Side::Mint, T), 0);
     }
 
     #[test]
@@ -228,6 +269,55 @@ mod tests {
     }
 
     #[test]
+    fn an_expiry_of_zero_never_expires() {
+        let e = exemption(WALLET, SIDE_ALL_BITS);
+        assert!(!e.is_expired(0));
+        assert!(!e.is_expired(i64::MAX));
+        assert_eq!(
+            effective_premium_bps(100, Some(&e), &WALLET, Side::Mint, i64::MAX),
+            0
+        );
+    }
+
+    #[test]
+    fn an_expired_exemption_silently_stops_applying() {
+        // The caller pays the full premium and the transaction still SUCCEEDS. Reverting would
+        // turn a lapsed commercial arrangement into a broken product for that wallet.
+        let e = expiring(WALLET, SIDE_ALL_BITS, 5_000);
+        assert_eq!(effective_premium_bps(100, Some(&e), &WALLET, Side::Mint, 4_999), 0);
+        // Exactly at the expiry it is already gone: the boundary is inclusive of expiry.
+        assert_eq!(
+            effective_premium_bps(100, Some(&e), &WALLET, Side::Mint, 5_000),
+            100
+        );
+        assert_eq!(
+            effective_premium_bps(100, Some(&e), &WALLET, Side::Mint, 9_999),
+            100
+        );
+    }
+
+    #[test]
+    fn expiry_applies_to_both_sides_independently_of_the_flags() {
+        let e = expiring(WALLET, SIDE_ALL_BITS, 5_000);
+        for side in [Side::Mint, Side::Redeem] {
+            assert_eq!(effective_premium_bps(150, Some(&e), &WALLET, side, 4_000), 0);
+            assert_eq!(effective_premium_bps(150, Some(&e), &WALLET, side, 6_000), 150);
+        }
+    }
+
+    #[test]
+    fn a_negative_or_zero_clock_cannot_resurrect_an_expired_exemption() {
+        // Solana's unix_timestamp is not guaranteed monotonic across validators. An exemption that
+        // has expired must not come back for a caller who lands during a backwards wobble... and it
+        // CAN, because the check is a plain comparison against `now`. Asserted so the behaviour is
+        // known rather than assumed: the window is bounded by clock skew (seconds), which is
+        // acceptable for a fee waiver and would not be for a security gate.
+        let e = expiring(WALLET, SIDE_MINT_BIT, 5_000);
+        assert_eq!(effective_premium_bps(100, Some(&e), &WALLET, Side::Mint, 5_001), 100);
+        assert_eq!(effective_premium_bps(100, Some(&e), &WALLET, Side::Mint, 4_999), 0);
+    }
+
+    #[test]
     fn the_launch_fees_are_the_ones_being_waived() {
         // Mark 2026-07-30: 1% mint, 1.5% redeem. Pinned so that changing the launch fees
         // cannot silently drift away from the cases exercised here.
@@ -236,11 +326,11 @@ mod tests {
         assert_eq!(DEFAULT_PREMIUM_REDEEM_BPS, 150);
         let e = exemption(WALLET, SIDE_ALL_BITS);
         assert_eq!(
-            effective_premium_bps(DEFAULT_PREMIUM_MINT_BPS, Some(&e), &WALLET, Side::Mint),
+            effective_premium_bps(DEFAULT_PREMIUM_MINT_BPS, Some(&e), &WALLET, Side::Mint, T),
             0
         );
         assert_eq!(
-            effective_premium_bps(DEFAULT_PREMIUM_REDEEM_BPS, Some(&e), &WALLET, Side::Redeem),
+            effective_premium_bps(DEFAULT_PREMIUM_REDEEM_BPS, Some(&e), &WALLET, Side::Redeem, T),
             0
         );
     }

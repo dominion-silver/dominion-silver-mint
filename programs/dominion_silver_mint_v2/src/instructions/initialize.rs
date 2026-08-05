@@ -494,7 +494,10 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.kyc_scope_flags = 0;
     // No prior bucket at genesis. See state/redeem_window.rs.
     config.instant_used_prev_usdc = 0;
-    config.reserved = [0u8; 45];
+    // Premium routing ON at launch. The escape hatch (see state/config.rs) only matters if the
+    // fee vault ever becomes unusable, e.g. frozen by the USDC issuer.
+    config.fee_routing_enabled = true;
+    config.reserved = [0u8; 44];
 
     msg!("dominion_silver_mint initialized");
     Ok(())

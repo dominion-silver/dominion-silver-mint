@@ -9,7 +9,7 @@ use anchor_spl::token::{Mint as ClassicMint, Token, TokenAccount};
 
 use crate::cpi::usdc_transfer_fee_vault_to_destination;
 use crate::errors::DominionError;
-use crate::events::{FeeExemptRemoved, FeeExemptSet, FeesWithdrawn};
+use crate::events::{FeeExemptRemoved, FeeExemptSet, FeeRoutingChanged, FeesWithdrawn};
 use crate::state::*;
 
 // ===========================================================================
@@ -17,7 +17,7 @@ use crate::state::*;
 // ===========================================================================
 
 #[derive(Accounts)]
-#[instruction(wallet: Pubkey, flags: u8)]
+#[instruction(wallet: Pubkey, flags: u8, expires_at: i64)]
 pub struct SetFeeExempt<'info> {
     #[account(seeds = [CONFIG_SEED], bump, has_one = admin)]
     pub config: Box<Account<'info, ConfigAccount>>,
@@ -52,9 +52,25 @@ pub struct SetFeeExempt<'info> {
 ///
 /// The residual risk, stated so it is not discovered later: a compromised admin can exempt
 /// itself and trade fee-free until someone notices. `FeeExemptSet` is the event to alert on.
-pub fn set_fee_exempt_handler(ctx: Context<SetFeeExempt>, wallet: Pubkey, flags: u8) -> Result<()> {
+pub fn set_fee_exempt_handler(
+    ctx: Context<SetFeeExempt>,
+    wallet: Pubkey,
+    flags: u8,
+    expires_at: i64,
+) -> Result<()> {
     validate_fee_exempt_flags(flags)?;
     let now = Clock::get()?.unix_timestamp;
+    // A6. 0 means "never expires" and is allowed: a genuinely indefinite exemption is a real
+    // operational choice, and forcing a fake far-future date would be worse because it would LOOK
+    // like an expiry while behaving like none.
+    //
+    // What IS rejected is an expiry already in the past, which would create an account that grants
+    // nothing while appearing in every roster as an active exemption. That is the same trap
+    // zero-flags would be, and it is rejected for the same reason.
+    require!(
+        expires_at == 0 || expires_at > now,
+        DominionError::FeeExemptFlagsInvalid
+    );
     let admin_key = ctx.accounts.admin.key();
     let acc = &mut ctx.accounts.fee_exempt;
 
@@ -68,10 +84,12 @@ pub fn set_fee_exempt_handler(ctx: Context<SetFeeExempt>, wallet: Pubkey, flags:
     acc.flags = flags;
     acc.added_by = admin_key;
     acc.version = FEE_EXEMPT_ACCOUNT_VERSION;
+    acc.expires_at = expires_at;
 
     emit!(FeeExemptSet {
         wallet,
         flags,
+        expires_at,
         by: admin_key,
         timestamp: now,
     });
@@ -254,6 +272,53 @@ pub fn withdraw_fees_handler(ctx: Context<WithdrawFees>, amount: u64) -> Result<
         // Computed rather than re-read: `fee_vault.amount` is the pre-CPI snapshot Anchor
         // deserialized, so re-reading it here would report the stale balance.
         remaining: available.saturating_sub(amount),
+        by: ctx.accounts.admin.key(),
+        timestamp: Clock::get()?.unix_timestamp,
+    });
+    Ok(())
+}
+
+// ===========================================================================
+// set_fee_routing_enabled: the fee-vault escape hatch
+// ===========================================================================
+
+#[derive(Accounts)]
+pub struct SetFeeRouting<'info> {
+    #[account(mut, seeds = [CONFIG_SEED], bump, has_one = admin)]
+    pub config: Box<Account<'info, ConfigAccount>>,
+    pub admin: Signer<'info>,
+}
+
+/// Turn premium routing on or off. INSTANT in both directions.
+///
+/// This is the remedy for a fee vault that has become unusable. USDC carries a Circle freeze
+/// authority, and the premium transfer inside mint and redeem is unconditional, so a frozen
+/// fee-vault ATA would otherwise brick mint AND redeem for every non-exempt wallet with no
+/// on-chain fix short of a program upgrade. Exempt wallets would keep working, which makes the
+/// failure asymmetric and hard to diagnose from the outside.
+///
+/// With routing OFF the premium simply stays in the treasury. That is not an untested degraded
+/// mode: it is exactly how this program behaved before 2026-08-05, for its entire prior history.
+///
+/// Instant in BOTH directions, which is unusual here and deliberate:
+///   - OFF is a safety action, and every safety action in this program is instant.
+///   - ON is normally the direction that would earn a timelock, but it cannot lose or misdirect
+///     funds. It only changes which of two PROGRAM-CONTROLLED accounts the premium accrues in,
+///     and both are reachable only by admin instructions that are themselves gated. Making the
+///     restoration slow would mean a day of forgone revenue after an incident is resolved, for
+///     no protection.
+pub fn set_fee_routing_enabled_handler(
+    ctx: Context<SetFeeRouting>,
+    enabled: bool,
+) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+    require!(
+        enabled != config.fee_routing_enabled,
+        DominionError::ProposalNoOp
+    );
+    config.fee_routing_enabled = enabled;
+    emit!(FeeRoutingChanged {
+        enabled,
         by: ctx.accounts.admin.key(),
         timestamp: Clock::get()?.unix_timestamp,
     });

@@ -240,8 +240,21 @@ pub fn handler(
         ctx.accounts.fee_exempt.as_deref(),
         &user_key,
         Side::Redeem,
+        // A6: an exemption can carry an expiry. An EXPIRED one silently stops applying and the
+        // caller pays the full premium, rather than reverting: a lapsed commercial arrangement
+        // must not become a broken product for that wallet.
+        now,
     );
-    let fee_usdc = fee_from_amount(gross_usdc, premium_bps)?;
+    // A5: with routing OFF the premium stays in the treasury, which is the pre-2026-08-05
+    // behaviour. Zeroing the fee here means the treasury pays only the user's leg, no fee CPI
+    // runs, and an unusable fee vault cannot brick redemption. Note this makes the payout LARGER
+    // (the user receives the full spot value), which is the right direction for a fallback: it
+    // forgoes revenue rather than blocking users.
+    let fee_usdc = if config.fee_routing_enabled {
+        fee_from_amount(gross_usdc, premium_bps)?
+    } else {
+        0
+    };
     // `fee_from_amount` is proven never to exceed its input (math.rs). Checked anyway: an
     // unchecked subtraction here would wrap into a colossal payout.
     let to_user_usdc = gross_usdc

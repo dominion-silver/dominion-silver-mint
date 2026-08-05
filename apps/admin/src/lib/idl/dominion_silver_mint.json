@@ -3882,6 +3882,10 @@
     },
     {
       "name": "set_fee_exempt",
+      "docs": [
+        "`expires_at` is a unix timestamp, or 0 for \"never expires\". An expiry already in the past",
+        "is rejected: it would grant nothing while appearing in every roster as active."
+      ],
       "discriminator": [
         224,
         228,
@@ -3959,6 +3963,65 @@
         {
           "name": "flags",
           "type": "u8"
+        },
+        {
+          "name": "expires_at",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "set_fee_routing_enabled",
+      "docs": [
+        "The fee-vault ESCAPE HATCH. Instant in both directions.",
+        "",
+        "With this false the premium stays in the treasury, which is how the program behaved before",
+        "2026-08-05. It exists because USDC carries a Circle freeze authority and the premium",
+        "transfer is unconditional, so a frozen fee vault would otherwise brick mint AND redeem for",
+        "every non-exempt wallet with no on-chain remedy."
+      ],
+      "discriminator": [
+        101,
+        222,
+        101,
+        30,
+        104,
+        59,
+        161,
+        45
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "enabled",
+          "type": "bool"
         }
       ]
     },
@@ -4657,6 +4720,19 @@
         68,
         232,
         59
+      ]
+    },
+    {
+      "name": "FeeRoutingChanged",
+      "discriminator": [
+        128,
+        104,
+        208,
+        247,
+        216,
+        128,
+        213,
+        86
       ]
     },
     {
@@ -6057,11 +6133,15 @@
             "type": "u64"
           },
           {
+            "name": "fee_routing_enabled",
+            "type": "bool"
+          },
+          {
             "name": "reserved",
             "type": {
               "array": [
                 "u8",
-                45
+                44
               ]
             }
           }
@@ -6175,16 +6255,38 @@
             "type": "u8"
           },
           {
+            "name": "expires_at",
+            "docs": [
+              "Unix timestamp after which this exemption stops applying. 0 = NEVER EXPIRES.",
+              "",
+              "A6. The `reserved` bytes were sized for this and it was left unwired, which the security",
+              "review flagged: instant grant + no expiry + no rate limit means a compromised admin",
+              "self-exempts and runs the mint-side capture loop until a human happens to read a",
+              "`FeeExemptSet` event. An expiry converts that from \"until someone notices\" into \"until the",
+              "clock runs out\", which is the difference between an open-ended leak and a bounded one.",
+              "",
+              "It also fits how these are actually used: a market-maker exemption is part of a liquidity",
+              "arrangement with a term, not an unconditional permanent favour.",
+              "",
+              "0 is still permitted, because a genuinely indefinite exemption is a real operational choice",
+              "and forcing a fake far-future date would be worse: it would look like an expiry while",
+              "behaving like none. The admin panel makes the choice explicit.",
+              "",
+              "An in-place upgrade over an existing exemption decodes this as 0 from the zeroed `reserved`,",
+              "i.e. \"never expires\", which preserves the current behaviour of every live exemption."
+            ],
+            "type": "i64"
+          },
+          {
             "name": "reserved",
             "docs": [
-              "Room for a future per-wallet fee OVERRIDE (a reduced rate rather than zero) or an",
-              "expiry, without changing the account size. Learned from GuardianAccount, which grew",
-              "twice and had neither."
+              "Room for a future per-wallet fee OVERRIDE (a reduced rate rather than zero) without",
+              "changing the account size."
             ],
             "type": {
               "array": [
                 "u8",
-                32
+                24
               ]
             }
           }
@@ -6234,6 +6336,39 @@
           {
             "name": "flags",
             "type": "u8"
+          },
+          {
+            "name": "expires_at",
+            "docs": [
+              "0 = never expires. Emitted so a monitor can alert on an exemption granted WITHOUT a term,",
+              "which is the shape a compromised admin would use."
+            ],
+            "type": "i64"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
+          },
+          {
+            "name": "timestamp",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "FeeRoutingChanged",
+      "docs": [
+        "Premium routing turned on or off. The highest-signal fee event: with routing OFF the premium",
+        "stays in the treasury, so revenue analytics that read `fee_usdc` will correctly see zeros, and",
+        "anyone reconciling the fee vault needs to know when the switch moved."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "enabled",
+            "type": "bool"
           },
           {
             "name": "by",

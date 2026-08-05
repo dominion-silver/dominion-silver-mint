@@ -406,14 +406,20 @@ const ACTIONS: ActionDesc[] = [
     fields: [
       { name: "wallet", label: "Wallet to exempt (pubkey)", kind: "pubkey" },
       { name: "flags", label: "Scope: 1=mint, 2=redeem, 3=both", kind: "int" },
+      {
+        name: "expires",
+        label: "Expires (unix seconds, 0 = never - prefer a term)",
+        kind: "optbig",
+      },
     ],
-    tip: "Waives the premium for one wallet. PREFER 1 (mint only): a both-sides exemption makes a round trip free, which hands that wallet a free option on oracle movement paid by the treasury, whereas the normal fees require a ~2.5% move before a round trip profits. Instant, because the worst case is foregone revenue, not a loss of principal.",
+    tip: "Waives the premium for one wallet. SET AN EXPIRY: without one, a compromised admin can self-exempt and trade fee-free until a human reads the event log. PREFER 1 (mint only): a both-sides exemption makes a round trip free, which hands that wallet a free option on oracle movement paid by the treasury, whereas the normal fees require a ~2.5% move before a round trip profits. Instant, because the worst case is foregone revenue, not a loss of principal.",
     build: (c, p) => {
       const f = parseUint(p.flags, 3);
       if (f !== 1 && f !== 2 && f !== 3) {
         throw new Error("Scope must be 1 (mint), 2 (redeem) or 3 (both)");
       }
-      return actions.setFeeExempt(c, pk(p.wallet), f);
+      const exp = p.expires && p.expires.trim() ? parseBigUint(p.expires) : 0n;
+      return actions.setFeeExempt(c, pk(p.wallet), f, exp);
     },
   },
   {
@@ -443,6 +449,17 @@ const ACTIONS: ActionDesc[] = [
   },
 
   // --- KYC gate. DORMANT until armed. ---
+  {
+    id: "fee-routing",
+    label: "Premium routing ON / OFF (escape hatch)",
+    group: "Emergency & ops",
+    danger: true,
+    mode: "squads",
+    fields: [{ name: "on", label: "Routing enabled", kind: "bool" }],
+    tip: "Turn this OFF if the fee vault ever becomes unusable, e.g. frozen by the USDC issuer. The premium transfer inside mint and redeem is unconditional, so a frozen vault would otherwise brick mint AND redeem for every non-exempt wallet, with exempt wallets still working (which makes it confusing to diagnose). With routing off the premium simply stays in the treasury: that is not an untested mode, it is exactly how this program behaved before 2026-08-05. Instant in both directions.",
+    current: (c) => (c.feeRoutingEnabled ? "ON (premium -> vault)" : "OFF (premium stays in treasury)"),
+    build: (c, p) => actions.setFeeRoutingEnabled(c, boolField(p, "on")),
+  },
   {
     id: "kyc-set-operator",
     label: "KYC: set attestor key",

@@ -125,6 +125,10 @@ export interface ConfigAccount {
   version: number;
   /** Single-active guard for the timelocked public-mint OPEN. */
   pendingPublicMintNonce: BN | null;
+  /** The fee-vault escape hatch. True at init: the premium routes to the vault. False means it
+   *  stays in the treasury, which is the pre-2026-08-05 behaviour and the remedy if the vault ever
+   *  becomes unusable (e.g. frozen by the USDC issuer). */
+  feeRoutingEnabled?: boolean;
   /** KYC scope bitfield: bit 0 = mint, bit 1 = redeem, 0 = off (the launch posture).
    *
    *  Declared explicitly because the panel reads it through an `any`-typed `current?: (c: any)`

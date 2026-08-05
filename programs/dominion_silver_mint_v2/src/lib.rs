@@ -102,8 +102,15 @@ pub mod dominion_silver_mint {
     // Both instant. Rationale at the handlers: the worst case is foregone revenue, not a loss
     // of principal, which is a different risk class from the loosenings this program delays.
 
-    pub fn set_fee_exempt(ctx: Context<SetFeeExempt>, wallet: Pubkey, flags: u8) -> Result<()> {
-        instructions::admin::fee_whitelist::set_fee_exempt_handler(ctx, wallet, flags)
+    /// `expires_at` is a unix timestamp, or 0 for "never expires". An expiry already in the past
+    /// is rejected: it would grant nothing while appearing in every roster as active.
+    pub fn set_fee_exempt(
+        ctx: Context<SetFeeExempt>,
+        wallet: Pubkey,
+        flags: u8,
+        expires_at: i64,
+    ) -> Result<()> {
+        instructions::admin::fee_whitelist::set_fee_exempt_handler(ctx, wallet, flags, expires_at)
     }
 
     pub fn remove_fee_exempt(ctx: Context<RemoveFeeExempt>, wallet: Pubkey) -> Result<()> {
@@ -115,6 +122,19 @@ pub mod dominion_silver_mint {
     /// already a multisig. See the handler for the full argument.
     pub fn withdraw_fees(ctx: Context<WithdrawFees>, amount: u64) -> Result<()> {
         instructions::admin::fee_whitelist::withdraw_fees_handler(ctx, amount)
+    }
+
+    /// The fee-vault ESCAPE HATCH. Instant in both directions.
+    ///
+    /// With this false the premium stays in the treasury, which is how the program behaved before
+    /// 2026-08-05. It exists because USDC carries a Circle freeze authority and the premium
+    /// transfer is unconditional, so a frozen fee vault would otherwise brick mint AND redeem for
+    /// every non-exempt wallet with no on-chain remedy.
+    pub fn set_fee_routing_enabled(
+        ctx: Context<SetFeeRouting>,
+        enabled: bool,
+    ) -> Result<()> {
+        instructions::admin::fee_whitelist::set_fee_routing_enabled_handler(ctx, enabled)
     }
 
     // === KYC gate (shipped 2026-08-05, DORMANT: kyc_scope_flags == 0) ===

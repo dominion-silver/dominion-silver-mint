@@ -251,8 +251,24 @@ pub fn handler(
         ctx.accounts.fee_exempt.as_deref(),
         &user_key,
         Side::Mint,
+        // A6: an exemption can carry an expiry. An EXPIRED one silently stops applying and the
+        // caller pays the full premium, rather than reverting: a lapsed commercial arrangement
+        // must not become a broken product for that wallet.
+        now,
     );
-    let fee_usdc = fee_from_amount(amount_usdc, premium_bps)?;
+    // A5: with routing OFF, the premium stays in the treasury (the pre-2026-08-05 behaviour) and
+    // NO fee amount is carved out at all. Setting `fee_usdc` to zero is what makes the whole
+    // downstream path fall back cleanly: the treasury receives the gross, no fee CPI runs, and a
+    // frozen or otherwise unusable fee vault stops mattering.
+    //
+    // The user's SILV changes, deliberately and in their favour by the premium, because the SILV is
+    // minted on the net. That is correct for a fallback whose purpose is to keep the product
+    // working: it forgoes revenue rather than charging a fee it cannot route.
+    let fee_usdc = if config.fee_routing_enabled {
+        fee_from_amount(amount_usdc, premium_bps)?
+    } else {
+        0
+    };
     // `fee_from_amount` is proven never to exceed its input (math.rs), so this cannot
     // underflow. Checked anyway: an unchecked subtraction here would wrap into a colossal
     // net on any future change to that guarantee.

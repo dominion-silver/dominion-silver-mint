@@ -563,7 +563,25 @@ pub struct ConfigAccount {
     // An in-place upgrade over an existing config decodes this as 0, which is correct: it means
     // "no prior bucket", so the first window after the upgrade is simply unweighted.
     pub instant_used_prev_usdc: u64,
-    pub reserved: [u8; 45],
+
+    // A5: the ESCAPE HATCH for premium routing. True at init.
+    //
+    // The failure it exists for: USDC carries a Circle freeze authority. A frozen fee-vault ATA
+    // would permanently brick mint AND redeem for every non-exempt wallet, because the premium
+    // transfer is unconditional and the vault can never be closed or redirected. Exempt wallets
+    // would keep working, which makes the failure asymmetric and genuinely confusing to diagnose.
+    // Low likelihood, unbounded blast radius, and before this there was NO on-chain remedy short
+    // of a program upgrade.
+    //
+    // With this false, the premium simply stays in the treasury, which is exactly the behaviour
+    // the program had before 2026-08-05. So the fallback is not a degraded mode nobody has
+    // exercised: it is the design that ran for the whole prior history of this program.
+    //
+    // Turning it OFF is a safety action and therefore instant. Turning it back ON is also instant,
+    // because it cannot lose or misdirect funds: it only changes which of two program-controlled
+    // accounts the premium accrues in.
+    pub fee_routing_enabled: bool,
+    pub reserved: [u8; 44],
 }
 
 impl ConfigAccount {
@@ -606,7 +624,8 @@ impl ConfigAccount {
         + (1 + 8)             // pending_public_mint_nonce (carved out of reserved)
         + 1                   // kyc_scope_flags (carved out of reserved)
         + 8                   // instant_used_prev_usdc (carved out of reserved)
-        + 45; // reserved
+        + 1                   // fee_routing_enabled (carved out of reserved)
+        + 44; // reserved
 
     pub fn assert_premium_within_bounds(&self) -> Result<()> {
         require!(

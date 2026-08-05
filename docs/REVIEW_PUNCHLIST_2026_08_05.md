@@ -7,6 +7,18 @@ Working rule for this pass: fix ONE item, run the relevant tests, tick it, move 
 batch unrelated edits into one commit, because a review-of-fixes has to be able to attribute a
 regression to a single change.
 
+## ALL 28 ITEMS CLOSED (2026-08-05)
+
+Fixed across seven commits, one coherent group per commit so a review-of-fixes can attribute a
+regression to a single change. Verification at the end of each: 130 program unit tests, admin 17,
+public 25, both typechecks, both production builds, the constants gate, the NEW client/IDL parity
+gate, and the mainnet readiness gate.
+
+Two items grew during the fix because implementing the reviewer's remedy revealed the real bug:
+A2 (no execute_* handler was bound to its config nonce, so every "clear the pending nonce" defence
+in the program was cosmetic, tracked as A7) and A3 (the fixed window could not be made rolling by
+renaming it, so it became a real sliding-window counter).
+
 ## Status legend
 
 - `[ ]` open
@@ -56,7 +68,7 @@ redemption routes around it. The panel tooltip already warns the operator; the p
 enforce it. Fix: gate `withdraw_fees` on `usdc_treasury.amount >= config.treasury_min_float_usdc`
 (cheapest, keeps the redeem path untouched), or debit the float on the premium leg.
 
-### [ ] A5. No escape hatch if the fee vault becomes unusable
+### [x] A5. No escape hatch if the fee vault becomes unusable
 USDC carries a Circle freeze authority. A frozen fee-vault ATA permanently bricks mint and
 redeem for every non-exempt wallet, recoverable only by a program upgrade: the vault cannot be
 closed and there is no config field to point the premium elsewhere. Exempt wallets keep working,
@@ -83,7 +95,7 @@ believed to disarm it.
 This is NOT a finding from the three reviewers; it surfaced while implementing their A2. Worth
 noting for the review-of-fixes: a fix can be the thing that reveals the real bug.
 
-### [ ] A6. Fee exemptions have no expiry and no rate limit
+### [x] A6. Fee exemptions have no expiry and no rate limit
 `FeeExemptAccount.reserved` was sized for an expiry that is not wired. Instant grant, no expiry,
 no rate limit means a compromised admin self-exempts and runs the mint-side capture loop until a
 human reads a `FeeExemptSet` event. Also quantified by the reviewer: a mint-exempt wallet has NO

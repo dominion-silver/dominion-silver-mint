@@ -247,14 +247,20 @@ export async function fetchFeeVaultBalance(
  *
  *  Instant, admin-only. Prefer 1 (mint only) unless there is a specific reason to waive both:
  *  a both-sides exemption makes a round trip free, which hands that wallet a free option on
- *  oracle movement, paid by the treasury. See state/fee_exempt.rs. */
+ *  oracle movement, paid by the treasury. See state/fee_exempt.rs.
+ *
+ *  `expiresAtUnix` is a unix timestamp, or 0n for "never expires". A term is STRONGLY preferred:
+ *  without one, a compromised admin can self-exempt and run the mint-side capture loop until a
+ *  human happens to read a FeeExemptSet event. An expiry bounds that. An expiry already in the
+ *  past is rejected on chain, because it would grant nothing while appearing active in a roster. */
 export async function setFeeExempt(
   c: BuildCtx,
   wallet: PublicKey,
   flags: number,
+  expiresAtUnix: bigint,
 ): Ix {
   const ix = await (getProgram(c.connection).methods as any)
-    .setFeeExempt(wallet, flags)
+    .setFeeExempt(wallet, flags, new BN(expiresAtUnix.toString()))
     .accountsPartial({
       admin: c.admin ?? adminAuthority(),
       feeExempt: feeExemptPda(wallet),
@@ -744,3 +750,16 @@ export async function executeWithdrawUsdc(
     .instruction();
   return one(ix);
 }
+
+/** The fee-vault ESCAPE HATCH. Instant in both directions.
+ *
+ *  With this false the premium stays in the treasury, which is how the program behaved before
+ *  2026-08-05. It exists because USDC carries a Circle freeze authority and the premium transfer
+ *  inside mint and redeem is unconditional, so a frozen fee vault would otherwise brick mint AND
+ *  redeem for every non-exempt wallet with no on-chain remedy short of a program upgrade.
+ *
+ *  Turning it OFF forgoes revenue and keeps the product working. That is the right trade in an
+ *  incident, and the fallback is not an untested mode: it is the design that ran for this
+ *  program's entire prior history. */
+export const setFeeRoutingEnabled = (c: BuildCtx, enabled: boolean): Ix =>
+  instant(c, "setFeeRoutingEnabled", enabled);
