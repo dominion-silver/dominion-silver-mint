@@ -15,8 +15,23 @@ pub struct MintEvent {
     /// this is the field to read when auditing whitelist usage rather than
     /// `config.premium_bps_mint`.
     pub premium_bps_used: u16,
-    /// Premium routed to the fee vault (2026-08-05). Appended, so older decoders that stop
-    /// after `timestamp` still parse the prefix.
+    /// Premium routed to the fee vault (2026-08-05).
+    ///
+    /// CORRECTION. An earlier version of this comment said "appended, so older decoders that
+    /// stop after `timestamp` still parse the prefix". THAT WAS FALSE and it is worth spelling
+    /// out, because the comment actively authorised a mistake:
+    ///
+    /// This field is at index 4 of 6, BEFORE `timestamp`, not appended. Borsh is positional, so
+    /// a decoder built against the pre-upgrade IDL reads these 8 bytes AS `timestamp`. A $100
+    /// mint would decode as `timestamp = 1000000`, i.e. January 1970. It does not error, it
+    /// silently produces a plausible wrong number, which is the worst failure shape available.
+    ///
+    /// There is no in-repo decoder, so nothing is broken today. But ANY off-chain indexer,
+    /// dashboard or analytics job must be rebuilt against the new IDL before it reads
+    /// MintEvent or RedeemEvent again. Do not assume a prefix-compatible read.
+    ///
+    /// Left in place rather than moved to the end: moving it would change the IDL again for no
+    /// benefit now that the hazard is documented, and every reader has to be rebuilt either way.
     pub fee_usdc: u64,
     pub timestamp: i64,
 }
@@ -41,7 +56,9 @@ pub struct RedeemEvent {
     pub price_used_scaled: u128,
     /// The premium ACTUALLY applied. 0 when the caller holds a redeem-side exemption.
     pub premium_bps_used: u16,
-    /// Premium routed to the fee vault (2026-08-05).
+    /// Premium routed to the fee vault (2026-08-05). NOT appended: it sits before `timestamp`,
+    /// so a decoder on the pre-upgrade IDL reads it AS the timestamp. See the long note on
+    /// `MintEvent::fee_usdc`. Rebuild every off-chain reader against the new IDL.
     pub fee_usdc: u64,
     pub timestamp: i64,
 }

@@ -704,7 +704,36 @@ pub fn execute_set_redeem_limits_handler(
         tl.action_disc == TimelockAction::SetRedeemLimits as u8,
         DominionError::NonceMismatch
     );
+    // BIND TO THE CONFIG'S ACTIVE SLOT. Without this, clearing `pending_redeem_limits_nonce`
+    // does not actually stop the proposal: this handler only ever WROTE that field (to None at
+    // the end) and never read it, so a cleared slot still executed.
+    //
+    // That made the emergency lever cosmetic. An operator responding to a bad oracle print
+    // reaches for the instant `set_redemptions_enabled(false)`, not for
+    // `cancel_timelocked_action` on a nonce they have to look up. They then believe redemptions
+    // are shut while a pending OPEN proposal is still armed and lands hours later, signed by
+    // Squads members who never heard about the incident.
+    //
+    // With this check, clearing the config slot IS a cancellation, which is what the instant
+    // closes below now do. It also means a proposal cancelled via `cancel_timelocked_action`
+    // fails here for a second, independent reason (that path clears the slot too), so the two
+    // guards are belt and braces rather than one point of failure.
+    //
+    // The SAME GAP EXISTS on `execute_set_public_mint` and every other execute_* in this file:
+    // none of them reads its `pending_*_nonce`, and `set_public_mint_enabled(false)` clears
+    // `pending_public_mint_nonce` believing that disarms the open. It does not. Tracked as A7 in
+    // docs/REVIEW_PUNCHLIST_2026_08_05.md; fixed here first because redeem is the path that pays
+    // out treasury cash.
+    require!(
+        config.pending_redeem_limits_nonce == Some(nonce),
+        DominionError::NonceMismatch
+    );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
+    // A loosening must not land while the protocol is paused. `execute_withdraw_usdc` has had
+    // this rule since D31 and this action needs it more: it can re-open the redemption path,
+    // and without the check the open would apply mid-pause and take effect the instant somebody
+    // unpauses, which is exactly when nobody is re-evaluating it.
+    require!(!config.paused, DominionError::Paused);
 
     let args = RedeemLimitsArgs::try_from_slice(&tl.action_data)
         .map_err(|_| error!(DominionError::SerializationFailure))?;

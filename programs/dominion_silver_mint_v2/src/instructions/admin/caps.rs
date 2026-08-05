@@ -122,6 +122,19 @@ pub fn set_redemptions_enabled_handler(ctx: Context<SetParam>, enabled: bool) ->
     require!(!enabled, DominionError::RedemptionsEnableBlocked);
     let old_enabled = ctx.accounts.config.redemptions_enabled;
     ctx.accounts.config.redemptions_enabled = enabled;
+    // DISARM any pending SetRedeemLimits proposal, mirroring what
+    // `set_public_mint_enabled_handler` does for its own nonce and for the same stated reason:
+    // leaving one armed after a deliberate emergency close would let the open land later
+    // without a fresh decision.
+    //
+    // This is only effective because `execute_set_redeem_limits` now REQUIRES
+    // `pending_redeem_limits_nonce == Some(nonce)`. Before that check existed, clearing this
+    // field did nothing at all: the execute handler never read it.
+    //
+    // Yes, this also discards any unrelated numeric loosening the proposal carried. That is the
+    // right trade during an incident: losing a queued budget raise costs one re-proposal, while
+    // keeping it armed costs an unwanted re-open at the worst possible moment.
+    ctx.accounts.config.pending_redeem_limits_nonce = None;
     // SolidProof LOW #3.
     emit!(RedemptionsEnabledChanged {
         old_enabled,
@@ -228,6 +241,11 @@ pub fn emergency_tighten_redeem_limits_handler(
     if let Some(v) = args.redemptions_enabled {
         let old_enabled = config.redemptions_enabled;
         config.redemptions_enabled = v;
+        // Same disarm as the dedicated setter. `redeem_limits_all_tighten` only admits
+        // `Some(false)` here, so this branch is always a CLOSE and disarming is unconditionally
+        // correct: an operator closing redemptions in an emergency must not leave a pending open
+        // armed behind them.
+        config.pending_redeem_limits_nonce = None;
         // Same event the dedicated setter and the timelocked path emit, so a monitor watching the
         // redeem switch sees every path that can move it without knowing which one ran.
         emit!(crate::events::RedemptionsEnabledChanged {
