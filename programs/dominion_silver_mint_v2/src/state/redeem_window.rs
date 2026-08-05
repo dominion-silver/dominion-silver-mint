@@ -296,3 +296,43 @@ mod tests {
         assert_eq!(d.new_window_start, 1_000);
     }
 }
+
+#[cfg(test)]
+mod ratchet_check {
+    // Added during the review-of-fixes, as a self-check rather than a reviewer finding: the
+    // handler comment CLAIMS that feeding `effective_used` into the current bucket would ratchet
+    // the limiter shut, and a claim in a comment is not a test.
+    use super::*;
+    const W: u32 = 86_400;
+    const WI: i64 = 86_400;
+    const BUDGET: u64 = 20_000_000_000;
+
+    /// The concern the handler comment names: if the CURRENT bucket were fed `effective_used`
+    /// instead of the request's gross, the weighted carry-over would be promoted into a permanent
+    /// figure and the limiter would ratchet shut. This drives 60 windows of steady, well-under-budget
+    /// traffic and asserts the limiter never closes.
+    #[test]
+    fn steady_traffic_never_ratchets_the_limiter_shut() {
+        let mut start = 0i64;
+        let mut cur = 0u64;
+        let mut prev = 0u64;
+        let step = BUDGET / 10; // 10% of budget per redemption
+        let mut rejected = 0;
+        for i in 0..(60 * 5) {
+            // 5 redemptions per window, i.e. 50% utilisation. Must never be refused.
+            let now = 1 + (i as i64) * (WI / 5);
+            let d = roll_window(now, start, W, cur, prev);
+            if d.effective_used + step <= BUDGET {
+                start = d.new_window_start;
+                cur = d.rolled_current + step;
+                prev = d.rolled_prev;
+            } else {
+                rejected += 1;
+            }
+        }
+        assert_eq!(
+            rejected, 0,
+            "the limiter refused {rejected} of 300 redemptions at 50% utilisation: it is ratcheting shut"
+        );
+    }
+}
