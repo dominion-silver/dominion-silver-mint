@@ -15,6 +15,7 @@ import {
   fetchTreasuryBalance,
   computeMaxInstantRedeemableUsdc,
   redeemUsdcOut,
+  redeemGrossUsdc,
   classifyRedeem,
   parseRedeemError,
   isQueuedNonceRaceError,
@@ -127,29 +128,43 @@ export function MintRedeemCard() {
   // Option B: classify the redeem route (instant / queue / otc / disabled)
   // for the entered amount, so the UI tells the user up-front.
   const nowSecs = Math.floor(Date.now() / 1000);
-  const redeemUsdcOutBn = useMemo(() => {
+  // TWO figures, deliberately named apart, because conflating them was bug B2.
+  //   GROSS = what leaves the treasury = what the program debits the budget by and checks
+  //           solvency against.
+  //   NET   = what the user receives = gross minus the premium.
+  // The UI shows NET. Every comparison against a protocol limit uses GROSS. The previous version
+  // passed the net into `classifyRedeem`, understating both checks by the redeem premium (1.5% at
+  // launch), so near either boundary the UI promised "instant" and the chain reverted. TypeScript
+  // cannot catch that: both are BN.
+  const redeemAmounts = useMemo(() => {
     if (mode !== "redeem" || !price || !amount) return null;
     if (premiumBpsRedeem === null) return null; // A-26
     const n = parseFloat(amount);
     if (isNaN(n) || n <= 0) return null;
     const priceScaled1e9 = new BN(Math.round(price.priceUsd * 1e9));
-    return redeemUsdcOut(
-      parseSilvAmount(amount),
-      priceScaled1e9,
-      premiumBpsRedeem,
-    );
+    const silv = parseSilvAmount(amount);
+    return {
+      gross: redeemGrossUsdc(silv, priceScaled1e9),
+      net: redeemUsdcOut(silv, priceScaled1e9, premiumBpsRedeem),
+    };
   }, [mode, price, amount, premiumBpsRedeem]);
+  const redeemUsdcOutBn = redeemAmounts?.net ?? null;
 
   const redeemRoute: RedeemRoute | null = useMemo(() => {
-    if (mode !== "redeem" || !cfg || !treasury || !redeemUsdcOutBn) return null;
-    return classifyRedeem(cfg, treasury, redeemUsdcOutBn, nowSecs);
-  }, [mode, cfg, treasury, redeemUsdcOutBn, nowSecs]);
+    if (mode !== "redeem" || !cfg || !treasury || !redeemAmounts) return null;
+    // GROSS, not net. See the note above.
+    return classifyRedeem(cfg, treasury, redeemAmounts.gross, nowSecs);
+  }, [mode, cfg, treasury, redeemAmounts, nowSecs]);
 
   // Max instantly-redeemable, shown as USDC (and approx SILV via price).
   const maxInstant = useMemo(() => {
     if (!cfg || !treasury) return null;
     const usdc = computeMaxInstantRedeemableUsdc(cfg, treasury, nowSecs);
     const usdcNum = usdc.toNumber() / 1e6;
+    // `usdc` is the NET the user receives. The SILV that produces it is gross/spot, and
+    // gross = net / (1 - bps/1e4), so divide the net by spot*(1-bps/1e4). That is what
+    // `effectiveRedeemPrice` returns, and it is exact rather than approximate now that the
+    // program takes the fee off the top of the gross.
     const silvApprox =
       price && price.priceUsd > 0 && premiumBpsRedeem !== null
         ? usdcNum / effectiveRedeemPrice(price.priceUsd, premiumBpsRedeem)
@@ -322,102 +337,26 @@ export function MintRedeemCard() {
             `Treasury can't cover this on-chain right now. For this size, redeem via the OTC desk: ${OTC_EMAIL} (physical-silver settlement).`,
           );
         }
-        if (route === "queue") {
-          // Burn SILV now, claim USDC after T+3 at the price then. 1 popup,
-          // no Pyth. Codex P2-02: next_redeem_request_nonce is global, so a
-          // concurrent queued redeem can stale our nonce. The ONLY safe retry
-          // signal is the contract's `NonceMismatch`, which provably reverts
-          // BEFORE any SILV burn (redeem_queued.rs:99-101 require! precedes
-          // the burn at :112; `config` is &mut so txs are write-serialized).
-          // Each attempt reads a FRESH config (never the stale preflight cfg).
-          // The amount is snapshotted ONCE so a mid-retry input edit cannot
-          // change what gets burned vs what the user approved.
-          const MAX_QUEUE_ATTEMPTS = 4;
-          const amountSilvToBurn = parseSilvAmount(amount);
-          let queued: { sig: string; delaySecs: number } | null = null;
-          let lastErr: unknown = null;
-          for (let attempt = 1; attempt <= MAX_QUEUE_ATTEMPTS; attempt++) {
-            const freshCfg = await fetchConfig(connection);
-            if (!freshCfg) throw new Error("Could not read protocol config.");
-            showProgress(
-              attempt === 1
-                ? "Submitting queued redemption (burns SILV now)..."
-                : `Another redemption was queued first - retrying (${attempt}/${MAX_QUEUE_ATTEMPTS})...`,
-            );
-            try {
-              const tx = await buildRedeemQueuedTx(connection, wallet, {
-                amountSilv: amountSilvToBurn,
-                requestNonce: freshCfg.nextRedeemRequestNonce,
-              });
-              const signed = await wallet.signTransaction!(tx);
-              const sig = await connection.sendRawTransaction(
-                signed.serialize(),
-                { skipPreflight: false, maxRetries: 3 },
-              );
-              const conf = await connection.confirmTransaction(
-                {
-                  signature: sig,
-                  blockhash: tx.recentBlockhash!,
-                  lastValidBlockHeight: tx.lastValidBlockHeight!,
-                },
-                "confirmed",
-              );
-              // confirmTransaction resolves on INCLUSION, not success. A
-              // landed-but-reverted tx has a non-null err here. Never treat
-              // that as success: fetch the program logs (carry the
-              // `Error Code: NonceMismatch` line) and route it through the
-              // same retry/throw decision as a thrown error.
-              if (conf.value?.err != null) {
-                const txInfo = await connection
-                  .getTransaction(sig, {
-                    commitment: "confirmed",
-                    maxSupportedTransactionVersion: 0,
-                  })
-                  .catch(() => null);
-                const onChainErr = Object.assign(
-                  new Error("Queued redemption reverted on-chain"),
-                  {
-                    logs: txInfo?.meta?.logMessages ?? [],
-                    onChainErr: conf.value.err,
-                  },
-                );
-                throw onChainErr;
-              }
-              queued = {
-                sig,
-                delaySecs: freshCfg.redeemQueueDelaySeconds ?? 259200,
-              };
-              break;
-            } catch (qe) {
-              lastErr = qe;
-              // Only the contract's NonceMismatch is retryable (provably
-              // pre-burn). Anything else (user-rejected, insufficient SILV,
-              // paused mid-flight, any other on-chain revert) bubbles with
-              // its real message - never a false "queued" success.
-              if (
-                !isQueuedNonceRaceError(qe) ||
-                attempt === MAX_QUEUE_ATTEMPTS
-              ) {
-                throw qe;
-              }
-            }
-          }
-          if (!queued) {
-            throw lastErr instanceof Error
-              ? lastErr
-              : new Error("Queued redemption failed after retries.");
-          }
-          setErrorMsg(null);
-          recordTxKind(queued.sig, "redeem");
-          toast({
-            message: `Queued. Claimable in ~${Math.round(queued.delaySecs / 86400)} days.`,
-            variant: "success",
-            href: `https://solscan.io/tx/${queued.sig}?cluster=devnet`,
-            hrefLabel: "View on Solscan",
-          });
-          setAmount("");
-          refreshRequests();
-        } else {
+        // The "queue" branch that lived here is GONE, along with the T+3 queue it drove
+        // (deleted from the program on 2026-08-05). It was reachable from a LIVE config value
+        // (`largeRedeemThresholdUsdc`, dead on chain but still $5,000), so every redemption at
+        // or above $5,000 hit a builder that throws. The program would have settled those
+        // instantly. Its ~95 lines of nonce-race retry machinery guarded a burn that can no
+        // longer happen.
+        if (route === "limit") {
+          throw new Error(
+            "This redemption would exceed the protocol's rolling limit for the current window. " +
+              "Nothing has been sent and your SILV is untouched. Retry once the window rolls, " +
+              "or redeem a smaller amount now.",
+          );
+        }
+        if (route === "kyc") {
+          throw new Error(
+            "Redemption now requires identity verification on this wallet. Nothing has been " +
+              "sent. Complete verification, then try again.",
+          );
+        }
+        {
           // Instant path (Pyth-priced).
           showProgress("Preparing transaction...");
           const r = await fetchAndExecuteLazer(
@@ -460,9 +399,11 @@ export function MintRedeemCard() {
       const friendly =
         isStaleOracleError(flat)
           ? STALE_ORACLE_USER_MESSAGE
-          : reroute === "queue"
-            ? "Instant budget just filled. Re-submit: it will route to the T+3 queue."
-            : reroute === "otc"
+          : reroute === "limit"
+            ? "The protocol's rolling redemption limit for this window is used up. Your SILV was not touched. Retry after the window rolls, or redeem less."
+            : reroute === "kyc"
+              ? "This wallet needs identity verification before it can redeem."
+              : reroute === "otc"
               ? `Treasury can't cover this now. Redeem via OTC: ${OTC_EMAIL}.`
               : reroute === "disabled"
                 ? "Redemptions are disabled / paused."
@@ -677,15 +618,17 @@ export function MintRedeemCard() {
               className={
                 redeemRoute === "instant"
                   ? "text-accent"
-                  : redeemRoute === "queue"
+                  : redeemRoute === "limit"
                     ? "text-yellow-300"
                     : "text-danger"
               }
             >
               {redeemRoute === "instant" &&
                 "This amount redeems INSTANTLY from the treasury."}
-              {redeemRoute === "queue" &&
-                `This amount is above the instant limit -> T+3 QUEUE: SILV is burned now, you claim USDC in ~${Math.round((cfg?.redeemQueueDelaySeconds ?? 259200) / 86400)} days at the price then.`}
+              {redeemRoute === "limit" &&
+                "This amount exceeds the protocol's rolling redemption limit for the current window. Nothing is sent and your SILV stays yours: retry once the window rolls, or redeem a smaller amount now."}
+              {redeemRoute === "kyc" &&
+                "Redemption requires identity verification on this wallet."}
               {redeemRoute === "otc" &&
                 `Treasury can't cover this on-chain now -> redeem via the OTC desk (${OTC_EMAIL}).`}
               {redeemRoute === "disabled" && "Redemptions are disabled/paused."}
@@ -799,9 +742,11 @@ export function MintRedeemCard() {
                     ? "Enter an amount"
                     : mode === "mint"
                       ? "Mint SILV"
-                      : redeemRoute === "queue"
-                        ? "Queue redemption (T+3)"
-                        : redeemRoute === "otc"
+                      : redeemRoute === "limit"
+                        ? "Over the window limit"
+                        : redeemRoute === "kyc"
+                          ? "Verification required"
+                          : redeemRoute === "otc"
                           ? "Use OTC desk"
                           : "Redeem SILV"}
       </button>

@@ -95,7 +95,7 @@ Dominion itself. Fix: wire the expiry, or accept and document with a monitoring 
 
 ## B. Public app
 
-### [ ] B1. Every redemption at or above $5,000 is impossible from the UI
+### [x] B1. Every redemption at or above $5,000 is impossible from the UI
 `anchor-client.ts:249` — `classifyRedeem` still returns `"queue"` on the dead
 `largeRedeemThresholdUsdc` (still $5,000) and on budget exhaustion, and `MintRedeemCard.tsx:325`
 then calls `buildRedeemQueuedTx`, which throws. The program would have settled instantly. The
@@ -103,13 +103,13 @@ then calls `buildRedeemQueuedTx`, which throws. The program would have settled i
 path, which reads a live config value. Fix: delete the queue route entirely; classify as instant
 or let the program reject.
 
-### [ ] B2. Client predicts on NET, program checks on GROSS
+### [x] B2. Client predicts on NET, program checks on GROSS
 `classifyRedeem` and the solvency preview compare the user's leg against the budget and the
 treasury balance; `redeem_silv` debits and requires the GROSS, because the treasury now pays
 both legs. Understates by 1.5% at launch fees. Near either boundary the UI says "instant" and
 the chain reverts with a raw code. Fix: compute gross, compare gross.
 
-### [ ] B3. "Max instant now" is capped at the dead threshold minus one
+### [x] B3. "Max instant now" is capped at the dead threshold minus one
 `computeMaxInstantRedeemableUsdc` clamps to `largeRedeemThresholdUsdc - 1`, so the site
 advertises $4,999.99 against a $20,000 budget, and $0 if an operator ever zeroes the dead
 field. Rendered by `ReservesPanel.tsx:48` and `MintRedeemCard.tsx:151`.
@@ -122,7 +122,7 @@ than quoted: 1 bp at 1%, 25 bp at the 500 bps ceiling. The slippage selector's m
 24h-timelock changeable, so this is one executed proposal away from breaking mint. Also: the fee
 is still presented as a marked-up price rather than the explicit off-the-top fee now charged.
 
-### [ ] B5. Three new error codes are mapped by no client
+### [x] B5. Three new error codes are mapped by no client
 `RedeemLimitExceeded` (12103), `KycRequired` (12104), `InsufficientFeeVault` (12108). The user
 gets `Simulation reverted: {"InstructionError":[5,{"Custom":12103}]}` plus raw program logs. The
 program's own message is actionable and none of it reaches the user. Also remove the dead
@@ -135,14 +135,14 @@ the failure is a bare `TypeError`, not the explained error the other stubs give.
 wired to a live onClick. Commit `5eb3d5f` claimed `claimRedemption` was "removed or stubbed";
 it was neither. Correct that claim when fixing.
 
-### [ ] B7. The reachable half of the queued UI tells the user things that are false
+### [x] B7. The reachable half of the queued UI tells the user things that are false
 `MintRedeemCard.tsx`: "This amount is above the instant limit -> T+3 QUEUE" (`:687`), the button
 label "Queue redemption (T+3)" (`:802`), "Re-submit: it will route to the T+3 queue" (`:463`),
 and the whole retry loop with its `nextRedeemRequestNonce` and `redeemQueueDelaySeconds` reads
 and its nonce-race machinery guarding a burn that can no longer happen. Unreachable (gated on an
 always-empty list): the pending and settled tables, Claim, handleCloseSettled, the IOU copy.
 
-### [ ] B8. The config type never declares `kycScopeFlags`
+### [x] B8. The config type never declares `kycScopeFlags`
 So if the gate is armed on redeem, the UI reports "instant" while every transaction reverts with
 a raw `Custom:12104`. The public config interface also still declares the three dead fields as
 live.

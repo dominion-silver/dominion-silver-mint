@@ -54,12 +54,18 @@ export interface ConfigAccount {
   maxSilvSupply: BN;
   treasuryMinFloatUsdc: BN;
   redemptionsEnabled: boolean;
+  /** DEAD ON CHAIN since 2026-08-05: no instruction reads it. It still DECODES and still holds
+   *  its $5,000 default, which is exactly how it silently blocked every redemption at or above
+   *  $5,000 from this app. Declared so the shape matches the IDL; MUST NOT be read for any
+   *  decision. Same for `redeemQueueDelaySeconds` and `nextRedeemRequestNonce`. */
   largeRedeemThresholdUsdc: BN;
   instantRedeemBudgetUsdc: BN;
   instantRedeemWindowSeconds: number;
+  /** DEAD ON CHAIN since 2026-08-05. Do not read. */
   redeemQueueDelaySeconds: number;
   instantWindowStart: BN;
   instantUsedUsdc: BN;
+  /** DEAD ON CHAIN since 2026-08-05. Do not read. */
   nextRedeemRequestNonce: BN;
   paused: boolean;
   mintPausedUntil: BN;
@@ -71,8 +77,19 @@ export interface ConfigAccount {
   inventoryWallet: PublicKey;
   publicMintEnabled: boolean;
   kycOperator: PublicKey;
+  /** DERIVED, never set independently: the program maintains
+   *  `kycEnforced == (kycScopeFlags != 0)`. Safe to read as "is the gate on at all". */
   kycEnforced: boolean;
   pendingKycOperatorNonce: BN | null;
+  /** THE KYC GATE (2026-08-05). Bit 0 = required on mint, bit 1 = required on redeem, 0 = off,
+   *  which is the launch posture.
+   *
+   *  Declared here because omitting it was a real bug class: with the field absent from this
+   *  interface, an armed gate would be invisible to the UI, which would keep reporting "instant"
+   *  while every transaction reverted with a raw Custom:12104 dump. Optional because a config
+   *  written before this upgrade decodes it as 0 rather than undefined, but `?? 0` at the read
+   *  sites costs nothing and survives a stale RPC snapshot. */
+  kycScopeFlags?: number;
   porFeed: PublicKey;
   porMaxStalenessSeconds: number;
   porEnforced: boolean;
@@ -94,7 +111,11 @@ export interface RedemptionRequestView {
   status: RedemptionStatusKind;
 }
 
-export type RedeemRoute = "instant" | "queue" | "otc" | "disabled";
+/** Where a redemption lands. "queue" is GONE (2026-08-05: the T+3 queue was deleted from the
+ *  program), replaced by "limit": the global rolling budget for this window is exhausted and the
+ *  caller should retry after it rolls. "kyc" is the dormant gate, reachable only once an admin
+ *  arms it. */
+export type RedeemRoute = "instant" | "limit" | "otc" | "kyc" | "disabled";
 
 // ---- provider / program ----
 
@@ -183,88 +204,125 @@ export async function fetchSilvSupply(connection: Connection): Promise<BN> {
 }
 
 /**
- * Option B "what can I redeem RIGHT NOW, and how" preview (replaces the
- * Option A reserve formula). Mirrors redeem_silv.rs §4.3:
- *   - refresh window client-side (if expired, used = 0);
- *   - instantBudgetRemaining = max(0, budget - usedThisWindow);
- *   - a redeem of `usdcOut` is instant iff usdcOut < largeThreshold AND
- *     usdcOut <= instantBudgetRemaining AND usdcOut <= treasuryBalance.
- * Returns the max instantly-redeemable USDC. Everything above routes to the
- * T+3 queue (or OTC if the treasury can't cover a small one).
+ * REDEEM PREDICTION LAYER. Rewritten 2026-08-05 for the instant-only program.
+ *
+ * Three bugs lived here and all three came from the same place: the program changed underneath
+ * these functions and they kept reading fields and using formulas that no longer describe it.
+ *
+ *   B1. `classifyRedeem` returned "queue" above `largeRedeemThresholdUsdc`, a field NO on-chain
+ *       instruction reads any more but which still holds its $5,000 default. The UI then called
+ *       a builder that throws. Every redemption at or above $5,000 was impossible from the front
+ *       end while the program would have settled it instantly.
+ *   B2. The client predicted on the NET (what the user receives) while the program now debits the
+ *       budget and checks the treasury on the GROSS, because the treasury pays BOTH legs: the
+ *       user's and the fee vault's. A 1.5% under-statement at launch fees, which near either
+ *       boundary means the UI promises "instant" and the chain reverts.
+ *   B3. `computeMaxInstantRedeemableUsdc` clamped to `threshold - 1`, advertising $4,999.99
+ *       against a $20,000 budget, and $0 if an operator ever zeroed that dead field.
+ *
+ * The rule going forward: everything the PROGRAM compares is in GROSS. Only what the USER
+ * receives is net. Keep the two named apart.
+ */
+
+/** GROSS USDC value of `amountSilv` at pure spot: what LEAVES THE TREASURY.
+ *
+ *  Mirrors `silv_to_usdc_at_oracle` in math.rs. This is the figure the rolling budget is debited
+ *  by and the figure the solvency check uses, so it is the figure the client must compare. */
+export function redeemGrossUsdc(amountSilv: BN, silverPriceScaled: BN): BN {
+  return amountSilv.mul(silverPriceScaled).div(new BN(10).pow(new BN(9)));
+}
+
+/** The premium, taken off the top: `ceil(amount * bps / 10_000)`.
+ *
+ *  Mirrors `fee_from_amount` in math.rs, INCLUDING the ceiling. The old client computed the
+ *  premium as a marked-down price (`spot * (1 - bps/1e4)`) and floored twice, which drifts from
+ *  the program by an atomic unit or two. Matching the contract exactly matters here because the
+ *  result feeds a slippage floor. */
+export function feeFromAmount(amount: BN, bps: number): BN {
+  if (bps === 0) return new BN(0);
+  const d = new BN(10_000);
+  return amount.mul(new BN(bps)).add(d.subn(1)).div(d);
+}
+
+/** NET USDC the user receives: gross minus the premium. */
+export function redeemUsdcOut(
+  amountSilv: BN,
+  silverPriceScaled: BN,
+  premiumBpsRedeem: number,
+): BN {
+  const gross = redeemGrossUsdc(amountSilv, silverPriceScaled);
+  return gross.sub(feeFromAmount(gross, premiumBpsRedeem));
+}
+
+/**
+ * The maximum a user can RECEIVE right now, in net USDC.
+ *
+ * Computed as a GROSS ceiling first (that is what the program bounds), then converted to net for
+ * display, because "you can redeem X" has to mean X in the user's hand.
+ *
+ * Two bounds, both gross, and NO size tier: `largeRedeemThresholdUsdc` is dead on chain and is
+ * deliberately not read here.
  */
 export function computeMaxInstantRedeemableUsdc(
   cfg: ConfigAccount,
   treasuryBalanceUsdc: BN,
   nowUnixSecs: number,
 ): BN {
-  if (!cfg.redemptionsEnabled) return new BN(0);
+  if (cfg.paused || !cfg.redemptionsEnabled) return new BN(0);
   const windowEnd =
     cfg.instantWindowStart.toNumber() + cfg.instantRedeemWindowSeconds;
   const windowExpired = nowUnixSecs >= windowEnd;
   const usedThisWindow = windowExpired ? new BN(0) : cfg.instantUsedUsdc;
   let budgetRemaining = cfg.instantRedeemBudgetUsdc.sub(usedThisWindow);
   if (budgetRemaining.ltn(0)) budgetRemaining = new BN(0);
-  // instant-eligible ceiling = min(threshold-1, budgetRemaining, treasury).
-  const thresholdCeil = cfg.largeRedeemThresholdUsdc.gtn(0)
-    ? cfg.largeRedeemThresholdUsdc.sub(new BN(1))
-    : new BN(0);
-  let m = thresholdCeil;
-  if (budgetRemaining.lt(m)) m = budgetRemaining;
-  if (treasuryBalanceUsdc.lt(m)) m = treasuryBalanceUsdc;
-  return m.ltn(0) ? new BN(0) : m;
-}
 
-/** Effective redeem price scaled 1e9: oracle * (1 - premiumRedeem/1e4). */
-function effectiveRedeemPriceScaled(
-  silverPriceScaled: BN,
-  premiumBpsRedeem: number,
-): BN {
-  return silverPriceScaled
-    .mul(new BN(10_000 - premiumBpsRedeem))
-    .div(new BN(10_000));
-}
+  let grossMax = budgetRemaining;
+  if (treasuryBalanceUsdc.lt(grossMax)) grossMax = treasuryBalanceUsdc;
+  if (grossMax.ltn(0)) grossMax = new BN(0);
 
-/** usdc_out (6dec) = amount_silv * eff_redeem_price / 1e9 (floor). */
-export function redeemUsdcOut(
-  amountSilv: BN,
-  silverPriceScaled: BN,
-  premiumBpsRedeem: number,
-): BN {
-  const eff = effectiveRedeemPriceScaled(silverPriceScaled, premiumBpsRedeem);
-  return amountSilv.mul(eff).div(new BN(10).pow(new BN(9)));
+  return grossMax.sub(feeFromAmount(grossMax, cfg.premiumBpsRedeem));
 }
 
 /**
- * Predict which redeem path a given amount will take, so the UI can tell the
- * user up-front. The on-chain program is the source of truth (it re-checks);
- * the client must still gracefully handle an on-send revert (parseRedeemError).
+ * Predict where a redemption lands, so the UI can say so before the user signs.
+ *
+ * Takes the GROSS, not the net. The program is still the source of truth and re-checks
+ * everything, so `parseRedeemError` must keep handling an on-send revert.
  */
 export function classifyRedeem(
   cfg: ConfigAccount,
   treasuryBalanceUsdc: BN,
-  usdcOut: BN,
+  grossUsdc: BN,
   nowUnixSecs: number,
 ): RedeemRoute {
   if (cfg.paused || !cfg.redemptionsEnabled) return "disabled";
-  if (usdcOut.gte(cfg.largeRedeemThresholdUsdc)) return "queue";
+  // The dormant KYC gate. Bit 1 is the redeem side (state/side.rs). Predicting it needs the
+  // caller's attestation, which this function does not have, so it only reports that the gate is
+  // armed; MintRedeemCard resolves the per-wallet answer.
+  if (((cfg.kycScopeFlags ?? 0) & 2) !== 0) return "kyc";
   const windowEnd =
     cfg.instantWindowStart.toNumber() + cfg.instantRedeemWindowSeconds;
   const used = nowUnixSecs >= windowEnd ? new BN(0) : cfg.instantUsedUsdc;
-  if (used.add(usdcOut).gt(cfg.instantRedeemBudgetUsdc)) return "queue";
-  if (treasuryBalanceUsdc.lt(usdcOut)) return "otc";
+  if (used.add(grossUsdc).gt(cfg.instantRedeemBudgetUsdc)) return "limit";
+  if (treasuryBalanceUsdc.lt(grossUsdc)) return "otc";
   return "instant";
 }
 
 /**
- * Map an on-chain revert (logs/message/structured err) to the user-facing
- * route. Matches BOTH the symbolic Anchor error name (present in program
- * logs) AND the numeric code (Anchor `Custom:<dec>` / `custom program
- * error: 0x<hex>` / `number:<dec>`). The numeric forms matter because when
- * `getTransaction` returns null right after inclusion (common RPC lag at
- * "confirmed"), the only signal left is the structured `value.err`
- * (`{InstructionError:[i,{Custom:<code>}]}`) - no symbolic name. Codes from
- * the IDL: InsufficientTreasury=12014/0x2eee, MustUseQueue=12061/0x2f1d,
- * RedemptionsDisabled=12060/0x2f1c, Paused=12000/0x2ee0.
+ * Map an on-chain revert (logs / message / structured err) to a route.
+ *
+ * Matches BOTH the symbolic Anchor error name (present in program logs) AND the numeric code
+ * (`Custom:<dec>` / `custom program error: 0x<hex>` / `number:<dec>`). The numeric forms matter
+ * because when `getTransaction` returns null right after inclusion (common RPC lag at
+ * "confirmed") the structured `value.err` is the only signal left and it carries no name.
+ *
+ * Codes verified against the committed IDL, not from memory:
+ *   Paused 12000, InsufficientTreasury 12014, RedemptionsDisabled 12060,
+ *   RedeemLimitExceeded 12103, KycRequired 12104, InsufficientFeeVault 12108.
+ *
+ * MustUseQueue (12061) is deliberately NOT mapped: the variant still exists in the enum for
+ * discriminant stability but `redeem_silv` can no longer raise it, and the copy it used to drive
+ * told users to retry into a queue that does not exist.
  */
 function anchorErr(t: string, name: string, codeDec: number): boolean {
   const hex = "0x" + codeDec.toString(16);
@@ -276,8 +334,12 @@ function anchorErr(t: string, name: string, codeDec: number): boolean {
   );
 }
 export function parseRedeemError(errText: string): RedeemRoute | null {
-  if (anchorErr(errText, "MustUseQueue", 12061)) return "queue";
+  if (anchorErr(errText, "RedeemLimitExceeded", 12103)) return "limit";
+  if (anchorErr(errText, "KycRequired", 12104)) return "kyc";
   if (anchorErr(errText, "InsufficientTreasury", 12014)) return "otc";
+  // The fee vault could not be paid. Not a route the user can choose: it means the treasury is
+  // short of the premium leg, which is the same practical situation as InsufficientTreasury.
+  if (anchorErr(errText, "InsufficientFeeVault", 12108)) return "otc";
   if (
     anchorErr(errText, "RedemptionsDisabled", 12060) ||
     anchorErr(errText, "Paused", 12000)
