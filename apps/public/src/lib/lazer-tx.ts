@@ -168,6 +168,69 @@ export interface BuildLazerMintTxArgs {
   envelope: Uint8Array;
 }
 
+/** The mint_silv account set, as a pure function of the caller and their optional per-wallet
+ *  accounts.
+ *
+ *  EXPORTED SO IT CAN BE TESTED. The previous unit test hand-wrote its own 17-key account object
+ *  and never called the real builder, so `buildLazerMintTx` could lose `feeVault` tomorrow and
+ *  every test would still pass. That is not a theoretical risk: `.accounts()` is NOT strict in
+ *  Anchor 0.31.1 (it delegates to `accountsPartial`), so a missing key is silently derived from
+ *  the IDL seeds rather than rejected, and for the OPTIONAL accounts that derivation produces a
+ *  real PDA address for an account that does not exist, which the program then fails to
+ *  deserialize. There is no compiler and no runtime check on this list: a test is the only guard.
+ *
+ *  `opt` comes from `resolveWalletFlags`, which must have already checked EXISTENCE. Passing a
+ *  PDA address for a non-existent optional account is worse than passing null. */
+export function mintSilvAccounts(
+  user: PublicKey,
+  opt: { feeExempt: PublicKey | null; kyc: PublicKey | null },
+) {
+  return {
+    config: configPda(),
+    feeVaultPda: feeVaultPda(),
+    feeVault: feeVaultUsdcAta(),
+    feeExempt: opt.feeExempt,
+    kyc: opt.kyc,
+    user,
+    usdcMint: USDC_MINT,
+    silvMint: SILV_MINT,
+    usdcTreasury: getAssociatedTokenAddressSync(
+      USDC_MINT,
+      treasuryPda(),
+      true,
+      TOKEN_PROGRAM_ID,
+    ),
+    userUsdcAta: getAssociatedTokenAddressSync(
+      USDC_MINT,
+      user,
+      false,
+      TOKEN_PROGRAM_ID,
+    ),
+    userSilvAta: getAssociatedTokenAddressSync(
+      SILV_MINT,
+      user,
+      false,
+      TOKEN_2022_PROGRAM_ID,
+    ),
+    silvMintAuthority: silvMintAuthorityPda(),
+    ...lazerOracleAccounts(),
+    classicTokenProgram: TOKEN_PROGRAM_ID,
+    token2022Program: TOKEN_2022_PROGRAM_ID,
+    associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+    systemProgram: SystemProgram.programId,
+  };
+}
+
+/** The redeem_silv account set. Same as mint plus `treasuryPda` (which signs the payout) and
+ *  minus `silvMintAuthority` (nothing is minted). Same testing rationale. */
+export function redeemSilvAccounts(
+  user: PublicKey,
+  opt: { feeExempt: PublicKey | null; kyc: PublicKey | null },
+) {
+  const { silvMintAuthority: _unused, ...rest } = mintSilvAccounts(user, opt);
+  return { ...rest, treasuryPda: treasuryPda() };
+}
+
 export async function buildLazerMintTx(
   connection: Connection,
   wallet: WalletContextState,
@@ -186,25 +249,7 @@ export async function buildLazerMintTx(
   const opt = await resolveWalletFlags(connection, user);
   const dominionIx = await (program.methods as any)
     .mintSilv(args.amountUsdc, args.minSilvOut, messageData, ED25519_IX_INDEX, 0)
-    .accounts({
-      config: configPda(),
-      feeVaultPda: feeVaultPda(),
-      feeVault: feeVaultUsdcAta(),
-      feeExempt: opt.feeExempt,
-      kyc: opt.kyc,
-      user,
-      usdcMint: USDC_MINT,
-      silvMint: SILV_MINT,
-      usdcTreasury: usdcTreasuryAta,
-      userUsdcAta,
-      userSilvAta,
-      silvMintAuthority: silvMintAuthorityPda(),
-      ...lazerOracleAccounts(),
-      classicTokenProgram: TOKEN_PROGRAM_ID,
-      token2022Program: TOKEN_2022_PROGRAM_ID,
-      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-    })
+    .accounts(mintSilvAccounts(user, opt))
     .instruction();
 
   const ataIxs = [
@@ -238,25 +283,7 @@ export async function buildLazerRedeemTx(
   const opt = await resolveWalletFlags(connection, user);
   const dominionIx = await (program.methods as any)
     .redeemSilv(args.amountSilv, args.minUsdcOut, messageData, ED25519_IX_INDEX, 0)
-    .accounts({
-      config: configPda(),
-      feeVaultPda: feeVaultPda(),
-      feeVault: feeVaultUsdcAta(),
-      feeExempt: opt.feeExempt,
-      kyc: opt.kyc,
-      user,
-      usdcMint: USDC_MINT,
-      silvMint: SILV_MINT,
-      usdcTreasury: usdcTreasuryAta,
-      userUsdcAta,
-      userSilvAta,
-      treasuryPda: treasuryPda(),
-      ...lazerOracleAccounts(),
-      classicTokenProgram: TOKEN_PROGRAM_ID,
-      token2022Program: TOKEN_2022_PROGRAM_ID,
-      associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-    })
+    .accounts(redeemSilvAccounts(user, opt))
     .instruction();
 
   const ataIxs = [

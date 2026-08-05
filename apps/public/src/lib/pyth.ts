@@ -32,10 +32,42 @@ export async function fetchSilverPrice(): Promise<SilverPrice> {
   };
 }
 
+/**
+ * The all-in price per ounce a minter actually pays: `spot / (1 - bps/1e4)`.
+ *
+ * NOT `spot * (1 + bps/1e4)`, which is what this returned until 2026-08-05 and which no longer
+ * describes the contract. The program takes the premium OFF THE TOP of the incoming USDC and
+ * mints the remainder at pure spot (math.rs::fee_from_amount, mint_silv.rs step 7):
+ *
+ *   silv_out = (amount - amount*bps/1e4) / spot
+ *            = amount * (1 - bps/1e4) / spot
+ *   price    = amount / silv_out
+ *            = spot / (1 - bps/1e4)
+ *
+ * The old form under-priced by exactly `bps^2/1e8`, so the quote promised more SILV than the
+ * program mints. That is 1 bp at the launch 1%, harmless in itself, but it scales with the SQUARE
+ * of the premium: 25 bps at the 500 bps ceiling. Since the slippage selector's minimum is 10 bps,
+ * the old formula meant that above roughly 317 bps of mint premium EVERY mint would revert
+ * SlippageExceeded, and the premium is 24h-timelock changeable, so that was one executed proposal
+ * away from breaking mint entirely.
+ *
+ * Presentation note, not fixed here: the fee is still shown to users as a marked-up price rather
+ * than as the explicit off-the-top fee the contract now charges. The number is right; the framing
+ * is a separate UI change.
+ */
 export function effectiveMintPrice(spot: number, premiumBps: number): number {
-  return (spot * (10_000 + premiumBps)) / 10_000;
+  return (spot * 10_000) / (10_000 - premiumBps);
 }
 
+/**
+ * The price per ounce a redeemer actually receives: `spot * (1 - bps/1e4)`.
+ *
+ * UNCHANGED, and verified against the new contract rather than assumed. The program computes
+ * `gross = silv * spot` then subtracts `gross * bps/1e4`, so what the user receives per ounce is
+ * `spot * (1 - bps/1e4)`: exactly this. The two sides are asymmetric in FORM (the mint fee is on
+ * the input, the redeem fee is on the output) even though both are "1% of what flows through",
+ * which is why only the mint helper needed fixing.
+ */
 export function effectiveRedeemPrice(spot: number, premiumBps: number): number {
   // FE-L8: rename param from feeBps to premiumBps for unity with the rest
   // of the codebase (we call it "redeem premium" everywhere else).

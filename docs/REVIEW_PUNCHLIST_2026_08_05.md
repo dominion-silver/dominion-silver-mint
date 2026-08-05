@@ -114,7 +114,7 @@ the chain reverts with a raw code. Fix: compute gross, compare gross.
 advertises $4,999.99 against a $20,000 budget, and $0 if an operator ever zeroes the dead
 field. Rendered by `ReservesPanel.tsx:48` and `MintRedeemCard.tsx:151`.
 
-### [ ] B4. Mint quote drifts from the new formula, and the drift scales with premium squared
+### [x] B4. Mint quote drifts from the new formula, and the drift scales with premium squared
 `pyth.ts:35` quotes `amount / (spot * (1 + bps/1e4))`; the program computes
 `floor((amount - ceil(amount * bps/1e4)) / spot)`. The user receives exactly `bps^2/1e8` less
 than quoted: 1 bp at 1%, 25 bp at the 500 bps ceiling. The slippage selector's minimum is
@@ -151,7 +151,7 @@ live.
 `apps/public` hardcodes the seed strings inline and its `SEEDS` still carries the dead
 `redeemRequest`; `apps/admin` reads them from `SEEDS`. No gate compares them.
 
-### [ ] B10. The tests assert nothing about the account lists
+### [x] B10. The tests assert nothing about the account lists
 `lazer-tx.test.ts` builds its own ix with 17 hand-written keys and never calls
 `buildLazerMintTx` or `buildLazerRedeemTx`. `buildLazerMintTx` could lose `feeVault` tomorrow and
 all 13 tests would still pass. This is the only mechanical guard available for an `as any` money
