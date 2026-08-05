@@ -251,7 +251,10 @@ pub fn handler(
 
     // 5. Slippage, measured on what the USER receives. Unchanged meaning for clients:
     // `min_usdc_out` has always been the user's floor, never the gross.
-    require!(to_user_usdc >= min_usdc_out, DominionError::SlippageExceeded);
+    require!(
+        to_user_usdc >= min_usdc_out,
+        DominionError::SlippageExceeded
+    );
 
     // 6. Rolling-window budget state. Computed here, COMMITTED at step 8 only after every
     // check has passed: no config mutation may survive a revert path.

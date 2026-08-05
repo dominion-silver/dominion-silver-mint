@@ -212,6 +212,30 @@ pub fn emergency_tighten_redeem_limits_handler(
     if let Some(v) = args.redeem_queue_delay_seconds {
         config.redeem_queue_delay_seconds = v;
     }
+    // THE REDEEM SWITCH. This arm was MISSING when the field shipped, and its absence was the
+    // worst failure mode in the batch: `redeem_limits_all_tighten` accepts `Some(false)`, so an
+    // emergency close SUCCEEDED, emitted an event, and left `redemptions_enabled` untouched.
+    // An operator responding to a bad oracle print would see a confirmed emergency action while
+    // redemptions kept paying out. A silent no-op on an emergency lever is worse than a revert.
+    //
+    // Same root cause as the propose.rs P0 fixed in the same pass: a new field added to the
+    // VALIDATORS and not to the APPLY block. Adding a field to `RedeemLimitsArgs` means touching
+    // FOUR places, and they are deliberately cross-referenced in each other's comments:
+    //   1. `redeem_limits_any_set`            (execute.rs) - is anything provided
+    //   2. `redeem_limits_effective_change`   (execute.rs) - does anything differ from current
+    //   3. `redeem_limits_all_tighten`        (execute.rs) - is the direction safe
+    //   4. BOTH apply blocks: here, and `execute_set_redeem_limits_handler`
+    if let Some(v) = args.redemptions_enabled {
+        let old_enabled = config.redemptions_enabled;
+        config.redemptions_enabled = v;
+        // Same event the dedicated setter and the timelocked path emit, so a monitor watching the
+        // redeem switch sees every path that can move it without knowing which one ran.
+        emit!(crate::events::RedemptionsEnabledChanged {
+            old_enabled,
+            new_enabled: v,
+            by: ctx.accounts.admin.key(),
+        });
+    }
     // SolidProof LOW #3: the instant fast lane was silent. Reports the RESULTING
     // values, not the supplied Options, so a monitor sees the live throttle state.
     emit!(RedeemLimitsTightened {

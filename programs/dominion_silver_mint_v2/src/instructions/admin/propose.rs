@@ -12,8 +12,8 @@ use anchor_lang::prelude::*;
 use crate::errors::DominionError;
 use crate::events::{AdminActionProposed, MintPausedUntilSet};
 use crate::instructions::admin::execute::{
-    redeem_limits_any_set, validate_metadata_args, validate_redeem_limits_ceilings, MetadataArgs,
-    OracleGuardsArgs, RedeemLimitsArgs,
+    redeem_limits_any_set, redeem_limits_effective_change, validate_metadata_args,
+    validate_redeem_limits_ceilings, MetadataArgs, OracleGuardsArgs, RedeemLimitsArgs,
 };
 use crate::state::*;
 
@@ -654,28 +654,26 @@ pub fn propose_set_redeem_limits_handler(
 
     // Reject pure no-op (every provided field already equals current) so a doomed
     // proposal cannot occupy the single redeem-limits slot for the full timelock.
-    let mut effective_change = false;
-    if let Some(v) = args.instant_redeem_budget_usdc {
-        if v != config.instant_redeem_budget_usdc {
-            effective_change = true;
-        }
-    }
-    if let Some(v) = args.instant_redeem_window_seconds {
-        if v != config.instant_redeem_window_seconds {
-            effective_change = true;
-        }
-    }
-    if let Some(v) = args.large_redeem_threshold_usdc {
-        if v != config.large_redeem_threshold_usdc {
-            effective_change = true;
-        }
-    }
-    if let Some(v) = args.redeem_queue_delay_seconds {
-        if v != config.redeem_queue_delay_seconds {
-            effective_change = true;
-        }
-    }
-    require!(effective_change, DominionError::ProposalNoOp);
+    // Was an inline block per field. Extracted to a pure, unit-tested function in execute.rs
+    // after it shipped MISSING the `redemptions_enabled` arm, which made opening redemptions
+    // unreachable in the deployed program: a switch-only proposal passed
+    // `redeem_limits_any_set`, passed the ceilings, and died here on ProposalNoOp, while
+    // `set_redemptions_enabled(true)` is refused in bytecode and `emergency_tighten_redeem_limits`
+    // refuses Some(true). No path left to the one action the batch exists to enable.
+    //
+    // Two independent no-op gates guard this action and a new field has to be added to BOTH.
+    // They now live side by side in execute.rs so that is hard to miss.
+    require!(
+        redeem_limits_effective_change(
+            &args,
+            config.instant_redeem_budget_usdc,
+            config.instant_redeem_window_seconds,
+            config.large_redeem_threshold_usdc,
+            config.redeem_queue_delay_seconds,
+            config.redemptions_enabled,
+        ),
+        DominionError::ProposalNoOp
+    );
 
     require!(
         config.pending_redeem_limits_nonce.is_none(),

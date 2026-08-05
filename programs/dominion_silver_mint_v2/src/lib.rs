@@ -133,11 +133,7 @@ pub mod dominion_silver_mint {
     }
 
     /// `reference` is a HASH of the provider's record id. NEVER PII, not even hashed PII.
-    pub fn attest_kyc(
-        ctx: Context<AttestKyc>,
-        wallet: Pubkey,
-        reference: [u8; 32],
-    ) -> Result<()> {
+    pub fn attest_kyc(ctx: Context<AttestKyc>, wallet: Pubkey, reference: [u8; 32]) -> Result<()> {
         instructions::admin::kyc_admin::attest_kyc_handler(ctx, wallet, reference)
     }
 

@@ -532,6 +532,58 @@ pub fn redeem_limits_any_set(args: &RedeemLimitsArgs) -> bool {
         || args.redemptions_enabled.is_some()
 }
 
+/// The SECOND no-op gate: does any PROVIDED field actually differ from the current config?
+///
+/// `redeem_limits_any_set` above answers a different question ("did the caller provide anything
+/// at all"), and the two are independent. That independence caused a P0: `redemptions_enabled`
+/// was added to `any_set` and NOT to this comparison, so a switch-only proposal passed the first
+/// gate and died on `ProposalNoOp` in the second, leaving no path in the deployed program to open
+/// redemptions at all.
+///
+/// Extracted out of `propose_set_redeem_limits`, where it lived inline, for two reasons: it is now
+/// unit-testable (the version that shipped was covered by a test asserting the WRONG function
+/// while claiming to protect this one), and both gates now sit in the same file so the next person
+/// adding a field cannot see one without the other.
+///
+/// IF YOU ADD A FIELD TO `RedeemLimitsArgs`, IT MUST BE ADDED HERE AND TO `redeem_limits_any_set`.
+pub fn redeem_limits_effective_change(
+    args: &RedeemLimitsArgs,
+    cur_budget: u64,
+    cur_window: u32,
+    cur_threshold: u64,
+    cur_queue_delay: u32,
+    cur_enabled: bool,
+) -> bool {
+    if args
+        .instant_redeem_budget_usdc
+        .is_some_and(|v| v != cur_budget)
+    {
+        return true;
+    }
+    if args
+        .instant_redeem_window_seconds
+        .is_some_and(|v| v != cur_window)
+    {
+        return true;
+    }
+    if args
+        .large_redeem_threshold_usdc
+        .is_some_and(|v| v != cur_threshold)
+    {
+        return true;
+    }
+    if args
+        .redeem_queue_delay_seconds
+        .is_some_and(|v| v != cur_queue_delay)
+    {
+        return true;
+    }
+    if args.redemptions_enabled.is_some_and(|v| v != cur_enabled) {
+        return true;
+    }
+    false
+}
+
 /// Pure directional check for the INSTANT tighten path. Every PROVIDED field must
 /// move its throttle in the SAFE (tighten) direction vs the current config. The
 /// safety metric is max sustained drain: budget / window. Tighten = shrink it.
@@ -1170,8 +1222,8 @@ mod fix_a_tests {
     // tests pin the direction rules, which are the error-prone core (esp. the
     // counter-intuitive window direction).
     use super::{
-        redeem_limits_all_tighten, redeem_limits_any_set, validate_redeem_limits_ceilings,
-        RedeemLimitsArgs,
+        redeem_limits_all_tighten, redeem_limits_any_set, redeem_limits_effective_change,
+        validate_redeem_limits_ceilings, RedeemLimitsArgs,
     };
     use crate::state::{
         DEFAULT_REDEEM_QUEUE_DELAY_SECONDS, REDEEM_QUEUE_DELAY_MAX_SECONDS,
@@ -1371,9 +1423,13 @@ mod fix_a_tests {
     }
 
     #[test]
-    fn the_redeem_switch_alone_is_not_a_no_op_proposal() {
-        // Without this, `propose_set_redeem_limits` with only the switch set would be
-        // rejected as an empty proposal and the enable path would be unreachable.
+    fn any_set_counts_the_redeem_switch_as_a_provided_field() {
+        // RENAMED. The version that shipped was called
+        // `the_redeem_switch_alone_is_not_a_no_op_proposal` and its comment claimed it protected
+        // `propose_set_redeem_limits`. It did not: it asserts `redeem_limits_any_set`, which is a
+        // DIFFERENT gate. The propose path has its own comparison, that one was missing the
+        // switch, and opening redemptions was therefore unreachable in the deployed program while
+        // this test passed. A test whose name overstates its reach is worse than no test.
         let only_switch = RedeemLimitsArgs {
             redemptions_enabled: Some(true),
             ..Default::default()
@@ -1382,6 +1438,124 @@ mod fix_a_tests {
 
         let nothing = RedeemLimitsArgs::default();
         assert!(!redeem_limits_any_set(&nothing));
+    }
+
+    // -----------------------------------------------------------------
+    // The SECOND gate: redeem_limits_effective_change, which is what propose actually calls.
+    // These are the tests that were missing.
+    // -----------------------------------------------------------------
+
+    fn changed(args: &RedeemLimitsArgs, cur_enabled: bool) -> bool {
+        redeem_limits_effective_change(
+            args,
+            CUR_BUDGET,
+            CUR_WINDOW,
+            CUR_THRESHOLD,
+            CUR_DELAY,
+            cur_enabled,
+        )
+    }
+
+    #[test]
+    fn opening_redemptions_from_closed_IS_an_effective_change() {
+        // THE regression test for the P0. If this fails, `propose_set_redeem_limits` rejects the
+        // only proposal shape that can open redemptions, and there is no other path: the instant
+        // setter refuses `true` in bytecode and the emergency tighten path refuses Some(true).
+        let open = RedeemLimitsArgs {
+            redemptions_enabled: Some(true),
+            ..Default::default()
+        };
+        assert!(
+            changed(&open, false),
+            "a switch-only proposal to OPEN redemptions must be a real change; if it is not, \
+             redemptions can never be opened"
+        );
+    }
+
+    #[test]
+    fn closing_redemptions_from_open_is_an_effective_change() {
+        let close = RedeemLimitsArgs {
+            redemptions_enabled: Some(false),
+            ..Default::default()
+        };
+        assert!(changed(&close, true));
+    }
+
+    #[test]
+    fn proposing_the_state_it_is_already_in_is_a_no_op() {
+        // The gate's actual purpose: a doomed proposal must not occupy the single
+        // redeem-limits slot for a full 24h.
+        let already_open = RedeemLimitsArgs {
+            redemptions_enabled: Some(true),
+            ..Default::default()
+        };
+        assert!(!changed(&already_open, true));
+
+        let already_closed = RedeemLimitsArgs {
+            redemptions_enabled: Some(false),
+            ..Default::default()
+        };
+        assert!(!changed(&already_closed, false));
+    }
+
+    #[test]
+    fn an_empty_proposal_is_a_no_op_and_every_numeric_field_is_still_compared() {
+        assert!(!changed(&RedeemLimitsArgs::default(), false));
+
+        // Every pre-existing field must keep working; the new arm must not have displaced one.
+        for args in [
+            RedeemLimitsArgs {
+                instant_redeem_budget_usdc: Some(CUR_BUDGET + 1),
+                ..Default::default()
+            },
+            RedeemLimitsArgs {
+                instant_redeem_window_seconds: Some(CUR_WINDOW + 1),
+                ..Default::default()
+            },
+            RedeemLimitsArgs {
+                large_redeem_threshold_usdc: Some(CUR_THRESHOLD + 1),
+                ..Default::default()
+            },
+            RedeemLimitsArgs {
+                redeem_queue_delay_seconds: Some(CUR_DELAY + 1),
+                ..Default::default()
+            },
+        ] {
+            assert!(changed(&args, false));
+        }
+
+        // And each one, set to its CURRENT value, must not count.
+        for args in [
+            RedeemLimitsArgs {
+                instant_redeem_budget_usdc: Some(CUR_BUDGET),
+                ..Default::default()
+            },
+            RedeemLimitsArgs {
+                instant_redeem_window_seconds: Some(CUR_WINDOW),
+                ..Default::default()
+            },
+            RedeemLimitsArgs {
+                large_redeem_threshold_usdc: Some(CUR_THRESHOLD),
+                ..Default::default()
+            },
+            RedeemLimitsArgs {
+                redeem_queue_delay_seconds: Some(CUR_DELAY),
+                ..Default::default()
+            },
+        ] {
+            assert!(!changed(&args, false));
+        }
+    }
+
+    #[test]
+    fn the_two_gates_agree_on_the_switch() {
+        // The P0 was the two gates DISAGREEING about a field. Assert they now agree, which is the
+        // property that was violated, rather than only asserting each one separately.
+        let open = RedeemLimitsArgs {
+            redemptions_enabled: Some(true),
+            ..Default::default()
+        };
+        assert_eq!(redeem_limits_any_set(&open), changed(&open, false));
     }
 
     #[test]

@@ -159,15 +159,24 @@ mod tests {
     #[test]
     fn a_redeem_only_exemption_waives_redeem_and_NOT_mint() {
         let e = exemption(WALLET, SIDE_REDEEM_BIT);
-        assert_eq!(effective_premium_bps(100, Some(&e), &WALLET, Side::Mint), 100);
-        assert_eq!(effective_premium_bps(150, Some(&e), &WALLET, Side::Redeem), 0);
+        assert_eq!(
+            effective_premium_bps(100, Some(&e), &WALLET, Side::Mint),
+            100
+        );
+        assert_eq!(
+            effective_premium_bps(150, Some(&e), &WALLET, Side::Redeem),
+            0
+        );
     }
 
     #[test]
     fn a_both_sides_exemption_waives_both() {
         let e = exemption(WALLET, SIDE_ALL_BITS);
         assert_eq!(effective_premium_bps(100, Some(&e), &WALLET, Side::Mint), 0);
-        assert_eq!(effective_premium_bps(150, Some(&e), &WALLET, Side::Redeem), 0);
+        assert_eq!(
+            effective_premium_bps(150, Some(&e), &WALLET, Side::Redeem),
+            0
+        );
     }
 
     #[test]
@@ -175,7 +184,10 @@ mod tests {
         // PDA seeds make this unreachable today. Asserted because it is the check that
         // must hold if the seeds are ever relaxed.
         let e = exemption(OTHER, SIDE_ALL_BITS);
-        assert_eq!(effective_premium_bps(100, Some(&e), &WALLET, Side::Mint), 100);
+        assert_eq!(
+            effective_premium_bps(100, Some(&e), &WALLET, Side::Mint),
+            100
+        );
         assert_eq!(
             effective_premium_bps(150, Some(&e), &WALLET, Side::Redeem),
             150
@@ -228,12 +240,7 @@ mod tests {
             0
         );
         assert_eq!(
-            effective_premium_bps(
-                DEFAULT_PREMIUM_REDEEM_BPS,
-                Some(&e),
-                &WALLET,
-                Side::Redeem
-            ),
+            effective_premium_bps(DEFAULT_PREMIUM_REDEEM_BPS, Some(&e), &WALLET, Side::Redeem),
             0
         );
     }

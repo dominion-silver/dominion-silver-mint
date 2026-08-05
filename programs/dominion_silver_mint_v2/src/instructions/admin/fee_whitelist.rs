@@ -179,7 +179,26 @@ pub struct WithdrawFees<'info> {
 /// `amount` is explicit rather than "0 means everything". A magic value on an irreversible
 /// transfer is how a fat-finger becomes a full sweep; the panel prefills the balance instead.
 pub fn withdraw_fees_handler(ctx: Context<WithdrawFees>, amount: u64) -> Result<()> {
+    // The guardian pause MUST cover this. It is the only instant money movement in the program,
+    // and without this check the guardians' one lever failed to reach it: a compromised admin
+    // whose timelocked actions were all frozen and whose mint and redeem were halted could still
+    // sweep the entire vault in one transaction, with no delay and no veto.
+    //
+    // Precedented: `execute_withdraw_usdc` refuses to run while paused (D31). This is the same
+    // rule applied to the same class of action.
+    require!(!ctx.accounts.config.paused, DominionError::Paused);
     require!(amount > 0, DominionError::ZeroAmount);
+
+    // A sweep to the vault itself succeeds as a token-program no-op, and the event below would
+    // then report `remaining = available - amount`, a balance that never existed. Since the
+    // design leans on `FeesWithdrawn.remaining` for the "alert if the vault grows" monitor, a
+    // self-sweep is a way to feed that monitor a fabricated figure, repeatedly, while the vault
+    // actually fills. Cheap to forbid, and there is no legitimate reason to do it.
+    require!(
+        ctx.accounts.destination.key() != ctx.accounts.fee_vault.key(),
+        DominionError::WithdrawRecipientMismatch
+    );
+
     let available = ctx.accounts.fee_vault.amount;
     require!(available >= amount, DominionError::InsufficientFeeVault);
 
