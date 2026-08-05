@@ -457,7 +457,9 @@ const ACTIONS: ActionDesc[] = [
     mode: "squads",
     fields: [{ name: "on", label: "Routing enabled", kind: "bool" }],
     tip: "Turn this OFF if the fee vault ever becomes unusable, e.g. frozen by the USDC issuer. The premium transfer inside mint and redeem is unconditional, so a frozen vault would otherwise brick mint AND redeem for every non-exempt wallet, with exempt wallets still working (which makes it confusing to diagnose). With routing off the premium simply stays in the treasury: that is not an untested mode, it is exactly how this program behaved before 2026-08-05. Instant in both directions.",
-    current: (c) => (c.feeRoutingEnabled ? "ON (premium -> vault)" : "OFF (premium stays in treasury)"),
+    // NEGATED field: false = routing ON. See ConfigAccount.feeRoutingDisabled.
+    current: (c) =>
+      c.feeRoutingDisabled ? "OFF (premium stays in treasury)" : "ON (premium -> vault)",
     build: (c, p) => actions.setFeeRoutingEnabled(c, boolField(p, "on")),
   },
   {

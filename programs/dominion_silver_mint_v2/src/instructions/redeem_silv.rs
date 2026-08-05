@@ -250,7 +250,7 @@ pub fn handler(
     // runs, and an unusable fee vault cannot brick redemption. Note this makes the payout LARGER
     // (the user receives the full spot value), which is the right direction for a fallback: it
     // forgoes revenue rather than blocking users.
-    let fee_usdc = if config.fee_routing_enabled {
+    let fee_usdc = if !config.fee_routing_disabled {
         fee_from_amount(gross_usdc, premium_bps)?
     } else {
         0

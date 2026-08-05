@@ -264,7 +264,7 @@ pub fn handler(
     // The user's SILV changes, deliberately and in their favour by the premium, because the SILV is
     // minted on the net. That is correct for a fallback whose purpose is to keep the product
     // working: it forgoes revenue rather than charging a fee it cannot route.
-    let fee_usdc = if config.fee_routing_enabled {
+    let fee_usdc = if !config.fee_routing_disabled {
         fee_from_amount(amount_usdc, premium_bps)?
     } else {
         0

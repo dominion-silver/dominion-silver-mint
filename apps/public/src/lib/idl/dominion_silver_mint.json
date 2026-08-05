@@ -6133,7 +6133,7 @@
             "type": "u64"
           },
           {
-            "name": "fee_routing_enabled",
+            "name": "fee_routing_disabled",
             "type": "bool"
           },
           {

@@ -318,11 +318,14 @@ pub fn set_fee_routing_enabled_handler(
     enabled: bool,
 ) -> Result<()> {
     let config = &mut ctx.accounts.config;
+    // The INSTRUCTION takes `enabled` because that is what an operator thinks in; the FIELD is
+    // negated so its zero value is the correct default on an in-place upgrade. The inversion lives
+    // here, in one place, rather than at every read site.
     require!(
-        enabled != config.fee_routing_enabled,
+        enabled == config.fee_routing_disabled,
         DominionError::ProposalNoOp
     );
-    config.fee_routing_enabled = enabled;
+    config.fee_routing_disabled = !enabled;
     emit!(FeeRoutingChanged {
         enabled,
         by: ctx.accounts.admin.key(),

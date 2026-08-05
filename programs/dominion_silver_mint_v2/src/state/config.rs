@@ -564,7 +564,7 @@ pub struct ConfigAccount {
     // "no prior bucket", so the first window after the upgrade is simply unweighted.
     pub instant_used_prev_usdc: u64,
 
-    // A5: the ESCAPE HATCH for premium routing. True at init.
+    // A5: the ESCAPE HATCH for premium routing. Note the INVERTED name: false = routing ON.
     //
     // The failure it exists for: USDC carries a Circle freeze authority. A frozen fee-vault ATA
     // would permanently brick mint AND redeem for every non-exempt wallet, because the premium
@@ -573,14 +573,23 @@ pub struct ConfigAccount {
     // Low likelihood, unbounded blast radius, and before this there was NO on-chain remedy short
     // of a program upgrade.
     //
-    // With this false, the premium simply stays in the treasury, which is exactly the behaviour
-    // the program had before 2026-08-05. So the fallback is not a degraded mode nobody has
-    // exercised: it is the design that ran for the whole prior history of this program.
+    // With this TRUE, the premium simply stays in the treasury, which is exactly the behaviour the
+    // program had before 2026-08-05. So the fallback is not a degraded mode nobody has exercised:
+    // it is the design that ran for the whole prior history of this program.
     //
-    // Turning it OFF is a safety action and therefore instant. Turning it back ON is also instant,
-    // because it cannot lose or misdirect funds: it only changes which of two program-controlled
-    // accounts the premium accrues in.
-    pub fee_routing_enabled: bool,
+    // WHY THE NAME IS NEGATED, which is otherwise bad practice. This field is carved out of
+    // `reserved`, so on an IN-PLACE UPGRADE it decodes from a zero byte. As
+    // `fee_routing_enabled` that meant FALSE, i.e. premium routing SILENTLY OFF on every
+    // upgraded config, discoverable only by noticing the fee vault was not growing. The two other
+    // fields carved in this pass (`kyc_scope_flags` = 0 = off, `instant_used_prev_usdc` = 0 = no
+    // prior bucket) both have the INTENDED behaviour at zero; this one did not. Negating the name
+    // makes the zero value correct by construction rather than correct by remembering to run a
+    // setter after every upgrade.
+    //
+    // Turning routing OFF is a safety action and therefore instant. Turning it back ON is also
+    // instant, because it cannot lose or misdirect funds: it only changes which of two
+    // program-controlled accounts the premium accrues in.
+    pub fee_routing_disabled: bool,
     pub reserved: [u8; 44],
 }
 
@@ -624,7 +633,7 @@ impl ConfigAccount {
         + (1 + 8)             // pending_public_mint_nonce (carved out of reserved)
         + 1                   // kyc_scope_flags (carved out of reserved)
         + 8                   // instant_used_prev_usdc (carved out of reserved)
-        + 1                   // fee_routing_enabled (carved out of reserved)
+        + 1                   // fee_routing_disabled (carved out of reserved)
         + 44; // reserved
 
     pub fn assert_premium_within_bounds(&self) -> Result<()> {
