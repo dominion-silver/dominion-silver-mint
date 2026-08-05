@@ -232,6 +232,12 @@ pub fn withdraw_fees_handler(ctx: Context<WithdrawFees>, amount: u64) -> Result<
     // Note the float is read as a raw balance, NOT balance-minus-amount: the question is whether
     // the buffer is currently healthy, not whether it would survive this sweep. A treasury sitting
     // exactly at its floor should not fund a fee withdrawal at all.
+    // CANNOT STRAND REVENUE PERMANENTLY, checked during the review-of-fixes because "gate a
+    // withdrawal on a threshold" is a classic way to build an inescapable trap. Two independent
+    // exits exist, both admin-reachable: `deposit_usdc` tops the treasury back above the floor, and
+    // `propose_set_treasury_min_float` lowers the floor itself (24h, since lowering it is a
+    // loosening). So a treasury structurally below its float DEFERS the sweep, it does not destroy
+    // the revenue: the vault keeps accruing and can never be closed.
     require!(
         ctx.accounts.usdc_treasury.amount >= ctx.accounts.config.treasury_min_float_usdc,
         DominionError::FloorBreached

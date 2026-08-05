@@ -759,6 +759,18 @@ pub fn execute_set_redeem_limits_handler(
     // fails here for a second, independent reason (that path clears the slot too), so the two
     // guards are belt and braces rather than one point of failure.
     //
+    // VERIFIED DURING THE REVIEW-OF-FIXES that this bind cannot create an inescapable state, which
+    // is the obvious hazard of adding a precondition to an execute path:
+    //   - `cancel_timelocked_action` does NOT read any pending_*_nonce as a precondition, and it
+    //     clears the matching one via a match on the action discriminant, so a proposal is ALWAYS
+    //     cancellable and cancelling always frees the single-active slot.
+    //   - `close_timelock_account` then reclaims the rent, so an orphaned account left behind by an
+    //     instant close is cleanable rather than permanent dust.
+    //   - nonces come from a monotonically increasing `next_timelock_nonce` and are never reused,
+    //     so a disarmed proposal cannot become executable again by coincidence.
+    // The failure mode is therefore "cannot execute, must be cancelled", which is exactly the
+    // intent, and never "cannot execute and cannot cancel".
+    //
     // The SAME GAP EXISTS on `execute_set_public_mint` and every other execute_* in this file:
     // none of them reads its `pending_*_nonce`, and `set_public_mint_enabled(false)` clears
     // `pending_public_mint_nonce` believing that disarms the open. It does not. Tracked as A7 in
