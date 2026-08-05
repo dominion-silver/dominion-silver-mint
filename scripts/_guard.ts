@@ -61,11 +61,34 @@ export const ACTION_COST: Record<string, ActionCost> = {
   remove_guardian: "timelocked-undo", // schedules; finalize needs the window
   finalize_guardian_removal: "timelocked-undo", // re-add needs a cooldown
 
+  // --- Pre-mainnet upgrade, 2026-08-05 ---
+  create_fee_vault: "reversible", // an empty ATA can be closed; and it is REQUIRED to exist
+  set_fee_exempt: "reversible", // remove_fee_exempt is instant
+  remove_fee_exempt: "reversible", // set_fee_exempt is instant
+  set_kyc_operator: "reversible",
+  attest_kyc: "reversible",
+  revoke_kyc: "reversible",
+  // Arming the KYC gate LOCKS USERS OUT, but disarming is one instant transaction, and this
+  // table's axis is strictly the cost to UNDO. Classified honestly on that axis, with the
+  // warning recorded here: arming with no attestations written is a total lockout for as long
+  // as it takes somebody to notice.
+  set_kyc_scope: "reversible",
+  // NOTE THE INVERSION vs set_public_mint_enabled above. Opening redemptions costs a 24h
+  // timelock, but CLOSING them is instant (`set_redemptions_enabled(false)`), so the UNDO is
+  // cheap and this is genuinely "reversible" on this table's axis. It is still the most
+  // consequential switch in the program, because it opens the only user-facing path that pays
+  // out treasury cash. A script must not open it unasked for that reason, not because the undo
+  // is expensive.
+  execute_open_redemptions: "reversible",
+
   // No way back without shipping new code.
   set_max_silv_supply: "irreversible", // tighten-only, by design
   initialize: "irreversible", // one shot per program id
   set_upgrade_authority: "irreversible",
   close_program: "irreversible",
+  // Funds leave to a caller-supplied address. Recoverable only if you control the
+  // destination, which a script cannot assume, so this is operator-only.
+  withdraw_fees: "irreversible",
 };
 
 function isDevnet(rpc: string): boolean {
