@@ -4112,28 +4112,6 @@
           "relations": [
             "config"
           ]
-        },
-        {
-          "name": "new_operator",
-          "docs": [
-            "The INCOMING attestor. Required to sign only while the gate is ARMED.",
-            "",
-            "ROUND 3 P2. The \"do not decommission while armed\" rule looked only for `Pubkey::default()`, so any",
-            "OTHER unusable key passed: rotate an armed gate's operator to the config PDA and the update succeeds",
-            "because the PDA is non-zero, existing holders keep passing, and no new holder can ever be attested.",
-            "Identical harm, one keystroke away from the case that was blocked.",
-            "",
-            "A signature is the only on-chain proof that a key can act, and the objection I raised against it for",
-            "C-02's first attempt does not apply here: you are rotating TO a key you chose, so its signature is by",
-            "definition available. The objection did apply to arming, where the operator was already configured and",
-            "might since have been lost.",
-            "",
-            "Required ONLY while armed, so the incident-response path stays one signature: with a leaked attestor",
-            "the admin can disarm (instant) and then rotate freely, or rotate with the new key's signature if it is",
-            "to hand. And a leaked attestor is a compliance problem, not a path to funds."
-          ],
-          "signer": true,
-          "optional": true
         }
       ],
       "args": [

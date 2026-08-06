@@ -28,23 +28,6 @@ pub struct SetKycOperator<'info> {
     #[account(mut, seeds = [CONFIG_SEED], bump, has_one = admin)]
     pub config: Box<Account<'info, ConfigAccount>>,
     pub admin: Signer<'info>,
-
-    /// The INCOMING attestor. Required to sign only while the gate is ARMED.
-    ///
-    /// ROUND 3 P2. The "do not decommission while armed" rule looked only for `Pubkey::default()`, so any
-    /// OTHER unusable key passed: rotate an armed gate's operator to the config PDA and the update succeeds
-    /// because the PDA is non-zero, existing holders keep passing, and no new holder can ever be attested.
-    /// Identical harm, one keystroke away from the case that was blocked.
-    ///
-    /// A signature is the only on-chain proof that a key can act, and the objection I raised against it for
-    /// C-02's first attempt does not apply here: you are rotating TO a key you chose, so its signature is by
-    /// definition available. The objection did apply to arming, where the operator was already configured and
-    /// might since have been lost.
-    ///
-    /// Required ONLY while armed, so the incident-response path stays one signature: with a leaked attestor
-    /// the admin can disarm (instant) and then rotate freely, or rotate with the new key's signature if it is
-    /// to hand. And a leaked attestor is a compliance problem, not a path to funds.
-    pub new_operator: Option<Signer<'info>>,
 }
 
 /// Set or rotate the attestor key. INSTANT.
@@ -83,28 +66,30 @@ pub fn set_kyc_operator_handler(ctx: Context<SetKycOperator>, operator: Pubkey) 
     // Disarm first, then decommission. Both are instant, so this costs the admin one extra transaction
     // and removes a silent trap.
     let config = &mut ctx.accounts.config;
-    if config.kyc_scope_flags != 0 {
-        // ARMED. The gate is closed, so an operator that cannot act shuts out every unrostered holder.
-        // Clearing is refused outright; appointing requires the appointee to sign.
+    // CLEARING the attestor while armed is refused: that is the one case we can detect and it leaves the gate
+    // with provably no way to admit anybody.
+    if operator == Pubkey::default() {
         require!(
-            operator != Pubkey::default(),
+            kyc_operator_may_be_cleared(config.kyc_scope_flags),
             DominionError::KycOperatorRequiredWhileArmed
         );
-        let signer = ctx
-            .accounts
-            .new_operator
-            .as_ref()
-            .ok_or(error!(DominionError::KycOperatorRequiredWhileArmed))?;
-        require_keys_eq!(
-            signer.key(),
-            operator,
-            DominionError::KycOperatorRequiredWhileArmed
-        );
-    } else {
-        // DISARMED. Nothing is gated, so an unusable operator harms nobody until someone tries to arm, and
-        // `validate_kyc_arming` refuses that on an empty roster. One signature, fast rotation preserved.
-        let _ = kyc_operator_may_be_cleared(config.kyc_scope_flags);
     }
+    // WHAT IS DELIBERATELY *NOT* CHECKED, and why, because I got this wrong once and reverted it.
+    //
+    // Round 3 P2 observes that rotating to any OTHER unusable key (a PDA, a typo) while armed has the same
+    // effect as clearing: no NEW holder can be attested. True. My first fix required the incoming operator to
+    // CO-SIGN whenever the gate was armed, which does prove the key can act.
+    //
+    // That fix was worse than the finding. The rotation card routes through Squads, `squads.ts` wraps with
+    // `ephemeralSigners: 0`, and its execute path compiles one signer, so a two-signature transaction cannot
+    // be assembled: exactly the reason the FIRST C-02 attempt (a co-signature on arming) was itself a P0.
+    // Rotation-while-armed became impossible from the panel, and that is the INCIDENT path: a leaked attestor
+    // key while the gate is live. So the fix traded an admin-MISTAKE scenario for an ATTACKER scenario.
+    //
+    // Residual, accepted and bounded: an admin that rotates an armed gate to a dead key shuts out holders who
+    // are not yet attested. Already-attested holders keep redeeming, `KycOperatorChanged` is emitted, and
+    // disarming is instant and needs nothing, so recovery is one transaction. The audit rated it P2, and the
+    // cost of closing it is a broken incident path, which is not a trade worth making.
     let old_operator = config.kyc_operator;
     config.kyc_operator = operator;
     emit!(KycOperatorChanged {
