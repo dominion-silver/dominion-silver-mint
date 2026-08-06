@@ -455,25 +455,41 @@ describe("audit P-02: the client must bound OUTFLOW, not the trade size", () => 
     ).toBe("otc");
   });
 
-  it("the advertised maximum matches what the flag makes possible", () => {
-    // With routing off the whole outflow allowance reaches the user, so "max instant" is the full
-    // budget. With routing on the user's share is the budget minus the premium leg.
-    const off = computeMaxInstantRedeemableUsdc({ ...base, feeRoutingDisabled: true }, TREASURY, NOW);
-    const on = computeMaxInstantRedeemableUsdc({ ...base, feeRoutingDisabled: false }, TREASURY, NOW);
-    expect(off.toString()).toBe("98500000");
-    expect(on.lt(off)).toBe(true);
-    // And the advertised maximum must itself be serveable: quoting a number that routes to "limit"
-    // is the same class of bug in the other direction.
-    for (const [cfgFlag, max] of [[true, off], [false, on]] as const) {
-      const cfg = { ...base, feeRoutingDisabled: cfgFlag };
-      // Convert the advertised NET back to the gross the user would submit.
-      const gross = cfgFlag
-        ? max
-        : max.mul(new BN(10_000)).div(new BN(10_000 - base.premiumBpsRedeem));
+  it("the advertised maximum is actually SERVEABLE, in both flag states", () => {
+    // REVIEW-OF-FIXES. The version here accepted `["instant","otc"]`, and "otc" MEANS not-serveable, so
+    // the treasury bound went unasserted while the comment claimed the opposite. Worse, it inverted
+    // net->gross only in the routing-ON branch, so for routing OFF it submitted a strictly SMALLER
+    // redemption than the advertised maximum and proved nothing about the boundary.
+    //
+    // The UI divides by (1 - bps) in BOTH states (MintRedeemCard), so the gross a user submits to receive
+    // the advertised net is the same computation either way. That is what this now exercises, and it
+    // demands "instant" exactly.
+    for (const flag of [true, false]) {
+      const cfg = { ...base, feeRoutingDisabled: flag };
+      const maxNet = computeMaxInstantRedeemableUsdc(cfg, TREASURY, NOW);
+      // The gross that yields `maxNet` to the user, i.e. what the UI would build.
+      const gross = flag
+        ? maxNet.mul(new BN(10_000)).div(new BN(10_000 - base.premiumBpsRedeem))
+        : maxNet.mul(new BN(10_000)).div(new BN(10_000 - base.premiumBpsRedeem));
       expect(
-        ["instant", "otc"].includes(classifyRedeem(cfg, TREASURY, gross, NOW, undefined)),
-        `advertised max must not be over the BUDGET (flag=${cfgFlag})`,
-      ).toBe(true);
+        classifyRedeem(cfg, TREASURY, gross, NOW, undefined),
+        `the advertised max must route INSTANT, not otc/limit (routingDisabled=${flag})`,
+      ).toBe("instant");
+    }
+
+    // And one atomic unit MORE than the advertised maximum must NOT be instant, or the advertised figure
+    // is not a maximum. This is the half that catches an off-by-one in the other direction.
+    for (const flag of [true, false]) {
+      const cfg = { ...base, feeRoutingDisabled: flag };
+      const maxNet = computeMaxInstantRedeemableUsdc(cfg, TREASURY, NOW);
+      const grossJustOver = maxNet
+        .mul(new BN(10_000))
+        .div(new BN(10_000 - base.premiumBpsRedeem))
+        .addn(2); // +2 atomic: +1 can be absorbed by the two floors on the way back
+      expect(
+        classifyRedeem(cfg, TREASURY, grossJustOver, NOW, undefined),
+        `just over the advertised max must NOT be instant (routingDisabled=${flag})`,
+      ).not.toBe("instant");
     }
   });
 });

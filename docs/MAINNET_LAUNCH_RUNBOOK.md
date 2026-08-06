@@ -121,7 +121,7 @@ circulating under one "reproducible" label: the Dockerfile header said Solana 1.
 1.52 / rustc 1.89.0. None of those is what produced the artifact.
 
 The toolchain that actually built `dominion_silver_mint.so` at sha256
-`91108c3ea9e7e04e2e21e0220c529b5727fb637e59323a39273927da9a7a650a` (1,185,864 bytes).
+`76f1a13619dd5feb05a25f43bbb32ea86960b8233a95fd6d040d8181fedb3721` (1,185,784 bytes).
 
 **This hash MUST be re-recorded on every program change.** It was `799945e4…` until 2026-08-06 and went
 stale within the hour: the commit that closed audit findings C-01, C-02 and C-03 changed the program, and
@@ -193,10 +193,18 @@ initialisation.** Run it BEFORE any init script.
 
 ```bash
 DOMINION_ALLOW_MAINNET=i-understand \
+DOMINION_RPC=https://api.mainnet-beta.solana.com \
 DOMINION_PROGRAM_ID=<PROGRAM_ID> \
 DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json \
 npx tsx scripts/t1-hostile-bootstrap.ts
 ```
+
+**`DOMINION_RPC` is on that list because it was missing, and its absence reproduced the audit's P0
+verbatim.** Every other mainnet command in this runbook sets it; this one did not, so `resolveCluster()`
+defaulted to devnet, `requireDevnet` returned on its first line, and the ceremony ran entirely on devnet
+after the mainnet deploy had been paid for. The script now REFUSES that combination outright
+(`DOMINION_ALLOW_MAINNET` set with `DOMINION_RPC` unset is a contradiction, not a default), so the old
+command no longer runs silently, but set it anyway and read the `cluster=` line the script prints first.
 
 **DO NOT EDIT `args()`.** That instruction lived here until 2026-08-06 and it was audit finding
 D-01, a P1. It told the operator to type `premiumBpsMint: 150` and `premiumBpsRedeem: 500` while
@@ -230,9 +238,18 @@ the JSON, not the TypeScript.
 the deploying upgrade authority (audit DOM-001), so deploy from the Ops Squads vault or transfer the
 upgrade authority to it AFTER initialize (step 12).
 
-Still edit `scripts/_t1-mint-helper.ts` so the mint's freeze authority and permanent delegate are the
-compliance vault rather than the payer. **Those two are permanent**, fixed at mint creation, and no
-program upgrade can restore them.
+**Do NOT edit `scripts/_t1-mint-helper.ts` either.** That instruction was here until 2026-08-06 and it
+was a P0 waiting to happen: the helper hardcoded the mint's freeze authority and permanent delegate to
+the payer, `initialize` had been changed to expect the compliance vault, and the two can never agree on
+mainnet. Forgetting the edit meant reverting `SilvFreezeAuthorityMismatch` at the initialisation step,
+after the deploy was paid for and after the mint keypair (deliberately never persisted) had been used.
+
+The helper now takes the compliance authority as an argument and T1 reads it from
+`authorities.compliance.pubkey`, resolved and validated BEFORE the first lamport moves. Neither authority
+has to sign to be set, so there was never a reason to hand-edit this.
+
+**Those two are still permanent**, fixed at mint creation, and no program upgrade can restore an external
+SPL authority once it is wrong. Check the printed value before confirming.
 
 Expect 17/17. Then record everything:
 
@@ -396,7 +413,7 @@ product rather than a missing setup step. Nothing creates it automatically: `ini
 touch it.
 
 ```
-DOMINION_ALLOW_MAINNET=i-understand DOMINION_RPC=<mainnet> npx tsx scripts/create-fee-vault.ts
+DOMINION_ALLOW_MAINNET=i-understand DOMINION_RPC=<mainnet> DOMINION_INTENT=create_fee_vault npx tsx scripts/create-fee-vault.ts
 ```
 
 Idempotent, one-way and permanent: the vault is a PDA-owned associated token account, so once it

@@ -7,16 +7,15 @@ const nextConfig: NextConfig = {
   // warn/guess a workspace root from the multiple lockfiles in the repo
   // (apps/public + apps/admin each have their own). Deterministic builds.
   outputFileTracingRoot: path.join(__dirname),
-  // Workaround: jito-ts (transitively pulled by @pythnetwork/pyth-solana-receiver)
-  // has a stale rpc-websockets import path that breaks Next.js webpack 5.
-  // We don't actually use jito here; mark these as externals so they don't
-  // get bundled. Pyth posting falls back to Hermes-only path.
+  // The comment here described a jito-ts workaround for @pythnetwork/pyth-solana-receiver, a dependency
+  // removed on 2026-08-06 with the retired Core oracle path (audit P-06). The `fs: false` fallback below
+  // is unrelated and still needed by the wallet adapters, so only the explanation was stale.
   webpack: (config) => {
     config.resolve.fallback = { ...config.resolve.fallback, fs: false };
     return config;
   },
   // Allow npm packages with mixed CJS/ESM to work in Next.
-  transpilePackages: ["@pythnetwork/pyth-solana-receiver"],
+  transpilePackages: [],
   async headers() {
     return [
       {
@@ -48,7 +47,10 @@ const nextConfig: NextConfig = {
                 "https://api.mainnet-beta.solana.com wss://api.mainnet-beta.solana.com",
                 "https://api.devnet.solana.com wss://api.devnet.solana.com",
                 "https://api.testnet.solana.com wss://api.testnet.solana.com",
-                "https://hermes.pyth.network",
+                // REVIEW-OF-FIXES P2: `https://hermes.pyth.network` was allowlisted here for the
+                // retired Pyth Core path. Nothing calls it: the price comes from the same-origin
+                // /api/lazer proxy, and the Hermes client was removed from package.json. An unnecessary
+                // connect-src entry is a standing permission for an upstream we no longer trust or use.
               ].join(" "),
               "frame-ancestors 'none'",
               "base-uri 'self'",

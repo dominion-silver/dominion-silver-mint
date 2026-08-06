@@ -38,7 +38,10 @@ const nextConfig: NextConfig = {
                 "https://api.mainnet-beta.solana.com wss://api.mainnet-beta.solana.com",
                 "https://api.devnet.solana.com wss://api.devnet.solana.com",
                 "https://api.testnet.solana.com wss://api.testnet.solana.com",
-                "https://hermes.pyth.network",
+                // REVIEW-OF-FIXES P2: `https://hermes.pyth.network` was allowlisted here for the
+                // retired Pyth Core path. Nothing calls it: the price comes from the same-origin
+                // /api/lazer proxy, and the Hermes client was removed from package.json. An unnecessary
+                // connect-src entry is a standing permission for an upstream we no longer trust or use.
               ].join(" "),
               "frame-ancestors 'none'",
               "base-uri 'self'",

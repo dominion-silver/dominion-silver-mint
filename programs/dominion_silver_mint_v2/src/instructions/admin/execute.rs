@@ -621,21 +621,23 @@ pub fn redeem_limits_effective_change(
     {
         return true;
     }
-    if args
-        .large_redeem_threshold_usdc
-        .is_some_and(|v| v != cur_threshold)
-    {
-        return true;
-    }
-    if args
-        .redeem_queue_delay_seconds
-        .is_some_and(|v| v != cur_queue_delay)
-    {
-        return true;
-    }
+    // REVIEW-OF-FIXES: `large_redeem_threshold_usdc` and `redeem_queue_delay_seconds` used to be
+    // compared here too, and that left C-03's abuse reachable with ONE EXTRA NO-OP FIELD. The audit fix
+    // narrowed `redeem_limits_any_set` only, so:
+    //
+    //     { instant_redeem_budget_usdc: Some(<current value>), redeem_queue_delay_seconds: Some(<new>) }
+    //
+    // passed `any_set` (a live field is Some) AND passed this gate (the dead field differs), held
+    // `pending_redeem_limits_nonce` for 24 hours, bumped `active_proposal_count`, and wrote only a value
+    // no instruction reads. That is the C-03 failure verbatim, one field wider.
+    //
+    // Both gates now agree on the same definition of "live", which is the property the test below pins.
+    // The parameters stay in the signature: removing them would change every call site for no gain, and
+    // the execute handler still WRITES a dead field when it is provided alongside a live one.
     if args.redemptions_enabled.is_some_and(|v| v != cur_enabled) {
         return true;
     }
+    let _ = (cur_threshold, cur_queue_delay);
     false
 }
 
@@ -1653,6 +1655,69 @@ mod fix_a_tests {
     }
 
     #[test]
+    fn the_two_no_op_gates_agree_on_what_counts_as_LIVE() {
+        // REVIEW-OF-FIXES. `redeem_limits_any_set` and `redeem_limits_effective_change` are independent,
+        // and that independence has now caused a bug TWICE: once when `redemptions_enabled` was added to
+        // the first and not the second (a P0: no path could open redemptions), and once when C-03
+        // narrowed the first and not the second (the abuse survived by pairing a dead field with a
+        // no-op live one). Nothing pinned the intended relationship, so nothing noticed either time.
+        //
+        // The relationship: if `any_set` is FALSE, `effective_change` must also be false. A proposal
+        // that is indistinguishable from empty cannot be an effective change.
+        for args in [
+            RedeemLimitsArgs {
+                large_redeem_threshold_usdc: Some(CUR_THRESHOLD + 1),
+                ..Default::default()
+            },
+            RedeemLimitsArgs {
+                redeem_queue_delay_seconds: Some(CUR_DELAY + 1),
+                ..Default::default()
+            },
+            // The exact pairing the review found: a live field at its CURRENT value plus a dead field
+            // that differs.
+            RedeemLimitsArgs {
+                instant_redeem_budget_usdc: Some(CUR_BUDGET),
+                redeem_queue_delay_seconds: Some(CUR_DELAY + 1),
+                ..Default::default()
+            },
+            RedeemLimitsArgs {
+                instant_redeem_window_seconds: Some(CUR_WINDOW),
+                large_redeem_threshold_usdc: Some(CUR_THRESHOLD + 1),
+                ..Default::default()
+            },
+        ] {
+            assert!(
+                !changed(&args, false),
+                "a dead-field-only or no-op-live proposal must not count as an effective change"
+            );
+        }
+
+        // And the converse still holds for every LIVE field, so the tightening did not break the
+        // ability to propose anything real.
+        assert!(changed(
+            &RedeemLimitsArgs {
+                instant_redeem_budget_usdc: Some(CUR_BUDGET + 1),
+                ..Default::default()
+            },
+            false
+        ));
+        assert!(changed(
+            &RedeemLimitsArgs {
+                instant_redeem_window_seconds: Some(CUR_WINDOW + 1),
+                ..Default::default()
+            },
+            false
+        ));
+        assert!(changed(
+            &RedeemLimitsArgs {
+                redemptions_enabled: Some(true),
+                ..Default::default()
+            },
+            false
+        ));
+    }
+
+    #[test]
     fn a_proposal_touching_only_DEAD_fields_is_refused() {
         // AUDIT C-03. `large_redeem_threshold_usdc` and `redeem_queue_delay_seconds` are read by no
         // instruction since the queue was deleted. Proposing one alone used to pass the no-op gates,
@@ -1718,10 +1783,18 @@ mod fix_a_tests {
     }
 
     #[test]
-    fn an_empty_proposal_is_a_no_op_and_every_numeric_field_is_still_compared() {
+    fn an_empty_proposal_is_a_no_op_and_every_LIVE_field_is_still_compared() {
+        // Renamed from "...every_numeric_field_is_still_compared", and the body changed with it. The old
+        // version asserted that a change to `large_redeem_threshold_usdc` or `redeem_queue_delay_seconds`
+        // counted as an effective change, which is what let C-03's abuse survive the first fix. Those two
+        // are read by no instruction; a gate that treats them as meaningful is the bug, so the test that
+        // demanded it had to change too.
+        //
+        // Kept deliberately as a RENAME rather than a deletion: the old name is what a future reader would
+        // otherwise cite as evidence the dead fields are governed.
         assert!(!changed(&RedeemLimitsArgs::default(), false));
 
-        // Every pre-existing field must keep working; the new arm must not have displaced one.
+        // Every LIVE field must still be compared, in both directions.
         for args in [
             RedeemLimitsArgs {
                 instant_redeem_budget_usdc: Some(CUR_BUDGET + 1),
@@ -1731,19 +1804,9 @@ mod fix_a_tests {
                 instant_redeem_window_seconds: Some(CUR_WINDOW + 1),
                 ..Default::default()
             },
-            RedeemLimitsArgs {
-                large_redeem_threshold_usdc: Some(CUR_THRESHOLD + 1),
-                ..Default::default()
-            },
-            RedeemLimitsArgs {
-                redeem_queue_delay_seconds: Some(CUR_DELAY + 1),
-                ..Default::default()
-            },
         ] {
             assert!(changed(&args, false));
         }
-
-        // And each one, set to its CURRENT value, must not count.
         for args in [
             RedeemLimitsArgs {
                 instant_redeem_budget_usdc: Some(CUR_BUDGET),
@@ -1753,8 +1816,23 @@ mod fix_a_tests {
                 instant_redeem_window_seconds: Some(CUR_WINDOW),
                 ..Default::default()
             },
+        ] {
+            assert!(!changed(&args, false));
+        }
+
+        // And the DEAD fields must NOT be, whichever value they carry. This is the assertion that
+        // replaces the old one, stated as the property rather than its negation.
+        for args in [
+            RedeemLimitsArgs {
+                large_redeem_threshold_usdc: Some(CUR_THRESHOLD + 1),
+                ..Default::default()
+            },
             RedeemLimitsArgs {
                 large_redeem_threshold_usdc: Some(CUR_THRESHOLD),
+                ..Default::default()
+            },
+            RedeemLimitsArgs {
+                redeem_queue_delay_seconds: Some(CUR_DELAY + 1),
                 ..Default::default()
             },
             RedeemLimitsArgs {
@@ -1762,7 +1840,10 @@ mod fix_a_tests {
                 ..Default::default()
             },
         ] {
-            assert!(!changed(&args, false));
+            assert!(
+                !changed(&args, false),
+                "a dead field must never count as an effective change"
+            );
         }
     }
 

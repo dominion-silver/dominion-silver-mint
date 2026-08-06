@@ -207,8 +207,25 @@ async function main() {
 
   // ------------------------------------------------------ the six requirements
   section("E. Your six launch requirements");
-  ok("1. SILV token deployed and live", "runbook steps 3-6");
-  ok("2. pre-mint freely to the inventory wallet, seed a Sunrise pool", "steps 7-9");
+  // REVIEW-OF-FIXES P1. These two printed READY unconditionally, on the promise of future steps, which is
+  // the second half of the audit's own P0: "le readiness gate ne lance ni n'analyse T1 et imprime READY
+  // pour le token deploye/live sur la seule promesse de futures etapes". A gate that reports READY for
+  // something that has not happened is worse than no line at all, because a checklist reads it as done.
+  //
+  // Neither can be PROVEN from here: the token does not exist until the ceremony creates it, and the
+  // premint has not happened. So they are AT STEP, the classification introduced for exactly this: red
+  // before the ceremony, expected to be red, and re-run afterwards. `atStep` does not exit 1.
+  atStep(
+    "runbook steps 3-6",
+    "1. SILV token deployed and live",
+    "the mint is created BY T1 (step 4-6). Nothing here can observe it beforehand: re-run this gate " +
+      "after T1 and check the mint address it prints.",
+  );
+  atStep(
+    "runbook steps 7-9",
+    "2. pre-mint freely to the inventory wallet, seed a Sunrise pool",
+    "admin_premint runs at step 7; the pool is seeded off-chain afterwards.",
+  );
   byHand(
     "3. public mint with no KYC",
     "works, but opening it costs a 24h timelock (propose at step 7, execute at step 10)",

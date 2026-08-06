@@ -102,28 +102,78 @@ describe("the Lazer proxy only serves feed 3154", () => {
 });
 
 describe("the Lazer proxy rate-limits", () => {
-  it("refuses a flood with 429 and stops spending the key", async () => {
+  it("throttles a flood of MISSES, which is the only kind that can reach upstream", async () => {
+    // REVIEW-OF-FIXES: this test used to hammer the legal request and expect 429s. That premise died with
+    // the fix: cache hits no longer spend tokens, so a sequential legal flood is all hits and nothing is
+    // throttled, by design. Keeping the old assertion would have meant reverting the DoS fix to satisfy a
+    // test.
+    //
+    // What still needs bounding is MISSES, since only a miss can reach the key. Make upstream fail so the
+    // cache never populates and every request is a miss.
     const { POST } = await freshRoute();
-    // Distinct feeds would be refused by the allowlist first, so hammer the LEGAL request. The cache
-    // absorbs the upstream calls; the bucket is what bounds the request rate itself.
+    fetchSpy.mockImplementation(async () => new Response("upstream down", { status: 503 }));
+
     let limited = 0;
+    let upstreamErrors = 0;
     for (let i = 0; i < 200; i++) {
-      const res = await POST(req({ feedId: 3154 }));
-      if (res.status === 429) limited++;
+      const st = (await POST(req({ feedId: 3154 }))).status;
+      if (st === 429) limited++;
+      if (st === 502) upstreamErrors++;
     }
-    expect(limited, "a 200-request burst must be throttled").toBeGreaterThan(0);
-    // Bounded, not merely non-zero: the burst allowance must not be so large that it fails to brake.
-    expect(limited).toBeGreaterThan(100);
-    // And a throttled response tells the caller when to come back.
+    expect(limited, "a flood of misses must be throttled").toBeGreaterThan(100);
+    expect(upstreamErrors, "and the ones that got through report the upstream failure").toBeGreaterThan(0);
+    // The bound that matters: the key was spent far fewer times than the flood asked for.
+    expect(fetchSpy.mock.calls.length).toBeLessThan(60);
     const res = await POST(req({ feedId: 3154 }));
     if (res.status === 429) expect(res.headers.get("Retry-After")).toBeTruthy();
   });
 
-  it("the limiter runs BEFORE the upstream call, not after", async () => {
-    // Otherwise it would protect our server's CPU while still burning the quota it exists to protect.
+  it("N CONCURRENT misses collapse into ONE upstream call", async () => {
+    // REVIEW-OF-FIXES: the test here used to be "the limiter runs BEFORE the upstream call" and asserted
+    // fetch was called at most once across 200 SEQUENTIAL requests. The 2s cache alone guarantees that, so
+    // deleting the token bucket entirely still passed it. It tested the cache and called it the limiter.
+    //
+    // This is the property the bucket cannot provide and the cache did not: concurrency. Measured before
+    // the fix, 40 concurrent requests on a cold instance produced 30 upstream calls.
     const { POST } = await freshRoute();
-    for (let i = 0; i < 200; i++) await POST(req({ feedId: 3154 }));
-    // One warm cache means at most one upstream call across the whole burst.
-    expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(1);
+    let resolveUpstream: (v: Response) => void = () => {};
+    const gate = new Promise<Response>((r) => {
+      resolveUpstream = r;
+    });
+    fetchSpy.mockImplementation(() => gate);
+
+    const inFlight = Array.from({ length: 40 }, () => POST(req({})));
+    // Let every request reach the fetch boundary before any upstream response lands.
+    await new Promise((r) => setImmediate(r));
+    resolveUpstream(
+      new Response(
+        JSON.stringify({
+          solana: { encoding: "base64", data: "AAAA" },
+          parsed: { priceFeeds: [{ price: "1", exponent: 0, confidence: "1", feedUpdateTimestamp: "1", publisherCount: 3 }] },
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const results = await Promise.all(inFlight);
+
+    expect(fetchSpy.mock.calls.length, "40 concurrent misses must not become 40 upstream calls").toBe(1);
+    // And nobody was starved: every caller got an answer, whether 200 from the shared fetch or a 429.
+    expect(results.every((r) => [200, 429].includes(r.status))).toBe(true);
+  });
+
+  it("a cache HIT costs no token, so the limiter cannot deny a warm instance", async () => {
+    // REVIEW-OF-FIXES: `allowRequest()` used to run before the cache check, so cache hits spent tokens.
+    // With a 5/s refill and the banner polling every 5s per tab, ~25 visitors saturated it, and a 429 on
+    // the poll disables the mint and redeem buttons for everyone on that instance.
+    const { POST } = await freshRoute();
+    // One miss to warm the cache. That one legitimately spends a token.
+    expect((await POST(req({}))).status).toBe(200);
+    // Now far more requests than the bucket could ever allow, all cache hits.
+    let served = 0;
+    for (let i = 0; i < 500; i++) {
+      if ((await POST(req({}))).status === 200) served++;
+    }
+    expect(served, "every cache hit must be served regardless of the bucket").toBe(500);
+    expect(fetchSpy.mock.calls.length, "and none of them touched upstream").toBe(1);
   });
 });

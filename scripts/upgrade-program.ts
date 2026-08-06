@@ -39,6 +39,7 @@
  */
 import { execFileSync } from "child_process";
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { resolveCluster, describeCluster } from "./_cluster";
 import { requireDevnet, assertReversible, intentFromEnv } from "./_guard";
@@ -99,6 +100,22 @@ async function main() {
     die("this program has no upgrade authority. It is immutable and cannot be upgraded.");
   }
 
+  // REVIEW-OF-FIXES P2. The script confirmed only that an authority EXISTS, never that it is the key
+  // `solana` will actually sign with: no --keypair is passed, so it silently inherits `solana config`.
+  // An extend costs non-refundable rent; discovering the wrong signer AFTER paying it is the expensive
+  // order to find out in.
+  const signer = sh("solana", ["address"]).trim();
+  console.log(`  signer        : ${signer}`);
+  if (signer !== show.authority) {
+    die(
+      `the configured signer is NOT the upgrade authority.\n` +
+        `  solana address : ${signer}\n` +
+        `  on-chain auth  : ${show.authority}\n` +
+        `Set the right keypair (solana config set --keypair ...) before running this. The extend that\n` +
+        `follows costs rent that is never refunded, and a deploy signed by the wrong key fails after it.`,
+    );
+  }
+
   const shortfall = localLen - onChainLen;
   const needExtend = shortfall > 0;
   if (needExtend) {
@@ -107,6 +124,21 @@ async function main() {
   } else {
     console.log(`  headroom      : ${(-shortfall).toLocaleString()} bytes. No extend needed.`);
   }
+
+  // And the payer must be able to afford BOTH the extend rent and the deploy buffer, which briefly holds
+  // the program's full rent. Running out mid-write leaves the locked rent plus an orphaned buffer.
+  const balSol = Number(sh("solana", ["balance", "-u", CLUSTER.rpc]).trim().split(/\s+/)[0]);
+  // ~0.007 SOL per KB of account data, doubled because the buffer coexists with the program.
+  const needSol = ((Math.max(0, shortfall) + HEADROOM + localLen) / 1024) * 0.00696 + 0.5;
+  console.log(`  balance       : ${balSol} SOL (need about ${needSol.toFixed(2)} for extend + buffer)`);
+  if (balSol < needSol) {
+    die(
+      `insufficient balance: ${balSol} SOL, need roughly ${needSol.toFixed(2)}.\n` +
+        `A deploy that runs out mid-write leaves the extend rent locked AND an orphaned buffer holding\n` +
+        `the program's full rent. Fund the signer first.`,
+    );
+  }
+
 
   // ---- 4. snapshot BEFORE ----
   step("4", "config snapshot BEFORE the upgrade");
@@ -176,26 +208,55 @@ async function main() {
   }
 
   step("5", "deploying");
-  console.log(
-    sh("solana", [
-      "program",
-      "deploy",
-      "--program-id",
-      PROGRAM_ID.toBase58(),
-      "-u",
-      CLUSTER.rpc,
-      SO,
-    ]),
-  );
+  try {
+    console.log(
+      sh("solana", [
+        "program",
+        "deploy",
+        "--program-id",
+        PROGRAM_ID.toBase58(),
+        "-u",
+        CLUSTER.rpc,
+        SO,
+      ]),
+    );
+  } catch (e) {
+    // REVIEW-OF-FIXES P2: a failed deploy of a 1.19 MB program over a public RPC is common, and it
+    // leaves a buffer account holding the program's FULL rent (about 8 SOL). The script neither reused
+    // nor mentioned it, so the operator's money sat in an account they did not know existed.
+    console.error(`\ndeploy FAILED: ${String(e).slice(0, 400)}`);
+    console.error(
+      `\nRECLAIM YOUR RENT before retrying. A failed deploy leaves an orphaned buffer:\n` +
+        `  solana program show --buffers -u ${CLUSTER.rpc}\n` +
+        `  solana program close --buffers -u ${CLUSTER.rpc}\n` +
+        `The ProgramData extend is NOT recoverable, but it persists, so a retry does not repeat it.`,
+    );
+    process.exit(1);
+  }
 
   // ---- 6. the BYTES, not the exit code ----
   step("6", "verifying the bytes actually on chain");
-  const dump = "/tmp/dominion-onchain-verify.so";
+  // mkdtemp, not a fixed /tmp path. REVIEW-OF-FIXES P2: `/tmp/dominion-onchain-verify.so` is predictable,
+  // so on a shared or CI host a pre-planted symlink turns this into an arbitrary file write as the
+  // operator, and the gap between the write and the hash is a TOCTOU on the MATCH verdict.
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dominion-verify-"));
+  const dump = path.join(tmpDir, "onchain.so");
   sh("solana", ["program", "dump", PROGRAM_ID.toBase58(), dump, "-u", CLUSTER.rpc]);
-  // A dump is padded to the full allocation. Compare only the first localLen bytes: the tail is
-  // zero-fill, and including it would make every hash mismatch for a reason that is not a defect.
-  const trimmed = "/tmp/dominion-onchain-verify-trim.so";
-  fs.writeFileSync(trimmed, fs.readFileSync(dump).subarray(0, localLen));
+  const raw = fs.readFileSync(dump);
+  // A dump is padded to the full allocation, so compare the first localLen bytes. But ASSERT the tail is
+  // zero rather than assuming it: the claim being made is "the bytes on chain are the artifact", and
+  // trimming without checking proves it only for a prefix.
+  const tail = raw.subarray(localLen);
+  const nonZero = tail.findIndex((b) => b !== 0);
+  if (nonZero !== -1) {
+    die(
+      `the dumped program has NON-ZERO bytes past the artifact length (first at offset ` +
+        `${localLen + nonZero}). The upgradeable loader zero-fills the remainder, so this should be ` +
+        `impossible; investigate before trusting this program.`,
+    );
+  }
+  const trimmed = path.join(tmpDir, "onchain-trim.so");
+  fs.writeFileSync(trimmed, raw.subarray(0, localLen));
   const onChainHash = sha256(trimmed);
   console.log(`  local    : ${localHash}`);
   console.log(`  on chain : ${onChainHash}`);
@@ -222,6 +283,38 @@ async function main() {
   // The three fields carved out of `reserved` in this upgrade must decode to their INTENDED-AT-ZERO
   // values, because an in-place upgrade reads them from bytes the old binary left as zero. This is
   // the whole reason `fee_routing_disabled` is negated rather than named `fee_routing_enabled`.
+  // ---- 6b. republish the on-chain IDL ----
+  step("6b", "publishing the new IDL on chain");
+  // REVIEW-OF-FIXES P1: no upgrade path touched the on-chain IDL. Only `deploy-devnet.sh` ever published
+  // one, and the runbook has no publish step, so after an in-place upgrade the PUBLISHED IDL still
+  // described the previous program: `RedeemQueued` present, `set_kyc_scope` with two accounts. Any
+  // integrator on the standard `Program.at(programId, provider)` path fetches THAT, builds `set_kyc_scope`
+  // without the `kyc_operator` slot, and the chain rejects it. Both repo gates compare only the three
+  // in-repo copies; neither reads the chain, so nothing could have noticed.
+  try {
+    console.log(
+      sh("anchor", [
+        "idl",
+        "upgrade",
+        PROGRAM_ID.toBase58(),
+        "--filepath",
+        path.join(__dirname, "..", "target", "idl", "dominion_silver_mint.json"),
+        "--provider.cluster",
+        CLUSTER.rpc,
+      ]),
+    );
+  } catch (e) {
+    // Not fatal to the bytecode upgrade, which has already landed and verified, but it must be loud:
+    // leaving a stale published IDL is a silent break for every external integrator.
+    console.error(
+      `\nIDL PUBLISH FAILED: ${String(e).slice(0, 300)}\n` +
+        `The BYTECODE upgrade succeeded and is verified. The PUBLISHED IDL is now stale, so external\n` +
+        `integrators using Program.at() will build the old account lists. Republish before announcing:\n` +
+        `  anchor idl upgrade ${PROGRAM_ID.toBase58()} \\\n` +
+        `    --filepath target/idl/dominion_silver_mint.json --provider.cluster ${CLUSTER.rpc}`,
+    );
+  }
+
   step("7b", "fields carved from `reserved` decode to their intended zero values");
   const carved: Array<[string, unknown]> = [
     ["feeRoutingDisabled", afterCfg.feeRoutingDisabled],

@@ -33,12 +33,38 @@ import {
   type TokenMetadata,
 } from "@solana/spl-token-metadata";
 
+/**
+ * Create the real SILV mint.
+ *
+ * REVIEW-OF-FIXES P0. `complianceAuthority` used to be absent and both the PermanentDelegate and the
+ * freeze authority were hardcoded to `payer.publicKey`, with the comment "== payer, for the test". The
+ * D-01 fix then changed what `initialize` EXPECTS to the compliance Squads vault on any non-devnet
+ * cluster, and `initialize` hard-requires equality (initialize.rs:270 and :340). On devnet the two
+ * agreed, because the ceremony authority falls back to the dev keypair, so every test passed. On mainnet
+ * they could not agree, and the ceremony would have reverted `SilvFreezeAuthorityMismatch` at case 5,
+ * having already paid ~9 SOL for the deploy and created a mint whose keypair is deliberately never
+ * persisted.
+ *
+ * That is the S-01 failure shape reintroduced by the commit that closed S-01: green on devnet, dead on
+ * mainnet, discovered after the money is spent.
+ *
+ * Neither authority needs to SIGN to be set: `createInitializePermanentDelegateInstruction` and
+ * `createInitializeMintInstruction` both take a plain pubkey. So the fix is to pass the right one, not
+ * to hand-edit this file at ceremony time, which the runbook used to instruct and which is exactly the
+ * "no ceremony value entered by editing TypeScript" rule the audit asked for.
+ *
+ * BOTH OF THESE ARE PERMANENT. They are fixed at mint creation and no program upgrade can restore an
+ * external SPL authority once it is wrong.
+ */
 export async function createSilvMintForTest(
   connection: Connection,
   payer: Keypair,
   silvMintKeypair: Keypair,
   silvMintAuthorityPda: PublicKey,
   programId: PublicKey,
+  /** Freeze authority AND permanent delegate. On devnet this is the payer; on mainnet the compliance
+   *  vault, read from config/mainnet-authorities.json by the caller. */
+  complianceAuthority: PublicKey,
 ): Promise<void> {
   const [silvMetadataAuthorityPda] = PublicKey.findProgramAddressSync(
     [Buffer.from("silv_metadata_authority")],
@@ -72,7 +98,7 @@ export async function createSilvMintForTest(
     }),
     createInitializePermanentDelegateInstruction(
       silvMintKeypair.publicKey,
-      payer.publicKey, // permanent delegate == freeze authority == payer, for the test
+      complianceAuthority, // PERMANENT. Must equal args.permanent_delegate_expected at initialize.
       TOKEN_2022_PROGRAM_ID,
     ),
     createInitializeMetadataPointerInstruction(
@@ -84,8 +110,8 @@ export async function createSilvMintForTest(
     createInitializeMintInstruction(
       silvMintKeypair.publicKey,
       decimals,
-      payer.publicKey, // temp mint authority, rotated below
-      payer.publicKey, // freeze authority
+      payer.publicKey, // temp mint authority, rotated to the program PDA below
+      complianceAuthority, // PERMANENT. Must equal args.freeze_authority_expected at initialize.
       TOKEN_2022_PROGRAM_ID,
     ),
     createInitializeInstruction({

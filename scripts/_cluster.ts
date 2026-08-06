@@ -148,7 +148,11 @@ export async function assertClusterMatchesChain(ctx: ClusterContext): Promise<vo
  * so there is exactly one place to be wrong.
  */
 export function mainnetConfig(): Record<string, unknown> {
-  const p = path.join(__dirname, "..", "config", "mainnet-authorities.json");
+  // `DOMINION_MAINNET_CONFIG` exists so the cluster gate can mutation-test against a TEMP COPY instead
+  // of writing over the real ceremony file (review-of-fixes P2). Nothing else sets it.
+  const p =
+    process.env.DOMINION_MAINNET_CONFIG ||
+    path.join(__dirname, "..", "config", "mainnet-authorities.json");
   if (!fs.existsSync(p)) {
     throw new Error(`missing source of truth: ${p}`);
   }
@@ -178,7 +182,27 @@ function requiredMainnetAddress(field: string): PublicKey {
  * boring thing it always was. What changed is that setting `DOMINION_RPC` now actually works.
  */
 export function resolveCluster(): ClusterContext {
-  const rpc = process.env.DOMINION_RPC?.trim() || DEFAULT_RPC.devnet;
+  const explicit = process.env.DOMINION_RPC?.trim();
+  // REVIEW-OF-FIXES P0. Two env vars that contradict each other must not both be honoured silently.
+  // `DOMINION_ALLOW_MAINNET` says "I intend to touch a real cluster"; an unset `DOMINION_RPC` says
+  // "devnet". The runbook's own T1 invocation set the first and omitted the second (every OTHER mainnet
+  // command in that file sets it), so the S-01 scenario reproduced verbatim from the exact command the
+  // audit cited: default to devnet, `requireDevnet` returns on its first line, and the mainnet ceremony
+  // runs entirely on devnet.
+  //
+  // Refusing the contradiction is better than picking a winner. Guessing mainnet would deploy somewhere
+  // the operator did not name; guessing devnet is the bug. So: say which.
+  if (!explicit && process.env.DOMINION_ALLOW_MAINNET) {
+    throw new Error(
+      "DOMINION_ALLOW_MAINNET is set but DOMINION_RPC is not.\n" +
+        "Those two say opposite things: the first means you intend to touch a real cluster, the second\n" +
+        "defaulting to devnet means you do not. This script will not choose for you.\n\n" +
+        "Set DOMINION_RPC explicitly, e.g.\n" +
+        "  DOMINION_RPC=https://api.mainnet-beta.solana.com\n" +
+        "  DOMINION_RPC=https://api.devnet.solana.com",
+    );
+  }
+  const rpc = explicit || DEFAULT_RPC.devnet;
   const cluster = classifyCluster(rpc);
 
   if (cluster === "devnet" || cluster === "localnet") {

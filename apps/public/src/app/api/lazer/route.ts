@@ -33,6 +33,20 @@ const BUCKET_BURST = 30;
 const BUCKET_RATE_PER_SEC = 5;
 let tokens = BUCKET_BURST;
 let lastRefill = Date.now();
+
+/**
+ * The single outstanding upstream request, if any.
+ *
+ * REVIEW-OF-FIXES P1. The cache was written only AFTER `await fetch` resolved and nothing tracked the
+ * in-flight request, so every request arriving during a fetch was a MISS and started its own. Measured on
+ * the real route: 40 concurrent requests on a cold instance produced **30 upstream Pyth calls**, and a
+ * sustained flood produced 3.7/s against a comment claiming the floor was 0.5/s. Seven times the stated
+ * bound, on the key this whole file exists to protect.
+ *
+ * One shared promise collapses N concurrent misses into one upstream call, which is the actual fix. The
+ * token bucket bounds the REQUEST rate; only this bounds the UPSTREAM rate.
+ */
+let inflight: Promise<unknown> | null = null;
 function allowRequest(): boolean {
   const now = Date.now();
   tokens = Math.min(
@@ -94,6 +108,18 @@ export async function POST(req: NextRequest) {
   // to spin up. The durable fix is a shared limiter (Upstash/Redis) keyed on IP, which needs
   // infrastructure this app does not have yet. Recorded in the audit remediation notes as the
   // follow-up; what is here now turns an unbounded drain into a bounded one.
+  // CACHE FIRST. REVIEW-OF-FIXES P1: `allowRequest()` used to run before this, so requests that would
+  // have been served from cache for free still spent tokens. With a global 5/s refill and the price banner
+  // polling every 5s per open tab, roughly 25 concurrent visitors saturated it, and a 429 on the poll
+  // leaves `price` undefined, which disables the mint AND redeem buttons for everyone on that instance.
+  // The limiter existed to protect the Pyth key and had become a cheap anonymous outage instead.
+  //
+  // Serving a cache hit costs nothing upstream, so it must cost nothing here.
+  if (silvCache && Date.now() - silvCache.at < CACHE_TTL_MS) {
+    return NextResponse.json(silvCache.payload);
+  }
+
+  // Only a genuine MISS can reach upstream, so only a miss spends a token.
   if (!allowRequest()) {
     return NextResponse.json(
       { error: "rate_limited", message: "Too many price requests. Retry shortly." },
@@ -101,10 +127,41 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  if (silvCache && Date.now() - silvCache.at < CACHE_TTL_MS) {
-    return NextResponse.json(silvCache.payload);
+  // SINGLE FLIGHT. A miss arriving while another miss is already upstream awaits that one instead of
+  // starting a second.
+  //
+  // The first attempt at this released the waiters inside the fetch's `finally`, which is too early: the
+  // shared promise settled before the cache had been written, so every waiter found the cache still empty
+  // and fetched anyway. The test measured 30 upstream calls for 40 concurrent requests, i.e. no dedupe at
+  // all. The shared promise has to cover fetch AND parse AND the cache write, so a waiter that wakes finds
+  // the answer already there. That is why this is a helper rather than a flag around the fetch.
+  if (!inflight) {
+    inflight = fetchAndCache(apiKey, feedId).finally(() => {
+      inflight = null;
+    });
+  }
+  try {
+    await inflight;
+  } catch (e) {
+    return NextResponse.json(
+      { error: "lazer_unreachable", message: String(e).slice(0, 300) },
+      { status: 502 },
+    );
   }
 
+  if (silvCache) return NextResponse.json(silvCache.payload);
+  // Reachable only if the shared attempt resolved without caching, which the helper never does: it either
+  // writes the cache or throws. Kept as a defined answer rather than an assumption.
+  return NextResponse.json({ error: "lazer_no_payload" }, { status: 502 });
+}
+
+/**
+ * Fetch upstream, parse, and WRITE THE CACHE. Throws on any failure.
+ *
+ * Extracted so exactly one of these can be in flight at a time and so its completion means "the cache is
+ * populated", which is what the waiters actually need to observe.
+ */
+async function fetchAndCache(apiKey: string, feedId: number): Promise<void> {
   // Request shape per the Pyth Lazer latest_price API (verified live 2026-06-10).
   // The dominion parser needs price + exponent + publisherCount + confidence +
   // feedUpdateTimestamp on the SOLANA chain at the fixed_rate@1000ms channel.
@@ -121,56 +178,44 @@ export async function POST(req: NextRequest) {
     channel: "fixed_rate@1000ms",
   };
 
-  let resp: Response;
-  try {
-    resp = await fetch(LAZER_ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(lazerReq),
-      // The key never leaves this server route.
-      cache: "no-store",
-    });
-  } catch (e) {
-    return NextResponse.json(
-      { error: "lazer_unreachable", message: String(e).slice(0, 500) },
-      { status: 502 },
-    );
-  }
+  const resp = await fetch(LAZER_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(lazerReq),
+    // The key never leaves this server route.
+    cache: "no-store",
+  });
 
   if (!resp.ok) {
+    // REVIEW-OF-FIXES P2: the route used to echo 500 bytes of the upstream body plus its status to any
+    // anonymous caller, which tells an attacker whether our key is 403 (no entitlement) or 429 (quota
+    // exhausted), i.e. whether the drain they are attempting is working. The detail goes to the server log
+    // where an operator can still read it; the caller gets a bare 502.
     const detail = await resp.text().catch(() => "");
-    return NextResponse.json(
-      { error: "lazer_error", status: resp.status, detail: detail.slice(0, 500) },
-      { status: 502 },
-    );
+    console.error(`lazer upstream ${resp.status}: ${detail.slice(0, 500)}`);
+    throw new Error(`lazer upstream ${resp.status}`);
   }
 
   const data = await resp.json().catch(() => null);
-  // The live response carries the ed25519-signed SolanaMessage envelope base64-
-  // encoded at solana.data (solana.encoding === "base64"). The client decodes
-  // it to the dominion ix's message_data arg (see lazer-client.ts).
-  const solana = data?.solana;
+  // The live response carries the ed25519-signed SolanaMessage envelope base64-encoded at solana.data
+  // (solana.encoding === "base64"). The client decodes it to the dominion ix's message_data arg.
+  const solana = (data as { solana?: { encoding?: string; data?: string } } | null)?.solana;
   if (
     !solana ||
     solana.encoding !== "base64" ||
     typeof solana.data !== "string" ||
     solana.data.length === 0
   ) {
-    // Bounded diagnostic only (never echo an unbounded third-party blob).
-    return NextResponse.json(
-      { error: "lazer_no_solana_message", raw: JSON.stringify(data).slice(0, 500) },
-      { status: 502 },
-    );
+    console.error(`lazer: no solana message in response: ${JSON.stringify(data).slice(0, 500)}`);
+    throw new Error("lazer returned no solana message");
   }
 
-  // Also surface the parsed price for the UI (display + the mint/redeem preview),
-  // so the UI shows the SAME feed the contract uses (the Lazer SILV feed), not
-  // the retired Core XAG/USD. `parsed.priceFeeds[0]` carries price + exponent +
-  // confidence + feedUpdateTimestamp(us) + publisherCount.
-  const feed = data?.parsed?.priceFeeds?.[0];
+  // Also surface the parsed price for the UI, so it shows the SAME feed the contract uses.
+  const feed = (data as { parsed?: { priceFeeds?: Array<Record<string, unknown>> } }).parsed
+    ?.priceFeeds?.[0];
   const price =
     feed && typeof feed.price !== "undefined"
       ? {
@@ -182,7 +227,5 @@ export async function POST(req: NextRequest) {
         }
       : null;
 
-  const payload = { envelopeBase64: solana.data, price };
-  silvCache = { at: Date.now(), payload };
-  return NextResponse.json(payload);
+  silvCache = { at: Date.now(), payload: { envelopeBase64: solana.data, price } };
 }

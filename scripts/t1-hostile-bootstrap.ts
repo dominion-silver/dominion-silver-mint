@@ -91,6 +91,8 @@ const BPF_LOADER = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
 
 let pass = 0;
 let fail = 0;
+/** Set by main() once the hostile key exists, so the `finally` at the bottom can always sweep it. */
+let sweep: (() => Promise<void>) | null = null;
 function ok(name: string, cond: boolean, detail = "") {
   console.log(`${cond ? "  PASS" : "  FAIL"}: ${name}${detail ? " -> " + detail : ""}`);
   cond ? pass++ : fail++;
@@ -158,80 +160,12 @@ async function main() {
   }
   console.log("  config PDA does not exist yet: the bootstrap window is open.\n");
 
-  // ---- the attacker ----
-  const attacker = Keypair.generate();
-  // Funded by transfer, not requestAirdrop: the devnet faucet rate-limits and
-  // returns -32603 "Internal error", which would make T1 flaky for a reason
-  // that has nothing to do with what it is testing.
-  //
-  // AUDIT FINDING S-04: this was 500_000_000 lamports (0.5 SOL) sent to a `Keypair.generate()` that
-  // exists only in this process's memory, never persisted and never refunded. On devnet that is
-  // nobody's problem. Once S-01 made the mainnet path actually reachable it became 0.5 real SOL
-  // burned per attempt, and a retry after a configuration error burns it again.
-  //
-  // Two changes: fund what the hostile cases actually need (a Token-2022 mint with extensions, an
-  // ATA, and a handful of failing transactions), and sweep the remainder back at the end.
-  const ATTACKER_FUNDING = 60_000_000; // 0.06 SOL
-  await sendAndConfirmTransaction(
-    conn,
-    new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: authority.publicKey,
-        toPubkey: attacker.publicKey,
-        lamports: ATTACKER_FUNDING,
-      }),
-    ),
-    [authority],
-    { commitment: "confirmed" },
-  );
-  console.log(
-    `  attacker funded: ${attacker.publicKey.toBase58()} (${ATTACKER_FUNDING / 1e9} SOL, swept back at the end)\n`,
-  );
-
-  /** Return whatever the hostile key still holds. Best effort: a failure here must never turn a
-   *  passing T1 into a failing one, so it reports and moves on. */
-  async function sweepAttacker(): Promise<void> {
-    try {
-      const bal = await conn.getBalance(attacker.publicKey);
-      const FEE = 5_000;
-      if (bal <= FEE) {
-        console.log(`  attacker sweep: nothing to return (${bal} lamports)`);
-        return;
-      }
-      await sendAndConfirmTransaction(
-        conn,
-        new Transaction().add(
-          SystemProgram.transfer({
-            fromPubkey: attacker.publicKey,
-            toPubkey: authority.publicKey,
-            lamports: bal - FEE,
-          }),
-        ),
-        [attacker],
-        { commitment: "confirmed" },
-      );
-      console.log(`  attacker sweep: returned ${(bal - FEE) / 1e9} SOL to the authority`);
-    } catch (e) {
-      console.log(
-        `  attacker sweep FAILED (${String(e).slice(0, 120)}). ` +
-          `Abandoned key: ${attacker.publicKey.toBase58()}`,
-      );
-    }
-  }
-
-  const mkProgram = (kp: Keypair) =>
-    new Program(
-      idl,
-      new AnchorProvider(conn, new Wallet(kp), { commitment: "confirmed" }),
-    );
-
-  // The SILV mint the legitimate deploy will use. Created by the AUTHORITY here so
-  // that case 1 is the worst case: the attacker points at the real, valid mint.
-  const silvMint = Keypair.generate();
-  console.log("  creating the real SILV mint (Token-2022 + extensions)...");
-  await createSilvMintForTest(conn, authority, silvMint, mintAuthPda, PROGRAM_ID);
-  console.log("  SILV mint:", silvMint.publicKey.toBase58(), "\n");
-
+  // REVIEW-OF-FIXES P1: the ceremony config is resolved and VALIDATED here, before a single lamport
+  // moves. It used to be read after the attacker was funded and after the real SILV mint was created, so
+  // a missing `authorities.compliance.pubkey` (a live possibility: this file is edited during the
+  // ceremony, and it records the deployer as not existing on mainnet yet) threw AFTER abandoning 0.06 SOL
+  // on a key held only in this process's memory, and every retry repeated it. S-04's remediation was
+  // conditional on nothing going wrong, which is the opposite of what the finding was about.
   // AUDIT FINDING D-01. These were LITERALS, and they disagreed with everything else: the source of
   // truth says 100/150 bps, this script said 150/200, and the runbook told the operator to hand-edit
   // it to 150/500 on one page while stating 100/150 on another. Three values, one launch. Following
@@ -283,6 +217,90 @@ async function main() {
     return new PublicKey(pk);
   }
   const COMPLIANCE = ceremonyAuthority("compliance", authority.publicKey);
+
+
+  // ---- the attacker ----
+  const attacker = Keypair.generate();
+  // Funded by transfer, not requestAirdrop: the devnet faucet rate-limits and
+  // returns -32603 "Internal error", which would make T1 flaky for a reason
+  // that has nothing to do with what it is testing.
+  //
+  // AUDIT FINDING S-04: this was 500_000_000 lamports (0.5 SOL) sent to a `Keypair.generate()` that
+  // exists only in this process's memory, never persisted and never refunded. On devnet that is
+  // nobody's problem. Once S-01 made the mainnet path actually reachable it became 0.5 real SOL
+  // burned per attempt, and a retry after a configuration error burns it again.
+  //
+  // Two changes: fund what the hostile cases actually need (a Token-2022 mint with extensions, an
+  // ATA, and a handful of failing transactions), and sweep the remainder back at the end.
+  const ATTACKER_FUNDING = 60_000_000; // 0.06 SOL
+  await sendAndConfirmTransaction(
+    conn,
+    new Transaction().add(
+      SystemProgram.transfer({
+        fromPubkey: authority.publicKey,
+        toPubkey: attacker.publicKey,
+        lamports: ATTACKER_FUNDING,
+      }),
+    ),
+    [authority],
+    { commitment: "confirmed" },
+  );
+  console.log(
+    `  attacker funded: ${attacker.publicKey.toBase58()} (${ATTACKER_FUNDING / 1e9} SOL, swept back at the end)\n`,
+  );
+
+  /** Return whatever the hostile key still holds. Best effort: a failure here must never turn a
+   *  passing T1 into a failing one, so it reports and moves on.
+   *
+   *  Published to module scope so the `finally` at the bottom can run it on EVERY exit path. */
+  sweep = async function sweepAttacker(): Promise<void> {
+    try {
+      const bal = await conn.getBalance(attacker.publicKey);
+      const FEE = 5_000;
+      if (bal <= FEE) {
+        console.log(`  attacker sweep: nothing to return (${bal} lamports)`);
+        return;
+      }
+      await sendAndConfirmTransaction(
+        conn,
+        new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: attacker.publicKey,
+            toPubkey: authority.publicKey,
+            lamports: bal - FEE,
+          }),
+        ),
+        [attacker],
+        { commitment: "confirmed" },
+      );
+      console.log(`  attacker sweep: returned ${(bal - FEE) / 1e9} SOL to the authority`);
+    } catch (e) {
+      console.log(
+        `  attacker sweep FAILED (${String(e).slice(0, 120)}). ` +
+          `Abandoned key: ${attacker.publicKey.toBase58()}`,
+      );
+    }
+  };
+
+  const mkProgram = (kp: Keypair) =>
+    new Program(
+      idl,
+      new AnchorProvider(conn, new Wallet(kp), { commitment: "confirmed" }),
+    );
+
+  // The SILV mint the legitimate deploy will use. Created by the AUTHORITY here so
+  // that case 1 is the worst case: the attacker points at the real, valid mint.
+  const silvMint = Keypair.generate();
+  console.log("  creating the real SILV mint (Token-2022 + extensions)...");
+  await createSilvMintForTest(
+    conn,
+    authority,
+    silvMint,
+    mintAuthPda,
+    PROGRAM_ID,
+    COMPLIANCE,
+  );
+  console.log("  SILV mint:", silvMint.publicKey.toBase58(), "\n");
 
   const args = (admin: PublicKey) => ({
     admin,
@@ -513,17 +531,24 @@ async function main() {
     );
   }
 
-  await sweepAttacker();
-
   console.log(`\n=== T1 result: ${pass} passed, ${fail} failed ===`);
   if (initSig) {
     console.log("initialize tx:", initSig);
     console.log("SILV mint secret is NOT persisted by this script (audit A-30).");
     console.log("SILV mint pubkey:", silvMint.publicKey.toBase58());
   }
-  process.exit(fail === 0 ? 0 : 1);
+  // exitCode, not exit(): `process.exit` would pre-empt the `finally` below and abandon the hostile
+  // key's remaining SOL on the success path too.
+  process.exitCode = fail === 0 ? 0 : 1;
 }
-main().catch((e) => {
-  console.error("T1 crashed:", e);
-  process.exit(1);
-});
+// The sweep runs in a `finally`, not at the end of main(). REVIEW-OF-FIXES P1: S-04's stated loss case is
+// "a retry after a configuration error repeats the loss", i.e. the THROWING path, which is precisely the
+// one path a sweep placed at the end of the happy flow could never reach.
+main()
+  .catch((e) => {
+    console.error("T1 crashed:", e);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    if (sweep) await sweep();
+  });

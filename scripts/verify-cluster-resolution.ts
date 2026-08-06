@@ -23,6 +23,7 @@
  * Run: npx tsx scripts/verify-cluster-resolution.ts
  */
 import fs from "fs";
+import os from "os";
 import path from "path";
 import { resolveCluster } from "./_cluster";
 import { requireDevnet } from "./_guard";
@@ -153,11 +154,20 @@ for (const rpc of [
 
 // 4. MUTATION: drop a mainnet constant and require a throw, not a devnet fallback.
 //    Without this the gate could pass while `_cluster.ts` quietly defaulted.
+// REVIEW-OF-FIXES P2: this used to write the mutated JSON over `config/mainnet-authorities.json` itself
+// and restore it in a `finally`. `finally` does not run on SIGINT, SIGKILL or a CI step timeout, so a
+// Ctrl-C mid-run left the file that supplies the mainnet USDC mint, the premiums, the timelock and the
+// compliance authority to `initialize` mutated and reformatted in the working tree. It was also a
+// concurrency hazard with anything else calling `mainnetConfig()`. A gate must not write to the file the
+// ceremony reads: the mutation goes to a temp copy and `DOMINION_MAINNET_CONFIG` points resolution at it.
 const original = fs.readFileSync(SOT, "utf8");
+const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dominion-sot-"));
+const tmpSot = path.join(tmpDir, "mainnet-authorities.json");
 try {
   const mutated = JSON.parse(original) as Record<string, Record<string, unknown>>;
   delete mutated.cluster_constants.usdc_mint;
-  fs.writeFileSync(SOT, JSON.stringify(mutated, null, 2) + "\n");
+  fs.writeFileSync(tmpSot, JSON.stringify(mutated, null, 2) + "\n");
+  process.env.DOMINION_MAINNET_CONFIG = tmpSot;
   let threw = false;
   let message = "";
   withRpc("https://api.mainnet-beta.solana.com", () => {
@@ -175,12 +185,14 @@ try {
     threw ? message.split("\n")[0].slice(0, 60) : "(no throw)",
   );
 } finally {
-  fs.writeFileSync(SOT, original);
+  delete process.env.DOMINION_MAINNET_CONFIG;
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 }
 // Restoration is itself load-bearing: a gate that corrupts the source of truth on failure would be
 // worse than no gate. Assert the file is byte-identical to what we read.
+// The strongest form of the property: the file was never written at all, so there is nothing to restore.
 ok(
-  "the source of truth was restored byte for byte",
+  "the source of truth was NEVER MUTATED (the test used a temp copy)",
   fs.readFileSync(SOT, "utf8") === original,
 );
 

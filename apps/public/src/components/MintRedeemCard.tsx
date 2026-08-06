@@ -104,7 +104,25 @@ export function MintRedeemCard() {
   const configuredBpsMint = cfg?.premiumBpsMint ?? null;
   const configuredBpsRedeem = cfg?.premiumBpsRedeem ?? null;
 
-  const nowSecs = Math.floor(Date.now() / 1000);
+  /**
+   * The clock the redemption-window prediction runs on.
+   *
+   * REVIEW-OF-FIXES P1: this was `Math.floor(Date.now()/1000)`, the BROWSER clock, feeding
+   * `effectiveRedeemUsed`, which is a faithful port of the program's `roll_window`. The program uses
+   * `Clock::unix_timestamp`. A client an hour fast promotes the previous bucket early; two windows fast
+   * takes the `elapsed >= 2*w` branch and reports used = 0 while the chain still counts the full previous
+   * bucket. The card then says "redeems INSTANTLY, max now $20,000", the user pays the Lazer verify fee,
+   * and the chain answers RedeemLimitExceeded. The port was faithful; the input was not.
+   *
+   * The Lazer price carries `publishTime`, produced by the oracle and refreshed every few seconds, so it
+   * is a far better clock than the local one and it is already in hand. Fall back to the local clock only
+   * when no price has loaded, in which case nothing is being quoted anyway.
+   *
+   * Not perfect: the envelope is up to a couple of seconds old, which makes the prediction very slightly
+   * CONSERVATIVE (it treats the window as marginally younger, so it decays the previous bucket less). That
+   * is the safe direction: it can refuse something the chain would serve, never the reverse.
+   */
+  const nowSecs = price?.publishTime ?? Math.floor(Date.now() / 1000);
 
   // The caller's on-chain per-wallet accounts. Needed so `classifyRedeem` can answer the KYC
   // question for THIS wallet instead of only reporting that the gate is armed. Cheap: one batched
