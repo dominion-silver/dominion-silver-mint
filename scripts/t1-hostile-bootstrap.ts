@@ -110,7 +110,19 @@ async function main() {
   // RULE 1 (scripts/_guard.ts): refuse any cluster but devnet unless
   // DOMINION_ALLOW_MAINNET is explicitly set.
   await requireSanctionedCluster(RPC, "T1 hostile bootstrap");
+  // RULE 2, checked HERE and not at case 5.
+  //
+  // The first version of this call sat immediately before case 5, which is after the attacker has been
+  // funded and after the REAL SILV mint has been created. So an operator following the runbook (which did
+  // not set DOMINION_INTENT) would have created the mainnet mint, run cases 1 to 4, and then thrown
+  // `REFUSING "initialize"` with the mint keypair never persisted and never printed, because the pubkey is
+  // only logged after case 5 succeeds. That is the round-3 P0's outcome exactly (rent spent, config
+  // uninitialised, mint lost), reintroduced by the fix for a P2 about this very gate.
+  //
+  // A gate on an irreversible action has to fire before the first lamport moves, or it is not a gate, it is
+  // a way to lose the thing it was protecting.
   const INTENT = intentFromEnv();
+  assertReversible("initialize", INTENT);
   const conn = new Connection(RPC, "confirmed");
   const authority = loadKp(
     process.env.DOMINION_KEYPAIR ??
@@ -482,14 +494,6 @@ async function main() {
   ok("DOM-002: the treasury ATA now exists before initialize", ataInfo !== null);
 
   // --- case 5: the genuine upgrade authority succeeds, DESPITE the pre-created ATA
-  //
-  // ROUND 3 P2. T1 imported `assertReversible`, computed `INTENT`, and never called it. `initialize` is
-  // classified `irreversible` in ACTION_COST and is the single most irreversible action in the repo: one
-  // shot per program id, and case 5 IS that shot. Meanwhile RULE 2 exists precisely so a slow-to-undo
-  // action needs its own named sanction, not just the generic cluster consent, which an operator may have
-  // exported from an unrelated command in the same shell.
-  assertReversible("initialize", INTENT);
-
   let initSig = "";
   try {
     initSig = await mkProgram(authority)

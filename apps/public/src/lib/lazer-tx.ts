@@ -491,10 +491,9 @@ export async function buildLazerMintTx(
   // Trust the caller's snapshot ONLY if it belongs to this signer (round 3 P1). A mismatch means the UI is
   // showing another wallet's entitlements, so resolving fresh is both correct and the only safe option; the
   // quote will be re-derived on the next render anyway.
-  const opt =
-    args.walletFlags && args.walletFlags.owner.equals(user)
-      ? args.walletFlags
-      : await resolveWalletFlagsOrDefault(connection, user);
+  const opt = flagsMatchOwner(args.walletFlags, user)
+    ? args.walletFlags!
+    : await resolveWalletFlagsOrDefault(connection, user);
   const dominionIx = await (program.methods as any)
     .mintSilv(args.amountUsdc, args.minSilvOut, messageData, ED25519_IX_INDEX, 0)
     .accounts(mintSilvAccounts(user, opt))
@@ -505,6 +504,20 @@ export async function buildLazerMintTx(
     createAssociatedTokenAccountIdempotentInstruction(user, userUsdcAta, user, USDC_MINT, TOKEN_PROGRAM_ID),
   ];
   return finalize(connection, user, assembleLazerOracleIxs(dominionIx, args.envelope, ataIxs));
+}
+
+/**
+ * Whether a wallet-flags snapshot describes THIS signer.
+ *
+ * ROUND 3 P1 was that `keepPreviousData` serves the previous wallet's entitlements until the new fetch
+ * settles, so a snapshot has to be checked against the signer before anything is priced from it.
+ *
+ * REVIEW-OF-FIXES P2: the check existed in three places as three copies of the same expression, and had
+ * zero test coverage. Reverting it in both builders and in the card left 60/60 and 25/25 green. One
+ * exported predicate, tested here, used everywhere.
+ */
+export function flagsMatchOwner(flags: WalletFlags | undefined | null, owner: PublicKey): boolean {
+  return !!flags && flags.owner.equals(owner);
 }
 
 export interface BuildLazerRedeemTxArgs {
@@ -532,10 +545,9 @@ export async function buildLazerRedeemTx(
   // Trust the caller's snapshot ONLY if it belongs to this signer (round 3 P1). A mismatch means the UI is
   // showing another wallet's entitlements, so resolving fresh is both correct and the only safe option; the
   // quote will be re-derived on the next render anyway.
-  const opt =
-    args.walletFlags && args.walletFlags.owner.equals(user)
-      ? args.walletFlags
-      : await resolveWalletFlagsOrDefault(connection, user);
+  const opt = flagsMatchOwner(args.walletFlags, user)
+    ? args.walletFlags!
+    : await resolveWalletFlagsOrDefault(connection, user);
   const dominionIx = await (program.methods as any)
     .redeemSilv(args.amountSilv, args.minUsdcOut, messageData, ED25519_IX_INDEX, 0)
     .accounts(redeemSilvAccounts(user, opt))

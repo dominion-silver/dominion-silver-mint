@@ -226,13 +226,14 @@ async function main() {
     // admin can use it too).
     await program.methods
       .cancelTimelockedAction(nonce)
+      // See the note in e2e-fixa-devnet.ts: an optional account is not nullable in Anchor's generated types.
       .accounts({
         config: configPda,
         timelock: tlPda(nonce),
         rentRecipient: admin,
         signer: admin,
         guardian: null,
-      })
+      } as never)
       .rpc();
     cfg = await acct.fetch(configPda);
     ok(

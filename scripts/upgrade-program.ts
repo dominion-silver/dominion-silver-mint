@@ -322,31 +322,58 @@ async function main() {
     );
   }
 
-  step("7b", "fields carved from `reserved` decode to their intended zero values");
+  step("7b", "fields carved from `reserved` are intact and in range");
   // ROUND 3 P2: three of these four were merely PRINTED. Only `feeRoutingDisabled` was asserted, so a layout
   // error decoding `kycScopeFlags = 2` (users unexpectedly gated), `instantUsedPrevUsdc = 10_000_000` (the
   // rolling budget distorted) or `kycAttestationCount = 1` (an empty-roster arm authorised) produced no drift
   // and no failure, and the script printed "carved fields correct". Printing is not checking.
-  const carved: Array<[string, unknown, string]> = [
-    ["feeRoutingDisabled", afterCfg.feeRoutingDisabled, "false"],
-    ["kycScopeFlags", afterCfg.kycScopeFlags, "0"],
-    ["instantUsedPrevUsdc", afterCfg.instantUsedPrevUsdc, "0"],
-    ["kycAttestationCount", afterCfg.kycAttestationCount, "0"],
-  ];
+  //
+  // REVIEW-OF-FIXES P2: asserting they are ZERO was correct exactly once. The zero expectation comes from the
+  // fields being read out of bytes the PRE-carve binary left as `reserved`, which is true only on the first
+  // in-place upgrade. The SECOND upgrade runs against an account where `kycScopeFlags` may legitimately be 2
+  // and the counter may legitimately be 40, and the script would have `die()`d on correct state: an upgrade
+  // path that refuses to run after it has been used once.
+  //
+  // The invariant that holds on EVERY upgrade is different, and it is the one a layout break violates: an
+  // upgrade must not CHANGE these values, and whatever they hold must be inside its domain. Both are checked
+  // here. All-zero is then reported rather than required, because which case is expected depends on whether
+  // this is the first upgrade over a pre-carve account, and the script cannot know that. The operator can.
+  const DOMAIN: Record<string, (v: unknown) => boolean> = {
+    // A bool decoded from a byte that is neither 0 nor 1 is the clearest possible layout signal.
+    feeRoutingDisabled: (v) => v === true || v === false,
+    // Side bits: 1 = mint, 2 = redeem, 3 = both. Anything else means the byte came from the wrong offset.
+    kycScopeFlags: (v) => Number(v) >= 0 && Number(v) <= 3,
+    // A u64 of micro-USDC. Anything above the max supply's worth is not a budget, it is a misread field.
+    instantUsedPrevUsdc: (v) => Number(v) >= 0 && Number(v) <= 1e15,
+    // A u32 roster size. Bounded well below u32::MAX for the same reason.
+    kycAttestationCount: (v) => Number(v) >= 0 && Number(v) <= 1e6,
+  };
+  const carvedNames = ["feeRoutingDisabled", "kycScopeFlags", "instantUsedPrevUsdc", "kycAttestationCount"];
   let carvedBad = 0;
-  for (const [k, v, want] of carved) {
-    const got = String(v);
-    const okv = got === want;
-    if (!okv) carvedBad++;
-    console.log(`  ${okv ? "ok  " : "DIFF"} ${k.padEnd(24)} = ${got}${okv ? "" : `  (expected ${want})`}`);
+  let allZero = true;
+  for (const k of carvedNames) {
+    const b = String(before[k]);
+    const a = String(afterCfg[k]);
+    const unchanged = b === a;
+    const inRange = DOMAIN[k](afterCfg[k]);
+    if (!unchanged || !inRange) carvedBad++;
+    if (!(a === "0" || a === "false")) allZero = false;
+    const note = !unchanged ? `CHANGED from ${b}` : !inRange ? "OUT OF RANGE" : "";
+    console.log(`  ${unchanged && inRange ? "ok  " : "BAD "} ${k.padEnd(24)} = ${a}${note ? "  <- " + note : ""}`);
   }
   if (carvedBad > 0) {
     die(
-      `${carvedBad} field(s) carved from \`reserved\` did not decode to their intended zero value. That is a ` +
-        `LAYOUT error, not a config difference: every one of them must read as zero on an in-place upgrade ` +
-        `over an account the old binary wrote.`,
+      `${carvedBad} field(s) carved from \`reserved\` either CHANGED across the upgrade or decoded outside ` +
+        `their domain. That is a LAYOUT error, not a config difference: an upgrade must not move them, and ` +
+        `a value out of range means the decoder is reading the wrong offset. Do not use this program.`,
     );
   }
+  console.log(
+    allZero
+      ? "  all four read zero: expected on the FIRST in-place upgrade over a pre-carve account."
+      : "  some are non-zero: expected on any LATER upgrade, since these are live fields by then. " +
+        "Confirm the values above are the ones you left behind.",
+  );
 
   if (drift > 0) {
     die(`${drift} watched config field(s) changed across the upgrade. Investigate before using it.`);

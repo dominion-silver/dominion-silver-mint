@@ -126,64 +126,91 @@ export async function POST(req: NextRequest) {
   //
   // The test previously accepted either status and therefore called those ten starved callers a success,
   // which is why the measurement had to come from the auditor rather than from the suite.
-  if (inflight) {
-    let sharedFailed = false;
-    try {
-      await inflight;
-    } catch {
-      sharedFailed = true;
-    }
+  //
+  // REVIEW-OF-FIXES P1, and this loop is the third shape of this code. Round 3 P2 was that joining before
+  // charging works only when the shared attempt SUCCEEDS: on a rejection every waiter fell through to
+  // `allowRequest()`, so 39 joiners drained a 30-token burst for ONE upstream retry and 10 got 429. My fix
+  // returned 502 to all of them instead, which is worse and on the money path: `lib/lazer-client.ts` throws
+  // on any non-ok status with no retry, and that is the SUBMIT-time envelope fetch. Of 40 concurrent callers
+  // hitting one transient blip, the old code served 29 and starved 10; mine served 0 and abandoned 40 mints
+  // and redeems with "Lazer proxy 502". Buying back 29 tokens of a bucket that refills in 6 seconds is not
+  // worth failing every in-flight transaction.
+  //
+  // The actual defect was never the retry existing, it was every waiter CHARGING ITSELF for it. So: loop
+  // back and join the retry. Exactly one waiter creates it and pays one token, the rest await that one.
+  // 1 token per blip instead of 29, and 40 of 40 served instead of 0 of 40.
+  //
+  // Bounded at two attempts, deliberately. A persistently dead upstream must answer 502 rather than let
+  // request N wait on retry N-1 forever, and one retry is all a transient blip needs.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    // Re-checked every pass: the attempt we just waited on may have populated it.
     if (silvCache && Date.now() - silvCache.at < CACHE_TTL_MS) {
       return NextResponse.json(silvCache.payload);
     }
-    if (sharedFailed) {
-      // ROUND 3 P2. Joining before charging works only when the shared attempt SUCCEEDS. When it rejects,
-      // every waiter used to fall through to `allowRequest()`, so 39 joiners drained the burst, 10 got 429,
-      // and only one of them actually created the retry: 29 tokens charged for one upstream call, followed by
-      // the starvation of legitimate callers. The concurrency test covered only the successful branch.
-      //
-      // A waiter that arrives after a failure has still incurred no upstream cost, so it must not pay for the
-      // retry it is not making. It returns 502 with the upstream's own status semantics, and the NEXT cold
-      // request creates the retry and pays for it.
+
+    if (inflight) {
+      let sharedFailed = false;
+      try {
+        await inflight;
+      } catch {
+        sharedFailed = true;
+      }
+      if (silvCache && Date.now() - silvCache.at < CACHE_TTL_MS) {
+        return NextResponse.json(silvCache.payload);
+      }
+      if (sharedFailed && attempt + 1 < 2) {
+        // Join the retry on the next pass. `inflight` is cleared in the creator's `.finally` BEFORE the
+        // waiters resume, so whichever waiter runs first becomes the creator and the assignment below is
+        // synchronous, which is what keeps this to one retry rather than 39.
+        continue;
+      }
+      if (sharedFailed) {
+        return NextResponse.json(
+          { error: "lazer_unreachable", message: "Upstream price request failed. Retry shortly." },
+          { status: 502, headers: { "Retry-After": "1" } },
+        );
+      }
+    }
+
+    // Now we are the one who will call upstream, so now we pay. Waiters never reach this line.
+    if (!allowRequest()) {
       return NextResponse.json(
-        { error: "lazer_unreachable", message: "Upstream price request failed. Retry shortly." },
-        { status: 502, headers: { "Retry-After": "1" } },
+        { error: "rate_limited", message: "Too many price requests. Retry shortly." },
+        { status: 429, headers: { "Retry-After": "2" } },
       );
     }
+
+    // SINGLE FLIGHT. A miss arriving while another miss is already upstream awaits that one instead of
+    // starting a second.
+    //
+    // The first attempt at this released the waiters inside the fetch's `finally`, which is too early: the
+    // shared promise settled before the cache had been written, so every waiter found the cache still empty
+    // and fetched anyway. The test measured 30 upstream calls for 40 concurrent requests, i.e. no dedupe at
+    // all. The shared promise has to cover fetch AND parse AND the cache write, so a waiter that wakes finds
+    // the answer already there. That is why this is a helper rather than a flag around the fetch.
+    if (!inflight) {
+      inflight = fetchAndCache(apiKey, feedId).finally(() => {
+        inflight = null;
+      });
+    }
+    try {
+      await inflight;
+    } catch (e) {
+      // The CREATOR retries too, on the same terms as the waiters. Without this it was the one caller in
+      // forty that got a 502, purely for having been the request that happened to open the upstream call.
+      // It has already paid its token; a second attempt costs one more and rescues its own transaction
+      // along with everyone else's. Measured: 40 requests, one transient blip, 2 upstream calls, 40x200.
+      if (attempt + 1 < 2) continue;
+      return NextResponse.json(
+        { error: "lazer_unreachable", message: String(e).slice(0, 300) },
+        { status: 502 },
+      );
+    }
+
+    if (silvCache) return NextResponse.json(silvCache.payload);
   }
 
-  // Now we are the one who will call upstream, so now we pay.
-  if (!allowRequest()) {
-    return NextResponse.json(
-      { error: "rate_limited", message: "Too many price requests. Retry shortly." },
-      { status: 429, headers: { "Retry-After": "2" } },
-    );
-  }
-
-  // SINGLE FLIGHT. A miss arriving while another miss is already upstream awaits that one instead of
-  // starting a second.
-  //
-  // The first attempt at this released the waiters inside the fetch's `finally`, which is too early: the
-  // shared promise settled before the cache had been written, so every waiter found the cache still empty
-  // and fetched anyway. The test measured 30 upstream calls for 40 concurrent requests, i.e. no dedupe at
-  // all. The shared promise has to cover fetch AND parse AND the cache write, so a waiter that wakes finds
-  // the answer already there. That is why this is a helper rather than a flag around the fetch.
-  if (!inflight) {
-    inflight = fetchAndCache(apiKey, feedId).finally(() => {
-      inflight = null;
-    });
-  }
-  try {
-    await inflight;
-  } catch (e) {
-    return NextResponse.json(
-      { error: "lazer_unreachable", message: String(e).slice(0, 300) },
-      { status: 502 },
-    );
-  }
-
-  if (silvCache) return NextResponse.json(silvCache.payload);
-  // Reachable only if the shared attempt resolved without caching, which the helper never does: it either
+  // Reachable only if a shared attempt resolved without caching, which the helper never does: it either
   // writes the cache or throws. Kept as a defined answer rather than an assumption.
   return NextResponse.json({ error: "lazer_no_payload" }, { status: 502 });
 }

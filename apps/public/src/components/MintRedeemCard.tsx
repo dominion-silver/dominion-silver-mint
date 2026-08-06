@@ -35,6 +35,7 @@ import {
   buildLazerRedeemTx,
   resolveWalletFlags,
   effectivePremiumBps,
+  flagsMatchOwner,
 } from "@/lib/lazer-tx";
 import { fetchAndExecuteLazer } from "@/lib/lazer-execute";
 import { toast } from "@/components/Toaster";
@@ -161,8 +162,9 @@ export function MintRedeemCard() {
   // ROUND 3 P1: `keepPreviousData` serves the PREVIOUS wallet's flags until the new fetch settles, so the
   // snapshot has to be checked against the connected wallet before anything is derived from it. Treating a
   // foreign snapshot as `undefined` puts every consumer back on the fail-closed path it already handles.
-  const flagsAreForThisWallet =
-    !!walletFlags && !!wallet.publicKey && walletFlags.owner.equals(wallet.publicKey);
+  // The SAME predicate the builders use, imported rather than re-expressed: three copies of this
+  // comparison is how one of them would have drifted. See lazer-tx.ts::flagsMatchOwner.
+  const flagsAreForThisWallet = !!wallet.publicKey && flagsMatchOwner(walletFlags, wallet.publicKey);
   const flags = flagsAreForThisWallet ? walletFlags : undefined;
   const kycAttested = flags ? flags.kyc != null : undefined;
 
@@ -635,8 +637,9 @@ export function MintRedeemCard() {
           Could not read this wallet&apos;s fee-exemption
           {mode === "redeem" ? " or verification" : ""} status from the network.
           {mode === "mint"
-            ? " If you hold an exemption it will NOT be applied to this transaction. Retry in a moment rather than signing."
-            : " Redemption will be routed as unverified until the read succeeds."}
+            ? " Minting is held until the read succeeds, so you cannot be quoted one fee and charged another."
+            : " Redeeming is held until the read succeeds, so you cannot be quoted one fee and charged another."}
+          {" Retry in a moment."}
         </div>
       )}
 
@@ -819,6 +822,21 @@ export function MintRedeemCard() {
           // chain decide", which is the opposite of the tri-state doctrine applied to `kycAttested`
           // eight lines from here.
           (mode === "redeem" && redeemRoute === null) ||
+          // REVIEW-OF-FIXES P1, found independently by both reviewers. Treating a foreign snapshot as
+          // `undefined` was only half a fix: `undefined` makes the QUOTE fall back to the configured
+          // premium, and then the builders resolve the flags FRESH, so the transaction is priced from a
+          // different snapshot than the one the user was shown. That is the two-snapshot disagreement the
+          // round-3 P1 existed to close, reopened in more states than before (every wallet switch, plus any
+          // window where the flags read is failing while `keepPreviousData` serves the old wallet's).
+          //
+          // The concrete revert, in the launch configuration: fee routing off, the new wallet holds a live
+          // redeem-side exemption, its budget is near the cap. The quote charges 150 bps, so outflow reads
+          // 98.50 and the route reads "instant". The chain charges 0 bps, outflow is 100.00, and the tx
+          // fails RedeemLimitExceeded AFTER the Lazer fee has been paid.
+          //
+          // So: do not sign what we cannot price. Unknown entitlements block, exactly as `kycAttested ===
+          // undefined` blocks. It costs one RPC round trip after connecting or switching wallets.
+          (wallet.connected && !flagsAreForThisWallet) ||
           // No config means no premium, no route and no min_out. Quoting would be inventing numbers, and
           // `preview` is already null so the button would say "0.00" with nothing behind it.
           !!cfgError ||
@@ -838,7 +856,9 @@ export function MintRedeemCard() {
                 ? "Mint not open yet"
                 : redemptionsOff
                   ? "Redemptions not open yet"
-                  : !amount
+                  : wallet.connected && !flagsAreForThisWallet
+                    ? "Checking your status..."
+                    : !amount
                     ? "Enter an amount"
                     : mode === "mint"
                       ? "Mint SILV"

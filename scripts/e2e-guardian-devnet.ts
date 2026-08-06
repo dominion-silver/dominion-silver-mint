@@ -439,7 +439,8 @@ async function main() {
     );
     await program.methods
       .cancelAdminTransfer()
-      .accounts({ config: configPda, signer: admin, guardian: null })
+      // See the note in e2e-fixa-devnet.ts: an optional account is not nullable in Anchor's generated types.
+      .accounts({ config: configPda, signer: admin, guardian: null } as never)
       .rpc();
     const restored: any = await cfgAcct.fetch(configPda);
     ok(

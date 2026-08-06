@@ -204,35 +204,79 @@ print("4a. Anchor account mutability")
 #
 # So: for every `#[derive(Accounts)]` struct, any field the matching handler writes must be declared
 # `mut`, or `init`/`init_if_needed`/`close`/`realloc`, all of which imply writability.
+#
+# REVIEW-OF-FIXES P2. The reviewer lifted this scan out and ran it against synthetic cases. It catches the
+# baseline shape and MISSED the same bug in six others, each closed below and named where it is closed. None
+# of the six is present in the tree today (measured: 0 compound writes, 0 two-level writes, 0
+# `&mut ...to_account_info()`, 49/49 handlers in the same file as their struct), so these are LATENT holes.
+# They are worth closing anyway, for the same reason the section exists: the P0 it was built for was a
+# handler and a struct disagreeing, and a scan that only sees one spelling of "writes" will be believed.
 _MUT_IMPLIED = ("mut", "init", "init_if_needed", "close", "realloc", "zero")
+# HOLE 1: `_MUT_IMPLIED` was matched against the RAW attribute text, so the word `mut` in a comment INSIDE
+# `#[account(...)]` satisfied it. A gate satisfiable by prose is the exact failure the sibling gate in the
+# same commit had just fixed, so it is stripped here too.
+_decomment = lambda t: re.sub(r"//[^\n]*", " ", re.sub(r"/\*.*?\*/", " ", t, flags=re.S))
 _bad = []
-for _path in sorted(pathlib.Path("programs/dominion_silver_mint_v2/src/instructions").rglob("*.rs")):
+_structs = 0
+_orphan_structs = []
+_instr_files = sorted(pathlib.Path("programs/dominion_silver_mint_v2/src/instructions").rglob("*.rs"))
+# HOLE 2: the handler was looked for in the SAME FILE as the struct, and `if not _hm: continue` skipped
+# silently when it was elsewhere. Every source is concatenated so a handler can be found wherever it lives,
+# and a struct whose handler cannot be found anywhere is now a FAILURE rather than a silent skip.
+_all_instr = "\n".join(_f.read_text() for _f in _instr_files)
+for _path in _instr_files:
     _src = _path.read_text()
     for _m in re.finditer(r"pub struct (\w+)<'info> \{(.*?)\n\}", _src, re.S):
-        _name, _body = _m.group(1), _m.group(2)
+        _structs += 1
+        _name, _body = _m.group(1), _decomment(_m.group(2))
         _nonmut = set()
-        for _fm in re.finditer(r"((?:\s*#\[account\((?:[^()]|\([^()]*\))*\)\]\s*)?)pub (\w+):", _body):
-            _attrs, _field = _fm.group(1), _fm.group(2)
+        # HOLE 3: `\s*` between the attribute and `pub field:` failed when a DOC COMMENT sat between them,
+        # and the field was then skipped as if it had no attribute at all. Comments are stripped above, which
+        # closes it; the pattern also tolerates the residual whitespace either way.
+        # HOLE 4: the attribute pattern handled ONE level of nested parens, so a constraint like
+        # `constraint = check(f(x))` made the field invisible. Two levels now.
+        _attr = r"(?:\s*#\[account\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)\]\s*)?"
+        for _fm in re.finditer(_attr + r"pub (\w+):", _body):
+            _attrs, _field = _fm.group(0), _fm.group(1)
             if "#[account(" not in _attrs:
                 continue
             if not any(re.search(r"\b" + _k + r"\b", _attrs) for _k in _MUT_IMPLIED):
                 _nonmut.add(_field)
         if not _nonmut:
             continue
-        _hm = re.search(r"fn \w+\(\s*ctx: Context<" + _name + r">.*?\n\}", _src, re.S)
+        _hm = re.search(r"fn \w+\(\s*ctx: Context<" + _name + r">.*?\n\}", _src, re.S) or \
+              re.search(r"fn \w+\(\s*ctx: Context<" + _name + r">.*?\n\}", _all_instr, re.S)
         if not _hm:
+            _orphan_structs.append(f"{_path.name}: {_name}")
             continue
-        _hb = _hm.group(0)
+        _hb = _decomment(_hm.group(0))
+        # HOLE 5: `&mut ctx.accounts.X.to_account_info()` is NOT a write to X, it is a borrow of a freshly
+        # built AccountInfo. Reporting it demanded `#[account(mut)]`, which is an IDL/ABI change that marks
+        # the account writable for every client and widens write locks. A gate that pressures an ABI change
+        # to satisfy a regex is a gate that gets allowlisted, so that shape is excluded before matching.
+        _hb = re.sub(r"&mut ctx\.accounts\.\w+\.to_account_info\(\)", " ", _hb)
         for _field in sorted(_nonmut):
+            # HOLE 6: the member name was `[a-z_]+`, which cannot match a digit (`token_2022_program`
+            # exists in this tree), the assignment had to be a bare `=` so `+=` / `|=` / `-=` were
+            # invisible, and only ONE level of member access was considered so `x.a.b = v` was missed.
             if re.search(r"&mut ctx\.accounts\." + _field + r"\b", _hb) or \
-               re.search(r"ctx\.accounts\." + _field + r"\.[a-z_]+\s*=[^=]", _hb):
+               re.search(r"ctx\.accounts\." + _field + r"(?:\.\w+)+\s*[-+|&^*/]?=[^=]", _hb):
                 _bad.append(f"{_path.name}: {_name}.{_field} is written but not declared mut")
 if _bad:
     for _b in _bad:
         print(f"   FAIL: {_b}")
     check(False, f"every written account is declared mut ({len(_bad)} violation(s))")
+elif _structs == 0 or _orphan_structs:
+    # SELF-CHECK, and it is count-free on purpose: no floor to maintain, just "the scan found structs, and
+    # every struct it found has a handler it could read". Without this, a struct pattern that stopped
+    # matching printed "ok" over an empty set, which is the class this whole section exists to catch.
+    if _structs == 0:
+        print("   FAIL: the Accounts-struct pattern matched NOTHING. The scan checked an empty set.")
+    for _o in _orphan_structs:
+        print(f"   FAIL: no handler found for {_o}, so its non-mut fields were never checked")
+    check(False, f"the mutability scan actually scanned ({_structs} struct(s), {len(_orphan_structs)} unreadable)")
 else:
-    print("   ok: every account a handler writes is declared mut")
+    print(f"   ok: every account a handler writes is declared mut ({_structs} Accounts structs scanned)")
 
 print("4b. scripts/ typecheck")
 # ROUND 3 P0-1 shipped because NOTHING typechecked scripts/. A five-argument call to a six-argument
@@ -247,12 +291,97 @@ _tc = subprocess.run(
     capture_output=True, text=True,
 )
 _diags = [l for l in _tc.stdout.splitlines() if l.startswith("scripts/") and "error" in l]
-if _diags:
+# REVIEW-OF-FIXES P0. `_tc.returncode` was never read, so this gate reproduced the EXACT false green it was
+# installed to close. When tsc aborts on a parse error inside node_modules there are no lines beginning with
+# "scripts/", `_diags` is empty, and the gate printed "ok: scripts/ typechecks clean" over a run that checked
+# nothing. Measured by the reviewer: returncode 2, 160 tsc error lines, 0 of them matching, gate green.
+#
+# The trigger is routine rather than exotic: the ROOT package.json pins typescript ^4.3.5 and resolves 4.9.5
+# while both apps pin ^5.5.0, and 4.9.5 cannot parse `<const T>`. Any dependency bump that lands another
+# modern .d.ts aborts the run again.
+#
+# The commit that added this said "Mutation-verified: reverting the sixth argument produces TS2554". That
+# proved the POSITIVE branch only, which is the same error the same commit message spends six lines
+# diagnosing: proving an implication without proving its premise is reachable.
+if _tc.returncode != 0 or _diags:
     for _d in _diags[:10]:
         print(f"   FAIL: {_d}")
-    check(False, f"scripts/ typechecks clean ({len(_diags)} diagnostic(s))")
+    if _tc.returncode != 0 and not _diags:
+        print(f"   FAIL: tsc exited {_tc.returncode} with no scripts/ diagnostics, so it checked NOTHING.")
+        print(f"          First tsc output: {(_tc.stdout or _tc.stderr).splitlines()[:1]}")
+    check(False, f"scripts/ typechecks clean (exit {_tc.returncode}, {len(_diags)} diagnostic(s))")
 else:
     print("   ok: scripts/ typechecks clean")
+
+print("4c. Every state rule is actually CALLED by a handler")
+# REVIEW-OF-FIXES P1, measured by the reviewer and reproduced here: the five WIRING-level mutations of the
+# round-3 contract fixes each left all 153 Rust tests green.
+#
+#   delete `validate_kyc_revocation(...)` from the handler   -> 153 passed
+#   delete `validate_kyc_subject(wallet)` from the handler   -> 153 passed
+#   `next_attestation_count(.., is_new)` -> `(.., true)`     -> 153 passed
+#
+# The rules are pure functions in `state/`, unit-tested to death, and the tests prove the RULE. Nothing
+# proved the HANDLER still calls it. That is the same shape as the P0 in section 4a (a mechanism present in
+# the source and absent from the executed path), so it gets the same treatment: a class check, not another
+# unit test. Only an on-chain integration test can prove the composed behaviour, and it is tracked as such;
+# this closes the cheap half now, which is "the rule was silently orphaned".
+#
+# Comments AND string literals are stripped before matching, so the gate cannot be satisfied by prose. That
+# is not a hypothetical: the sibling detector in verify-cluster-resolution.ts claimed to strip strings and
+# did not.
+_state_dir = pathlib.Path("programs/dominion_silver_mint_v2/src/state")
+_instr_dir = pathlib.Path("programs/dominion_silver_mint_v2/src/instructions")
+
+
+def _strip_code(text):
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
+    text = re.sub(r"//[^\n]*", " ", text)
+    # String and char literals, so `require!(x, "call validate_kyc_subject")` proves nothing.
+    text = re.sub(r'"(?:[^"\\]|\\.)*"', '""', text)
+    return text
+
+
+# Rules, not accessors: a predicate or validator whose whole job is to be called by a handler. Named
+# explicitly rather than pattern-matched on the prefix, because a gate that guesses its own scope silently
+# shrinks to zero (section 5's recurring failure).
+_RULES = [
+    "validate_kyc_arming",
+    "revocation_must_disarm",
+    "validate_kyc_subject",
+    "validate_kyc_scope",
+    "next_attestation_count",
+    "count_after_revocation",
+    "kyc_operator_may_be_cleared",
+    "enforce_kyc",
+]
+_declared = {}
+for _f in sorted(_state_dir.rglob("*.rs")):
+    _body = _strip_code(_f.read_text())
+    for _m in re.finditer(r"\bpub fn ([a-z0-9_]+)\s*\(", _body):
+        _declared.setdefault(_m.group(1), _f.name)
+
+_instr_src = "\n".join(_strip_code(_f.read_text()) for _f in sorted(_instr_dir.rglob("*.rs")))
+_orphans, _absent = [], []
+for _rule in _RULES:
+    if _rule not in _declared:
+        # The rule was renamed or deleted and this list was not updated. That is a FAILURE, not a skip:
+        # silently dropping unknown names is how a gate shrinks to checking nothing.
+        _absent.append(_rule)
+        continue
+    if not re.search(r"\b" + _rule + r"\s*\(", _instr_src):
+        _orphans.append(f"{_rule} (declared in state/{_declared[_rule]})")
+if _absent:
+    print(f"   FAIL: rule(s) named here no longer exist in state/: {', '.join(_absent)}")
+    print("          If a rule was renamed or genuinely retired, update _RULES in the SAME commit.")
+if _orphans:
+    print("   FAIL: rule(s) declared and unit-tested but never called by any handler:")
+    for _o in _orphans:
+        print(f"          {_o}")
+    print("          A rule nothing calls is a rule that does not run. This is section 4a's class,")
+    print("          one level up: present in the source, absent from the executed path.")
+check(not _absent and not _orphans,
+      f"all {len(_RULES)} state rules are called from instructions/")
 
 print("5. Retired program ids")
 # Review-of-fixes F1: this list was STALE ON THE COMMIT THAT INTRODUCED IT. gc5TW,

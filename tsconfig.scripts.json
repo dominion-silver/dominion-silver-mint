@@ -3,12 +3,21 @@
     "A typecheck for scripts/ THAT CAN ACTUALLY FAIL.",
     "",
     "ROUND 3 P0-1 shipped because nothing typechecked this directory. My attempts returned exit 0 with zero",
-    "scripts/ diagnostics, which I read as 'clean'. They were not clean: tsc aborts on PARSE errors inside",
-    "node_modules/@solana/spl-token-group's bundled codecs .d.ts (a TS-version mismatch), and skipLibCheck",
-    "does not suppress parse errors. So tsc never reached scripts/ at all and reported success.",
+    "scripts/ diagnostics, which I read as 'clean'. They were not clean: tsc aborted on a PARSE error inside",
+    "a bundled codecs .d.ts and skipLibCheck does not suppress parse errors, so tsc never reached scripts/",
+    "at all and reported success.",
     "",
-    "`paths` maps that one package to a stub so the parse error cannot abort the run. That is narrow and",
-    "targeted: everything else is still checked for real.",
+    "REVIEW-OF-FIXES P2: my fix for that was a `paths` stub pointing the offending package at an empty",
+    "module. The reviewer measured that the stub blinds nothing today, and then found the actual cause: the",
+    "ROOT package.json pinned typescript ^4.3.5 and resolved 4.9.5, while both apps pin ^5.5.0 and the",
+    "external auditor used 5.9. 4.9.5 cannot parse `<const T>`, which is TS 5.0 syntax. The stub was",
+    "treating a toolchain skew as a broken dependency, and the next package to ship modern .d.ts syntax",
+    "would have aborted the run again and taken the gate green with it.",
+    "",
+    "So the root is on ^5.5.0 now, matching the apps, and the stub is GONE. One toolchain, one bar.",
+    "",
+    "`strict` is on for the same reason: this directory was held to a lower standard than apps/*, and the",
+    "scripts here are the ones that sign mainnet transactions.",
     "",
     "Run: npx tsc -p tsconfig.scripts.json"
   ],
@@ -21,14 +30,9 @@
     "target": "ES2022",
     "module": "CommonJS",
     "moduleResolution": "node",
-    "strict": false,
-    "noImplicitAny": false,
+    "strict": true,
     "types": ["node"],
-    "baseUrl": ".",
-    "paths": {
-      "@solana/codecs-data-structures": ["scripts/_typecheck-stubs/any-module.d.ts"]
-    }
+    "baseUrl": "."
   },
-  "include": ["scripts/**/*.ts"],
-  "exclude": ["scripts/_typecheck-stubs"]
+  "include": ["scripts/**/*.ts"]
 }

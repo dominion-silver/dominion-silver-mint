@@ -350,15 +350,14 @@ export async function withdrawFees(
  *  Instant because the realistic failure is that this key LEAKS (it lives on a server and
  *  signs every approval), and a timelock on rotation would mean 24h with a compromised
  *  attestor live. Pass PublicKey.default to decommission it. */
-export async function setKycOperator(
-  c: BuildCtx,
-  operator: PublicKey,
-): Ix {
-  // One signature. The co-signature-while-armed variant was reverted: see the long note in
-  // `kyc_admin.rs::set_kyc_operator_handler`. Squads cannot assemble two signatures, so requiring one broke
-  // rotation-while-armed, which is the incident path for a leaked attestor key.
-  return instant(c, "setKycOperator", operator);
-}
+// One signature. The co-signature-while-armed variant was reverted: see the long note in
+// `kyc_admin.rs::set_kyc_operator_handler`. Squads cannot assemble two signatures, so requiring one broke
+// rotation-while-armed, which is the incident path for a leaked attestor key.
+//
+// Back to an arrow, like its siblings: the revert left an `async function` wrapping a single `return
+// instant(...)`, which is harmless but reads as if this call site still had something to resolve.
+export const setKycOperator = (c: BuildCtx, operator: PublicKey): Ix =>
+  instant(c, "setKycOperator", operator);
 
 /** Arm or disarm the gate. `flags`: 0 = off, 1 = mint, 2 = redeem, 3 = both.
  *

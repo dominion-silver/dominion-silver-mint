@@ -173,26 +173,66 @@ for (const rpc of [
   // via `provider.sendAndConfirm(...)`, also invisible; and a guard call sitting only in a COMMENT satisfied
   // the textual property without executing anything.
   //
-  // So: strip comments and strings before looking, widen the send primitives, and require the guard call to
-  // appear in CODE. A gate that can be satisfied by prose is worse than no gate, because it reports 30/30.
+  // REVIEW-OF-FIXES P2, and this is the third shape of this check. Both reviewers measured the same three
+  // holes in my widened version:
+  //
+  //   1. `detected.length >= 12` was the self-check. 16 match today, so REVERTING the primitive list to the
+  //      exact pre-fix set still printed 31/31, and so did deleting `sendRawTransaction` alone, which is
+  //      the precise primitive whose absence WAS the round-3 finding. It fired only on a near-total gutting.
+  //      Worse, a magic floor on the number of dangerous scripts is a floor on how safe the repo may
+  //      become: deleting five devnet-only one-shots would drop it to 11 and FAIL the launch gate.
+  //   2. `upgrade-program.ts`, the script that writes mainnet bytecode, matches ZERO primitives. It shells
+  //      out through `sh(cmd, args)` with a variable first argument. It calls the guard today; deleting
+  //      that call would have kept the gate at 31/31.
+  //   3. The comment said "strip comments and strings"; only comments were stripped. So a read-only probe
+  //      whose log line mentions a primitive was reported as an unguarded sender, and a gate with false
+  //      positives gets allowlisted into uselessness.
+  //
+  // So the floor is now a NAMED MANIFEST rather than a count. Three explicit lists, and every one of them
+  // is load-bearing in a different direction:
+  //
+  //   SENDERS   must call the guard, whether or not a regex can see how they send.
+  //   INDIRECT  senders the pattern list is NOT expected to match (they shell out through a helper), so
+  //             their absence from `detected` is not treated as a detector regression.
+  //   READ_ONLY scripts that invoke the solana CLI to READ. They must NOT be forced to guard: making a
+  //             read demand DOMINION_ALLOW_MAINNET trains the operator to keep the mainnet write-consent
+  //             variable exported, which is itself one of the findings in round 3.
+  //
+  // Adding a sending script means adding a line here, in the same commit. That is the point: the gate can
+  // no longer drift to "checking nothing" by arithmetic, only by someone editing a list on purpose.
+
+  // Two strippings, because the two families of pattern need opposite treatment. A JS primitive named
+  // inside a string is prose; the `solana` CLI literal is ONLY ever found inside a string.
   const stripComments = (src: string) =>
     src
       .replace(/\/\*[\s\S]*?\*\//g, " ")
       .replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
+  const stripStrings = (src: string) =>
+    src
+      .replace(/`(?:[^`\\]|\\[\s\S])*`/g, "``")
+      .replace(/"(?:[^"\\\n]|\\.)*"/g, '""')
+      .replace(/'(?:[^'\\\n]|\\.)*'/g, "''");
+  // Imports mention the guard without calling it, so they must not count as either a call or a comment.
+  const stripImports = (src: string) =>
+    src.replace(/^\s*import[\s\S]*?from\s*["'][^"']+["'];?/gm, " ");
 
+  // Matched against code with comments AND strings stripped.
   const SEND_PRIMITIVES = [
     /\bsendAndConfirmTransaction\s*\(/,
-    /\bsendAndConfirm\s*\(/,          // AnchorProvider.sendAndConfirm
+    /\bsendAndConfirmRawTransaction\s*\(/,  // the raw sibling; sendRawTransaction does not match it
+    /\bsendAndConfirm\s*\(/,                // AnchorProvider.sendAndConfirm
     /\bsendRawTransaction\s*\(/,
-    /\.\s*sendTransaction\s*\(/,      // Connection.sendTransaction
-    /\.\s*rpc\s*\(/,                  // Anchor methods().rpc(), tolerating whitespace
-    // Shelling out to the solana CLI. Detect the CALL, not the words: a bare
-    // /solana\s+program\s+close/ matched the PROSE inside a console.log string in
-    // verify-mainnet-authorities.ts, which is a read-only preflight. A gate with false positives gets
-    // allowlisted into uselessness, so it has to be precise in both directions.
-    /exec(?:File)?Sync\s*\(\s*["'`]solana["'`]/,
-    /spawn(?:Sync)?\s*\(\s*["'`]solana["'`]/,
+    /\.\s*sendTransaction\s*\(/,            // Connection.sendTransaction
+    /\.\s*sendAll\s*\(/,                    // AnchorProvider.sendAll
+    /\.\s*rpc\s*\(/,                        // Anchor methods().rpc(), tolerating whitespace
   ];
+  // Matched against code with comments stripped and strings KEPT, since the command name is a literal.
+  // Paired with a write verb: a bare /solana/ matched read-only preflights, and forcing those to guard is
+  // how the consent variable ends up permanently exported.
+  const CLI_INVOCATION = /(?:exec(?:File)?Sync|spawn(?:Sync)?)\s*\(\s*["'`]solana["'`]/;
+  const CLI_WRITE_VERB =
+    /["'`](?:deploy|extend|close|set-upgrade-authority|transfer|airdrop|write-buffer)["'`]/;
+
   const scriptsDir = path.join(__dirname);
   const helpers = new Set([
     "_guard.ts",
@@ -202,57 +242,118 @@ for (const rpc of [
     "_t1-mint-helper.ts",
     "verify-cluster-resolution.ts",
   ]);
-  const offenders: string[] = [];
+
+  // THE MANIFEST. Every script here sends transactions and must call requireSanctionedCluster.
+  const SENDERS = new Set([
+    "bump-staleness.ts",
+    "cancel-all.ts",
+    "cancel-bad-proposal.ts",
+    "cancel-nonce-1.ts",
+    "create-fee-vault.ts",
+    "dev-set-premiums.ts",
+    "e2e-fixa-devnet.ts",
+    "e2e-guardian-devnet.ts",
+    "e2e-lazer-mint.ts",
+    "e2e-public-mint-devnet.ts",
+    "initialize-devnet.ts",
+    "t1-hostile-bootstrap.ts",
+    "test-dominion-squads-e2e.ts",
+    "test-squads-e2e.ts",
+    "test-v2-devnet.ts",
+    "ui-scenario.ts",
+    // Not matched by any primitive: it shells out through `sh(cmd, args)`. Listed anyway BECAUSE it is the
+    // one script that writes mainnet bytecode. This entry is the fix for hole 2 above.
+    "upgrade-program.ts",
+  ]);
+  const INDIRECT = new Set(["upgrade-program.ts"]);
+  // Invoke the solana CLI to READ. Must not be required to consent to a mainnet WRITE in order to look.
+  const READ_ONLY_CLI = new Set(["verify-mainnet-authorities.ts", "verify-mainnet-readiness.ts"]);
+
+  const files = fs.readdirSync(scriptsDir).filter((x) => x.endsWith(".ts") && !helpers.has(x));
+  const detected: string[] = [];
+  const unguarded: string[] = [];
   const prose: string[] = [];
-  for (const f of fs.readdirSync(scriptsDir).filter((x) => x.endsWith(".ts"))) {
-    if (helpers.has(f)) continue;
+  const unlisted: string[] = [];
+  for (const f of files) {
     const raw = fs.readFileSync(path.join(scriptsDir, f), "utf8");
-    const code = stripComments(raw);
-    if (!SEND_PRIMITIVES.some((re) => re.test(code))) continue;
+    const noComments = stripComments(raw);
+    const code = stripStrings(noComments);
+    const sends =
+      SEND_PRIMITIVES.some((re) => re.test(code)) ||
+      (CLI_INVOCATION.test(noComments) && CLI_WRITE_VERB.test(noComments));
+    if (sends) detected.push(f);
+
+    // A script the manifest names must guard, even if no pattern can see how it sends.
+    if (!SENDERS.has(f)) {
+      // A NEW sender that nobody listed. Not silently tolerated: either it belongs in SENDERS or it is a
+      // read-only CLI caller and belongs in READ_ONLY_CLI. The choice has to be made by a person.
+      if (sends && !READ_ONLY_CLI.has(f)) unlisted.push(f);
+      continue;
+    }
     if (!/requireSanctionedCluster\s*\(/.test(code)) {
       // Distinguish "no guard at all" from "a guard mentioned only in a comment", because the second is
-      // the one that fooled the previous version of this check.
-      if (/requireSanctionedCluster/.test(raw)) prose.push(f);
-      else offenders.push(f);
+      // the one that fooled the first version of this check. Imports are stripped from BOTH sides, so
+      // deleting the call while leaving `import { requireSanctionedCluster }` reads as unguarded, not as
+      // prose. It reported prose before, which told the operator to move a comment when the call was gone.
+      if (/requireSanctionedCluster/.test(stripImports(noComments))) prose.push(f);
+      else unguarded.push(f);
     }
   }
+
   ok(
     "every transaction-sending script calls requireSanctionedCluster IN CODE",
-    offenders.length === 0 && prose.length === 0,
+    unguarded.length === 0 && prose.length === 0,
     [
-      offenders.length ? `unguarded: ${offenders.join(", ")}` : "",
+      unguarded.length ? `unguarded: ${unguarded.join(", ")}` : "",
       prose.length ? `guard only in a comment: ${prose.join(", ")}` : "",
     ]
       .filter(Boolean)
-      .join(" | ") || "all guarded",
+      .join(" | ") || `all ${SENDERS.size} manifest senders guarded`,
+  );
+
+  ok(
+    "no sending script is missing from the manifest",
+    unlisted.length === 0,
+    unlisted.length
+      ? `add to SENDERS (or READ_ONLY_CLI if it only reads): ${unlisted.join(", ")}`
+      : "none",
   );
 
   // And nothing may reach for the consent-only predicate to skirt the genesis check.
   const skirters = fs
     .readdirSync(scriptsDir)
     .filter((x) => x.endsWith(".ts") && x !== "verify-cluster-resolution.ts" && x !== "_guard.ts")
-    .filter((f) => /guardConsentOnly\s*\(/.test(stripComments(fs.readFileSync(path.join(scriptsDir, f), "utf8"))));
+    .filter((f) =>
+      /guardConsentOnly\s*\(/.test(
+        stripStrings(stripComments(fs.readFileSync(path.join(scriptsDir, f), "utf8"))),
+      ),
+    );
   ok(
     "no script uses guardConsentOnly to skip the genesis-hash check",
     skirters.length === 0,
     skirters.length ? skirters.join(", ") : "none",
   );
 
-  // SELF-CHECK: the send detector must actually detect. A gate whose detector matches nothing reports a
-  // clean sweep over an empty set, which is how the previous version passed while ui-scenario.ts sent
-  // unguarded.
-  const detected = fs
-    .readdirSync(scriptsDir)
-    .filter((x) => x.endsWith(".ts") && !helpers.has(x))
-    .filter((f) =>
-      SEND_PRIMITIVES.some((re) =>
-        re.test(stripComments(fs.readFileSync(path.join(scriptsDir, f), "utf8"))),
-      ),
-    );
+  // SELF-CHECK ON THE DETECTOR, and this is what `detected.length >= 12` was trying and failing to be.
+  // Every manifest sender that is not declared INDIRECT must be matched by the primitive list. Narrowing
+  // the list now names the script it stopped seeing instead of quietly staying above a threshold.
+  const undetectable = [...SENDERS].filter((f) => !INDIRECT.has(f) && !detected.includes(f)).sort();
   ok(
-    "the send detector finds a plausible number of senders",
-    detected.length >= 12,
-    `${detected.length} detected`,
+    "the send detector still matches every direct sender it is supposed to match",
+    undetectable.length === 0,
+    undetectable.length
+      ? `the primitive list no longer sees: ${undetectable.join(", ")} (did a pattern get narrowed?)`
+      : `${detected.length} detected, ${SENDERS.size} in the manifest`,
+  );
+
+  // And the manifest may not name a script that no longer exists: a stale entry is a line nobody reads.
+  const ghosts = [...SENDERS, ...READ_ONLY_CLI].filter(
+    (f) => !fs.existsSync(path.join(scriptsDir, f)),
+  );
+  ok(
+    "no manifest entry names a deleted script",
+    ghosts.length === 0,
+    ghosts.length ? `remove from the manifest: ${ghosts.join(", ")}` : "none",
   );
 }
 

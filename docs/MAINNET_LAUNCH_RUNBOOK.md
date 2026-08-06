@@ -143,15 +143,22 @@ circulating under one "reproducible" label: the Dockerfile header said Solana 1.
 / Rust 1.79 while its own ARGs said 2.1.20 / 0.31.1 / 1.79, and CI declares 3.1.14 / platform-tools
 1.52 / rustc 1.89.0. None of those is what produced the artifact.
 
-The toolchain that actually built `dominion_silver_mint.so` at sha256
-`404dd8da4afd48419be0b33caf850c5de5ef9e4173329dc8b0f595c91dae7699` (1,188,728 bytes).
+**THE RELEASE HASH IS NOT WRITTEN HERE.** It lives in exactly one place,
+`config/mainnet-authorities.json` under `release_artifact.sha256`, and the way you check it is:
 
-**This hash MUST be re-recorded on every program change.** It was `799945e4…` until 2026-08-06 and went
-stale within the hour: the commit that closed audit findings C-01, C-02 and C-03 changed the program, and
-this line kept blessing the binary WITHOUT those fixes. An operator hash-checking at the ceremony would
-either fail on the correct artifact or go hunting for the wrong one. Regenerate with
-`shasum -a 256 target/deploy/dominion_silver_mint.so` and verify with
-`scripts/verify-release-artifact.sh`, which rebuilds and compares rather than trusting this line.
+```bash
+bash scripts/verify-release-artifact.sh
+```
+
+which REBUILDS and compares rather than asking you to read a hash off a page.
+
+This paragraph used to carry the hash inline, and it went stale three times: `799945e4...`, then
+`404dd8da...`, each one blessing a binary that no longer existed. Twice it was stale within the hour, because
+the commit that changed the program was the same commit that should have updated this line and did not. An
+operator hash-checking at the ceremony would either fail on the CORRECT artifact or go hunting for a wrong
+one. A number that must be updated by hand in two places is a number that will disagree with itself, so the
+copy that is checked by a script is the only copy that exists now, and a gate refuses to let a bare sha256
+reappear in this file.
 
 Toolchain that produced it, confirmed on two independent machines (this one and the external auditor's,
 2026-08-06):
@@ -219,10 +226,16 @@ initialisation.** Run it BEFORE any init script.
 ```bash
 DOMINION_ALLOW_MAINNET=i-understand \
 DOMINION_RPC=https://api.mainnet-beta.solana.com \
+DOMINION_INTENT=initialize \
 DOMINION_PROGRAM_ID=<PROGRAM_ID> \
 DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json \
 npx tsx scripts/t1-hostile-bootstrap.ts
 ```
+
+**`DOMINION_INTENT=initialize` is on that list because RULE 2 demands it and this page did not have it.**
+`initialize` is classified irreversible, and T1's case 5 performs it. The guard now fires BEFORE the mint is
+created rather than after, so a missing token costs you nothing; without both changes an operator following
+this page would have created the real mainnet mint and then been refused, losing the mint keypair.
 
 **`DOMINION_RPC` is on that list because it was missing, and its absence reproduced the audit's P0
 verbatim.** Every other mainnet command in this runbook sets it; this one did not, so `resolveCluster()`

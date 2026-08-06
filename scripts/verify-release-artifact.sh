@@ -191,4 +191,19 @@ if [[ "$SKIP_REBUILD" -eq 1 ]]; then
   echo "--skip-rebuild before any deploy."
   exit 2
 fi
+# REVIEW-OF-FIXES P2, and this deletes a class rather than an instance. The runbook carried the release
+# hash INLINE, and it went stale three times: twice within the hour of the commit that changed the program.
+# A number maintained by hand in two places disagrees with itself. So `config/mainnet-authorities.json` is
+# the only copy, and no document may reintroduce one: a bare 64-hex string in docs/ is now a hard failure,
+# whether or not it happens to be correct today, because "correct today" is exactly what the last three were.
+_stray=$(grep -rnoE "\b[0-9a-f]{64}\b" docs/*.md 2>/dev/null || true)
+if [ -n "$_stray" ]; then
+  echo ""
+  echo "FAIL: a bare sha256 appears in docs/. The release hash has ONE home:"
+  echo "      config/mainnet-authorities.json -> release_artifact.sha256"
+  echo "      Replace the literal with a pointer to that file plus 'bash scripts/verify-release-artifact.sh'."
+  echo "$_stray"
+  exit 1
+fi
+
 echo "ARTIFACT OK: matches a clean default rebuild, no forbidden instruction."

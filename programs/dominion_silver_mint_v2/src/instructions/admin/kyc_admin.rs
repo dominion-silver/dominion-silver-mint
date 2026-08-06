@@ -311,12 +311,35 @@ pub fn revoke_kyc_handler(ctx: Context<RevokeKyc>, wallet: Pubkey) -> Result<()>
     // dangerous one: it would let the gate be armed while the count claims attestations that no longer
     // exist. If this ever underflows, the invariant is already broken and the right answer is to refuse
     // and be noticed, not to clamp to zero and carry on.
+    let signer = ctx.accounts.signer.key();
+    // Read before the mutable borrow. `RevokeKyc` already constrains the signer to be one of the two.
+    let signer_is_admin = signer == ctx.accounts.config.admin;
     let config = &mut ctx.accounts.config;
     let count_after = count_after_revocation(config.kyc_attestation_count)?;
-    // ROUND 3 P0: refuse to leave an ARMED gate with an empty roster. Checked BEFORE the write, so a
-    // refusal leaves the counter untouched.
-    validate_kyc_revocation(config.kyc_scope_flags, count_after)?;
+    // ROUND 3 P0, as amended by REVIEW-OF-FIXES P1: the state "armed gate, empty roster" must be
+    // unreachable. The rule lives in `state/kyc.rs::revocation_must_disarm`, and it resolves BEFORE any
+    // write, so a refusal leaves both the counter and the scope untouched.
+    //
+    // My first fix refused this revocation outright, which deleted the only path to remove the LAST
+    // holder: see the function's doc block. It now disarms instead, for the admin only.
+    let must_disarm = revocation_must_disarm(config.kyc_scope_flags, count_after, signer_is_admin)?;
     config.kyc_attestation_count = count_after;
+
+    if must_disarm {
+        // Removing the last holder while armed drops the gate in the SAME instruction. Not a silent
+        // loosening: it emits the same event an explicit `set_kyc_scope(0)` emits, so anything watching
+        // the highest-signal admin event sees it without having to correlate the counter.
+        let old_flags = config.kyc_scope_flags;
+        config.kyc_scope_flags = 0;
+        // The derived master signal, never set independently. Same rule as `set_kyc_scope`.
+        config.kyc_enforced = false;
+        emit!(KycScopeChanged {
+            old_flags,
+            new_flags: 0,
+            by: signer,
+            timestamp: Clock::get()?.unix_timestamp,
+        });
+    }
 
     emit!(KycRevoked {
         wallet,

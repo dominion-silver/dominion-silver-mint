@@ -74,17 +74,22 @@ function no(msg: string, detail = "") {
  * 2 swaps them. So the exit code was permanently non-zero and an operator told "the gate must be
  * green" would be trained to override it. That is D2's failure mode, the item this pass just fixed,
  * reproduced in the gate itself. */
-function atStep(step: string, msg: string, detail = "") {
-  // The step label can be "2", "9/10" or "runbook steps 3-6". Take the LAST number as the due step.
+function atStep(step: string, msg: string, detail = "", dueStep?: number) {
+  // `dueStep` is EXPLICIT and numeric. `step` is the label an operator reads.
   //
-  // ROUND 3 P1: this took the FIRST, so "runbook steps 3-6" was due at 3 and `--stage=4` blocked because the
-  // mint does not exist before T1, which IS steps 4+5+6. Same for "steps 7-9" blocking at --stage=8 before
-  // the documented premint at 9. The work completes at the END of a range, so the deadline is the end.
-  const nums = step.match(/\d+/g) ?? [];
-  const due = nums.length ? Number(nums[nums.length - 1]) : NaN;
-  if (STAGE !== null && Number.isFinite(due) && due < STAGE) {
+  // This used to derive the deadline from the label by regex, and both attempts were wrong in opposite
+  // directions. Taking the FIRST integer made "runbook steps 3-6" due at 3, so `--stage=4` blocked because
+  // the mint does not exist before T1, which IS steps 4+5+6. Taking the LAST made "9/10" due at 10, and the
+  // test is `due < STAGE`, so the MANDATORY fee vault was silently not reported at `--stage=10` -- the exact
+  // stage the runbook step added in the same commit tells the operator to check it at, with the comment
+  // "must not report the vault as OVERDUE". It could not: the check was vacuous.
+  //
+  // A deadline is data, not prose. Parsing it out of a human-readable string is a class of bug, not an
+  // instance, so the parameter deletes the class. `dueStep` omitted means "no deadline", which is honest for
+  // an item whose step is genuinely a range the operator judges.
+  if (STAGE !== null && dueStep !== undefined && dueStep < STAGE) {
     console.log(
-      `  OVERDUE  ${msg} -> was due at step ${due}, you are at step ${STAGE}${detail ? `. ${detail}` : ""}`,
+      `  OVERDUE  ${msg} -> was due at step ${dueStep}, you are at step ${STAGE}${detail ? `. ${detail}` : ""}`,
     );
     blocked++;
     return;
@@ -181,7 +186,7 @@ async function main() {
     );
     usdc === USDC_MAINNET
       ? ok(`apps/${app} USDC_MINT is the mainnet mint`)
-      : atStep("2", `apps/${app} USDC_MINT is not mainnet yet`, `${usdc} (swapped at runbook step 2)`);
+      : atStep("2", `apps/${app} USDC_MINT is not mainnet yet`, `${usdc} (swapped at runbook step 2)`, 2);
   }
   const lt = grep(
     "apps/public/src/lib/constants.ts",
@@ -189,7 +194,7 @@ async function main() {
   );
   lt === LAZER_TREASURY_MAINNET
     ? ok("apps/public LAZER_TREASURY is the mainnet value")
-    : atStep("2", "apps/public LAZER_TREASURY is not mainnet yet", `${lt} (it is cluster-specific)`);
+    : atStep("2", "apps/public LAZER_TREASURY is not mainnet yet", `${lt} (it is cluster-specific)`, 2);
   const feed = grep("apps/public/src/lib/constants.ts", /LAZER_SILV_FEED_ID\s*=\s*(\d+)/);
   Number(feed) === FEED_ID
     ? ok(`feed id is ${FEED_ID} (Metal.Index.SILVER/USD, pure spot)`)
@@ -258,11 +263,14 @@ async function main() {
     "1. SILV token deployed and live",
     "the mint is created BY T1 (step 4-6). Nothing here can observe it beforehand: re-run this gate " +
       "after T1 and check the mint address it prints.",
+    // Due by the END of the 4+5+6 block, so it must be satisfied by the time step 7 begins.
+    6,
   );
   atStep(
     "runbook steps 7-9",
     "2. pre-mint freely to the inventory wallet, seed a Sunrise pool",
     "admin_premint runs at step 7; the pool is seeded off-chain afterwards.",
+    9,
   );
   byHand(
     "3. public mint with no KYC",
@@ -316,10 +324,14 @@ async function main() {
       ok("3c. the MAINNET fee vault exists", vault.toBase58());
     } else {
       atStep(
-        "9/10",
+        "9b, BEFORE step 10",
         "3c. the MAINNET fee vault does not exist yet",
         `${vault.toBase58()} -- run scripts/create-fee-vault.ts AFTER the deploy and BEFORE opening ` +
           `mint or redeem, or every mint and every redeem reverts AccountNotInitialized`,
+        // Due at 9b, i.e. it MUST exist before step 10 opens the public mint. The label used to be "9/10",
+        // which the last-number heuristic read as due at 10, so `--stage=10` never reported it: the one
+        // prerequisite whose absence makes every mint and every redeem revert was the one the check missed.
+        9,
       );
     }
   }

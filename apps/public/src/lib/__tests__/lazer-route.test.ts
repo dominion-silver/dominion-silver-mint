@@ -184,28 +184,69 @@ describe("the Lazer proxy rate-limits", () => {
     expect(fetchSpy.mock.calls.length, "and none of them touched upstream").toBe(1);
   });
 
-  it("a FAILED shared request does not charge the waiters for the retry", async () => {
-    // ROUND 3 P2. Joining before charging only helps when the shared attempt succeeds. On rejection every
-    // waiter used to fall through to the bucket: 39 joiners drained the burst, 10 got 429, and only one of
-    // them created the retry. 29 tokens for one upstream call, then starvation. The concurrency test above
-    // covered only the happy branch, which is why the measurement came from the auditor.
+  it("a FAILED shared request does not charge the waiters, and they JOIN the retry", async () => {
+    // ROUND 3 P2 and REVIEW-OF-FIXES P1 in one test, because the two are the same measurement taken twice
+    // and my first fix moved the cost instead of removing it.
+    //
+    // P2: on rejection every waiter fell through to the bucket. 39 joiners drained the burst, 10 got 429,
+    // and only one of them created the retry: 29 tokens for one upstream call, then starvation.
+    // My fix: return 502 to all 39. That is worse and it is on the MONEY path. lib/lazer-client.ts throws
+    // on any non-ok status with no retry, and that is the submit-time envelope fetch, so one transient blip
+    // abandoned every in-flight mint and redeem. The old code served 29 of 40; mine served 0 of 40.
+    //
+    // What the burst must do: ONE waiter creates the retry and pays ONE token, the other 38 await it, and
+    // all 40 are served. Assert the retry is joined, not fanned out, and not converted into 40 failures.
     const { POST } = await freshRoute();
-    let rejectUpstream: (e: Error) => void = () => {};
-    const gate = new Promise<Response>((_, rej) => {
-      rejectUpstream = rej;
+    let rejectFirst: (e: Error) => void = () => {};
+    const firstAttempt = new Promise<Response>((_, rej) => {
+      rejectFirst = rej;
     });
-    fetchSpy.mockImplementation(() => gate);
+    let calls = 0;
+    fetchSpy.mockImplementation(() => {
+      calls += 1;
+      // Only the FIRST upstream attempt fails, which is what a transient blip looks like.
+      if (calls === 1) return firstAttempt;
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            solana: { encoding: "base64", data: "AAAA" },
+            parsed: {
+              priceFeeds: [
+                { price: "5688400", exponent: -2, confidence: "100", feedUpdateTimestamp: "1785334113000000", publisherCount: 3 },
+              ],
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    });
 
     const inFlight = Array.from({ length: 40 }, () => POST(req({})));
     await new Promise((r) => setImmediate(r));
-    rejectUpstream(new Error("upstream down"));
-    const results = await Promise.all(inFlight);
-    const statuses = results.map((r) => r.status);
+    rejectFirst(new Error("upstream down"));
+    const statuses = (await Promise.all(inFlight)).map((r: Response) => r.status);
 
-    // ONE upstream attempt for the whole burst: the creator's. Nobody retried on the way out.
-    expect(fetchSpy.mock.calls.length).toBe(1);
-    // Everybody hears about the failure; nobody is told to come back later because the bucket is empty.
-    expect(statuses.every((st) => st === 502)).toBe(true);
+    // TWO upstream calls total for 40 requests: the failed one and the single joined retry.
+    expect(calls, "the retry must be joined by the waiters, not made by each of them").toBe(2);
+    // Nobody is told to come back later because the bucket is empty.
     expect(statuses.filter((st) => st === 429).length, "no waiter may be rate-limited for a retry it did not make").toBe(0);
+    // And nobody's transaction is abandoned over a blip the retry already fixed.
+    expect(statuses.filter((st) => st === 502).length, "the 502-to-everyone fix was worse than the bug").toBe(0);
+    expect(statuses.every((st) => st === 200)).toBe(true);
+  });
+
+  it("an upstream that stays down answers 502 rather than looping", async () => {
+    // The other half of the bounded retry: two attempts, then a definite answer. Without the bound, a
+    // persistently dead upstream would have request N waiting on retry N-1 forever.
+    const { POST } = await freshRoute();
+    fetchSpy.mockImplementation(() => Promise.reject(new Error("upstream down for good")));
+
+    const statuses = (await Promise.all(Array.from({ length: 40 }, () => POST(req({}))))).map(
+      (r: Response) => r.status,
+    );
+    expect(statuses.every((st) => st === 502 || st === 429)).toBe(true);
+    expect(statuses.filter((st) => st === 200).length).toBe(0);
+    // Bounded: two attempts for the whole burst, not one per caller.
+    expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(2);
   });
 });

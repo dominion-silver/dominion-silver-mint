@@ -283,16 +283,35 @@ async function main() {
     `  min_usdc_out (0.5% slip @ envelope price, ${premiumBpsRedeem}bps premium):`,
     minUsdcOut / 1e6,
   );
-  // Redemptions are CLOSED at launch and `set_redemptions_enabled` refuses to enable
-  // them in the deployed bytecode, so the redeem half of this script is unreachable
-  // until the Phase 1 upgrade. Skip it rather than fail: the mint half is the part that
-  // proves the oracle, and reporting a red run for a deliberately closed path trains
-  // people to ignore the script.
+  // Redemptions are CLOSED at launch, so the redeem half is unreachable until an admin opens them.
+  //
+  // REVIEW-OF-FIXES P2, two things wrong with how this used to be handled. First the comment was STALE: it
+  // said `set_redemptions_enabled` "refuses to enable them in the deployed bytecode until the Phase 1
+  // upgrade", which stopped being true when instant redeem shipped. Enabling is an ordinary admin call now.
+  //
+  // Second, and worse, it `return`ed with exit 0 and the line "MINT PROVEN END TO END". Half a proof
+  // recorded as a pass. This script is the functional gate for a devnet upgrade, so a run that never
+  // executed `redeem_silv` must not be indistinguishable from one that did, or the whole redeem path
+  // (budget accounting, fee routing, the 2 bps premium check) ships unexercised behind a green line.
+  //
+  // So: loud, and exit 2 unless the operator says mint-only is what they wanted. Enabling redemptions on
+  // devnet is one admin transaction, and if this is the pre-upgrade smoke test then passing the variable is
+  // one word. Neither is a reason to let a partial run read as complete.
   if (!cfg.redemptionsEnabled) {
-    console.log("\n  SKIP redeem half: redemptions_enabled = false (closed at launch,");
-    console.log("  and enabling is blocked on-chain until the Phase 1 upgrade).");
-    console.log("\n  MINT PROVEN END TO END with a real signed Lazer envelope.");
-    return;
+    console.log("\n  SKIP redeem half: redemptions_enabled = false on this program.");
+    console.log("  The MINT half passed, with a real signed Lazer envelope.");
+    if (process.env.E2E_ALLOW_MINT_ONLY === "1") {
+      console.log("  E2E_ALLOW_MINT_ONLY=1, so this counts as a pass. The redeem path was NOT exercised.");
+      return;
+    }
+    console.error(
+      "\nE2E INCOMPLETE: redeem_silv was never executed, so the budget accounting, the fee routing and\n" +
+        "the redeem premium check are unproven by this run. Open redemptions and re-run:\n" +
+        "  npx tsx scripts/dev-set-premiums.ts   # or set_redemptions_enabled(true) from the admin panel\n" +
+        "Or, if a mint-only smoke test is genuinely what you want, say so explicitly:\n" +
+        "  E2E_ALLOW_MINT_ONLY=1 npx tsx scripts/e2e-lazer-mint.ts",
+    );
+    process.exit(2);
   }
 
   const redeemMsg = Buffer.from(lazerMessageData(redeemEnv));
