@@ -57,6 +57,7 @@ import { requireDevnet, assertReversible, intentFromEnv } from "./_guard";
 import {
   resolveCluster,
   describeCluster,
+  assertClusterMatchesChain,
   mainnetConfig,
   type ClusterContext,
 } from "./_cluster";
@@ -110,6 +111,9 @@ async function main() {
   // RULE 1 (scripts/_guard.ts): refuse any cluster but devnet unless
   // DOMINION_ALLOW_MAINNET is explicitly set.
   requireDevnet(RPC, "T1 hostile bootstrap");
+  // Before ANY transaction: confirm the chain is the cluster the hostname claims. T1's case 5 performs
+  // the one-shot `initialize`, so a wrong cluster here is not a retryable mistake.
+  await assertClusterMatchesChain(CLUSTER);
   const INTENT = intentFromEnv();
   const conn = new Connection(RPC, "confirmed");
   const authority = loadKp(

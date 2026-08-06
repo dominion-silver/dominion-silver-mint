@@ -19,8 +19,8 @@
  *   1. Resolve the cluster from DOMINION_RPC and apply guard RULE 1 (mainnet needs explicit consent).
  *   2. Read the on-chain ProgramData allocation and compare it with the local .so.
  *   3. If the binary no longer fits, EXTEND the ProgramData account. This is the step whose absence
- *      made the upgrade impossible: 1,185,864 bytes of binary against 1,100,936 allocated is an
- *      84,928-byte shortfall (recomputed at runtime; this number is prose and goes stale on every rebuild), and `solana program deploy` simply fails until it is closed.
+ *      made the upgrade impossible: 1,185,784 bytes of binary against 1,100,936 allocated is an
+ *      84,848-byte shortfall (recomputed at runtime; this number is prose and goes stale on every rebuild), and `solana program deploy` simply fails until it is closed.
  *   4. Snapshot the config BEFORE, so the after-comparison is against reality and not against a
  *      remembered value.
  *   5. Deploy.
@@ -41,7 +41,7 @@ import { execFileSync } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { resolveCluster, describeCluster } from "./_cluster";
+import { resolveCluster, describeCluster, assertClusterMatchesChain } from "./_cluster";
 import { requireDevnet, assertReversible, intentFromEnv } from "./_guard";
 import { PROGRAM_ID } from "./_program-id";
 
@@ -73,6 +73,11 @@ async function main() {
   console.log(`  mode:    ${EXECUTE ? "EXECUTE (real transactions)" : "DRY RUN (no transactions)"}`);
 
   requireDevnet(CLUSTER.rpc, "in-place program upgrade");
+  // The genesis hash is the CHAIN's answer to "which cluster am I"; the hostname is only a claim made by
+  // whoever set DOMINION_RPC. This runs before the extend and the deploy, which are the irreversible
+  // parts, and it is the only thing that catches a proxy or a typo pointing a devnet-looking URL at
+  // mainnet. Written as part of the P0 fix and, until now, never called: dead code in a safety path.
+  await assertClusterMatchesChain(CLUSTER);
 
   if (!fs.existsSync(SO)) {
     die(`no local artifact at ${SO}. Build first: cargo build-sbf -- --locked`);

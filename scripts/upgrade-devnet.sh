@@ -14,7 +14,7 @@
 # Re-implementing cluster selection in bash is what produced findings S-01, S-02 and D-01.
 #
 # It also does the thing this script never did: extend the ProgramData account. The binary outgrew
-# its allocation by 84,928 bytes at the time of writing (the script recomputes it), and `solana program deploy` fails until that is closed.
+# its allocation by 84,848 bytes at the time of writing (the script recomputes it), and `solana program deploy` fails until that is closed.
 
 set -euo pipefail
 
