@@ -1,53 +1,31 @@
 #!/usr/bin/env bash
 #
-# Upgrade the deployed Dominion Silver program on devnet with the latest CI artifact.
-# Requires: gh CLI authenticated, solana config set to devnet + correct wallet.
+# SUPERSEDED 2026-08-06 by scripts/upgrade-program.ts. Kept as a pointer so nothing that references
+# this filename silently does nothing.
+#
+# What this file used to be: a V1-era upgrade helper whose first executable line was `exit 1`, on the
+# grounds that "V2 is a MANDATORY fresh deploy under a NEW program ID (the V1/V2 ConfigAccount layout
+# is incompatible)". That was correct when written. It stopped being correct once the live target was
+# itself V2, and external audit finding S-03 caught the consequence: the repository had NO working
+# upgrade path at all for the program it actually runs, while the pending batch needs a V2 to V2
+# upgrade that PRESERVES the config, the treasury, the SILV mint binding and the live proposal.
+#
+# The replacement is TypeScript so it can share scripts/_cluster.ts with the rest of the tooling.
+# Re-implementing cluster selection in bash is what produced findings S-01, S-02 and D-01.
+#
+# It also does the thing this script never did: extend the ProgramData account. The binary outgrew
+# its allocation by 79,048 bytes, and `solana program deploy` fails until that is closed.
 
 set -euo pipefail
 
-# CODEX P0-01 HARD GUARD: V2 is a MANDATORY fresh deploy under a NEW program ID
-# (the V1/V2 ConfigAccount layout is incompatible). In-place upgrade is
-# UNSUPPORTED and would invalidate the core "no stale V1 state" safety
-# hypothesis. This V1 upgrade script is kept only as historical reference and
-# is hard-disabled. To deploy V2: fresh `solana program deploy` with
-# target/deploy/dominion_silver_mint_v2-keypair.json + fresh `initialize` +
-# fresh SILV mint. See private/CODEX_AUDIT_GUIDE_V2.md + CONFIRMED_SPEC.md.
-echo "REFUSING TO RUN: in-place upgrade is unsupported for V2 (fresh-deploy-only)." >&2
-echo "See private/CODEX_AUDIT_GUIDE_V2.md section 4." >&2
-exit 1
+cat >&2 <<'EOF'
+scripts/upgrade-devnet.sh is SUPERSEDED. Use:
 
-WORKDIR="$(cd "$(dirname "$0")/.." && pwd)"
-cd "$WORKDIR"
+  npx tsx scripts/upgrade-program.ts                 # dry run, prints the plan, sends nothing
+  DOMINION_INTENT=irreversible \
+    npx tsx scripts/upgrade-program.ts --execute      # performs it
 
-echo "==> Downloading latest successful CI artifact..."
-RUN_ID=$(gh run list --workflow "Anchor Build + Test" --status success --limit 1 --json databaseId --jq '.[0].databaseId')
-if [[ -z "$RUN_ID" ]]; then
-  echo "ERROR: no successful CI run found" >&2
-  exit 1
-fi
-echo "==> Run: $RUN_ID"
-
-rm -rf /tmp/dominion-upgrade
-mkdir -p /tmp/dominion-upgrade
-gh run download "$RUN_ID" --name program-binary --dir /tmp/dominion-upgrade
-gh run download "$RUN_ID" --name idl --dir /tmp/dominion-upgrade
-mkdir -p target/deploy target/idl
-cp /tmp/dominion-upgrade/dominion_silver_mint.so target/deploy/
-cp /tmp/dominion-upgrade/dominion_silver_mint.json target/idl/
-
-PROGRAM_ID=$(solana-keygen pubkey target/deploy/dominion_silver_mint-keypair.json)
-echo "==> Program ID: $PROGRAM_ID"
-echo "==> Cluster: $(solana config get json_rpc_url | awk '{print $3}')"
-echo "==> Wallet balance: $(solana balance)"
-
-echo "==> Upgrading..."
-solana program deploy \
-  --program-id target/deploy/dominion_silver_mint-keypair.json \
-  target/deploy/dominion_silver_mint.so
-
-echo ""
-echo "✅ Upgrade complete."
-echo "==> New binary hash: $(sha256sum target/deploy/dominion_silver_mint.so | awk '{print $1}')"
-echo "==> Program ID: $PROGRAM_ID"
-echo "==> Program details:"
-solana program show "$PROGRAM_ID" | grep -E "Authority|Data Length|Balance|Last Deployed" || true
+Cluster comes from DOMINION_RPC (default devnet). The dry run reports the ProgramData shortfall,
+whether an extend is required, and the config fields it will verify afterwards.
+EOF
+exit 64 # EX_USAGE: not a failure of the upgrade, a wrong entry point

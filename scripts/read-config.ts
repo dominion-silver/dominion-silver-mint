@@ -3,6 +3,7 @@ import { AnchorProvider, Program, Wallet, Idl } from "@coral-xyz/anchor";
 import fs from "fs";
 import path from "path";
 import { PROGRAM_ID as SHARED_PROGRAM_ID, IDL_PATH } from "./_program-id";
+import { connect, describeCluster } from "./_cluster";
 async function main() {
   // Review-of-fixes F5: this used a non-null-asserted env var with no fallback, so
   // the tool that constants.ts and every SUPERSEDED header name as THE way to read
@@ -12,7 +13,12 @@ async function main() {
   const PROGRAM_ID = SHARED_PROGRAM_ID;
   const idl = JSON.parse(fs.readFileSync(IDL_PATH, "utf8"));
   idl.address = PROGRAM_ID.toBase58();
-  const conn = new Connection("https://api.devnet.solana.com","confirmed");
+  // AUDIT S-02: this was `new Connection("https://api.devnet.solana.com")`, so the
+  // `DOMINION_RPC=<mainnet>` the runbook tells the operator to set was silently ignored. After a
+  // mainnet init, "read the config to confirm the ceremony" would have read devnet and either
+  // failed or, worse, shown a DIFFERENT deployment's config as if it were the new one.
+  const { conn, ctx } = connect();
+  console.error(`# ${describeCluster(ctx)}`);
   const p = new Program(idl as Idl, new AnchorProvider(conn, new Wallet(Keypair.generate()), {}));
   const [cfg] = PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
   const c: any = await (p.account as any).configAccount.fetch(cfg);

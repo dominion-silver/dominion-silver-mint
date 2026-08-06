@@ -62,7 +62,14 @@ export const ACTION_COST: Record<string, ActionCost> = {
   finalize_guardian_removal: "timelocked-undo", // re-add needs a cooldown
 
   // --- Pre-mainnet upgrade, 2026-08-05 ---
-  create_fee_vault: "reversible", // an empty ATA can be closed; and it is REQUIRED to exist
+  // AUDIT FINDING D-03. This said "reversible" because "an empty ATA can be closed". It cannot.
+  // Closing a token account needs the OWNER's signature, the owner here is the fee_vault PDA, and
+  // this program signs no CloseAccount for it anywhere: see the comment at
+  // instructions/mint_silv.rs:60, which states exactly that, and launch_posture.fee_vault in
+  // config/mainnet-authorities.json, which states it again. So the rent is locked for the life of
+  // the program and `assertReversible` was handing out RULE 2's guarantee for an action that has no
+  // undo. Classified honestly now; it still gets created, just not without the operator saying so.
+  create_fee_vault: "irreversible",
   set_fee_exempt: "reversible", // remove_fee_exempt is instant
   remove_fee_exempt: "reversible", // set_fee_exempt is instant
   set_kyc_operator: "reversible",

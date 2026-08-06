@@ -20,18 +20,26 @@ import { lazerMessageData } from "../apps/public/src/lib/lazer-assembly";
 import { assembleLazerOracleIxs, ED25519_IX_INDEX } from "../apps/public/src/lib/lazer-tx";
 import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 import { requireDevnet, assertReversible, intentFromEnv } from "./_guard";
+import { resolveCluster, describeCluster } from "./_cluster";
 
-const RPC = "https://api.devnet.solana.com";
+// AUDIT S-02: RPC, USDC_MINT and LAZER_TREASURY were all hardcoded to devnet, and the runbook
+// presents this script as the proof that the PRICED MINT PATH works after a mainnet init. It could
+// never have proven that. Worse, it sends transactions, so run with a mainnet operator key it would
+// have signed devnet transactions with that key while appearing to test mainnet.
+const CLUSTER = resolveCluster();
+const RPC = CLUSTER.rpc;
 // Resolved, never hardcoded: this line held 2ujQg, the ORIGINAL retired program, and
 // no gate caught it because 2ujQg was missing from the retired list too.
 const PROGRAM_ID = SHARED_PROGRAM_ID;
-const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+const USDC_MINT = CLUSTER.usdcMint;
 // Read from the live config in main(): only the chain knows which mint a given
 // program is bound to.
 let SILV_MINT: PublicKey;
 const LAZER_PROGRAM = new PublicKey("pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt");
 const LAZER_STORAGE = new PublicKey("3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpPuSCQVyQL");
-const LAZER_TREASURY = new PublicKey("opsLibxVY7Vz5eYMmSfX8cLFCFVYTtH6fr6MiifMpA7"); // devnet (mainnet: Gx4MBPb1...)
+// Was a devnet literal with "(mainnet: Gx4MBPb1...)" in a trailing comment: the gap was known
+// and written down rather than closed. Now resolved per cluster.
+const LAZER_TREASURY = CLUSTER.lazerTreasury;
 const TOKEN_PROGRAM = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022 = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const ATA_PROGRAM = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
@@ -101,6 +109,7 @@ async function main() {
   // RULE 1 (scripts/_guard.ts): refuse any cluster but devnet unless
   // DOMINION_ALLOW_MAINNET is explicitly set.
   requireDevnet(RPC, "priced mint E2E");
+  console.log("  " + describeCluster(CLUSTER));
   const INTENT = intentFromEnv();
   const conn = new Connection(RPC, "confirmed");
   const kpPath = process.env.DOMINION_KEYPAIR

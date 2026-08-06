@@ -54,17 +54,40 @@ import os from "os";
 import path from "path";
 import { createSilvMintForTest } from "./_t1-mint-helper";
 import { requireDevnet, assertReversible, intentFromEnv } from "./_guard";
+import {
+  resolveCluster,
+  describeCluster,
+  mainnetConfig,
+  type ClusterContext,
+} from "./_cluster";
 
-const RPC = "https://api.devnet.solana.com";
-const PROGRAM_ID = new PublicKey(
-  process.env.DOMINION_PROGRAM_ID ?? "",
-);
-const DEVNET_USDC = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+// EXTERNAL AUDIT 2026-08-06, FINDING S-01 (the P0). This block used to read:
+//
+//   const RPC = "https://api.devnet.solana.com";
+//   const DEVNET_USDC = new PublicKey("4zMM...");
+//
+// and then `requireDevnet(RPC, ...)`. The guard was handed a constant containing "devnet", so it
+// returned on its first line and the DOMINION_ALLOW_MAINNET branch could never run. The mainnet
+// runbook tells the operator to invoke this script with a mainnet program id; it would have looked
+// for that program's ProgramData ON DEVNET, funded a devnet attacker, and failed with nothing
+// initialised, AFTER the mainnet deploy was paid for. `initialize` fires once per program id and
+// case 5 below IS that initialisation, so there is no second attempt.
+//
+// The cluster now comes from the environment via scripts/_cluster.ts, which THROWS rather than
+// falling back to a devnet address when a mainnet constant is unknown.
+const CLUSTER: ClusterContext = resolveCluster();
+const RPC = CLUSTER.rpc;
+// Validated BEFORE constructing, so a missing id produces this sentence instead of web3.js's bare
+// "Invalid public key input" thrown at module scope. The check inside main() was unreachable: this
+// line ran first and crashed the import, so the helpful message could never print.
+if (!process.env.DOMINION_PROGRAM_ID) {
+  throw new Error(
+    "set DOMINION_PROGRAM_ID to the freshly deployed program id.\n" +
+      "T1 must run against a deployed but NOT YET INITIALIZED program.",
+  );
+}
+const PROGRAM_ID = new PublicKey(process.env.DOMINION_PROGRAM_ID);
 const BPF_LOADER = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
-// A third-party, live, upgradeable devnet program used as the "foreign ProgramData"
-// in case 3. Deliberately NOT a Dominion id: we retire ours, and a closed program
-// would turn case 3 into a false FAIL.
-const LAZER_PROGRAM_ID = new PublicKey("pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt");
 
 let pass = 0;
 let fail = 0;
@@ -86,9 +109,6 @@ async function main() {
   // DOMINION_ALLOW_MAINNET is explicitly set.
   requireDevnet(RPC, "T1 hostile bootstrap");
   const INTENT = intentFromEnv();
-  if (!process.env.DOMINION_PROGRAM_ID) {
-    throw new Error("set DOMINION_PROGRAM_ID to the freshly deployed program id");
-  }
   const conn = new Connection(RPC, "confirmed");
   const authority = loadKp(
     process.env.DOMINION_KEYPAIR ??
@@ -114,13 +134,17 @@ async function main() {
     PROGRAM_ID,
   );
   const usdcTreasury = getAssociatedTokenAddressSync(
-    DEVNET_USDC,
+    CLUSTER.usdcMint,
     treasuryPda,
     true,
     TOKEN_PROGRAM_ID,
   );
 
   console.log("T1 hostile bootstrap");
+  // Printed FIRST, and printed at all, because S-01 was invisible: nothing in the output said which
+  // cluster the script was on, so a devnet run under a mainnet invocation looked identical to a
+  // mainnet run right up to the failure.
+  console.log("  " + describeCluster(CLUSTER));
   console.log("  program:", PROGRAM_ID.toBase58());
   console.log("  config PDA:", configPda.toBase58());
   console.log("  upgrade authority:", authority.publicKey.toBase58());
@@ -139,19 +163,61 @@ async function main() {
   // Funded by transfer, not requestAirdrop: the devnet faucet rate-limits and
   // returns -32603 "Internal error", which would make T1 flaky for a reason
   // that has nothing to do with what it is testing.
+  //
+  // AUDIT FINDING S-04: this was 500_000_000 lamports (0.5 SOL) sent to a `Keypair.generate()` that
+  // exists only in this process's memory, never persisted and never refunded. On devnet that is
+  // nobody's problem. Once S-01 made the mainnet path actually reachable it became 0.5 real SOL
+  // burned per attempt, and a retry after a configuration error burns it again.
+  //
+  // Two changes: fund what the hostile cases actually need (a Token-2022 mint with extensions, an
+  // ATA, and a handful of failing transactions), and sweep the remainder back at the end.
+  const ATTACKER_FUNDING = 60_000_000; // 0.06 SOL
   await sendAndConfirmTransaction(
     conn,
     new Transaction().add(
       SystemProgram.transfer({
         fromPubkey: authority.publicKey,
         toPubkey: attacker.publicKey,
-        lamports: 500_000_000,
+        lamports: ATTACKER_FUNDING,
       }),
     ),
     [authority],
     { commitment: "confirmed" },
   );
-  console.log("  attacker funded:", attacker.publicKey.toBase58(), "\n");
+  console.log(
+    `  attacker funded: ${attacker.publicKey.toBase58()} (${ATTACKER_FUNDING / 1e9} SOL, swept back at the end)\n`,
+  );
+
+  /** Return whatever the hostile key still holds. Best effort: a failure here must never turn a
+   *  passing T1 into a failing one, so it reports and moves on. */
+  async function sweepAttacker(): Promise<void> {
+    try {
+      const bal = await conn.getBalance(attacker.publicKey);
+      const FEE = 5_000;
+      if (bal <= FEE) {
+        console.log(`  attacker sweep: nothing to return (${bal} lamports)`);
+        return;
+      }
+      await sendAndConfirmTransaction(
+        conn,
+        new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: attacker.publicKey,
+            toPubkey: authority.publicKey,
+            lamports: bal - FEE,
+          }),
+        ),
+        [attacker],
+        { commitment: "confirmed" },
+      );
+      console.log(`  attacker sweep: returned ${(bal - FEE) / 1e9} SOL to the authority`);
+    } catch (e) {
+      console.log(
+        `  attacker sweep FAILED (${String(e).slice(0, 120)}). ` +
+          `Abandoned key: ${attacker.publicKey.toBase58()}`,
+      );
+    }
+  }
 
   const mkProgram = (kp: Keypair) =>
     new Program(
@@ -166,17 +232,65 @@ async function main() {
   await createSilvMintForTest(conn, authority, silvMint, mintAuthPda, PROGRAM_ID);
   console.log("  SILV mint:", silvMint.publicKey.toBase58(), "\n");
 
+  // AUDIT FINDING D-01. These were LITERALS, and they disagreed with everything else: the source of
+  // truth says 100/150 bps, this script said 150/200, and the runbook told the operator to hand-edit
+  // it to 150/500 on one page while stating 100/150 on another. Three values, one launch. Following
+  // the runbook would have opened mainnet at 1.5%/5% instead of 1%/1.5%, and correcting either
+  // premium afterwards costs a 24h timelocked proposal each.
+  //
+  // So they are READ from config/mainnet-authorities.json now. The runbook's "edit its args()"
+  // instruction is deleted with them: a ceremony value that has to be retyped into TypeScript is a
+  // ceremony value that will be retyped wrong.
+  const posture = (mainnetConfig().launch_posture ?? {}) as Record<string, number>;
+  function required(field: string): number {
+    const v = posture[field];
+    if (typeof v !== "number") {
+      throw new Error(
+        `launch_posture.${field} missing or not a number in config/mainnet-authorities.json`,
+      );
+    }
+    return v;
+  }
+  const CEREMONY = {
+    premiumBpsMint: required("premium_bps_mint"),
+    premiumBpsRedeem: required("premium_bps_redeem"),
+    adminTimelockSeconds: required("admin_timelock_seconds"),
+    maxGuardianCount: required("max_guardian_count"),
+    pythLazerFeedId: required("pyth_lazer_feed_id"),
+  };
+  console.log(
+    `  ceremony args from config/mainnet-authorities.json: ` +
+      `mint=${CEREMONY.premiumBpsMint}bps redeem=${CEREMONY.premiumBpsRedeem}bps ` +
+      `timelock=${CEREMONY.adminTimelockSeconds}s guardians<=${CEREMONY.maxGuardianCount} ` +
+      `feed=${CEREMONY.pythLazerFeedId}`,
+  );
+
+  // On a real cluster the authorities are the Squads vaults from the source of truth, not the local
+  // dev keypair. On devnet the dev keypair IS the authority, which is what makes T1 runnable there.
+  const auths = (mainnetConfig().authorities ?? {}) as Record<
+    string,
+    { pubkey?: string } | undefined
+  >;
+  function ceremonyAuthority(role: string, devnetFallback: PublicKey): PublicKey {
+    if (CLUSTER.cluster === "devnet" || CLUSTER.cluster === "localnet") return devnetFallback;
+    const pk = auths[role]?.pubkey;
+    if (!pk) {
+      throw new Error(
+        `authorities.${role}.pubkey missing from config/mainnet-authorities.json, and this is ` +
+          `${CLUSTER.cluster}. Refusing to initialise a real deployment with the dev keypair.`,
+      );
+    }
+    return new PublicKey(pk);
+  }
+  const COMPLIANCE = ceremonyAuthority("compliance", authority.publicKey);
+
   const args = (admin: PublicKey) => ({
     admin,
     upgradeAuthorityInfo: admin,
-    permanentDelegateExpected: authority.publicKey,
-    freezeAuthorityExpected: authority.publicKey,
+    permanentDelegateExpected: COMPLIANCE,
+    freezeAuthorityExpected: COMPLIANCE,
     complianceMode: false,
-    premiumBpsMint: 150,
-    premiumBpsRedeem: 200,
-    pythLazerFeedId: 3154, // Metal.Index.SILVER/USD, pure spot (confirmed 2026-07-26)
-    adminTimelockSeconds: 24 * 3600,
-    maxGuardianCount: 5,
+    ...CEREMONY,
   });
 
   const accs = (signer: PublicKey, pd: PublicKey, prog: PublicKey) => ({
@@ -185,7 +299,7 @@ async function main() {
     programData: pd,
     config: configPda,
     treasuryPda,
-    usdcMint: DEVNET_USDC,
+    usdcMint: CLUSTER.usdcMint,
     silvMint: silvMint.publicKey,
     usdcTreasury,
     classicTokenProgram: TOKEN_PROGRAM_ID,
@@ -254,7 +368,7 @@ async function main() {
   // close` would turn this case into a false FAIL (AccountNotInitialized matches
   // none of the expected codes). Pyth Lazer is a third-party, upgradeable, live
   // devnet program we will never close. Asserted below rather than assumed.
-  const foreignProgram = LAZER_PROGRAM_ID;
+  const foreignProgram = CLUSTER.foreignUpgradeableProgram;
   {
     const pdInfo = await conn.getAccountInfo(programData(foreignProgram));
     if (!pdInfo || !pdInfo.owner.equals(BPF_LOADER)) {
@@ -319,7 +433,7 @@ async function main() {
         attacker.publicKey, // anyone may create it: that is the point
         usdcTreasury,
         treasuryPda,
-        DEVNET_USDC,
+        CLUSTER.usdcMint,
         TOKEN_PROGRAM_ID,
       ),
     ),
@@ -398,6 +512,8 @@ async function main() {
           .rpc(),
     );
   }
+
+  await sweepAttacker();
 
   console.log(`\n=== T1 result: ${pass} passed, ${fail} failed ===`);
   if (initSig) {

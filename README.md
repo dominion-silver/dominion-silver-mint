@@ -86,14 +86,24 @@ program. `scripts/verify-constants-consistency.sh` now fails the build if any
 retired id appears on a live line of the files that drive deploys, and the current
 id above is asserted against `declare_id!`.
 
-Deployment is fresh-deploy-only: a new program keypair per environment, never
-an in-place upgrade over a prior id. The ad-hoc `scripts/deploy-devnet.sh` and
-`scripts/upgrade-devnet.sh` are intentionally hard-disabled to prevent that
-footgun; deploys follow the governed runbook (build, hash-verify, fresh
-keypair, `solana program deploy`, `scripts/initialize-devnet.ts`, constants +
-IDL update, frontend redeploy).
+Deployment has two paths, and conflating them was audit finding S-03.
 
-Pre-mainnet. External audit pending.
+A **fresh deploy** (new program keypair, new id) is for a new environment or a layout-breaking
+change. It runs through the governed runbook: build, hash-verify, fresh keypair,
+`solana program deploy`, then `scripts/t1-hostile-bootstrap.ts`, which performs the one-shot
+`initialize` while proving the hostile-bootstrap P0 is closed. `scripts/deploy-devnet.sh` remains
+hard-disabled: ad-hoc fresh deploys are the footgun.
+
+An **in-place upgrade** of an already-initialised program is `scripts/upgrade-program.ts`. It
+preserves the program id, the config, the authorities and any live timelock proposal, extends the
+ProgramData account when the binary has outgrown its allocation, then verifies the bytes ON CHAIN
+against the local artifact and re-reads every watched config field. Dry run by default.
+`scripts/upgrade-devnet.sh` is a pointer to it: that script was hard-disabled on the premise that
+in-place upgrade is never supported, which was true for V1 to V2 and false once the live target was
+itself V2. The repository consequently had no working upgrade path for the program it actually runs.
+
+Pre-mainnet. External audit received 2026-08-06 (26 findings: 1 P0, 6 P1, 12 P2, 7 P3), remediated;
+see `private/EXTERNAL_AUDIT_REPORT_2026_08_06.md`.
 
 ## License
 

@@ -81,7 +81,7 @@ else
   # its own CARGO_TARGET_DIR and shares no intermediate objects with the artifact
   # under test. Costs a full cold rebuild; that is the point.
   if ! CARGO_TARGET_DIR="$TMPDIR_BUILD/target" \
-      cargo build-sbf --manifest-path "$MANIFEST" --sbf-out-dir "$TMPDIR_BUILD" >"$TMPDIR_BUILD/build.log" 2>&1; then
+      cargo build-sbf --manifest-path "$MANIFEST" --sbf-out-dir "$TMPDIR_BUILD" -- --locked >"$TMPDIR_BUILD/build.log" 2>&1; then
     echo "   FAIL: the default-feature rebuild did not succeed"
     tail -5 "$TMPDIR_BUILD/build.log" | sed 's/^/     /'
     exit 1
@@ -175,5 +175,20 @@ if [[ "$fail" -ne 0 ]]; then
   echo "  cargo build-sbf --manifest-path $MANIFEST"
   echo "  (cd programs/dominion_silver_mint_v2 && anchor idl build -- --locked)"
   exit 1
+fi
+# AUDIT FINDING S-06. This line used to be unconditional, so
+# `verify-release-artifact.sh --skip-rebuild` exited 0 while claiming "matches a clean default
+# rebuild" when no rebuild had happened. The warning printed 100 lines earlier does not travel: what
+# gets pasted into a release checklist is the LAST line. And this file's own header records that a
+# dev-hatch build once passed with "ARTIFACT OK", so this exact confusion has already cost something.
+#
+# The message now states what was actually proven, and skipping the rebuild is no longer reported as
+# a pass at all: it exits 2, which is neither the 0 a checklist wants nor the 1 of a real rejection.
+if [[ "$SKIP_REBUILD" -eq 1 ]]; then
+  echo "ARTIFACT PARTIALLY CHECKED: the secondary scans found no forbidden instruction,"
+  echo "but the reproducible rebuild was SKIPPED, so this is NOT a release attestation."
+  echo "A binary built with a feature flag can pass everything above. Re-run without"
+  echo "--skip-rebuild before any deploy."
+  exit 2
 fi
 echo "ARTIFACT OK: matches a clean default rebuild, no forbidden instruction."

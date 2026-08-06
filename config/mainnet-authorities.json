@@ -139,9 +139,47 @@
     "admin_timelock_seconds": 86400,
     "min_publishers": 2,
     "treasury_min_float_usdc": "SET A NON-ZERO VALUE before enabling any withdrawal (SolidProof LOW #4)",
-    "usdc_mint_mainnet": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    "lazer_treasury_mainnet": "Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak",
+    "usdc_mint_mainnet": "SEE cluster_constants.usdc_mint (single source; scripts/_cluster.ts reads that one)",
+    "lazer_treasury_mainnet": "SEE cluster_constants.lazer_treasury (single source; scripts/_cluster.ts reads that one)",
     "premint_plan": "$6.75M worth of SILV at launch, which is ~115,705 oz at $58.34 spot, i.e. ~77% of the 150,000 oz cap. Compute the exact ounce figure at ceremony time with scripts/premint-sizing.ts: the budget is in dollars, the cap is in ounces, so a fall in the silver price increases the ounces needed. Leaves ~34,300 oz (~$2.03M) of headroom, which is the hard ceiling on PUBLIC MINT volume since mint_silv draws on the same cap.",
-    "pyth_lazer_feed_id": 3154
+    "pyth_lazer_feed_id": 3154,
+    "max_guardian_count": 5,
+    "_max_guardian_count_note": [
+      "5, deliberately, and this is a PERMANENT choice: max_guardian_count is written once by",
+      "initialize and NO instruction can raise it (see state/config.rs:515). The audit reported T1's",
+      "literal 5 as contradicting this file's prose note about the default being 3. The contradiction",
+      "was real, but lowering T1 to 3 would have been the wrong resolution.",
+      "",
+      "The cap only bounds how many guardians you MAY add; every addition is still a separate admin",
+      "action, and MIN_ACTIVE_GUARDIANS is 1. So a cap of 5 costs nothing and preserves optionality,",
+      "whereas a cap of 3 is an irreversible ceiling adopted by accident from a default. Thomas",
+      "recorded on 2026-07-26 that more guardians are to be added; 3 could have blocked that",
+      "permanently, with no fix short of a new program id.",
+      "",
+      "THOMAS: confirm 5 is the ceiling you want. It cannot be raised after the ceremony."
+    ]
+  },
+  "cluster_constants": {
+    "_note": [
+      "Cluster-specific addresses read by scripts/_cluster.ts. Added 2026-08-06 to close external",
+      "audit finding S-01 (P0). Before this, scripts/t1-hostile-bootstrap.ts hardcoded",
+      "RPC = api.devnet.solana.com and the devnet USDC mint, so requireDevnet() always",
+      "short-circuited and the runbook's mainnet invocation would have run entirely on devnet.",
+      "",
+      "scripts/_cluster.ts THROWS if a field here is missing rather than falling back to the",
+      "devnet value. That fallback IS the P0. Every address below was read from mainnet-beta on",
+      "2026-08-06 before being written here; see verified_onchain on each."
+    ],
+    "usdc_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "usdc_mint_verified_onchain": "2026-08-06: exists on mainnet-beta, owner TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA, decimals 6. Circle USDC.",
+    "lazer_treasury": "Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak",
+    "lazer_treasury_verified_onchain": "2026-08-06: exists on mainnet-beta, System-owned, ~203.85 SOL, consistent with a live fee treasury. Matches docs/MAINNET_LAUNCH_RUNBOOK.md line 130.",
+    "foreign_upgradeable_program": "pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt",
+    "foreign_upgradeable_program_note": [
+      "Used ONLY as T1 case 3's 'foreign ProgramData': a third-party live upgradeable program that",
+      "is not ours, to prove initialize rejects a ProgramData belonging to someone else. Pyth Lazer,",
+      "which we already depend on, so it will not be closed under us."
+    ],
+    "foreign_upgradeable_program_verified_onchain": "2026-08-06: exists on mainnet-beta, executable, owner BPFLoaderUpgradeab1e11111111111111111111111."
   }
 }

@@ -35,9 +35,9 @@ needs to be reopened in a hurry.
 | Decision | Where it is fixed | Consequence of getting it wrong |
 |---|---|---|
 | SILV mint: decimals, extension set, **freeze authority**, **permanent delegate** | at mint creation, step 4 | No fix. A new mint means a new token, a new pool, and every holder re-onboarded. |
-| `config.admin`, `permanent_delegate_expected`, `freeze_authority_expected`, feed id, premiums, timelock | at `initialize`, step 6, which runs ONCE per program id | Recoverable only by a program upgrade that re-initialises. |
+| `config.admin`, `permanent_delegate_expected`, `freeze_authority_expected`, feed id, premiums, timelock | at `initialize`, step 6, which runs ONCE per program id | **Mostly NOT irreversible, and this row said the opposite.** Audit finding D-02. There is no "upgrade that re-initialises": `initialize` refuses a second call for the same program id, so that escape does not exist. What DOES exist is a dedicated governed setter for most of these: admin via `propose_admin_transfer`, feed via `execute_set_pyth_feed`, both premiums via their own timelocked actions, timelock via its own. All 24h. The genuinely permanent pair is `permanent_delegate_expected` / `freeze_authority_expected`, because they mirror authorities fixed on the MINT at creation and no SPL authority can be restored once lost. Get those two right; the rest are a day of governance, not a new deployment. |
 | `max_silv_supply` = **150,000 oz** | tighten-only, forever, and a ONE-WAY RATCHET | Raising it needs a program upgrade + re-audit. Lowering it is instant but makes the lower value the new permanent ceiling, so never lower it casually. |
-| Upgrade authority transfer | step 12 | If the multisig is lost, the program can never be upgraded, so **redemptions can never be opened**. |
+| Upgrade authority transfer | step 12 | If the multisig is lost, the program can never be upgraded. It does **not** block opening redemptions: audit finding D-02 caught this claim, and step 11 plus the capability table below both describe the real path, the 24h-timelocked `SetRedeemLimits` action, which needs `config.admin` and no upgrade authority at all. What a lost upgrade authority really costs is every future CODE change: new instructions, bug fixes, and the redeem-side features that are not yet written. |
 
 ---
 
@@ -115,8 +115,36 @@ Update `declare_id!` in `programs/dominion_silver_mint_v2/src/lib.rs`, add
 `[programs.mainnet]` to `Anchor.toml`, and set `PROGRAM_ID` in both apps' `constants.ts`.
 Then:
 
+**THE AUTHORITATIVE BUILD TOOLCHAIN** (audit finding S-07). Three generations of tooling were
+circulating under one "reproducible" label: the Dockerfile header said Solana 1.18.26 / Anchor 0.30.1
+/ Rust 1.79 while its own ARGs said 2.1.20 / 0.31.1 / 1.79, and CI declares 3.1.14 / platform-tools
+1.52 / rustc 1.89.0. None of those is what produced the artifact.
+
+The toolchain that actually built `dominion_silver_mint.so` at sha256
+`799945e416c8a71151a1656a8dc2ed1c272e1d5f2764b09963f8052ee856403f`, confirmed on two independent
+machines (this one and the external auditor's, 2026-08-06):
+
+| Component | Version |
+|---|---|
+| solana-cli / solana-cargo-build-sbf | 3.0.0 |
+| platform-tools | v1.51 |
+| SBF rustc | 1.84.1 |
+| host rustc (for `anchor idl build`) | 1.89.0 |
+| anchor-cli | 0.31.1 |
+
+Build with `-- --locked`, always. Without it a build may RESOLVE `Cargo.lock` instead of failing when
+a manifest and the lock disagree, which is the opposite of what a release build should do.
+
+**Known open divergence, deliberately not papered over:** CI declares Solana 3.1.14 / platform-tools
+1.52, so a CI-produced binary is not guaranteed to hash-match the table above. Aligning CI needs a CI
+run to prove it, and the header comment at `.github/workflows/build.yml:15` records that an earlier
+version-bump attempt broke the build (`edition2024` unparseable, `pyth-solana-receiver-sdk` E0782).
+Until that is resolved, **the release artifact is the LOCALLY built one verified by
+`scripts/verify-release-artifact.sh`**, and the `reproducible-build` CI job (now blocking, audit
+S-05) is the independent third-party check via `solana-verify`.
+
 ```bash
-cargo build-sbf --manifest-path programs/dominion_silver_mint_v2/Cargo.toml
+cargo build-sbf --manifest-path programs/dominion_silver_mint_v2/Cargo.toml -- --locked
 (cd programs/dominion_silver_mint_v2 && anchor idl build -- --locked > ../../target/idl/dominion_silver_mint.json)
 cp target/idl/dominion_silver_mint.json apps/admin/src/lib/idl/
 cp target/idl/dominion_silver_mint.json apps/public/src/lib/idl/
@@ -161,22 +189,41 @@ DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json \
 npx tsx scripts/t1-hostile-bootstrap.ts
 ```
 
-Before running it on mainnet, edit its `args()` so the recorded authorities are the REAL
-ones, not the dev wallet:
+**DO NOT EDIT `args()`.** That instruction lived here until 2026-08-06 and it was audit finding
+D-01, a P1. It told the operator to type `premiumBpsMint: 150` and `premiumBpsRedeem: 500` while
+`config/mainnet-authorities.json` says 100 / 150 and page 354 of this same runbook says 100 / 150
+too. The script itself contained a third pair, 150 / 200. Following this page would have opened
+mainnet at **1.5% mint / 5% redeem** instead of 1% / 1.5%: on a 100 USDC mint that is 1.50 taken
+instead of 1.00, and on a 100 USDC gross redeem the user receives 95.00 instead of 98.50. Correcting
+either number afterwards costs one 24h timelocked proposal each, so the launch would have run on the
+wrong tariff for at least a day.
 
-```
-admin:                       65g5nNXTtqtFz3jggKAqyvS6oCoVUXuXqAU9B8jHqPPS   (Ops Squads)
-upgradeAuthorityInfo:        FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3
-permanentDelegateExpected:   FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3   (compliance)
-freezeAuthorityExpected:     FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3   (compliance)
-pythLazerFeedId:             3154
-premiumBpsMint:              150
-premiumBpsRedeem:            500     <- Mark's 5%; the CEILING is also 500
-adminTimelockSeconds:        86400
+T1 now READS these values, from `config/mainnet-authorities.json`:
+
+- `launch_posture.premium_bps_mint`, `premium_bps_redeem`, `admin_timelock_seconds`,
+  `max_guardian_count`, `pyth_lazer_feed_id`
+- `authorities.compliance.pubkey`, used for BOTH `permanentDelegateExpected` and
+  `freezeAuthorityExpected` on any non-devnet cluster (on devnet it stays the dev keypair, which is
+  what makes T1 runnable there at all)
+
+So the only thing to check before running is that file. Print what T1 resolved and compare:
+
+```bash
+python3 -c "import json;d=json.load(open('config/mainnet-authorities.json'));\
+print(d['launch_posture']['premium_bps_mint'], d['launch_posture']['premium_bps_redeem'], \
+d['launch_posture']['max_guardian_count'], d['authorities']['compliance']['pubkey'])"
 ```
 
-and `scripts/_t1-mint-helper.ts` so the mint's freeze authority and permanent delegate
-are the compliance vault rather than the payer. **Those two are permanent.**
+T1 echoes the same values on its second line of output. If they disagree with what you expect, fix
+the JSON, not the TypeScript.
+
+**`admin` and `upgradeAuthorityInfo`** are still the signer, by design: `initialize` binds them to
+the deploying upgrade authority (audit DOM-001), so deploy from the Ops Squads vault or transfer the
+upgrade authority to it AFTER initialize (step 12).
+
+Still edit `scripts/_t1-mint-helper.ts` so the mint's freeze authority and permanent delegate are the
+compliance vault rather than the payer. **Those two are permanent**, fixed at mint creation, and no
+program upgrade can restore them.
 
 Expect 17/17. Then record everything:
 
@@ -286,8 +333,13 @@ solana program set-upgrade-authority <PROGRAM_ID> \
 solana program show <PROGRAM_ID> -u mainnet-beta   # Authority must now be FqFNX
 ```
 
-**Do NOT use `--final`.** That makes the program immutable, and redemptions can only ever
-be opened by an upgrade. Immutability is a decision for after the redeem flow ships.
+**Do NOT use `--final`.** That makes the program immutable and PERMANENTLY forecloses every future
+code change: bug fixes, new instructions, and the redeem-side features that are still unwritten.
+
+The reason given here until 2026-08-06 was that "redemptions can only ever be opened by an upgrade".
+That was false (audit D-02): opening redemptions is a `config` change through the 24h-timelocked
+`SetRedeemLimits` action and needs no upgrade authority. The correct reason to avoid `--final` is
+simply that the code is not finished. Immutability is a decision for after the redeem flow ships.
 
 ---
 

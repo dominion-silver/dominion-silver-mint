@@ -1,6 +1,15 @@
-# Reproducible build environment for dominion_silver_mint.
-# Pins Solana 1.18.26 + Anchor 0.30.1 + Rust 1.79 + Node 20.
-# Used for: anchor build, anchor test, and reproducible binary verification.
+# Build environment for dominion_silver_mint.
+#
+# AUDIT FINDING S-07: this header used to claim "Pins Solana 1.18.26 + Anchor 0.30.1 + Rust 1.79"
+# while the ARGs three lines below set 2.1.20 / 0.31.1 / 1.79.0. Two of the three were simply wrong,
+# and the word "Reproducible" over a stale header is how two operators end up on different toolchains
+# believing they are on the same one. The header now reads its values from the ARGs, which are the
+# only thing docker actually uses.
+#
+# THIS IS NOT THE RELEASE PATH. The authoritative toolchain is documented in
+# docs/MAINNET_LAUNCH_RUNBOOK.md (Solana 3.0.0 / platform-tools 1.51 / SBF rustc 1.84.1 /
+# anchor 0.31.1), and third-party reproducibility is attested by the `reproducible-build` CI job via
+# solana-verify. This image is a convenience for local builds and tests only.
 #
 # Build:   docker build -t dominion-builder .
 # Run:     docker run --rm -v "$PWD":/work -w /work dominion-builder anchor build

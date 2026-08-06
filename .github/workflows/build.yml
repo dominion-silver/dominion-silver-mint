@@ -296,6 +296,18 @@ jobs:
         run: anchor test --skip-local-validator
         continue-on-error: true # tests are placeholders; will fail until 55-test matrix implemented
 
+  # AUDIT FINDING S-05. Every step of this job carried `continue-on-error: true` and the final step
+  # was `if [ -f ... ]`, which does nothing when the file is absent. So the job went GREEN whether or
+  # not a verifiable build had ever happened, and a green "reproducible-build" check is exactly the
+  # kind of thing a release checklist treats as proof. It attested nothing.
+  #
+  # It is blocking now. The `gate` job is NOT a substitute and the audit was right to say so: gate
+  # compares two builds produced by the SAME local toolchain, which catches a tampered artifact but
+  # cannot demonstrate that an independent party reproduces the same bytes. Only solana-verify does
+  # that, which is the whole reason this job exists.
+  #
+  # If it breaks, fix the Docker image or the toolchain pin. Do NOT restore continue-on-error: that
+  # converts a failing proof back into a passing badge, which is worse than having no job at all.
   reproducible-build:
     runs-on: ubuntu-latest
     needs: build
@@ -304,15 +316,18 @@ jobs:
 
       - name: Install solana-verify
         run: cargo install solana-verify --locked
-        continue-on-error: true
 
       - name: Verifiable build
-        run: |
-          solana-verify build
-        continue-on-error: true # until Docker image + Cargo.lock stable
+        run: solana-verify build
 
-      - name: Report binary hash
+      - name: Report binary hash, and FAIL if there is nothing to report
         run: |
-          if [ -f target/deploy/dominion_silver_mint.so ]; then
-            sha256sum target/deploy/dominion_silver_mint.so
+          set -euo pipefail
+          SO=target/deploy/dominion_silver_mint.so
+          if [ ! -f "$SO" ]; then
+            echo "::error::solana-verify produced no binary at $SO."
+            echo "This job exists to attest a third-party-reproducible build. No binary means no"
+            echo "attestation, so it fails rather than reporting nothing and passing (audit S-05)."
+            exit 1
           fi
+          sha256sum "$SO"
