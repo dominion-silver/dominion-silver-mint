@@ -120,6 +120,15 @@ pub fn validate_new_max_supply(new_max: u64, current_cap: u64, live_supply: u64)
 /// the timelocked, guardian-cancellable withdraw_usdc.
 pub fn set_redemptions_enabled_handler(ctx: Context<SetParam>, enabled: bool) -> Result<()> {
     require!(!enabled, DominionError::RedemptionsEnableBlocked);
+    // NO-OP GUARD, mirroring `set_public_mint_enabled_handler`. Its absence was not cosmetic: this
+    // handler DISARMS any pending open (below), so calling it while redemptions were already closed
+    // succeeded and silently destroyed a queued proposal. A defensive "let me confirm redemptions are
+    // off" click during pre-launch cost 24 hours. That was the reachable half of the cancel-wipes-a-
+    // live-proposal sequence the review-of-fixes found.
+    require!(
+        ctx.accounts.config.redemptions_enabled,
+        DominionError::ProposalNoOp
+    );
     let old_enabled = ctx.accounts.config.redemptions_enabled;
     ctx.accounts.config.redemptions_enabled = enabled;
     // DISARM any pending SetRedeemLimits proposal, mirroring what

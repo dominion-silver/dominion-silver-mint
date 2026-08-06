@@ -254,9 +254,10 @@ mod tests {
                 .filter(|&&(t, _)| t >= t0 && t < t0 + WI)
                 .map(|&(_, a)| a)
                 .sum();
-            // The DERIVED bound is 1.5x (see the module docs), not 2x. The looser 2x this
-            // originally asserted would have passed even if the sliding window were not working at
-            // all, since 2x is exactly what the fixed window it replaced allowed.
+            // 2x is the real bound (see the module docs). Note this assertion has little
+            // discriminating power on a UNIFORM timeline, which by the closed form maxes out around
+            // 1.0007x: it would pass at 3x too. The adversarial alignments below are what actually
+            // test the sliding behaviour. Kept as a sanity floor, named honestly.
             assert!(
                 in_span <= BUDGET * 2,
                 "a {WI}s span starting at {t0} allowed {in_span}, above the 2x bound"
@@ -366,27 +367,44 @@ mod tests {
 
     #[test]
     fn many_tiny_requests_cannot_beat_the_limiter() {
-        // Salami-slicing: 10_000 requests of budget/10_000 inside one window must total exactly the
-        // budget and no more. Rounding in the weighting must not leak per-request.
+        // Salami-slicing inside one window: many tiny requests must total the budget and no more, so
+        // the rounding in the weighting cannot leak per-request.
+        //
+        // CORRECTED. The first version computed `now = 1 + (i % WI)`, so time ran forward once then
+        // jumped BACKWARDS 12,000 times. `elapsed` never reached `w`, `prev` stayed 0, and no
+        // boundary was ever crossed: it was a backwards-clock test wearing a salami-slicing name.
+        // Now time advances monotonically across three windows, which is what the name claims.
         let step = BUDGET / 10_000;
         let mut start = 1i64;
         let mut cur = 0u64;
         let mut prev = 0u64;
         let mut allowed = 0u64;
+        let mut allowed_first_window = 0u64;
         for i in 0..12_000 {
-            let now = 1 + (i as i64) % WI;
+            let now = 1 + (i as i64) * (3 * WI) / 12_000;
             let d = roll_window(now, start, W, cur, prev);
             if d.effective_used + step <= BUDGET {
                 start = d.new_window_start;
                 cur = d.rolled_current + step;
                 prev = d.rolled_prev;
                 allowed += step;
+                if now < 1 + WI {
+                    allowed_first_window += step;
+                }
             }
         }
+        // The FIRST window is the clean assertion: no alignment trickery is available yet because
+        // there is no previous bucket to under-count.
         assert!(
-            allowed <= BUDGET,
-            "salami-slicing let {allowed} out of a {BUDGET} budget in one window"
+            allowed_first_window <= BUDGET,
+            "salami-slicing let {allowed_first_window} out of a {BUDGET} budget in the first window"
         );
+        // Across three windows the sliding counter must still be doing work: well under 3x.
+        assert!(
+            allowed < 3 * BUDGET,
+            "three windows of slicing allowed {allowed}, i.e. the limiter is not limiting"
+        );
+        assert!(allowed > BUDGET, "the limiter refused everything after the first window");
     }
 
     #[test]

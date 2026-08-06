@@ -254,6 +254,12 @@ pub const SILV_METADATA_AUTHORITY_SEED: &[u8] = b"silv_metadata_authority";
 pub const TIMELOCK_SEED: &[u8] = b"timelock";
 pub const GUARDIAN_SEED: &[u8] = b"guardian";
 
+// Longest term a fee exemption may be granted for. A fat-finger rail, not a security control: see
+// the honest note on the threat model in state/fee_exempt.rs. Two years is longer than any market
+// making arrangement this protocol will sign and short enough that a millisecond-timestamp paste
+// (year 57000) is rejected rather than silently becoming "never expires".
+pub const MAX_FEE_EXEMPT_TERM_SECONDS: i64 = 2 * 365 * 86400;
+
 // Premium revenue destination (Thomas, 2026-08-05). Authority PDA of the fee vault.
 //
 // The vault itself is the ASSOCIATED TOKEN ACCOUNT of this PDA for `config.usdc_mint`,

@@ -25,13 +25,17 @@ pub const FEE_EXEMPT_ACCOUNT_VERSION: u8 = 1;
 ///     anyone, and the fee-paying path is the one that needs no privileges.
 ///
 /// Both add and remove are INSTANT admin actions, deliberately NOT timelocked, which is a
-/// departure from how this program treats other loosenings. The reason is that the worst
-/// case here is FOREGONE FEE REVENUE, not a loss of principal, backing, or user funds: an
-/// exempt wallet still pays the full oracle price for its SILV and still receives the full
-/// oracle price when redeeming. Compare the loosenings that ARE timelocked (opening the
-/// mint, raising the redeem budget, changing the oracle feed), every one of which can move
-/// value or change what users are charged. A day-long ceremony to onboard a market maker
-/// would buy nothing.
+/// departure from how this program treats other loosenings. The stated reason is that the worst
+/// case is FOREGONE FEE REVENUE rather than a loss of principal or backing: an exempt wallet still
+/// pays the full oracle price for its SILV and still receives the full oracle price when redeeming.
+///
+/// THAT IS NOT THE WHOLE TRUTH, and the review-of-fixes was right to call it out. The KNOWN
+/// CONSEQUENCE paragraph below describes a both-sides exemption handing its holder a free option on
+/// oracle movement PAID BY THE TREASURY, which is a transfer of value, not merely revenue not
+/// collected. Both statements cannot be true, and the second is the accurate one.
+///
+/// Instant is probably still the right call for onboarding a market maker, but it rests on the
+/// per-side flags being used properly (mint-only) rather than on the exposure being nil.
 ///
 /// KNOWN CONSEQUENCE, flagged to Thomas 2026-08-05 and accepted: a wallet exempt on BOTH
 /// sides can mint at exact spot and redeem at exact spot, so its round trip is free. That
@@ -54,18 +58,26 @@ pub struct FeeExemptAccount {
     pub version: u8,
     /// Unix timestamp after which this exemption stops applying. 0 = NEVER EXPIRES.
     ///
-    /// A6. The `reserved` bytes were sized for this and it was left unwired, which the security
-    /// review flagged: instant grant + no expiry + no rate limit means a compromised admin
-    /// self-exempts and runs the mint-side capture loop until a human happens to read a
-    /// `FeeExemptSet` event. An expiry converts that from "until someone notices" into "until the
-    /// clock runs out", which is the difference between an open-ended leak and a bounded one.
+    /// A6, WITH THE RATIONALE CORRECTED. The first version of this note claimed the expiry bounded a
+    /// COMPROMISED ADMIN: "until someone notices" becoming "until the clock runs out". The
+    /// review-of-fixes pointed out that it does not. The admin CHOOSES `expires_at`, and 0 (never) is
+    /// permitted, so against a compromised admin the expiry adds nothing at all.
     ///
-    /// It also fits how these are actually used: a market-maker exemption is part of a liquidity
-    /// arrangement with a term, not an unconditional permanent favour.
+    /// What it genuinely bounds is FORGETFULNESS: a market-making arrangement that ends, a
+    /// counterparty that stops providing liquidity, an exemption granted for a launch window and
+    /// never revisited. That is a real and common failure and worth the eight bytes, but it is an
+    /// operational control, not a security one, and it should not be cited as the latter.
     ///
-    /// 0 is still permitted, because a genuinely indefinite exemption is a real operational choice
-    /// and forcing a fake far-future date would be worse: it would look like an expiry while
-    /// behaving like none. The admin panel makes the choice explicit.
+    /// Bounding the compromised-admin case would need `expires_at` to be mandatory with a
+    /// compile-time maximum, or grants to be timelocked. Neither is done: grants are instant by
+    /// deliberate choice (see the note on the struct) and a permanent exemption is a legitimate
+    /// operational option. The monitoring requirement stands in its place: alert on `FeeExemptSet`,
+    /// and treat one with `expires_at == 0` as the shape a compromised admin would use.
+    ///
+    /// 0 stays permitted because a genuinely indefinite exemption is a real operational choice, and
+    /// forcing a fake far-future date would be worse: it would look like a term while behaving like
+    /// none. A term absurdly far out is rejected for exactly that reason (see
+    /// MAX_FEE_EXEMPT_TERM_SECONDS), which is what catches a millisecond-timestamp paste.
     ///
     /// An in-place upgrade over an existing exemption decodes this as 0 from the zeroed `reserved`,
     /// i.e. "never expires", which preserves the current behaviour of every live exemption.

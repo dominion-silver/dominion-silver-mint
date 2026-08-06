@@ -43,15 +43,19 @@ pub struct SetFeeExempt<'info> {
 
 /// Grant or update a per-wallet fee exemption. INSTANT, no timelock.
 ///
-/// Why instant, when opening the mint or raising the redeem budget both cost 24 hours: the
-/// worst case here is FOREGONE FEE REVENUE, not a loss of principal, backing or user funds.
-/// An exempt wallet still pays the full oracle price for its SILV and still receives the
-/// full oracle price when redeeming; the protocol simply does not take its cut. Every
-/// loosening this program DOES timelock can move value or change what a third party is
-/// charged. Making market-maker onboarding a day-long ceremony would buy nothing.
+/// Why instant, when opening the mint or raising the redeem budget both cost 24 hours: onboarding a
+/// market maker should not be a day-long ceremony, and a wallet with only the MINT side waived still
+/// pays the redeem premium to close any loop.
 ///
-/// The residual risk, stated so it is not discovered later: a compromised admin can exempt
-/// itself and trade fee-free until someone notices. `FeeExemptSet` is the event to alert on.
+/// Do NOT read this as "the exposure is nil". An earlier version of this note said the worst case was
+/// merely FOREGONE REVENUE; state/fee_exempt.rs now corrects that, because a BOTH-SIDES exemption
+/// hands its holder a free option on oracle movement paid by the treasury, which is a transfer of
+/// value. The instant-ness rests on the per-side flags being used properly, not on there being
+/// nothing at stake.
+///
+/// Residual risk, stated so it is not discovered later: a compromised admin can exempt itself and
+/// trade fee-free until someone notices, and the expiry does NOT bound that (the admin picks it).
+/// `FeeExemptSet` is the event to alert on, and a grant with `expires_at == 0` is the shape to flag.
 pub fn set_fee_exempt_handler(
     ctx: Context<SetFeeExempt>,
     wallet: Pubkey,
@@ -60,15 +64,19 @@ pub fn set_fee_exempt_handler(
 ) -> Result<()> {
     validate_fee_exempt_flags(flags)?;
     let now = Clock::get()?.unix_timestamp;
-    // A6. 0 means "never expires" and is allowed: a genuinely indefinite exemption is a real
-    // operational choice, and forcing a fake far-future date would be worse because it would LOOK
-    // like an expiry while behaving like none.
+    // Reject a term already in the past, and a term absurdly far out. 0 ("never") stays allowed.
     //
-    // What IS rejected is an expiry already in the past, which would create an account that grants
-    // nothing while appearing in every roster as an active exemption. That is the same trap
-    // zero-flags would be, and it is rejected for the same reason.
+    // A PAST term would create an account that grants nothing while appearing in every roster as an
+    // active exemption: the same trap zero flags would be, rejected for the same reason.
+    //
+    // The UPPER rail catches the realistic operator error the review-of-fixes named: pasting a
+    // 13-digit JavaScript millisecond timestamp instead of seconds yields a year-57000 expiry that
+    // LOOKS like a term while behaving like "never", which is exactly the trap this field exists to
+    // avoid. Every other tunable in this program has a fat-finger ceiling; this one did not.
     require!(
-        expires_at == 0 || expires_at > now,
+        expires_at == 0
+            || (expires_at > now
+                && expires_at <= now.saturating_add(MAX_FEE_EXEMPT_TERM_SECONDS)),
         DominionError::FeeExemptFlagsInvalid
     );
     let admin_key = ctx.accounts.admin.key();
@@ -207,13 +215,24 @@ pub struct WithdrawFees<'info> {
 /// `amount` is explicit rather than "0 means everything". A magic value on an irreversible
 /// transfer is how a fat-finger becomes a full sweep; the panel prefills the balance instead.
 pub fn withdraw_fees_handler(ctx: Context<WithdrawFees>, amount: u64) -> Result<()> {
-    // The guardian pause MUST cover this. It is the only instant money movement in the program,
-    // and without this check the guardians' one lever failed to reach it: a compromised admin
-    // whose timelocked actions were all frozen and whose mint and redeem were halted could still
-    // sweep the entire vault in one transaction, with no delay and no veto.
+    // Refuses while paused, matching `execute_withdraw_usdc` (D31).
     //
-    // Precedented: `execute_withdraw_usdc` refuses to run while paused (D31). This is the same
-    // rule applied to the same class of action.
+    // CORRECTED CLAIM. An earlier version of this comment said the check meant "the guardians' one
+    // lever" now reached this instruction and that a compromised admin could no longer sweep the
+    // vault during a pause. That was wrong, and the review-of-fixes showed why: `unpause` is
+    // `has_one = admin`, admin-only, instant, with no timelock and no guardian involvement. A
+    // compromised admin submits `[unpause, withdraw_fees]` in ONE transaction and the gate is gone.
+    //
+    // The cited precedent is not analogous either. `execute_withdraw_usdc` has a PROPOSAL a guardian
+    // can cancel, so its pause check is belt-and-braces on top of a real veto. `withdraw_fees` has
+    // no proposal, so there is no guardian control over it at all and this check cannot create one.
+    //
+    // What the check DOES buy, which is worth keeping: it stops an ordinary sweep from landing in the
+    // middle of an incident by accident, and it makes the bypass require a deliberate, visible
+    // `unpause` in the same transaction. The underlying exposure is the one already accepted above:
+    // this vault holds earned revenue, not user backing, and `config.admin` is a multisig. Closing it
+    // properly would mean gating or delaying `unpause`, which is a governance change well outside
+    // this instruction.
     require!(!ctx.accounts.config.paused, DominionError::Paused);
     require!(amount > 0, DominionError::ZeroAmount);
 

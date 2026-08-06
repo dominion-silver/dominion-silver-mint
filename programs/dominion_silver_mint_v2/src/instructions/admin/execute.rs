@@ -1076,6 +1076,15 @@ pub fn execute_set_public_mint_handler(ctx: Context<ExecutePublicMint>, nonce: u
         DominionError::NonceMismatch
     );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
+    // Same rule as execute_set_redeem_limits, and for the same reason: A2's argument applies
+    // identically here and this was the one remaining gap the review-of-fixes found.
+    //
+    // Opening the public mint WAKES THE ORACLE PATH, which is dormant while mint and redeem are both
+    // closed, and lets the public consume cap headroom. Without this check the open would apply
+    // mid-pause and take effect the instant somebody unpauses, which is exactly when nobody is
+    // re-evaluating whether it should. The oracle-guard, pyth-feed and compliance actions auto-pause
+    // so they are covered; premium, float and metadata are inert while paused. Public mint was not.
+    require!(!config.paused, DominionError::Paused);
 
     require!(
         !tl.action_data.is_empty(),
