@@ -497,15 +497,39 @@ describe("audit P-02: the client must bound OUTFLOW, not the trade size", () => 
 describe("audit P-07: the per-wallet premium mirrors the program", () => {
   // The IDL is the arbiter of the byte offsets the hand decoder uses. If a field is ever inserted into
   // FeeExemptAccount, this fails instead of the decoder silently reading the wrong bytes.
-  it("the FeeExemptAccount offsets the decoder assumes match the IDL", () => {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const acc = (idl as any).accounts?.find((a: any) => a.name === "FeeExemptAccount");
-    expect(acc, "FeeExemptAccount must exist in the IDL").toBeDefined();
+  it("the FeeExemptAccount layout the decoder derives matches the Rust struct exactly", () => {
+    // RE-AUDIT P2. This used to assert only the field NAMES and their ORDER, while the decoder hardcoded
+    // byte offsets, and the round-trip test below rebuilt its buffer from those same literals. Circular:
+    // widen `added_at` from i64 to i128 and every assertion stayed green while `expires_at` moved eight
+    // bytes, so the app would read `added_by`/`version` as the expiry and show an active waiver as expired.
+    //
+    // Two changes. The offsets are now DERIVED from the IDL's field TYPES (lazer-tx.ts), so a widened field
+    // moves them automatically and an unknown type throws at module load. And this test pins the total
+    // SIZE, which is what actually catches a widening that keeps names and order intact.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ty = (idl as any).types?.find((t: any) => t.name === "FeeExemptAccount");
-    const names = ty.type.fields.map((f: { name: string }) => f.name);
-    // The decoder assumes exactly this order. Anything else invalidates the offsets.
-    expect(names).toEqual([
+    expect(ty, "FeeExemptAccount must be in the IDL").toBeDefined();
+
+    const W: Record<string, number> = {
+      u8: 1, i8: 1, u16: 2, i16: 2, u32: 4, i32: 4,
+      u64: 8, i64: 8, u128: 16, i128: 16, bool: 1, pubkey: 32,
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const width = (t: any): number => {
+      if (typeof t === "string") {
+        expect(W[t], `unhandled IDL type ${t}`).toBeDefined();
+        return W[t];
+      }
+      const [inner, len] = t.array as [string, number];
+      return W[inner] * len;
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const total = 8 + (ty.type.fields as any[]).reduce((n, f) => n + width(f.type), 0);
+    // `FeeExemptAccount::SIZE` in state/fee_exempt.rs, asserted there against the same sum.
+    expect(total, "the on-chain account size changed: the decoder's offsets move with it").toBe(114);
+
+    // The field order still matters for a human reading the decoder, so keep it pinned too.
+    expect((ty.type.fields as { name: string }[]).map((f) => f.name)).toEqual([
       "wallet",
       "flags",
       "added_at",

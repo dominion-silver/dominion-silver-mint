@@ -148,10 +148,23 @@ async function main() {
   // 4. Real SILV envelope.
   const { envelope, priceUsd } = await fetchSilvEnvelope();
   console.log("  envelope len:", envelope.length);
-  // min_out from the envelope's OWN price + 0.5% slippage (proves the frontend fix:
-  // a tight slippage no longer reverts because min_out matches the contract's price).
-  const minSilvOut = Math.floor((10 / (priceUsd * 1.1)) * (1 - 50 / 10_000) * 1e6);
-  console.log("  min_silv_out (0.5% slip @ envelope price):", minSilvOut / 1e6);
+  // min_out from the envelope's OWN price, the CONFIGURED premium, and 0.5% slippage.
+  //
+  // RE-AUDIT P2. This computed `10 / (priceUsd * 1.1) * 0.995`, i.e. it assumed a 10% premium while the
+  // configured mint premium is 1%. The floor was therefore 8.63% BELOW the correct output despite being
+  // labelled "0.5% slippage", so a deployed pricing regression charging a 9% mint fee would have returned
+  // 9.1/price, cleared the floor, and printed MINT OK. An economic E2E whose tolerance is an order of
+  // magnitude wider than the thing it measures is not a check.
+  //
+  // The premium is READ from the live config rather than hardcoded, so the floor tracks a timelocked
+  // premium change instead of going stale the first time one lands.
+  const premiumBpsMint = Number(cfg.premiumBpsMint);
+  const effectiveMintPrice = (priceUsd * 10_000) / (10_000 - premiumBpsMint);
+  const minSilvOut = Math.floor((10 / effectiveMintPrice) * (1 - 50 / 10_000) * 1e6);
+  console.log(
+    `  min_silv_out (0.5% slip @ envelope price, ${premiumBpsMint}bps premium):`,
+    minSilvOut / 1e6,
+  );
 
   // 5. Build the mint tx (mirrors buildLazerMintTx in lazer-tx.ts).
   const usdcTreasuryAta = getAssociatedTokenAddressSync(USDC_MINT, pda("treasury"), true, TOKEN_PROGRAM);
@@ -202,6 +215,26 @@ async function main() {
   const supply = Number((await getMint(conn, SILV_MINT, "confirmed", TOKEN_2022)).supply);
   console.log("after:  USDC", usdcAfter / 1e6, "| SILV", silvAfter / 1e6, "| total supply", supply / 1e6);
   console.log("\n  USDC spent:", (usdcBefore - usdcAfter) / 1e6, "| SILV minted:", (silvAfter - silvBefore) / 1e6);
+
+  // RE-AUDIT P2: the post-check only asserted that SILV increased, which any premium from 0% to 99%
+  // satisfies. Assert the ACTUAL premium the chain charged, to the tolerance the slippage allows.
+  const usdcSpent = (usdcBefore - usdcAfter) / 1e6;
+  const silvMinted = (silvAfter - silvBefore) / 1e6;
+  const impliedPricePerOz = usdcSpent / silvMinted;
+  const impliedPremiumBps = Math.round((1 - priceUsd / impliedPricePerOz) * 10_000);
+  console.log(
+    `  implied price: $${impliedPricePerOz.toFixed(4)}/oz vs spot $${priceUsd.toFixed(4)} ` +
+      `=> premium ${impliedPremiumBps} bps (configured ${premiumBpsMint})`,
+  );
+  // 25 bps of slack: the program floors twice (USDC then SILV), and a 10 USDC mint is small enough that
+  // those two floors are visible in the third decimal. Wide enough not to be flaky, far narrower than the
+  // 863 bps the old floor tolerated.
+  if (Math.abs(impliedPremiumBps - premiumBpsMint) > 25) {
+    throw new Error(
+      `MINT ECONOMICS WRONG: the chain charged ${impliedPremiumBps} bps, config says ${premiumBpsMint}. ` +
+        `This is the check that a pricing regression has to fail.`,
+    );
+  }
   if (silvAfter <= silvBefore) throw new Error("SILV did not increase");
   console.log("  ✅ MINT OK");
 

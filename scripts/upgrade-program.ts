@@ -285,6 +285,7 @@ async function main() {
   // the whole reason `fee_routing_disabled` is negated rather than named `fee_routing_enabled`.
   // ---- 6b. republish the on-chain IDL ----
   step("6b", "publishing the new IDL on chain");
+  let idlPublishFailed = false;
   // REVIEW-OF-FIXES P1: no upgrade path touched the on-chain IDL. Only `deploy-devnet.sh` ever published
   // one, and the runbook has no publish step, so after an in-place upgrade the PUBLISHED IDL still
   // described the previous program: `RedeemQueued` present, `set_kyc_scope` with two accounts. Any
@@ -304,8 +305,11 @@ async function main() {
       ]),
     );
   } catch (e) {
-    // Not fatal to the bytecode upgrade, which has already landed and verified, but it must be loud:
-    // leaving a stale published IDL is a silent break for every external integrator.
+    idlPublishFailed = true;
+    // RE-AUDIT P2: this logged loudly and then fell through to `UPGRADE OK` and exit 0. Loud text does not
+    // preserve failure semantics: a pasted ceremony result or any automation reads the exit code, and an
+    // integrator on `Program.at()` fetching the OLD account list builds transactions the upgraded program
+    // rejects. The bytecode really did land, so this is not a rollback, but it is not OK either.
     console.error(
       `\nIDL PUBLISH FAILED: ${String(e).slice(0, 300)}\n` +
         `The BYTECODE upgrade succeeded and is verified. The PUBLISHED IDL is now stale, so external\n` +
@@ -328,6 +332,14 @@ async function main() {
 
   if (drift > 0) {
     die(`${drift} watched config field(s) changed across the upgrade. Investigate before using it.`);
+  }
+  if (idlPublishFailed) {
+    console.error(
+      "\nUPGRADE INCOMPLETE: the bytecode is deployed and byte-verified and the config is preserved,\n" +
+        "but the ON-CHAIN IDL IS STALE. External integrators using Program.at() will build the previous\n" +
+        "account lists and be rejected. Republish, then re-run this script to confirm.",
+    );
+    process.exit(3); // distinct from 1 (verification failed) so automation can tell them apart
   }
   console.log("\nUPGRADE OK: bytes verified on chain, config preserved, carved fields correct.");
 }

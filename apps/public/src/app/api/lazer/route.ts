@@ -119,7 +119,25 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(silvCache.payload);
   }
 
-  // Only a genuine MISS can reach upstream, so only a miss spends a token.
+  // JOIN BEFORE CHARGING. RE-AUDIT P2: the token was spent before the `inflight` check, so 40 cold
+  // concurrent requests produced ONE upstream call but 30x200 and 10x429: ten callers were starved for a
+  // cost they were never going to incur. Only the request that CREATES the upstream call has an upstream
+  // cost, so only that one should pay for it.
+  //
+  // The test previously accepted either status and therefore called those ten starved callers a success,
+  // which is why the measurement had to come from the auditor rather than from the suite.
+  if (inflight) {
+    try {
+      await inflight;
+    } catch {
+      /* the shared attempt failed; fall through and pay for our own */
+    }
+    if (silvCache && Date.now() - silvCache.at < CACHE_TTL_MS) {
+      return NextResponse.json(silvCache.payload);
+    }
+  }
+
+  // Now we are the one who will call upstream, so now we pay.
   if (!allowRequest()) {
     return NextResponse.json(
       { error: "rate_limited", message: "Too many price requests. Retry shortly." },

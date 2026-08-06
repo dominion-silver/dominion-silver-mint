@@ -261,8 +261,69 @@ export interface WalletFlags {
 // Hand-decoded rather than via Anchor's coder because this runs inside `getMultipleAccountsInfo`, where
 // we already hold the raw bytes and want no second RPC. The offsets are asserted in
 // contract-parity.test.ts against the IDL so they cannot drift from the struct.
-const FEE_EXEMPT_FLAGS_OFFSET = 8 + 32;
-const FEE_EXEMPT_EXPIRES_AT_OFFSET = 8 + 32 + 1 + 8 + 32 + 1;
+/**
+ * Offsets DERIVED from the IDL's field types, not hardcoded.
+ *
+ * RE-AUDIT P2, and it was the fourth remediation test that could not fail for the class its comment
+ * claimed to guard. The offsets were literals, the parity test asserted only field NAMES and ORDER, and
+ * the round-trip test rebuilt its buffer from the same literals, so it was circular. Widen `added_at` from
+ * i64 to i128 without renaming or reordering anything and both tests stay green while `expires_at` moves
+ * eight bytes: the app then reads `added_by`/`version` as the expiry and shows an active waiver as expired
+ * or the reverse. That directly changes the quoted fee and `min_out`.
+ *
+ * Computing from the IDL removes the class: a widened field changes the offset automatically, and a type
+ * this table does not know throws at module load rather than silently returning a wrong number.
+ */
+const BORSH_WIDTH: Record<string, number> = {
+  u8: 1,
+  i8: 1,
+  u16: 2,
+  i16: 2,
+  u32: 4,
+  i32: 4,
+  u64: 8,
+  i64: 8,
+  u128: 16,
+  i128: 16,
+  bool: 1,
+  pubkey: 32,
+};
+
+function feeExemptOffset(field: string): number {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ty = (idl as any).types?.find((t: any) => t.name === "FeeExemptAccount");
+  if (!ty?.type?.fields) {
+    throw new Error("FeeExemptAccount is not in the IDL: cannot derive its layout");
+  }
+  let off = 8; // account discriminator
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const f of ty.type.fields as any[]) {
+    if (f.name === field) return off;
+    const t = f.type;
+    if (typeof t === "string") {
+      const w = BORSH_WIDTH[t];
+      if (w === undefined) {
+        throw new Error(`unhandled IDL type "${t}" before ${field} in FeeExemptAccount`);
+      }
+      off += w;
+    } else if (t?.array) {
+      const [inner, len] = t.array as [string, number];
+      const w = BORSH_WIDTH[inner];
+      if (w === undefined) {
+        throw new Error(`unhandled IDL array type "${inner}" in FeeExemptAccount`);
+      }
+      off += w * len;
+    } else {
+      throw new Error(
+        `unhandled IDL type ${JSON.stringify(t)} before ${field} in FeeExemptAccount`,
+      );
+    }
+  }
+  throw new Error(`field ${field} not found in FeeExemptAccount`);
+}
+
+const FEE_EXEMPT_FLAGS_OFFSET = feeExemptOffset("flags");
+const FEE_EXEMPT_EXPIRES_AT_OFFSET = feeExemptOffset("expires_at");
 
 export function decodeFeeExemptFlags(data: Uint8Array | Buffer): number | null {
   if (data.length < FEE_EXEMPT_FLAGS_OFFSET + 1) return null;
@@ -321,10 +382,19 @@ export function usable(
 }
 
 
+/** A wallet-entitlement snapshot the CALLER already resolved.
+ *
+ *  RE-AUDIT P2: the builders used to re-read these accounts themselves, so the transaction was built from
+ *  a different snapshot than the one the quote and `min_out` were derived from. Two snapshots, one
+ *  transaction, and the disagreement surfaces as an unexplainable SlippageExceeded. Pass the quote's
+ *  snapshot; omit it and the builder resolves its own, which is the correct behaviour for a non-UI caller
+ *  (a script) that has no quote to be consistent with. */
 export interface BuildLazerMintTxArgs {
   amountUsdc: BN;
   minSilvOut: BN;
   envelope: Uint8Array;
+  /** The snapshot the QUOTE used. See the note above. */
+  walletFlags?: WalletFlags;
 }
 
 /** The mint_silv account set, as a pure function of the caller and their optional per-wallet
@@ -404,7 +474,8 @@ export async function buildLazerMintTx(
   const messageData = Buffer.from(lazerMessageData(args.envelope));
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const opt = await resolveWalletFlagsOrDefault(connection, user);
+  // The caller's snapshot if it has one, so the transaction is priced by the same facts the user saw.
+  const opt = args.walletFlags ?? (await resolveWalletFlagsOrDefault(connection, user));
   const dominionIx = await (program.methods as any)
     .mintSilv(args.amountUsdc, args.minSilvOut, messageData, ED25519_IX_INDEX, 0)
     .accounts(mintSilvAccounts(user, opt))
@@ -421,6 +492,8 @@ export interface BuildLazerRedeemTxArgs {
   amountSilv: BN;
   minUsdcOut: BN;
   envelope: Uint8Array;
+  /** The snapshot the QUOTE used. See BuildLazerMintTxArgs. */
+  walletFlags?: WalletFlags;
 }
 
 export async function buildLazerRedeemTx(
@@ -437,7 +510,7 @@ export async function buildLazerRedeemTx(
   const messageData = Buffer.from(lazerMessageData(args.envelope));
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const opt = await resolveWalletFlagsOrDefault(connection, user);
+  const opt = args.walletFlags ?? (await resolveWalletFlagsOrDefault(connection, user));
   const dominionIx = await (program.methods as any)
     .redeemSilv(args.amountSilv, args.minUsdcOut, messageData, ED25519_IX_INDEX, 0)
     .accounts(redeemSilvAccounts(user, opt))

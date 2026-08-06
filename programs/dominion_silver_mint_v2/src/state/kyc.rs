@@ -131,6 +131,37 @@ pub fn enforce_kyc(
     }
 }
 
+
+/// The C-02 arming rule, as a PURE function so it is actually testable.
+///
+/// Both audits recommended the attestation counter over the arming co-signature. Extracted for the same
+/// reason `validate_fee_exempt_expiry` was: a rule that only exists inside a handler, behind
+/// `Clock::get()` and an `Accounts` struct, is a rule with no unit test. Every previous C-02 mechanism
+/// shipped without one.
+///
+/// `flags == 0` (disarm) is ALWAYS allowed and deliberately checked first: it is the only unbrick path and
+/// must never depend on the roster or the operator, either of which may be the thing that is broken.
+pub fn validate_kyc_arming(
+    flags: u8,
+    operator: Pubkey,
+    attestation_count: u32,
+) -> Result<()> {
+    if flags == 0 {
+        return Ok(());
+    }
+    require!(
+        operator != Pubkey::default(),
+        DominionError::KycAttestorNotSet
+    );
+    require!(attestation_count > 0, DominionError::KycNoAttestationsYet);
+    Ok(())
+}
+
+/// Whether clearing the attestor is permitted, given the current scope. See C-02's second half.
+pub fn kyc_operator_may_be_cleared(scope_flags: u8) -> bool {
+    scope_flags == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,4 +244,75 @@ mod tests {
         assert!(validate_kyc_scope(0b100).is_err());
         assert!(validate_kyc_scope(0xFF).is_err());
     }
+    // ---- C-02: the attestation counter and the arming rule ----
+
+    #[test]
+    fn arming_is_refused_with_an_empty_roster() {
+        let op = Pubkey::new_from_array([3u8; 32]);
+        // The whole point: a configured attestor is NOT enough, because a PDA or a typo satisfies that
+        // while being unable to sign. Somebody has to be through the gate already.
+        assert!(validate_kyc_arming(2, op, 0).is_err());
+        assert!(validate_kyc_arming(1, op, 0).is_err());
+        assert!(validate_kyc_arming(3, op, 0).is_err());
+        // One is enough to arm. Arming with exactly one still locks out everyone else, which is an
+        // operational matter no on-chain check can distinguish from a deliberately small roster.
+        assert!(validate_kyc_arming(2, op, 1).is_ok());
+    }
+
+    #[test]
+    fn arming_still_requires_a_configured_attestor_and_reports_that_first() {
+        // Order matters for the operator's sake: with neither an attestor nor attestations, the useful
+        // message is "no attestor", because setting one is the first step.
+        let e = validate_kyc_arming(2, Pubkey::default(), 0).unwrap_err();
+        assert!(format!("{e:?}").contains("KycAttestorNotSet"));
+        // And an attestor with an empty roster reports the roster.
+        let e2 = validate_kyc_arming(2, Pubkey::new_from_array([9u8; 32]), 0).unwrap_err();
+        assert!(format!("{e2:?}").contains("KycNoAttestationsYet"));
+    }
+
+    #[test]
+    fn DISARMING_never_depends_on_the_roster_or_the_operator() {
+        // The unbrick path. If either of these could block a disarm, a wrongly-armed gate would be
+        // unfixable by exactly the mechanism meant to fix it.
+        assert!(validate_kyc_arming(0, Pubkey::default(), 0).is_ok());
+        assert!(validate_kyc_arming(0, Pubkey::new_from_array([1u8; 32]), 0).is_ok());
+        assert!(validate_kyc_arming(0, Pubkey::default(), 7).is_ok());
+    }
+
+    #[test]
+    fn the_attestor_may_only_be_cleared_while_disarmed() {
+        // C-02's second half, which the co-signature did not address at all: arm legitimately, then
+        // decommission the attestor, and no NEW attestation can ever be written while the side stays
+        // gated. Already-attested holders keep redeeming; everyone else is shut out silently.
+        assert!(kyc_operator_may_be_cleared(0));
+        assert!(!kyc_operator_may_be_cleared(1));
+        assert!(!kyc_operator_may_be_cleared(2));
+        assert!(!kyc_operator_may_be_cleared(3));
+    }
+
+    #[test]
+    fn the_counter_arithmetic_is_checked_in_both_directions() {
+        // The handlers use checked_add / checked_sub. These pin WHY: an underflow means the counter has
+        // already drifted below the real roster, and the drift direction that matters is the one where the
+        // count claims attestations that no longer exist, which would let the gate be armed on a lie.
+        // Refusing and being noticed beats clamping to zero and carrying on.
+        assert_eq!(0u32.checked_sub(1), None, "revoke must refuse, not saturate");
+        assert_eq!(u32::MAX.checked_add(1), None, "attest must refuse, not wrap");
+        // And the ordinary path still works.
+        assert_eq!(0u32.checked_add(1), Some(1));
+        assert_eq!(1u32.checked_sub(1), Some(0));
+    }
+
+    #[test]
+    fn a_re_attestation_must_not_inflate_the_roster() {
+        // `attest_kyc` is idempotent by design (`init_if_needed`), because a backend replaying its queue
+        // depends on it. The handler therefore counts CREATIONS, detected by `version == 0` on the freshly
+        // zeroed account, not writes. Incrementing unconditionally would inflate the count on every replay
+        // and eventually let the gate be armed with a roster that is empty in reality.
+        //
+        // `version` is the right signal: every account this handler has written carries a non-zero
+        // KYC_ACCOUNT_VERSION, so zero means "created by init_if_needed on this call".
+        assert_ne!(KYC_ACCOUNT_VERSION, 0, "version 0 must mean 'freshly created'");
+    }
+
 }

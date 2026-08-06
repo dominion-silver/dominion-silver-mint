@@ -69,37 +69,34 @@ describe("admin builder account parity with the IDL", () => {
     }
   });
 
-  // --- audit C-02: an OPTIONAL account that is REQUIRED by the handler ---
+  // --- audit C-02, FINAL MECHANISM: one signature, and the contract holds the invariant ---
   //
-  // This is the case neither existing gate can see. `verify-client-idl-parity.ts` checks that account
-  // NAMES exist in the IDL; a name that is present but never PASSED is invisible to it. And Anchor
-  // 0.31's `.accounts()` delegates to `accountsPartial()`, so an omitted optional account encodes as
-  // absent without a word of complaint: the transaction builds, the user signs, the chain reverts.
+  // The first fix added `kyc_operator: Option<Signer>` to `set_kyc_scope` and three tests asserting the
+  // client passed it. Those tests were correct about the client and the mechanism was wrong: the Squads
+  // path cannot assemble two signatures, so arming was unreachable from the panel. Both audits
+  // recommended the on-chain attestation counter, so the account is gone and so are those tests.
   //
-  // The contract requires `kyc_operator` to co-sign whenever `flags != 0`, so the arm path must carry
-  // a THIRD key and the disarm path must not.
-  it("arming the KYC gate passes the attestor as a signer", async () => {
-    const attestor = PublicKey.unique();
-    const built = await actions.setKycScope(ctx, 2, attestor);
+  // What is worth pinning instead: the account list is back to two, and nothing in the client tries to
+  // supply a signer the IDL no longer declares.
+  it("set_kyc_scope takes exactly the accounts the IDL declares, with no co-signer", async () => {
+    const built = await actions.setKycScope(ctx, 2);
     expect(built[0].keys).toHaveLength(ix("set_kyc_scope").accounts.length);
-    const k = built[0].keys.find((x) => x.pubkey.equals(attestor));
-    expect(k, "the attestor must be among the instruction's keys").toBeDefined();
-    expect(k!.isSigner, "and it must be marked as a SIGNER, not just present").toBe(true);
+    expect(ix("set_kyc_scope").accounts.map((a: { name: string }) => a.name)).toEqual([
+      "config",
+      "admin",
+    ]);
+    // Exactly one signer: the admin. If a co-signer ever comes back, this fails rather than the panel
+    // silently building a transaction nobody can sign.
+    expect(built[0].keys.filter((k) => k.isSigner)).toHaveLength(1);
   });
 
-  it("disarming the KYC gate needs no attestor, and encodes its absence", async () => {
-    // Disarming must never depend on the attestor: it is the only way out of a wrongly-armed gate,
-    // and the attestor may be exactly what is broken. Anchor encodes an absent optional account as
-    // the PROGRAM ID, so the key count is unchanged and the slot holds the program.
-    const built = await actions.setKycScope(ctx, 0);
-    const programId = new PublicKey((idl as { address: string }).address);
-    expect(built[0].keys.some((x) => x.pubkey.equals(programId))).toBe(true);
-  });
-
-  it("arming without an attestor is refused BEFORE a signature is requested", async () => {
-    // Failing in the builder rather than on chain is the point: an on-chain revert has already cost
-    // the operator a signature and a fee to learn something knowable offline.
-    await expect(actions.setKycScope(ctx, 3)).rejects.toThrow(/co-sign/i);
+  it("disarming and arming build identically, because the invariant is on chain now", async () => {
+    const arm = await actions.setKycScope(ctx, 3);
+    const disarm = await actions.setKycScope(ctx, 0);
+    expect(arm[0].keys.length).toBe(disarm[0].keys.length);
+    // The client no longer needs to know which direction is which; the program refuses an empty-roster
+    // arm and always allows a disarm.
+    expect(arm[0].programId.equals(disarm[0].programId)).toBe(true);
   });
 
   // --- audit A-01: a failed read must be REPORTED, not rendered as zero ---

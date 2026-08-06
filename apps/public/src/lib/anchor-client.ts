@@ -185,8 +185,15 @@ export async function fetchConfig(
     );
     return acc as ConfigAccount | null;
   } catch (e) {
-    console.error("fetchConfig error", e);
-    return null;
+    // RE-AUDIT P2. This used to `return null` on ANY error, which made an RPC failure indistinguishable
+    // from "the config account does not exist yet". SWR therefore recorded a SUCCESS with `data === null`,
+    // the ReservesPanel kept its green "Live" dot and showed "Loading on-chain state..." indefinitely, and
+    // the same outage silently removed the config needed to quote and route every user operation.
+    //
+    // Exactly the P-04 lesson, in the one read P-04 did not touch: a helper that cannot tell "no" from "do
+    // not know" must not answer. `fetchNullable` already returns null for a genuinely absent account, so
+    // that case never reaches here and the distinction is clean.
+    throw new Error(`config unavailable: ${String(e).slice(0, 200)}`);
   }
 }
 

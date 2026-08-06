@@ -606,7 +606,25 @@ pub struct ConfigAccount {
     // instant, because it cannot lose or misdirect funds: it only changes which of two
     // program-controlled accounts the premium accrues in.
     pub fee_routing_disabled: bool,
-    pub reserved: [u8; 44],
+
+    /// How many `KycAccount`s exist right now. Incremented by `attest_kyc` when it CREATES one,
+    /// decremented by `revoke_kyc` when it closes one.
+    ///
+    /// C-02, and the mechanism BOTH audits recommended over the arming co-signature I shipped first.
+    ///
+    /// The property that matters before closing the KYC gate is not "some key was able to sign once", it
+    /// is "at least one holder can get through". A co-signature proves the former; this proves the latter.
+    /// It also removes the two-signature transaction the Squads panel cannot assemble, which made the
+    /// co-signature unusable in practice, and it survives the admin rotating the attestor to a dead key
+    /// afterwards, which the co-signature did not.
+    ///
+    /// INTENDED BEHAVIOUR AT ZERO, which is what an in-place upgrade decodes from `reserved`: zero means
+    /// "no attestations", and `set_kyc_scope` refuses to arm at zero. That is correct today by fact, not
+    /// just by convention: the gate is dormant and `kyc_operator` is the system program, so no
+    /// `KycAccount` can exist on any cluster. If that ever stops being true, this field has to be
+    /// backfilled BEFORE the upgrade, not after.
+    pub kyc_attestation_count: u32,
+    pub reserved: [u8; 40],
 }
 
 impl ConfigAccount {

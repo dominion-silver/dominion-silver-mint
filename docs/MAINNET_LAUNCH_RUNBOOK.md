@@ -48,7 +48,7 @@ needs to be reopened in a hurry.
 | 1. SILV token deployed and live | ✅ ready | steps 3-6 |
 | 2. Pre-mint freely, send to inventory, seed a ~100K USDC Sunrise pool | ✅ ready | the plan is $6.75M worth, ~115,705 oz at $58.34 spot, 77% of the 150,000 oz cap. Steps 7-9. |
 | 3. Public mint, no KYC, KYC enableable later | ✅ **yes** | Public mint: yes, and opening it costs a 24h timelock (step 9). KYC: the gate SHIPPED DORMANT on 2026-08-05. `kyc_scope_flags = 0` at init and it IS read, by `mint_silv` and `redeem_silv`, so arming it later is a CONFIG CHANGE, not a program upgrade and not a second audit. Order matters: set the attestor, write the attestations, THEN arm the scope. Arming first locks out every existing holder. |
-| 4. Redeem closed now, open later by upgrade | ✅ exactly this | `set_redemptions_enabled` refuses `true` in the deployed bytecode. Opening is a code change by construction. |
+| 4. Redeem closed now, open later | ✅ ready, **NO upgrade needed** | `set_redemptions_enabled` still refuses `true`, but the 24h-timelocked `SetRedeemLimits` action carries the switch: `propose_set_redeem_limits({ redemptionsEnabled: true })`, wait, execute. This row said "open later BY UPGRADE" and "opening is a code change by construction" until 2026-08-06, contradicting section P4 on the same page (re-audit P2). An operator following the table would have omitted the timelocked action and waited for a release that was never coming. |
 | 5. Admin portal live for admin wallet + guardians + multisig | ✅ ready | step 11. Needs `NEXT_PUBLIC_OPS_SQUADS` set, else the Squads-member path is inert. |
 | 6. Revoke the deployer, upgrade authority to the multisig | ✅ ready, **ordering matters** | step 12, and it MUST be last: `initialize` requires the signer to BE the upgrade authority. |
 
@@ -115,13 +115,19 @@ Update `declare_id!` in `programs/dominion_silver_mint_v2/src/lib.rs`, add
 `[programs.mainnet]` to `Anchor.toml`, and set `PROGRAM_ID` in both apps' `constants.ts`.
 Then:
 
+**NEVER redirect `anchor idl build` stdout into the IDL file.** Use `-o`. Anything else cargo writes to
+stdout lands in the file, and on a registry cache MISS that is `  Downloaded <crate>`, so the JSON is
+corrupt while the command still exits 0. That is the CI P0 of 2026-08-06: the `gate` job had never passed
+in its entire history and none of the steps after it had ever executed. This page instructed the same
+redirect until the re-audit caught it, one step from copying a corrupt file into both clients.
+
 **THE AUTHORITATIVE BUILD TOOLCHAIN** (audit finding S-07). Three generations of tooling were
 circulating under one "reproducible" label: the Dockerfile header said Solana 1.18.26 / Anchor 0.30.1
 / Rust 1.79 while its own ARGs said 2.1.20 / 0.31.1 / 1.79, and CI declares 3.1.14 / platform-tools
 1.52 / rustc 1.89.0. None of those is what produced the artifact.
 
 The toolchain that actually built `dominion_silver_mint.so` at sha256
-`76f1a13619dd5feb05a25f43bbb32ea86960b8233a95fd6d040d8181fedb3721` (1,185,784 bytes).
+`d1510b133add1eecfb8d5a0826fbd8ac3d4584976612f84f3b3b0eebe424a326` (1,185,296 bytes).
 
 **This hash MUST be re-recorded on every program change.** It was `799945e4…` until 2026-08-06 and went
 stale within the hour: the commit that closed audit findings C-01, C-02 and C-03 changed the program, and
@@ -154,7 +160,9 @@ S-05) is the independent third-party check via `solana-verify`.
 
 ```bash
 cargo build-sbf --manifest-path programs/dominion_silver_mint_v2/Cargo.toml -- --locked
-(cd programs/dominion_silver_mint_v2 && anchor idl build -- --locked > ../../target/idl/dominion_silver_mint.json)
+(cd programs/dominion_silver_mint_v2 && anchor idl build -o ../../target/idl/dominion_silver_mint.json -- --locked)
+printf '\n' >> target/idl/dominion_silver_mint.json   # -o omits it; keeps the committed copies byte-identical
+python3 -c "import json;json.load(open('target/idl/dominion_silver_mint.json'))"  # MUST parse before copying
 cp target/idl/dominion_silver_mint.json apps/admin/src/lib/idl/
 cp target/idl/dominion_silver_mint.json apps/public/src/lib/idl/
 scripts/verify-constants-consistency.sh   # must pass
@@ -470,5 +478,7 @@ treasury is below its float. Sweep on a cadence so the standing balance stays sm
    observes 3 today. A legitimate degradation to 1 halts every priced operation.
 3. **The inventory wallet is a single-signer key holding the whole pre-mint.**
 - ~~`admin_settle_redemption_offchain` can void a payable claim~~ RESOLVED 2026-08-05: the instruction was DELETED with the queued path, which removed SolidProof MEDIUM #4 from the codebase rather than accepting it. This was listed as "must be fixed before they open" and is now a phantom blocker: do not hold the launch on it.
-   Unreachable while redemptions are closed. Must be fixed before they open.
+   (The trailing line "Unreachable while redemptions are closed. Must be fixed before they open." survived
+   the strike-through until 2026-08-06 and read as an ACTIVE blocker, re-audit P3. There is nothing to fix:
+   neither the instruction nor the queue exists.)
 - ~~The queued redeem path does no volume accounting~~ RESOLVED 2026-08-05: there is no queued path. Redemption is one instant route and it DOES debit a global sliding-window budget.

@@ -181,5 +181,19 @@
       "which we already depend on, so it will not be closed under us."
     ],
     "foreign_upgradeable_program_verified_onchain": "2026-08-06: exists on mainnet-beta, executable, owner BPFLoaderUpgradeab1e11111111111111111111111."
+  },
+  "release_artifact": {
+    "_note": [
+      "The ONE pinned hash of the release binary. Added 2026-08-06 for re-audit P2: the",
+      "`reproducible-build` CI job printed a hash and compared it to nothing, so a green blocking check",
+      "proved only that solana-verify produced A binary, not OUR binary.",
+      "",
+      "RE-RECORD THIS ON EVERY PROGRAM CHANGE, and let verify-release-artifact.sh be what you trust for",
+      "the local build: it rebuilds and compares rather than reading this line. The runbook carried a",
+      "stale hash for two rebuilds before this file existed."
+    ],
+    "sha256": "d1510b133add1eecfb8d5a0826fbd8ac3d4584976612f84f3b3b0eebe424a326",
+    "bytes": 1185296,
+    "toolchain": "solana-cli/SBF 3.0.0, platform-tools v1.51, SBF rustc 1.84.1, anchor-cli 0.31.1"
   }
 }

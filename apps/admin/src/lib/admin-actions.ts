@@ -355,46 +355,18 @@ export const setKycOperator = (c: BuildCtx, operator: PublicKey): Ix =>
 
 /** Arm or disarm the gate. `flags`: 0 = off, 1 = mint, 2 = redeem, 3 = both.
  *
- *  ORDER MATTERS AND THE CONTRACT CANNOT ENFORCE IT: write the attestations FIRST. Arming
- *  before any attestation exists locks out every holder instantly. The contract only refuses
- *  the extreme case where no attestor is configured at all.
+ *  ONE SIGNATURE, and back to `instant()` deliberately. The first C-02 fix required the attestor to
+ *  CO-SIGN arming, which the Squads path cannot assemble (`ephemeralSigners: 0`, one signer on the
+ *  execute message), so the card was unusable: arming only worked if the connected wallet was
+ *  simultaneously admin and attestor, which is the shape C-02 exists to rule out.
  *
- *  Instant in both directions. Arming grants no griefing power the admin lacks (it can already
- *  halt redemptions with pause), and disarming must be fast because it is the only way to
- *  unbrick a wrongly-armed gate. */
-/** Arm or disarm the gate. `flags`: 0 = off, 1 = mint, 2 = redeem, 3 = both.
+ *  Both audits recommended the on-chain attestation COUNTER instead. The contract now refuses to arm
+ *  while `kyc_attestation_count == 0`, which proves somebody is already through the gate rather than
+ *  merely that a key could sign once, and needs nothing from the client.
  *
- *  ARMING REQUIRES THE ATTESTOR TO CO-SIGN (contract audit finding C-02), so `kycOperator` must be
- *  supplied whenever `flags != 0`. Disarming takes no co-signer: it is the unbrick path and must never
- *  depend on a key that might be the thing that is broken.
- *
- *  Passing it explicitly rather than letting `instant()` fall through matters here. Anchor 0.31's
- *  `.accounts()` is NOT strict, it delegates to `accountsPartial()`, so an omitted OPTIONAL account is
- *  silently encoded as absent. The arm transaction would build cleanly, cost a signature, and revert
- *  KycAttestorNotSet on chain. The IDL parity gate cannot catch this class either: it checks that
- *  account NAMES exist in the IDL, not that a required signer was passed. */
-export async function setKycScope(
-  c: BuildCtx,
-  flags: number,
-  kycOperator?: PublicKey,
-): Ix {
-  if (flags !== 0 && !kycOperator) {
-    throw new Error(
-      "Arming the KYC gate requires the configured attestor to co-sign. Supply its pubkey " +
-        "(and it must sign the transaction), or pass flags = 0 to disarm.",
-    );
-  }
-  const ix = await (getProgram(c.connection).methods as any)
-    .setKycScope(flags)
-    .accountsPartial({
-      admin: c.admin ?? adminAuthority(),
-      // `null` is how Anchor encodes an absent optional account. Explicit on the disarm path so the
-      // intent is visible rather than inferred from an omission.
-      kycOperator: flags === 0 ? null : kycOperator,
-    })
-    .instruction();
-  return one(ix);
-}
+ *  THE ORDER IS NOW ENFORCED BY THE PROGRAM: attest at least one wallet, then arm. It used to be advice. */
+export const setKycScope = (c: BuildCtx, flags: number): Ix =>
+  instant(c, "setKycScope", flags);
 
 /** Record an approval. Signed by the ATTESTOR, not the admin, so this is only buildable from
  *  the panel when the connected wallet holds the operator key. Normally Mark's backend calls it.

@@ -26,7 +26,8 @@ use crate::events::{
     RedemptionsEnabledChanged,
 };
 use crate::instructions::admin::execute::{
-    redeem_limits_all_tighten, redeem_limits_any_set, validate_redeem_limits_ceilings,
+    redeem_limits_all_tighten, redeem_limits_any_set, redeem_limits_effective_change,
+    validate_redeem_limits_ceilings,
     RedeemLimitsArgs,
 };
 use crate::state::*;
@@ -244,6 +245,26 @@ pub fn emergency_tighten_redeem_limits_handler(
             config.redeem_queue_delay_seconds,
         ),
         DominionError::LooseningRequiresTimelock
+    );
+    // RE-AUDIT P2. This is the THIRD entry point to the redeem limits, and it was the one left behind: the
+    // timelocked path gained `redeem_limits_effective_change` and this one still only checked `any_set`
+    // plus direction. `redeem_limits_all_tighten` accepts EQUALITY on purpose (tightening to the current
+    // value is not a loosening), so `{ instant_redeem_budget_usdc: Some(B) }` with B already the budget
+    // succeeded and emitted `RedeemLimitsTightened` while nothing moved.
+    //
+    // That matters more here than on the timelocked path, not less: this is the EMERGENCY action. Its
+    // event is what an incident timeline is reconstructed from afterwards, and a successful no-op in that
+    // log reads as "the throttle was tightened at 03:12" when it was not.
+    require!(
+        redeem_limits_effective_change(
+            &args,
+            config.instant_redeem_budget_usdc,
+            config.instant_redeem_window_seconds,
+            config.large_redeem_threshold_usdc,
+            config.redeem_queue_delay_seconds,
+            config.redemptions_enabled,
+        ),
+        DominionError::ProposalNoOp
     );
 
     if let Some(v) = args.instant_redeem_budget_usdc {

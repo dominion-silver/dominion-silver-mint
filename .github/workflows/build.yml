@@ -341,7 +341,7 @@ jobs:
       - name: Verifiable build
         run: solana-verify build
 
-      - name: Report binary hash, and FAIL if there is nothing to report
+      - name: Compare the verifiable build against the pinned release hash
         run: |
           set -euo pipefail
           SO=target/deploy/dominion_silver_mint.so
@@ -351,4 +351,23 @@ jobs:
             echo "attestation, so it fails rather than reporting nothing and passing (audit S-05)."
             exit 1
           fi
-          sha256sum "$SO"
+          GOT=$(sha256sum "$SO" | awk '{print $1}')
+          EXPECTED=$(python3 -c "import json;print(json.load(open('config/mainnet-authorities.json'))['release_artifact']['sha256'])")
+          echo "solana-verify: $GOT"
+          echo "pinned       : $EXPECTED"
+          # RE-AUDIT P2. Removing continue-on-error proved solana-verify can produce A binary; it never
+          # proved it produces OUR binary, because the hash was only printed. "Independent third-party
+          # check" was theatre until this comparison existed.
+          #
+          # KNOWN AND DELIBERATE: this is expected to FAIL today. The Docker toolchain
+          # (solana-verify reported v2.3.0) differs from the release toolchain (3.0.0 / platform-tools
+          # 1.51), so the bytes differ. That is exactly the open divergence documented in the runbook as
+          # S-07, and it should be visible as a red check rather than hidden behind a green one that
+          # compares nothing. Fix the toolchain, do not delete the comparison.
+          if [ "$GOT" != "$EXPECTED" ]; then
+            echo "::error::the verifiable build does NOT match the pinned release artifact."
+            echo "Either the release hash in config/mainnet-authorities.json is stale (re-record it), or"
+            echo "the solana-verify toolchain differs from the release toolchain (runbook, S-07)."
+            exit 1
+          fi
+          echo "MATCH: an independent solana-verify build reproduces the pinned release artifact."

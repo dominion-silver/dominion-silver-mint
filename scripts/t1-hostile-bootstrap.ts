@@ -512,7 +512,11 @@ async function main() {
     ok("case 8: redemptions closed", cfg.redemptionsEnabled === false);
     ok("case 8: guardian floor field present", typeof cfg.guardianCount === "number");
     ok(
-      "case 8: queue delay respects the new floor",
+      "case 8: the instant redeem WINDOW respects its floor",
+      // RE-AUDIT P3: the CHECK was corrected to read `instantRedeemWindowSeconds` but its LABEL still said
+      // "queue delay respects the new floor", so T1's green output recorded that a removed control had been
+      // verified. The ceremony evidence and the checked property have to name the same thing.
+      //
       // Was `redeemQueueDelaySeconds >= 3600`. That passed, which is exactly why it was worse
       // than useless: the field is DEAD on chain since 2026-08-05, so a green check here was a
       // false assurance about a throttle nothing reads. The live throttle is the rolling window.

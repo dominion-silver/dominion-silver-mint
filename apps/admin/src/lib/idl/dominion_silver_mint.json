@@ -3831,6 +3831,7 @@
       "accounts": [
         {
           "name": "config",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -4161,34 +4162,6 @@
           "relations": [
             "config"
           ]
-        },
-        {
-          "name": "kyc_operator",
-          "docs": [
-            "The configured attestor, WHICH MUST CO-SIGN TO ARM. Absent when disarming.",
-            "",
-            "EXTERNAL AUDIT FINDING C-02. Arming only checked `config.kyc_operator != Pubkey::default()`.",
-            "Any PDA, any program address, any typo'd 32 bytes satisfies that while being unable to sign",
-            "anything at all. Point the operator at the `config` PDA, arm the redeem side, and no attestation",
-            "can ever be written again: every holder not already attested is locked out of redeeming until an",
-            "admin notices and disarms.",
-            "",
-            "A signature is the only on-chain proof that a key can act. An on-curve check would be the",
-            "cheaper move and it is WRONG here: a Squads vault is a PDA, hence off-curve, and a Squads vault",
-            "is a legitimate attestor. On-curve would reject the good case while still accepting any",
-            "attacker-controlled plain keypair. A signature accepts both, since a vault signs through",
-            "`invoke_signed` when the multisig executes.",
-            "",
-            "WHY HERE AND NOT ON `set_kyc_operator`, which is where I first put it: rotation is the incident",
-            "response path for a leaked server key and must stay a single fast signature. Checking at ARM time",
-            "is also strictly stronger, because a key that could sign at appointment might be lost by the time",
-            "the gate closes. This proves the gate can be passed at the moment it is shut.",
-            "",
-            "It does NOT prove any attestation has been WRITTEN. That footgun is unchanged and still",
-            "documented below: write the attestations first."
-          ],
-          "signer": true,
-          "optional": true
         }
       ],
       "args": [
@@ -5688,6 +5661,16 @@
       "code": 12111,
       "name": "FeeWithdrawDestinationStranded",
       "msg": "withdraw_fees destination must not be owned by the fee-vault PDA: funds sent there could never be moved again"
+    },
+    {
+      "code": 12112,
+      "name": "KycNoAttestationsYet",
+      "msg": "KYC cannot be armed with zero attestations: attest at least one wallet first"
+    },
+    {
+      "code": 12113,
+      "name": "KycOperatorRequiredWhileArmed",
+      "msg": "cannot clear the KYC operator while the gate is armed: disarm the scope first"
     }
   ],
   "types": [
@@ -6162,11 +6145,33 @@
             "type": "bool"
           },
           {
+            "name": "kyc_attestation_count",
+            "docs": [
+              "How many `KycAccount`s exist right now. Incremented by `attest_kyc` when it CREATES one,",
+              "decremented by `revoke_kyc` when it closes one.",
+              "",
+              "C-02, and the mechanism BOTH audits recommended over the arming co-signature I shipped first.",
+              "",
+              "The property that matters before closing the KYC gate is not \"some key was able to sign once\", it",
+              "is \"at least one holder can get through\". A co-signature proves the former; this proves the latter.",
+              "It also removes the two-signature transaction the Squads panel cannot assemble, which made the",
+              "co-signature unusable in practice, and it survives the admin rotating the attestor to a dead key",
+              "afterwards, which the co-signature did not.",
+              "",
+              "INTENDED BEHAVIOUR AT ZERO, which is what an in-place upgrade decodes from `reserved`: zero means",
+              "\"no attestations\", and `set_kyc_scope` refuses to arm at zero. That is correct today by fact, not",
+              "just by convention: the gate is dormant and `kyc_operator` is the system program, so no",
+              "`KycAccount` can exist on any cluster. If that ever stops being true, this field has to be",
+              "backfilled BEFORE the upgrade, not after."
+            ],
+            "type": "u32"
+          },
+          {
             "name": "reserved",
             "type": {
               "array": [
                 "u8",
-                44
+                40
               ]
             }
           }

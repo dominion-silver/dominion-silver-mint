@@ -366,7 +366,7 @@ function RedemptionsTab({
         <Metric
           title="Instant budget per window"
           value={`$${formatUsdc(cfg.instantRedeemBudgetUsdc)}`}
-          tip="Maximum total treasury OUTFLOW per window, across all users combined. Debited by the GROSS value leaving the treasury (the payout plus the premium leg), not by what the user receives. Exceeding it reverts: there is no queue to fall back to."
+          tip="Maximum total treasury OUTFLOW per window, across all users combined. Debited by what ACTUALLY LEAVES: the payout plus the premium leg while fee routing is ON, and the payout alone while it is OFF (the premium is then retained, so it never leaves). This said the GROSS is always debited, which overstates the consumed capacity by the premium (1.5% at launch) during exactly the incident that turns routing off. Exceeding it reverts: there is no queue to fall back to."
         />
         <Metric
           title="Window length"

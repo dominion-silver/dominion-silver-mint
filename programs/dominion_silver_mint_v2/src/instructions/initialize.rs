@@ -498,7 +498,12 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     // though it is the zero value, because relying on zeroing for meaning is how the previous
     // polarity went unnoticed.
     config.fee_routing_disabled = false;
-    config.reserved = [0u8; 44];
+    // C-02: no attestations exist on a fresh deployment, so the gate cannot be armed until the attestor
+    // writes one. Set explicitly rather than relying on the zeroing below, because this value is a
+    // SAFETY PRECONDITION and reading it from incidental zero-initialisation is how a field ends up
+    // meaning something nobody chose.
+    config.kyc_attestation_count = 0;
+    config.reserved = [0u8; 40];
 
     msg!("dominion_silver_mint initialized");
     Ok(())

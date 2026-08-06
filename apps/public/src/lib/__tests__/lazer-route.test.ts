@@ -157,8 +157,15 @@ describe("the Lazer proxy rate-limits", () => {
     const results = await Promise.all(inFlight);
 
     expect(fetchSpy.mock.calls.length, "40 concurrent misses must not become 40 upstream calls").toBe(1);
-    // And nobody was starved: every caller got an answer, whether 200 from the shared fetch or a 429.
-    expect(results.every((r) => [200, 429].includes(r.status))).toBe(true);
+    // RE-AUDIT P2: this used to accept 200 OR 429, which called a starved caller a success and hid the
+    // real measurement (30x200, 10x429). A joiner incurs no upstream cost, so it must not be rate-limited:
+    // EVERY one of the 40 gets the shared answer.
+    const statuses = results.map((r) => r.status);
+    expect(
+      statuses.filter((s) => s === 429).length,
+      `no joiner may be starved, got ${statuses.filter((s) => s === 429).length} x 429`,
+    ).toBe(0);
+    expect(statuses.every((s) => s === 200)).toBe(true);
   });
 
   it("a cache HIT costs no token, so the limiter cannot deny a warm instance", async () => {

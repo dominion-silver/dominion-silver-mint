@@ -275,4 +275,20 @@ pub enum DominionError {
     FeeExemptExpiryInvalid,
     #[msg("withdraw_fees destination must not be owned by the fee-vault PDA: funds sent there could never be moved again")]
     FeeWithdrawDestinationStranded,
+
+    /// C-02: the KYC gate cannot be armed while the attestation roster is EMPTY.
+    ///
+    /// Arming with nothing on the roster locks every holder out of the gated side, and no on-chain check
+    /// can tell an empty roster from a deliberately empty one, so the roster itself is the check. Write at
+    /// least one attestation first (`attest_kyc`), then arm.
+    #[msg("KYC cannot be armed with zero attestations: attest at least one wallet first")]
+    KycNoAttestationsYet,
+
+    /// C-02: the attestor may not be decommissioned while the gate is armed.
+    ///
+    /// Setting `kyc_operator` to the zero pubkey while a side is gated means no NEW attestation can ever
+    /// be written, so every holder not already attested is shut out with no path in. Disarm first, then
+    /// decommission. Both are instant.
+    #[msg("cannot clear the KYC operator while the gate is armed: disarm the scope first")]
+    KycOperatorRequiredWhileArmed,
 }

@@ -55,10 +55,13 @@ export function MintRedeemCard() {
     revalidateOnFocus: false,
   });
 
-  const { data: cfg } = useSWR("onchain-config", () => fetchConfig(connection), {
-    refreshInterval: 30_000,
-    revalidateOnFocus: false,
-  });
+  // `error` destructured: `fetchConfig` throws on an RPC failure now (re-audit P2), and without the
+  // config there is no premium, no route and no min_out, so quoting anything would be inventing numbers.
+  const { data: cfg, error: cfgError } = useSWR(
+    "onchain-config",
+    () => fetchConfig(connection),
+    { refreshInterval: 30_000, revalidateOnFocus: false },
+  );
 
   // Treasury USDC (Option B: drives instant-redeem availability, not a reserve).
   const { data: treasury } = useSWR(
@@ -132,6 +135,20 @@ export function MintRedeemCard() {
   // throw, and the first version of this fix ignored `error`, so a failed read was invisible: the
   // route silently fell back to whatever `undefined` implies and the fee-exemption line just never
   // appeared. The punch list claimed this call site surfaced the error before it actually did.
+  // ONE SNAPSHOT, used by the quote AND handed to the builder.
+  //
+  // RE-AUDIT P2: the UI cached these flags for 30s and derived the premium, the route and `min_out` from
+  // them, while both builders independently RE-READ the accounts at send time. So a single transaction
+  // rested on two snapshots that could disagree. Revoke a mint exemption after SWR cached it: the UI
+  // quotes 0% and derives a spot `minSilvOut`, the builder sees the revocation and omits the account, the
+  // chain charges 1%, and the transaction reverts SlippageExceeded. The mirror case is worse: granting a
+  // redeem exemption while routing is off makes the UI classify 98.50 of outflow as inside budget while
+  // the fresh builder makes the chain count 100.00 and reject.
+  //
+  // The builders now take the flags the quote used, so the transaction is priced by the same facts the
+  // user was shown. Staleness is the accepted cost and it is the right one: a stale-but-CONSISTENT quote
+  // reverts on a program check the user can read, whereas two disagreeing snapshots revert on arithmetic
+  // nobody can see.
   const { data: walletFlags, error: walletFlagsError } = useSWR(
     wallet.publicKey ? `wallet-flags-${wallet.publicKey.toBase58()}` : null,
     () => resolveWalletFlags(connection, wallet.publicKey!),
@@ -403,6 +420,8 @@ export function MintRedeemCard() {
                   )
                 : parseSilvAmount(floor6(preview.minOut));
             return buildLazerMintTx(connection, wallet, {
+                // RE-AUDIT P2: the SAME snapshot the quote above used.
+                walletFlags,
               amountUsdc: parseUsdcAmount(amount),
               minSilvOut,
               envelope,
@@ -463,6 +482,8 @@ export function MintRedeemCard() {
                     )
                   : parseUsdcAmount(floor6(preview.minOut));
               return buildLazerRedeemTx(connection, wallet, {
+                  // RE-AUDIT P2: the SAME snapshot the quote and the route used.
+                  walletFlags,
                 amountSilv: parseSilvAmount(amount),
                 minUsdcOut,
                 envelope,
@@ -593,6 +614,14 @@ export function MintRedeemCard() {
           are things the user would want to know BEFORE signing. On mint, a fee exemption we cannot
           see is a fee exemption the program is not told about, so an exempt wallet pays full
           premium with nothing reverting. On redeem, an attestation we cannot see routes to "kyc". */}
+      {cfgError && (
+        <div className="mb-4 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
+          Could not read the protocol configuration from the network, so no quote can be produced. This is
+          an RPC problem, not a protocol change: nothing has been sent and your balances are untouched.
+          Retry in a moment.
+        </div>
+      )}
+
       {wallet.publicKey && walletFlagsError && (
         <div className="mb-4 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
           Could not read this wallet&apos;s fee-exemption
@@ -782,6 +811,9 @@ export function MintRedeemCard() {
           // chain decide", which is the opposite of the tri-state doctrine applied to `kycAttested`
           // eight lines from here.
           (mode === "redeem" && redeemRoute === null) ||
+          // No config means no premium, no route and no min_out. Quoting would be inventing numbers, and
+          // `preview` is already null so the button would say "0.00" with nothing behind it.
+          !!cfgError ||
           submitting ||
           insufficientSol
         }

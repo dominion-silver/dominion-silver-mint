@@ -234,8 +234,13 @@ pub fn handler(
 
     // 4. Price at PURE SPOT, then split the premium off the payout.
     //
-    // `gross_usdc` is the full oracle value of the SILV being burned, and it is what LEAVES
-    // THE TREASURY. The user receives `gross - fee`, the fee vault receives `fee`.
+    // `gross_usdc` is the full oracle value of the SILV being burned. The user receives `gross - fee`.
+    //
+    // What LEAVES the treasury is `to_user + fee_routed`, so it equals the gross only while fee routing is
+    // ON. With routing off the premium is retained and the outflow is the user's leg alone. RE-AUDIT P2:
+    // this comment said the gross always leaves, which is the same stale rule that produced P-02 (the
+    // client mirrored a comment like this one and refused solvable redemptions during the exact incident
+    // that turns routing off). Three of these survived the D-04 pass; this is one.
     let gross_usdc = silv_to_usdc_at_oracle(amount_silv, oracle_price)?;
     require!(gross_usdc > 0, DominionError::ZeroAmount);
 
@@ -362,8 +367,9 @@ pub fn handler(
         ctx.accounts.silv_mint.decimals,
     )?;
 
-    // Both USDC legs come out of the treasury and are signed by the same PDA. Together they
-    // total `gross_usdc`, which is what step 7b verified the treasury can cover.
+    // Both USDC legs are signed by the same treasury PDA. Together they total `total_out`, which is what
+    // step 7b verified the treasury can cover, and which equals `gross_usdc` only while fee routing is on:
+    // with routing off the premium leg is not transferred at all.
     let bump = ctx.bumps.treasury_pda;
     let seeds: &[&[u8]] = &[TREASURY_SEED, &[bump]];
     let signer_seeds: &[&[&[u8]]] = &[seeds];
@@ -405,7 +411,10 @@ pub fn handler(
     emit!(RedeemEvent {
         user: user_key,
         amount_silv,
-        // NET, i.e. what the user received. The treasury paid amount_usdc + fee_usdc.
+        // NET, i.e. what the user received. The treasury paid `amount_usdc + fee_usdc` ONLY while fee
+        // routing is on; with routing off it paid `amount_usdc` alone, because the premium stayed put.
+        // Reconstructing the real outflow from this event needs the routing flag as of that slot, which
+        // `FeeRoutingChanged` is what tells you.
         amount_usdc: to_user_usdc,
         price_used_scaled: oracle_price,
         // The EFFECTIVE premium, not config.premium_bps_redeem: 0 means the caller used a
