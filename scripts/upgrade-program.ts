@@ -161,6 +161,9 @@ async function main() {
     "nextTimelockNonce",
     "activeProposalCount",
     "maxSilvSupply",
+    // ROUND 3 P2: `kycAttestationCount` was in neither list, so a layout error decoding it as 1 would have
+    // authorised an empty-roster arm and the script would still have printed UPGRADE OK.
+    "kycAttestationCount",
   ] as const;
   for (const k of WATCHED) console.log(`  ${k.padEnd(24)} = ${String(before[k])}`);
 
@@ -320,14 +323,29 @@ async function main() {
   }
 
   step("7b", "fields carved from `reserved` decode to their intended zero values");
-  const carved: Array<[string, unknown]> = [
-    ["feeRoutingDisabled", afterCfg.feeRoutingDisabled],
-    ["kycScopeFlags", afterCfg.kycScopeFlags],
-    ["instantUsedPrevUsdc", afterCfg.instantUsedPrevUsdc],
+  // ROUND 3 P2: three of these four were merely PRINTED. Only `feeRoutingDisabled` was asserted, so a layout
+  // error decoding `kycScopeFlags = 2` (users unexpectedly gated), `instantUsedPrevUsdc = 10_000_000` (the
+  // rolling budget distorted) or `kycAttestationCount = 1` (an empty-roster arm authorised) produced no drift
+  // and no failure, and the script printed "carved fields correct". Printing is not checking.
+  const carved: Array<[string, unknown, string]> = [
+    ["feeRoutingDisabled", afterCfg.feeRoutingDisabled, "false"],
+    ["kycScopeFlags", afterCfg.kycScopeFlags, "0"],
+    ["instantUsedPrevUsdc", afterCfg.instantUsedPrevUsdc, "0"],
+    ["kycAttestationCount", afterCfg.kycAttestationCount, "0"],
   ];
-  for (const [k, v] of carved) console.log(`  ${k.padEnd(24)} = ${String(v)}`);
-  if (String(afterCfg.feeRoutingDisabled) !== "false") {
-    die("feeRoutingDisabled decoded TRUE. Fee routing is OFF, which is not the intended default.");
+  let carvedBad = 0;
+  for (const [k, v, want] of carved) {
+    const got = String(v);
+    const okv = got === want;
+    if (!okv) carvedBad++;
+    console.log(`  ${okv ? "ok  " : "DIFF"} ${k.padEnd(24)} = ${got}${okv ? "" : `  (expected ${want})`}`);
+  }
+  if (carvedBad > 0) {
+    die(
+      `${carvedBad} field(s) carved from \`reserved\` did not decode to their intended zero value. That is a ` +
+        `LAYOUT error, not a config difference: every one of them must read as zero on an in-place upgrade ` +
+        `over an account the old binary wrote.`,
+    );
   }
 
   if (drift > 0) {

@@ -21,7 +21,13 @@ holds the ~6 SOL of rent for the bytecode. That is its only remaining BLOCKING i
 satisfied DURING the ceremony, so they are supposed to be red beforehand and must be re-run after.
 
 Note `anchor build` is BROKEN in this repo. Use `cargo build-sbf -- --locked`, and run
-`anchor idl build -- --locked` from inside `programs/dominion_silver_mint_v2`, redirecting stdout.
+`anchor idl build -o <file> -- --locked` from inside `programs/dominion_silver_mint_v2`.
+
+**NEVER redirect its stdout into the IDL file.** This note said "redirecting stdout" until 2026-08-06 and
+that redirect is the CI P0: on a cargo cache miss, `  Downloaded <crate>` lands ahead of the JSON, the
+command still exits 0, and copying that output into the apps produces an invalid IDL. The CI and the runbook
+were fixed in the same round and this document was missed, which is why it is called out here rather than
+quietly edited.
 See the memory note `anchor-build-needs-locked`.
 
 ---

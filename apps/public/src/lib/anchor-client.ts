@@ -353,11 +353,15 @@ export function redeemUsdcOut(
 /**
  * The maximum a user can RECEIVE right now, in net USDC.
  *
- * Computed as a GROSS ceiling first (that is what the program bounds), then converted to net for
+ * Computed as an OUTFLOW ceiling first (that is what the program bounds), then converted to net for
  * display, because "you can redeem X" has to mean X in the user's hand.
  *
- * Two bounds, both gross, and NO size tier: `largeRedeemThresholdUsdc` is dead on chain and is
- * deliberately not read here.
+ * ROUND 3 P2: this said GROSS, and the two bounds below say GROSS, and both are false while fee routing is
+ * off. The code twenty lines down is correct; these leading rules are the stale version that produced the
+ * original client bug, so an engineer trusting the summary can reintroduce it.
+ *
+ * Two bounds, both on OUTFLOW rather than on the trade size, and NO size tier:
+ * `largeRedeemThresholdUsdc` is dead on chain and is deliberately not read here.
  */
 export function computeMaxInstantRedeemableUsdc(
   cfg: ConfigAccount,
@@ -433,8 +437,9 @@ export function redeemOutflowForGross(
 /**
  * Predict where a redemption lands, so the UI can say so before the user signs.
  *
- * Takes the GROSS, not the net. The program is still the source of truth and re-checks
- * everything, so `parseRedeemError` must keep handling an on-send revert.
+ * Takes the GROSS, and converts it to the OUTFLOW itself (see `redeemOutflowForGross`): outflow equals the
+ * gross only while fee routing is ON. The program is still the source of truth and re-checks everything, so
+ * `parseRedeemError` must keep handling an on-send revert.
  */
 export function classifyRedeem(
   cfg: ConfigAccount,

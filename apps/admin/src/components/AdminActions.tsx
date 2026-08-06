@@ -528,6 +528,8 @@ const ACTIONS: ActionDesc[] = [
       },
     ],
     tip: "The hot key that writes approvals. It can ONLY add and remove attestations: it cannot mint, pause, move funds, change a fee, or arm the gate. Instant on purpose, because the realistic failure is that this key leaks and a timelock on rotation would mean 24h with a compromised attestor live.",
+    // ROUND 3 P2: while the gate is ARMED the contract requires the incoming operator to co-sign. The
+    // builder reads the scope from the chain itself, so this call site cannot get it wrong.
     build: (c, p) => actions.setKycOperator(c, pk(p.operator)),
   },
   {

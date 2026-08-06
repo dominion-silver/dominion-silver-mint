@@ -167,36 +167,92 @@ for (const rpc of [
 //     is what stops the class from reopening: a NEW sending script that forgets the guard fails here, not
 //     in production.
 {
-  const sendPattern = /sendAndConfirmTransaction|\.rpc\(\)|solana", \[\s*"program",\s*"deploy"/;
+  // ROUND 3 P2. The first version of this check recognised only `sendAndConfirmTransaction`, an exact
+  // `.rpc()`, and one textual `solana program deploy`. Codex broke it three ways: `ui-scenario.ts` has a
+  // real `conn.sendRawTransaction(...)` and no guard yet the gate printed 30/30; `e2e-lazer-mint.ts` sends
+  // via `provider.sendAndConfirm(...)`, also invisible; and a guard call sitting only in a COMMENT satisfied
+  // the textual property without executing anything.
+  //
+  // So: strip comments and strings before looking, widen the send primitives, and require the guard call to
+  // appear in CODE. A gate that can be satisfied by prose is worse than no gate, because it reports 30/30.
+  const stripComments = (src: string) =>
+    src
+      .replace(/\/\*[\s\S]*?\*\//g, " ")
+      .replace(/(^|[^:])\/\/[^\n]*/g, "$1 ");
+
+  const SEND_PRIMITIVES = [
+    /\bsendAndConfirmTransaction\s*\(/,
+    /\bsendAndConfirm\s*\(/,          // AnchorProvider.sendAndConfirm
+    /\bsendRawTransaction\s*\(/,
+    /\.\s*sendTransaction\s*\(/,      // Connection.sendTransaction
+    /\.\s*rpc\s*\(/,                  // Anchor methods().rpc(), tolerating whitespace
+    // Shelling out to the solana CLI. Detect the CALL, not the words: a bare
+    // /solana\s+program\s+close/ matched the PROSE inside a console.log string in
+    // verify-mainnet-authorities.ts, which is a read-only preflight. A gate with false positives gets
+    // allowlisted into uselessness, so it has to be precise in both directions.
+    /exec(?:File)?Sync\s*\(\s*["'`]solana["'`]/,
+    /spawn(?:Sync)?\s*\(\s*["'`]solana["'`]/,
+  ];
   const scriptsDir = path.join(__dirname);
-  const offenders: string[] = [];
   const helpers = new Set([
     "_guard.ts",
     "_cluster.ts",
     "_program-id.ts",
-    "_t1-mint-helper.ts", // called BY t1, which guards; it never resolves a cluster itself
+    // Called BY t1, which guards. It resolves no cluster of its own and takes an open Connection.
+    "_t1-mint-helper.ts",
     "verify-cluster-resolution.ts",
   ]);
+  const offenders: string[] = [];
+  const prose: string[] = [];
   for (const f of fs.readdirSync(scriptsDir).filter((x) => x.endsWith(".ts"))) {
     if (helpers.has(f)) continue;
-    const src = fs.readFileSync(path.join(scriptsDir, f), "utf8");
-    if (!sendPattern.test(src)) continue;
-    if (!/requireSanctionedCluster\s*\(/.test(src)) offenders.push(f);
+    const raw = fs.readFileSync(path.join(scriptsDir, f), "utf8");
+    const code = stripComments(raw);
+    if (!SEND_PRIMITIVES.some((re) => re.test(code))) continue;
+    if (!/requireSanctionedCluster\s*\(/.test(code)) {
+      // Distinguish "no guard at all" from "a guard mentioned only in a comment", because the second is
+      // the one that fooled the previous version of this check.
+      if (/requireSanctionedCluster/.test(raw)) prose.push(f);
+      else offenders.push(f);
+    }
   }
   ok(
-    "every transaction-sending script calls requireSanctionedCluster",
-    offenders.length === 0,
-    offenders.length ? offenders.join(", ") : "none unguarded",
+    "every transaction-sending script calls requireSanctionedCluster IN CODE",
+    offenders.length === 0 && prose.length === 0,
+    [
+      offenders.length ? `unguarded: ${offenders.join(", ")}` : "",
+      prose.length ? `guard only in a comment: ${prose.join(", ")}` : "",
+    ]
+      .filter(Boolean)
+      .join(" | ") || "all guarded",
   );
+
   // And nothing may reach for the consent-only predicate to skirt the genesis check.
   const skirters = fs
     .readdirSync(scriptsDir)
     .filter((x) => x.endsWith(".ts") && x !== "verify-cluster-resolution.ts" && x !== "_guard.ts")
-    .filter((f) => /guardConsentOnly/.test(fs.readFileSync(path.join(scriptsDir, f), "utf8")));
+    .filter((f) => /guardConsentOnly\s*\(/.test(stripComments(fs.readFileSync(path.join(scriptsDir, f), "utf8"))));
   ok(
     "no script uses guardConsentOnly to skip the genesis-hash check",
     skirters.length === 0,
     skirters.length ? skirters.join(", ") : "none",
+  );
+
+  // SELF-CHECK: the send detector must actually detect. A gate whose detector matches nothing reports a
+  // clean sweep over an empty set, which is how the previous version passed while ui-scenario.ts sent
+  // unguarded.
+  const detected = fs
+    .readdirSync(scriptsDir)
+    .filter((x) => x.endsWith(".ts") && !helpers.has(x))
+    .filter((f) =>
+      SEND_PRIMITIVES.some((re) =>
+        re.test(stripComments(fs.readFileSync(path.join(scriptsDir, f), "utf8"))),
+      ),
+    );
+  ok(
+    "the send detector finds a plausible number of senders",
+    detected.length >= 12,
+    `${detected.length} detected`,
   );
 }
 

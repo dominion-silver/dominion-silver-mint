@@ -28,6 +28,23 @@ pub struct SetKycOperator<'info> {
     #[account(mut, seeds = [CONFIG_SEED], bump, has_one = admin)]
     pub config: Box<Account<'info, ConfigAccount>>,
     pub admin: Signer<'info>,
+
+    /// The INCOMING attestor. Required to sign only while the gate is ARMED.
+    ///
+    /// ROUND 3 P2. The "do not decommission while armed" rule looked only for `Pubkey::default()`, so any
+    /// OTHER unusable key passed: rotate an armed gate's operator to the config PDA and the update succeeds
+    /// because the PDA is non-zero, existing holders keep passing, and no new holder can ever be attested.
+    /// Identical harm, one keystroke away from the case that was blocked.
+    ///
+    /// A signature is the only on-chain proof that a key can act, and the objection I raised against it for
+    /// C-02's first attempt does not apply here: you are rotating TO a key you chose, so its signature is by
+    /// definition available. The objection did apply to arming, where the operator was already configured and
+    /// might since have been lost.
+    ///
+    /// Required ONLY while armed, so the incident-response path stays one signature: with a leaked attestor
+    /// the admin can disarm (instant) and then rotate freely, or rotate with the new key's signature if it is
+    /// to hand. And a leaked attestor is a compliance problem, not a path to funds.
+    pub new_operator: Option<Signer<'info>>,
 }
 
 /// Set or rotate the attestor key. INSTANT.
@@ -66,11 +83,27 @@ pub fn set_kyc_operator_handler(ctx: Context<SetKycOperator>, operator: Pubkey) 
     // Disarm first, then decommission. Both are instant, so this costs the admin one extra transaction
     // and removes a silent trap.
     let config = &mut ctx.accounts.config;
-    if operator == Pubkey::default() {
+    if config.kyc_scope_flags != 0 {
+        // ARMED. The gate is closed, so an operator that cannot act shuts out every unrostered holder.
+        // Clearing is refused outright; appointing requires the appointee to sign.
         require!(
-            kyc_operator_may_be_cleared(config.kyc_scope_flags),
+            operator != Pubkey::default(),
             DominionError::KycOperatorRequiredWhileArmed
         );
+        let signer = ctx
+            .accounts
+            .new_operator
+            .as_ref()
+            .ok_or(error!(DominionError::KycOperatorRequiredWhileArmed))?;
+        require_keys_eq!(
+            signer.key(),
+            operator,
+            DominionError::KycOperatorRequiredWhileArmed
+        );
+    } else {
+        // DISARMED. Nothing is gated, so an unusable operator harms nobody until someone tries to arm, and
+        // `validate_kyc_arming` refuses that on an empty roster. One signature, fast rotation preserved.
+        let _ = kyc_operator_may_be_cleared(config.kyc_scope_flags);
     }
     let old_operator = config.kyc_operator;
     config.kyc_operator = operator;
@@ -208,6 +241,9 @@ pub fn attest_kyc_handler(
     wallet: Pubkey,
     reference: [u8; 32],
 ) -> Result<()> {
+    // ROUND 3 P2: refuse a subject that can never sign as a holder. Attesting `Pubkey::default()` filled
+    // the roster without admitting anybody, so the counter read 1 and arming succeeded on an unusable roster.
+    validate_kyc_subject(wallet)?;
     let now = Clock::get()?.unix_timestamp;
     let attestor_key = ctx.accounts.attestor.key();
     // Count CREATIONS, not writes. `init_if_needed` makes this handler idempotent, which a backend
@@ -227,13 +263,10 @@ pub fn attest_kyc_handler(
     acc.reference = reference;
     acc.version = KYC_ACCOUNT_VERSION;
 
-    if is_new {
-        let config = &mut ctx.accounts.config;
-        config.kyc_attestation_count = config
-            .kyc_attestation_count
-            .checked_add(1)
-            .ok_or(error!(DominionError::ArithmeticOverflow))?;
-    }
+    // The transition lives in `state/kyc.rs::next_attestation_count`, so the arithmetic AND the
+    // "creations only" rule are exercised by tests that touch the real rule rather than the standard library.
+    let config = &mut ctx.accounts.config;
+    config.kyc_attestation_count = next_attestation_count(config.kyc_attestation_count, is_new)?;
 
     emit!(KycAttested {
         wallet,
@@ -294,10 +327,7 @@ pub fn revoke_kyc_handler(ctx: Context<RevokeKyc>, wallet: Pubkey) -> Result<()>
     // exist. If this ever underflows, the invariant is already broken and the right answer is to refuse
     // and be noticed, not to clamp to zero and carry on.
     let config = &mut ctx.accounts.config;
-    let count_after = config
-        .kyc_attestation_count
-        .checked_sub(1)
-        .ok_or(error!(DominionError::ArithmeticOverflow))?;
+    let count_after = count_after_revocation(config.kyc_attestation_count)?;
     // ROUND 3 P0: refuse to leave an ARMED gate with an empty roster. Checked BEFORE the write, so a
     // refusal leaves the counter untouched.
     validate_kyc_revocation(config.kyc_scope_flags, count_after)?;

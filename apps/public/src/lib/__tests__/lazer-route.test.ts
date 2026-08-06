@@ -183,4 +183,29 @@ describe("the Lazer proxy rate-limits", () => {
     expect(served, "every cache hit must be served regardless of the bucket").toBe(500);
     expect(fetchSpy.mock.calls.length, "and none of them touched upstream").toBe(1);
   });
+
+  it("a FAILED shared request does not charge the waiters for the retry", async () => {
+    // ROUND 3 P2. Joining before charging only helps when the shared attempt succeeds. On rejection every
+    // waiter used to fall through to the bucket: 39 joiners drained the burst, 10 got 429, and only one of
+    // them created the retry. 29 tokens for one upstream call, then starvation. The concurrency test above
+    // covered only the happy branch, which is why the measurement came from the auditor.
+    const { POST } = await freshRoute();
+    let rejectUpstream: (e: Error) => void = () => {};
+    const gate = new Promise<Response>((_, rej) => {
+      rejectUpstream = rej;
+    });
+    fetchSpy.mockImplementation(() => gate);
+
+    const inFlight = Array.from({ length: 40 }, () => POST(req({})));
+    await new Promise((r) => setImmediate(r));
+    rejectUpstream(new Error("upstream down"));
+    const results = await Promise.all(inFlight);
+    const statuses = results.map((r) => r.status);
+
+    // ONE upstream attempt for the whole burst: the creator's. Nobody retried on the way out.
+    expect(fetchSpy.mock.calls.length).toBe(1);
+    // Everybody hears about the failure; nobody is told to come back later because the bucket is empty.
+    expect(statuses.every((st) => st === 502)).toBe(true);
+    expect(statuses.filter((st) => st === 429).length, "no waiter may be rate-limited for a retry it did not make").toBe(0);
+  });
 });

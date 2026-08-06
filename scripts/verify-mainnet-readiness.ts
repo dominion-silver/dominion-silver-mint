@@ -75,8 +75,13 @@ function no(msg: string, detail = "") {
  * green" would be trained to override it. That is D2's failure mode, the item this pass just fixed,
  * reproduced in the gate itself. */
 function atStep(step: string, msg: string, detail = "") {
-  // The step label can be "2" or "runbook steps 3-6"; take the FIRST number as the due step.
-  const due = Number((/(\d+)/.exec(step) ?? [])[1] ?? NaN);
+  // The step label can be "2", "9/10" or "runbook steps 3-6". Take the LAST number as the due step.
+  //
+  // ROUND 3 P1: this took the FIRST, so "runbook steps 3-6" was due at 3 and `--stage=4` blocked because the
+  // mint does not exist before T1, which IS steps 4+5+6. Same for "steps 7-9" blocking at --stage=8 before
+  // the documented premint at 9. The work completes at the END of a range, so the deadline is the end.
+  const nums = step.match(/\d+/g) ?? [];
+  const due = nums.length ? Number(nums[nums.length - 1]) : NaN;
   if (STAGE !== null && Number.isFinite(due) && due < STAGE) {
     console.log(
       `  OVERDUE  ${msg} -> was due at step ${due}, you are at step ${STAGE}${detail ? `. ${detail}` : ""}`,

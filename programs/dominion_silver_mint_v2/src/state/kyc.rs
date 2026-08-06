@@ -176,6 +176,52 @@ pub fn validate_kyc_arming(
  * NOT symmetric with `validate_kyc_arming` on purpose: arming needs `count > 0` BEFORE, this needs
  * `count > 0` AFTER. Assuming one covers the other is how this half went missing in the first place.
  */
+/**
+ * Whether a wallet may be attested at all.
+ *
+ * ROUND 3 P2. `attest_kyc` accepted `Pubkey::default()`, so the roster could be filled with the system
+ * program address: the counter reads 1, arming succeeds, and NOBODY can pass, because no user can present
+ * `11111...` as the required signer. An armed gate with zero usable entries, which is the exact state the
+ * counter exists to prevent, reached by attesting a hole.
+ *
+ * This is deliberately NARROWER than "verify the holder is real", which is the missing provider pipeline
+ * and cannot be done on chain. It rejects only the addresses that are PROVABLY unusable as a signer, which
+ * costs nothing and needs no off-chain identity.
+ */
+pub fn validate_kyc_subject(wallet: Pubkey) -> Result<()> {
+    require!(wallet != Pubkey::default(), DominionError::KycSubjectInvalid);
+    Ok(())
+}
+
+/**
+ * The roster size after an attestation, given whether the account was CREATED by this call.
+ *
+ * ROUND 3 P2, and the reason this exists as a function at all. The two tests I wrote for the counter could
+ * not fail: one exercised `u32::checked_add` and `u32::checked_sub`, i.e. the Rust standard library, and the
+ * other asserted that a constant is non-zero. Neither touched a handler, so replacing `checked_sub` with
+ * `saturating_sub` or incrementing on every re-attestation left both green.
+ *
+ * The arithmetic and the creation rule now live here, so a test can exercise the ACTUAL transition the
+ * handler performs rather than the primitive it happens to use.
+ */
+pub fn next_attestation_count(current: u32, account_is_new: bool) -> Result<u32> {
+    if !account_is_new {
+        // Idempotent re-attestation. A backend replaying its queue must not inflate the roster: that would
+        // eventually let the gate be armed against a roster that is empty in reality.
+        return Ok(current);
+    }
+    current
+        .checked_add(1)
+        .ok_or(error!(DominionError::ArithmeticOverflow))
+}
+
+/** The roster size after a revocation. `checked_sub`, never saturating: see the handler's note. */
+pub fn count_after_revocation(current: u32) -> Result<u32> {
+    current
+        .checked_sub(1)
+        .ok_or(error!(DominionError::ArithmeticOverflow))
+}
+
 pub fn validate_kyc_revocation(scope_flags: u8, count_after: u32) -> Result<()> {
     if scope_flags == 0 {
         return Ok(());
@@ -316,30 +362,7 @@ mod tests {
         assert!(!kyc_operator_may_be_cleared(3));
     }
 
-    #[test]
-    fn the_counter_arithmetic_is_checked_in_both_directions() {
-        // The handlers use checked_add / checked_sub. These pin WHY: an underflow means the counter has
-        // already drifted below the real roster, and the drift direction that matters is the one where the
-        // count claims attestations that no longer exist, which would let the gate be armed on a lie.
-        // Refusing and being noticed beats clamping to zero and carrying on.
-        assert_eq!(0u32.checked_sub(1), None, "revoke must refuse, not saturate");
-        assert_eq!(u32::MAX.checked_add(1), None, "attest must refuse, not wrap");
-        // And the ordinary path still works.
-        assert_eq!(0u32.checked_add(1), Some(1));
-        assert_eq!(1u32.checked_sub(1), Some(0));
-    }
 
-    #[test]
-    fn a_re_attestation_must_not_inflate_the_roster() {
-        // `attest_kyc` is idempotent by design (`init_if_needed`), because a backend replaying its queue
-        // depends on it. The handler therefore counts CREATIONS, detected by `version == 0` on the freshly
-        // zeroed account, not writes. Incrementing unconditionally would inflate the count on every replay
-        // and eventually let the gate be armed with a roster that is empty in reality.
-        //
-        // `version` is the right signal: every account this handler has written carries a non-zero
-        // KYC_ACCOUNT_VERSION, so zero means "created by init_if_needed on this call".
-        assert_ne!(KYC_ACCOUNT_VERSION, 0, "version 0 must mean 'freshly created'");
-    }
 
     #[test]
     fn the_LAST_attestation_cannot_be_revoked_while_the_gate_is_armed() {
@@ -364,6 +387,44 @@ mod tests {
         assert!(validate_kyc_revocation(2, 0).is_err(), "cannot REACH an empty roster while armed");
         assert!(validate_kyc_arming(2, op, 1).is_ok());
         assert!(validate_kyc_revocation(2, 1).is_ok());
+    }
+
+    #[test]
+    fn the_roster_transition_is_exercised_not_the_standard_library() {
+        // ROUND 3 P2. The two tests this replaces could not fail: one asserted `u32::checked_add(1)` and
+        // `checked_sub(1)` behave as documented, which is a test of Rust, and the other asserted a constant
+        // is non-zero. Swapping the handler's `checked_sub` for `saturating_sub`, or incrementing on every
+        // re-attestation, left both green. These exercise the actual transition instead.
+        //
+        // A CREATION increments.
+        assert_eq!(next_attestation_count(0, true).unwrap(), 1);
+        assert_eq!(next_attestation_count(41, true).unwrap(), 42);
+        // A RE-ATTESTATION does not. This is the one that matters: `attest_kyc` is idempotent so a backend
+        // replaying its queue must not inflate the roster, or the gate could be armed against a roster that
+        // is empty in reality.
+        assert_eq!(next_attestation_count(0, false).unwrap(), 0);
+        assert_eq!(next_attestation_count(7, false).unwrap(), 7);
+        // Overflow REFUSES rather than wrapping.
+        assert!(next_attestation_count(u32::MAX, true).is_err());
+        assert_eq!(next_attestation_count(u32::MAX, false).unwrap(), u32::MAX);
+
+        // Revocation decrements, and refuses at zero rather than saturating. Saturating would paper over a
+        // counter already drifted below the real roster, in the direction that lets the gate be armed on a
+        // lie, so refusing and being noticed is the correct answer.
+        assert_eq!(count_after_revocation(1).unwrap(), 0);
+        assert_eq!(count_after_revocation(9).unwrap(), 8);
+        assert!(count_after_revocation(0).is_err(), "must refuse, not saturate to 0");
+    }
+
+    #[test]
+    fn a_provably_unusable_subject_cannot_be_attested() {
+        // ROUND 3 P2. `Pubkey::default()` was accepted, so the roster could be filled with the system
+        // program address: count reads 1, arming succeeds, and nobody can pass because no user can present
+        // `11111...` as the required signer. An armed gate with zero usable entries.
+        assert!(validate_kyc_subject(Pubkey::default()).is_err());
+        assert!(validate_kyc_subject(Pubkey::new_from_array([1u8; 32])).is_ok());
+        // Narrow on purpose: this rejects only what is PROVABLY unusable. Verifying a holder is real is the
+        // off-chain provider pipeline and cannot be done here.
     }
 
 }

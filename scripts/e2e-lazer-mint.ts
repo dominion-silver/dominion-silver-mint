@@ -45,6 +45,9 @@ const TOKEN_2022 = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 const ATA_PROGRAM = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
 const pda = (seed: string) => PublicKey.findProgramAddressSync([Buffer.from(seed)], PROGRAM_ID)[0];
+/** A PDA with a second seed, e.g. the per-wallet fee-exempt account. */
+const pda2 = (seed: string, extra: Uint8Array) =>
+  PublicKey.findProgramAddressSync([Buffer.from(seed), Buffer.from(extra)], PROGRAM_ID)[0];
 
 async function fetchSilvEnvelope(): Promise<{ envelope: Uint8Array; priceUsd: number }> {
   const resp = await fetch("https://pyth-lazer.dourolabs.app/v1/latest_price", {
@@ -158,7 +161,23 @@ async function main() {
   //
   // The premium is READ from the live config rather than hardcoded, so the floor tracks a timelocked
   // premium change instead of going stale the first time one lands.
-  const premiumBpsMint = Number(cfg.premiumBpsMint);
+  // ROUND 3 P2: the transaction passes the wallet's OWN optional exemption account, so a test wallet with a
+  // live mint exemption is charged 0 bps by the program while this script compared against the global rate
+  // and aborted the ceremony proof with "MINT ECONOMICS WRONG" for CORRECT behaviour. Read the exemption the
+  // same way the transaction does.
+  const feeExemptInfo = await conn.getAccountInfo(pda2("fee_exempt", user.toBytes()));
+  const mintSideExempt = (() => {
+    if (!feeExemptInfo || feeExemptInfo.data.length < 90) return false;
+    const flags = feeExemptInfo.data[8 + 32];
+    let exp = 0n;
+    for (let i = 7; i >= 0; i--) exp = (exp << 8n) | BigInt(feeExemptInfo.data[8 + 32 + 1 + 8 + 32 + 1 + i]);
+    const live = exp !== 0n && BigInt(Math.floor(Date.now() / 1000)) < exp;
+    return live && (flags & 1) !== 0;
+  })();
+  const premiumBpsMint = mintSideExempt ? 0 : Number(cfg.premiumBpsMint);
+  if (mintSideExempt) {
+    console.log("  NOTE: this wallet holds a LIVE mint-side exemption, so 0 bps is the CORRECT expectation");
+  }
   const effectiveMintPrice = (priceUsd * 10_000) / (10_000 - premiumBpsMint);
   const minSilvOut = Math.floor((10 / effectiveMintPrice) * (1 - 50 / 10_000) * 1e6);
   console.log(
@@ -226,10 +245,12 @@ async function main() {
     `  implied price: $${impliedPricePerOz.toFixed(4)}/oz vs spot $${priceUsd.toFixed(4)} ` +
       `=> premium ${impliedPremiumBps} bps (configured ${premiumBpsMint})`,
   );
-  // 25 bps of slack: the program floors twice (USDC then SILV), and a 10 USDC mint is small enough that
-  // those two floors are visible in the third decimal. Wide enough not to be flaky, far narrower than the
-  // 863 bps the old floor tolerated.
-  if (Math.abs(impliedPremiumBps - premiumBpsMint) > 25) {
+  // ROUND 3 P2: the tolerance was 25 bps, which ACCEPTED a 125 bps charge against a configured 100, i.e. a
+  // 25% increase in the very fee this check claims to verify. The two integer floors contribute far less
+  // than that: at a 10 USDC size and ~$58/oz, one SILV atomic unit is about 0.06 bps and one USDC atomic unit
+  // about 0.001 bps. 2 bps is still an order of magnitude above the floors and an order of magnitude below
+  // anything a pricing regression would produce.
+  if (Math.abs(impliedPremiumBps - premiumBpsMint) > 2) {
     throw new Error(
       `MINT ECONOMICS WRONG: the chain charged ${impliedPremiumBps} bps, config says ${premiumBpsMint}. ` +
         `This is the check that a pricing regression has to fail.`,
@@ -241,8 +262,27 @@ async function main() {
   // === REDEEM (instant) - validates the redeem account set on-chain too ===
   console.log("\n== Redeem 0.05 SILV (instant, fresh envelope) ==");
   const { envelope: redeemEnv, priceUsd: redeemPrice } = await fetchSilvEnvelope();
-  const minUsdcOut = Math.floor(0.05 * redeemPrice * (1 - 200 / 10_000) * (1 - 50 / 10_000) * 1e6);
-  console.log("  min_usdc_out (0.5% slip @ envelope price):", minUsdcOut / 1e6);
+  // ROUND 3 P2: this hardcoded 200 bps while the mainnet source of truth is 150, so the floor was
+  // 100 * 0.98 * 0.995 = 97.51 instead of 98.0075. A regression charging up to ~249 bps cleared it and the
+  // script still printed LAZER FULL-CYCLE E2E PASSED, about 99 bps above the configured fee. The mint half
+  // was fixed to read the live premium in the previous round and this half was left behind.
+  const redeemSideExempt = (() => {
+    if (!feeExemptInfo || feeExemptInfo.data.length < 90) return false;
+    const flags = feeExemptInfo.data[8 + 32];
+    let exp = 0n;
+    for (let i = 7; i >= 0; i--) exp = (exp << 8n) | BigInt(feeExemptInfo.data[8 + 32 + 1 + 8 + 32 + 1 + i]);
+    const live = exp !== 0n && BigInt(Math.floor(Date.now() / 1000)) < exp;
+    return live && (flags & 2) !== 0;
+  })();
+  const premiumBpsRedeem = redeemSideExempt ? 0 : Number(cfg.premiumBpsRedeem);
+  const redeemSilvAmount = 0.05;
+  const minUsdcOut = Math.floor(
+    redeemSilvAmount * redeemPrice * (1 - premiumBpsRedeem / 10_000) * (1 - 50 / 10_000) * 1e6,
+  );
+  console.log(
+    `  min_usdc_out (0.5% slip @ envelope price, ${premiumBpsRedeem}bps premium):`,
+    minUsdcOut / 1e6,
+  );
   // Redemptions are CLOSED at launch and `set_redemptions_enabled` refuses to enable
   // them in the deployed bytecode, so the redeem half of this script is unreachable
   // until the Phase 1 upgrade. Skip it rather than fail: the mint half is the part that
@@ -278,8 +318,28 @@ async function main() {
   console.log("  ✅ REDEEM TX:", redeemSig);
   const silvFinal = Number((await getAccount(conn, userSilvAta, "confirmed", TOKEN_2022)).amount);
   const usdcFinal = Number((await getAccount(conn, userUsdcAta, "confirmed", TOKEN_PROGRAM)).amount);
-  console.log("  SILV burned:", (silvAfter - silvFinal) / 1e6, "| USDC received:", (usdcFinal - usdcAfter) / 1e6);
+  const silvBurned = (silvAfter - silvFinal) / 1e6;
+  const usdcReceived = (usdcFinal - usdcAfter) / 1e6;
+  console.log("  SILV burned:", silvBurned, "| USDC received:", usdcReceived);
   if (usdcFinal <= usdcAfter) throw new Error("USDC did not increase on redeem");
+
+  // ROUND 3 P2: the redeem half asserted ONLY that USDC increased, which any premium from 0% to 99%
+  // satisfies. The mint half got an economic postcondition in the previous round and this one was left with
+  // a liveness check masquerading as a proof. Assert the premium the chain actually charged.
+  const impliedRedeemPricePerOz = usdcReceived / silvBurned;
+  const impliedRedeemBps = Math.round((1 - impliedRedeemPricePerOz / redeemPrice) * 10_000);
+  console.log(
+    `  implied redeem: $${impliedRedeemPricePerOz.toFixed(4)}/oz vs spot $${redeemPrice.toFixed(4)} ` +
+      `=> premium ${impliedRedeemBps} bps (expected ${premiumBpsRedeem})`,
+  );
+  // Same 2 bps as the mint side, and for the same reason: the integer floors contribute far less, so
+  // anything wider would accept a real pricing regression.
+  if (Math.abs(impliedRedeemBps - premiumBpsRedeem) > 2) {
+    throw new Error(
+      `REDEEM ECONOMICS WRONG: the chain charged ${impliedRedeemBps} bps, expected ${premiumBpsRedeem}. ` +
+        `This is the check a pricing regression has to fail.`,
+    );
+  }
 
   console.log("\n🎉 LAZER FULL-CYCLE E2E PASSED - mint + instant redeem with real signed SILV prices through the on-chain verify_message.");
 }

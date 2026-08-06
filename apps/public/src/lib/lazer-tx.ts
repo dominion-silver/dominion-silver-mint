@@ -167,6 +167,7 @@ export async function resolveWalletFlags(
     const infos = await connection.getMultipleAccountsInfo([fe, ky]);
     const feeOk = usable(infos[0], FEE_EXEMPT_DISCRIMINATOR);
     return {
+      owner: user,
       feeExempt: feeOk ? fe : null,
       kyc: usable(infos[1], KYC_DISCRIMINATOR) ? ky : null,
       // AUDIT P-07: the account was located and never READ, so the UI could not tell WHICH side was
@@ -209,7 +210,7 @@ async function resolveWalletFlagsOrDefault(
     try {
       return await resolveWalletFlags(connection, user);
     } catch {
-      return { feeExempt: null, kyc: null, feeExemptFlags: null, feeExemptExpiresAt: null };
+      return { owner: user, feeExempt: null, kyc: null, feeExemptFlags: null, feeExemptExpiresAt: null };
     }
   }
 }
@@ -248,6 +249,18 @@ const KYC_DISCRIMINATOR = discriminatorFromIdl("KycAccount");
  * the property this function has to mirror.
  */
 export interface WalletFlags {
+  /** WHOSE flags these are.
+   *
+   *  ROUND 3 P1. `WalletFlags` carried no identity, and the SWR request uses `keepPreviousData: true`, which
+   *  deliberately serves the PREVIOUS key's data until the new fetch settles. Both builders then trusted that
+   *  snapshot. Switch from wallet A to wallet B and submit before B's fetch lands: A's `feeExempt: null` is
+   *  passed for B, so the program is never shown B's live exemption and charges the full premium. In the
+   *  other direction A's exemption PDA is passed for B and the transaction reverts after the Lazer fee.
+   *
+   *  The builders now REJECT a snapshot whose owner is not the signer, and resolve fresh instead. A snapshot
+   *  that cannot say who it belongs to cannot be checked, which is why this field exists rather than a
+   *  comment telling callers to be careful. */
+  owner: PublicKey;
   feeExempt: PublicKey | null;
   kyc: PublicKey | null;
   /** `Side` bitfield from the on-chain account: 1 = mint, 2 = redeem, 3 = both. */
@@ -475,7 +488,13 @@ export async function buildLazerMintTx(
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   // The caller's snapshot if it has one, so the transaction is priced by the same facts the user saw.
-  const opt = args.walletFlags ?? (await resolveWalletFlagsOrDefault(connection, user));
+  // Trust the caller's snapshot ONLY if it belongs to this signer (round 3 P1). A mismatch means the UI is
+  // showing another wallet's entitlements, so resolving fresh is both correct and the only safe option; the
+  // quote will be re-derived on the next render anyway.
+  const opt =
+    args.walletFlags && args.walletFlags.owner.equals(user)
+      ? args.walletFlags
+      : await resolveWalletFlagsOrDefault(connection, user);
   const dominionIx = await (program.methods as any)
     .mintSilv(args.amountUsdc, args.minSilvOut, messageData, ED25519_IX_INDEX, 0)
     .accounts(mintSilvAccounts(user, opt))
@@ -510,7 +529,13 @@ export async function buildLazerRedeemTx(
   const messageData = Buffer.from(lazerMessageData(args.envelope));
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const opt = args.walletFlags ?? (await resolveWalletFlagsOrDefault(connection, user));
+  // Trust the caller's snapshot ONLY if it belongs to this signer (round 3 P1). A mismatch means the UI is
+  // showing another wallet's entitlements, so resolving fresh is both correct and the only safe option; the
+  // quote will be re-derived on the next render anyway.
+  const opt =
+    args.walletFlags && args.walletFlags.owner.equals(user)
+      ? args.walletFlags
+      : await resolveWalletFlagsOrDefault(connection, user);
   const dominionIx = await (program.methods as any)
     .redeemSilv(args.amountSilv, args.minUsdcOut, messageData, ED25519_IX_INDEX, 0)
     .accounts(redeemSilvAccounts(user, opt))

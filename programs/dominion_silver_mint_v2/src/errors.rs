@@ -299,4 +299,12 @@ pub enum DominionError {
     /// lockout the counter exists to prevent. Disarm first, then revoke.
     #[msg("cannot revoke the last KYC attestation while the gate is armed: disarm the scope first")]
     KycLastAttestationWhileArmed,
+
+    /// C-02, round 3: the attested wallet is provably unusable as a signer.
+    ///
+    /// `Pubkey::default()` (the system program) can never present itself as a holder, so attesting it fills
+    /// the roster without admitting anybody. Narrower than "prove the holder is real", which is the
+    /// off-chain provider pipeline.
+    #[msg("that wallet cannot be attested: it can never sign as a holder")]
+    KycSubjectInvalid,
 }

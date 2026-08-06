@@ -315,7 +315,11 @@ async function main() {
 
   const args = (admin: PublicKey) => ({
     admin,
-    upgradeAuthorityInfo: admin,
+    // ROUND 3 P3: this was `admin`, so after the P0 fix passed the Ops vault it recorded OPS as the upgrade
+    // authority. The field is informational, so nothing is bypassed, but it becomes an immutable launch
+    // record that misidentifies the protocol's upgrade trust root. It is the SIGNER that initialises, and
+    // the real BPF upgrade authority moves to the upgrade vault at step 12.
+    upgradeAuthorityInfo: authority.publicKey,
     permanentDelegateExpected: COMPLIANCE,
     freezeAuthorityExpected: COMPLIANCE,
     complianceMode: false,
@@ -478,6 +482,14 @@ async function main() {
   ok("DOM-002: the treasury ATA now exists before initialize", ataInfo !== null);
 
   // --- case 5: the genuine upgrade authority succeeds, DESPITE the pre-created ATA
+  //
+  // ROUND 3 P2. T1 imported `assertReversible`, computed `INTENT`, and never called it. `initialize` is
+  // classified `irreversible` in ACTION_COST and is the single most irreversible action in the repo: one
+  // shot per program id, and case 5 IS that shot. Meanwhile RULE 2 exists precisely so a slow-to-undo
+  // action needs its own named sanction, not just the generic cluster consent, which an operator may have
+  // exported from an unrelated command in the same shell.
+  assertReversible("initialize", INTENT);
+
   let initSig = "";
   try {
     initSig = await mkProgram(authority)

@@ -11,7 +11,7 @@ the steps in order. Do not reorder them: several steps only work in one sequence
 ## The two hard rules
 
 **RULE 1. Nothing touches mainnet unless the command says so.** Every E2E script now
-calls `requireDevnet()` from `scripts/_guard.ts` and refuses a non-devnet RPC unless
+calls `requireSanctionedCluster()` from `scripts/_guard.ts` and refuses a non-devnet RPC unless
 `DOMINION_ALLOW_MAINNET=i-understand` is set.
 
 **RULE 2. No script takes an action whose undo is slow, unless you sanction it.**
@@ -121,13 +121,30 @@ corrupt while the command still exits 0. That is the CI P0 of 2026-08-06: the `g
 in its entire history and none of the steps after it had ever executed. This page instructed the same
 redirect until the re-audit caught it, one step from copying a corrupt file into both clients.
 
+### Run the readiness gate BEFORE each numbered step, with `--stage`
+
+```bash
+npx tsx scripts/verify-mainnet-readiness.ts --stage=<the step you are about to do>
+```
+
+**ROUND 3 P1: this instruction was missing entirely.** The gate existed, `--stage` existed, and no step of
+this runbook ever called it, so an operator following the page never ran it. Worse, the mandatory fee-vault
+creation sat outside the numbered sequence (in the PREREQUISITES section), so step 10 could open the public
+mint with no vault and make every mint and every redeem revert `AccountNotInitialized`.
+
+`--stage=N` reports anything due before N as OVERDUE and exits 1. Without it the gate cannot tell "not yet"
+from "skipped", so a mid-ceremony run reads falsely reassuring.
+
+**The fee vault is now step 9b below, inside the sequence.** A prerequisite nobody numbers is a prerequisite
+somebody skips.
+
 **THE AUTHORITATIVE BUILD TOOLCHAIN** (audit finding S-07). Three generations of tooling were
 circulating under one "reproducible" label: the Dockerfile header said Solana 1.18.26 / Anchor 0.30.1
 / Rust 1.79 while its own ARGs said 2.1.20 / 0.31.1 / 1.79, and CI declares 3.1.14 / platform-tools
 1.52 / rustc 1.89.0. None of those is what produced the artifact.
 
 The toolchain that actually built `dominion_silver_mint.so` at sha256
-`0a0e067db1fa0d1420736ea0d2c4f2be55965ad377969281421396b252de6408` (1,187,152 bytes).
+`b12a14543a35f00f5234397099cfa7e7c2e247db06dd091a747264bffb898a80` (1,194,528 bytes).
 
 **This hash MUST be re-recorded on every program change.** It was `799945e4…` until 2026-08-06 and went
 stale within the hour: the commit that closed audit findings C-01, C-02 and C-03 changed the program, and
@@ -327,6 +344,19 @@ error) and refuses if the cap could not absorb it.
 Then from the inventory wallet, create the Sunrise SILV/USDC pool with the SILV and your
 100,000 USDC. The inventory wallet is a **plain single-signer wallet** and will hold the
 entire pre-minted supply, so treat its key as equal in value to the pool.
+
+### 9b. Create the fee vault. BLOCKING for step 10.
+
+```bash
+DOMINION_ALLOW_MAINNET=i-understand DOMINION_RPC=<mainnet> DOMINION_INTENT=create_fee_vault \
+  npx tsx scripts/create-fee-vault.ts
+npx tsx scripts/verify-mainnet-readiness.ts --stage=10   # must not report the vault as OVERDUE
+```
+
+`mint_silv` and `redeem_silv` both take the fee vault as a REQUIRED account, so if it does not exist EVERY
+mint and EVERY redeem reverts `AccountNotInitialized`, which reads like a broken program. This used to live
+in the PREREQUISITES section outside the numbered steps, which is round 3's P1: the operator following the
+sequence never reached it and step 10 could open the mint on top of a missing vault.
 
 ### 10. Execute the public-mint open (24h after step 7)
 

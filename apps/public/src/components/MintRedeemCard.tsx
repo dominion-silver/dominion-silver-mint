@@ -158,7 +158,13 @@ export function MintRedeemCard() {
   // `classifyRedeem` turns into the "kyc" route whenever the gate is armed (`kycAttested !== true`).
   // That is the fail-closed direction, so an RPC failure blocks rather than promising an instant
   // redeem the chain would revert.
-  const kycAttested = walletFlags ? walletFlags.kyc != null : undefined;
+  // ROUND 3 P1: `keepPreviousData` serves the PREVIOUS wallet's flags until the new fetch settles, so the
+  // snapshot has to be checked against the connected wallet before anything is derived from it. Treating a
+  // foreign snapshot as `undefined` puts every consumer back on the fail-closed path it already handles.
+  const flagsAreForThisWallet =
+    !!walletFlags && !!wallet.publicKey && walletFlags.owner.equals(wallet.publicKey);
+  const flags = flagsAreForThisWallet ? walletFlags : undefined;
+  const kycAttested = flags ? flags.kyc != null : undefined;
 
   // AUDIT FINDING P-07. The premiums the quote uses are the ones THIS WALLET pays, not the global
   // config values. The exemption PDA was already being loaded and its contents were simply never read,
@@ -175,8 +181,8 @@ export function MintRedeemCard() {
       ? null
       : effectivePremiumBps(
           configuredBpsMint,
-          walletFlags?.feeExemptFlags ?? null,
-          walletFlags?.feeExemptExpiresAt ?? null,
+          flags?.feeExemptFlags ?? null,
+          flags?.feeExemptExpiresAt ?? null,
           "mint",
           nowSecs,
         );
@@ -185,8 +191,8 @@ export function MintRedeemCard() {
       ? null
       : effectivePremiumBps(
           configuredBpsRedeem,
-          walletFlags?.feeExemptFlags ?? null,
-          walletFlags?.feeExemptExpiresAt ?? null,
+          flags?.feeExemptFlags ?? null,
+          flags?.feeExemptExpiresAt ?? null,
           "redeem",
           nowSecs,
         );
@@ -222,8 +228,10 @@ export function MintRedeemCard() {
   // Option B: classify the redeem route (instant / limit / otc / kyc / disabled)
   // for the entered amount, so the UI tells the user up-front.
   // TWO figures, deliberately named apart, because conflating them was bug B2.
-  //   GROSS = what leaves the treasury = what the program debits the budget by and checks
-  //           solvency against.
+  //   GROSS = the full oracle value of the SILV being burned. It is what the program debits the budget by
+  //           and checks solvency against ONLY while fee routing is on; with routing off the outflow is the
+  //           user's leg alone. Round 3 P2: this line said "what leaves the treasury" flat out, which is the
+  //           stale rule that produced the original client bug.
   //   NET   = what the user receives = gross minus the premium.
   // Every comparison against a protocol limit uses GROSS, which is what this memo produces. The
   // previous version passed the NET into `classifyRedeem`, understating both checks by the redeem
@@ -421,7 +429,7 @@ export function MintRedeemCard() {
                 : parseSilvAmount(floor6(preview.minOut));
             return buildLazerMintTx(connection, wallet, {
                 // RE-AUDIT P2: the SAME snapshot the quote above used.
-                walletFlags,
+                walletFlags: flags,
               amountUsdc: parseUsdcAmount(amount),
               minSilvOut,
               envelope,
@@ -483,7 +491,7 @@ export function MintRedeemCard() {
                   : parseUsdcAmount(floor6(preview.minOut));
               return buildLazerRedeemTx(connection, wallet, {
                   // RE-AUDIT P2: the SAME snapshot the quote and the route used.
-                  walletFlags,
+                  walletFlags: flags,
                 amountSilv: parseSilvAmount(amount),
                 minUsdcOut,
                 envelope,
@@ -729,14 +737,14 @@ export function MintRedeemCard() {
               )}
             </span>
           </div>
-          {exemptSide && walletFlags?.feeExemptExpiresAt ? (
+          {exemptSide && flags?.feeExemptExpiresAt ? (
             <div className="flex justify-between text-accent/80">
               <span>
                 Fee exemption ({exemptSide === "both" ? "mint and redeem" : exemptSide} side)
               </span>
               <span className="font-mono">
                 until{" "}
-                {new Date(walletFlags.feeExemptExpiresAt * 1000)
+                {new Date(flags!.feeExemptExpiresAt! * 1000)
                   .toISOString()
                   .slice(0, 10)}
               </span>

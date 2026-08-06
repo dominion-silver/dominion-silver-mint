@@ -48,6 +48,15 @@ import { createRequire } from "module";
 import * as fs from "fs";
 import * as os from "os";
 import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
+import { requireSanctionedCluster } from "./_guard";
+import { resolveCluster, describeCluster } from "./_cluster";
+
+// ROUND 3 P2. This script calls `conn.sendRawTransaction(...)` and had NO cluster guard. The structural
+// assertion in verify-cluster-resolution.ts missed it because its send detector recognised only
+// `sendAndConfirmTransaction` and an exact `.rpc()`, so the gate printed a clean 30/30 over an incomplete
+// set. Both are fixed: the detector is wider, and this script now resolves its cluster from the environment
+// and passes through the one guard.
+const CLUSTER = resolveCluster();
 
 const APUB = "/Users/thomasblanc/1_app/dominion/apps/public/";
 const r = createRequire(APUB);
@@ -70,6 +79,8 @@ const DEF_THRESHOLD = "5000000000"; // $5000
 const DEF_QUEUE_DELAY = 259_200; // T+3
 
 async function main() {
+  await requireSanctionedCluster(CLUSTER.rpc, "ui-scenario.ts");
+  console.log("  " + describeCluster(CLUSTER));
   const cmd = process.argv[2] ?? "state";
   const admin = Keypair.fromSecretKey(
     Uint8Array.from(

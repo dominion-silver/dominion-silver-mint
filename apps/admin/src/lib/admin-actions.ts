@@ -350,8 +350,35 @@ export async function withdrawFees(
  *  Instant because the realistic failure is that this key LEAKS (it lives on a server and
  *  signs every approval), and a timelock on rotation would mean 24h with a compromised
  *  attestor live. Pass PublicKey.default to decommission it. */
-export const setKycOperator = (c: BuildCtx, operator: PublicKey): Ix =>
-  instant(c, "setKycOperator", operator);
+export async function setKycOperator(
+  c: BuildCtx,
+  operator: PublicKey,
+): Ix {
+  // Whether the co-signer is required is a fact about the CHAIN, so it is read from the chain rather than
+  // passed in. One extra read on a rare admin action, and a caller cannot get it wrong.
+  //
+  // ROUND 3 P2: the "do not decommission while armed" rule only looked for the zero pubkey, so rotating an
+  // armed gate's operator to any OTHER unusable key (a PDA, a typo) succeeded and no new holder could ever be
+  // attested. A signature is the only on-chain proof a key can act, and unlike the arming case the objection
+  // does not apply: you are rotating TO a key you chose, so its signature is available by definition.
+  //
+  // Required only while ARMED, so incident-response rotation stays one signature: with a leaked attestor,
+  // disarm (instant) then rotate.
+  const program = getProgram(c.connection);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cfg = await (program.account as any).configAccount.fetch(configPda());
+  const gateIsArmed = Number(cfg.kycScopeFlags ?? 0) !== 0;
+  const ix = await (program.methods as any)
+    .setKycOperator(operator)
+    .accountsPartial({
+      admin: c.admin ?? adminAuthority(),
+      // `null` is Anchor's encoding for an absent optional account. Explicit on the disarmed path so the
+      // intent is visible rather than inferred from an omission.
+      newOperator: gateIsArmed ? operator : null,
+    })
+    .instruction();
+  return one(ix);
+}
 
 /** Arm or disarm the gate. `flags`: 0 = off, 1 = mint, 2 = redeem, 3 = both.
  *

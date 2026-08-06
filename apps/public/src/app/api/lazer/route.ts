@@ -127,13 +127,28 @@ export async function POST(req: NextRequest) {
   // The test previously accepted either status and therefore called those ten starved callers a success,
   // which is why the measurement had to come from the auditor rather than from the suite.
   if (inflight) {
+    let sharedFailed = false;
     try {
       await inflight;
     } catch {
-      /* the shared attempt failed; fall through and pay for our own */
+      sharedFailed = true;
     }
     if (silvCache && Date.now() - silvCache.at < CACHE_TTL_MS) {
       return NextResponse.json(silvCache.payload);
+    }
+    if (sharedFailed) {
+      // ROUND 3 P2. Joining before charging works only when the shared attempt SUCCEEDS. When it rejects,
+      // every waiter used to fall through to `allowRequest()`, so 39 joiners drained the burst, 10 got 429,
+      // and only one of them actually created the retry: 29 tokens charged for one upstream call, followed by
+      // the starvation of legitimate callers. The concurrency test covered only the successful branch.
+      //
+      // A waiter that arrives after a failure has still incurred no upstream cost, so it must not pay for the
+      // retry it is not making. It returns 502 with the upstream's own status semantics, and the NEXT cold
+      // request creates the retry and pays for it.
+      return NextResponse.json(
+        { error: "lazer_unreachable", message: "Upstream price request failed. Retry shortly." },
+        { status: 502, headers: { "Retry-After": "1" } },
+      );
     }
   }
 
