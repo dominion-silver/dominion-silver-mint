@@ -18,8 +18,11 @@ export const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJD
 // Must be updated after every fresh init: read it back with scripts/read-config.ts.
 export const SILV_MINT = new PublicKey("62dTkSN7FF2HH8tENWL1mXmrCm8ouqX1bditK71yfxPr");
 
-// Pyth XAG/USD feed.
-export const PYTH_XAG_USD_FEED_ID = "0xf2fb02c32b055c805e7238d628e5e9dadef274376114eb1f012337cabe93871e";
+// AUDIT FINDING P-06: `PYTH_XAG_USD_FEED_ID` (the retired Pyth Core XAG/USD feed) was exported here
+// with zero call sites. The program reads Pyth LAZER feed 3154 via a signed message; there is no Core
+// receiver account on `initialize` any more. A live-looking export of a retired oracle is how a future
+// change reintroduces the wrong price source, and showing a different price than the contract mints at
+// is the specific mistake the note at the top of lib/pyth.ts exists to prevent.
 
 // RPC endpoints.
 // Default = public devnet RPC (no API key required) so the console reads the

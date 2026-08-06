@@ -192,6 +192,14 @@ LIVE_PATHS = [
 # actually get run kept a hardcoded id fallback and no gate could see it. This repo
 # has rotated ids four times in two weeks and every rotation left stale hardcodes.
 LIVE_PATHS += sorted(str(q) for q in pathlib.Path("scripts").glob("*.ts"))
+# AUDIT FINDING P-06: `apps/public/scripts/` was outside this check, and EIGHT of the ten scripts in it
+# hardcoded the retired program id J9cw. The id was already in RETIRED above, so the gate KNEW it and
+# simply never opened the files. `npm run test:auto` ran one of them. That whole directory is deleted
+# now, but the blind spot is what needs closing, not the instance: any per-app scripts directory added
+# later must be scanned from the day it appears, not after the next rotation leaves stale hardcodes in
+# it. Globbed rather than listed for exactly that reason.
+for _app_scripts in sorted(pathlib.Path(".").glob("apps/*/scripts")):
+    LIVE_PATHS += sorted(str(q) for q in _app_scripts.glob("*.ts"))
 found_retired = False
 for path in LIVE_PATHS:
     src = pathlib.Path(path).read_text()

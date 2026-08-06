@@ -4,7 +4,7 @@ import { MintRedeemCard } from "@/components/MintRedeemCard";
 import { ReservesPanel } from "@/components/ReservesPanel";
 import { TransactionHistory } from "@/components/TransactionHistory";
 import { WalletAuthGate } from "@/components/WalletAuthGate";
-import { PROGRAM_ID } from "@/lib/constants";
+import { PROGRAM_ID, solscanAccount } from "@/lib/constants";
 
 export default function HomePage() {
   return (
@@ -46,7 +46,7 @@ export default function HomePage() {
             </a>{" "}
             ·{" "}
             <a
-              href={`https://solscan.io/account/${PROGRAM_ID.toBase58()}?cluster=devnet`}
+              href={solscanAccount(PROGRAM_ID.toBase58())}
               target="_blank"
               rel="noopener noreferrer"
               className="text-accent underline"

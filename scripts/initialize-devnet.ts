@@ -97,12 +97,10 @@ function programDataAddress(programId: PublicKey): PublicKey {
 }
 // Circle devnet USDC (in the V2 initialize allowlist).
 const DEVNET_USDC = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
-// Official Pyth pull-oracle receiver (V2 hard-pins exactly this).
-const PYTH_RECEIVER_DEVNET = new PublicKey(
-  "rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ",
-);
-const PYTH_XAG_USD_FEED_ID_HEX =
-  "f2fb02c32b055c805e7238d628e5e9dadef274376114eb1f012337cabe93871e";
+// AUDIT P-06: a Pyth Core receiver address and the retired XAG/USD feed id used to be declared here.
+// Both were unused: this script passes `pythLazerFeedId: 3154` and `initialize` no longer takes a Pyth
+// receiver account at all. The comment claimed "V2 hard-pins exactly this", which stopped being true
+// when the oracle moved to Lazer.
 
 function parseArgs(): { admin: PublicKey; upgradeSquads: PublicKey } {
   const argv = process.argv.slice(2);

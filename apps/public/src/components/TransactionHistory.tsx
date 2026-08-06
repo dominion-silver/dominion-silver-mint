@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import useSWR from "swr";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
-import { SILV_MINT, TOKEN_2022_PROGRAM_ID } from "@/lib/constants";
+import { SILV_MINT, TOKEN_2022_PROGRAM_ID, solscanTx } from "@/lib/constants";
 
 /**
  * Last N signatures touching the user's SILV ATA = Dominion mint/redeem
@@ -212,7 +212,7 @@ export function TransactionHistory() {
                 </span>
               </div>
               <a
-                href={`https://solscan.io/tx/${entry.signature}?cluster=devnet`}
+                href={solscanTx(entry.signature)}
                 target="_blank"
                 rel="noreferrer"
                 className="font-mono text-accent hover:underline"

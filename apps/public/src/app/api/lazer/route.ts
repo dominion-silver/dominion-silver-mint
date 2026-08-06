@@ -28,6 +28,23 @@ const SILV_FEED_ID = 3154;
 const CACHE_TTL_MS = 2000;
 let silvCache: { at: number; payload: unknown } | null = null;
 
+// Token bucket for audit P-01. Refills continuously at RATE tokens/second up to BURST.
+const BUCKET_BURST = 30;
+const BUCKET_RATE_PER_SEC = 5;
+let tokens = BUCKET_BURST;
+let lastRefill = Date.now();
+function allowRequest(): boolean {
+  const now = Date.now();
+  tokens = Math.min(
+    BUCKET_BURST,
+    tokens + ((now - lastRefill) / 1000) * BUCKET_RATE_PER_SEC,
+  );
+  lastRefill = now;
+  if (tokens < 1) return false;
+  tokens -= 1;
+  return true;
+}
+
 export async function POST(req: NextRequest) {
   const apiKey = process.env.PYTH_LAZER_API_KEY;
   if (!apiKey) {
@@ -37,24 +54,54 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  let feedId = SILV_FEED_ID;
+  // EXTERNAL AUDIT FINDING P-01 (P1). This block used to accept ANY positive integer as `feedId`,
+  // behind a comment claiming it "prevents using this same-origin route to spend the server-held key's
+  // quota on junk/float/negative feeds". It prevented junk, floats and negatives. It did not prevent
+  // 1, 2, 3, 4... and only feed 3154 was cached, so every other value was a guaranteed cache MISS and
+  // therefore one upstream Pyth call, on our key, per request, with no authentication and no rate
+  // limit. Walk the integers and the entitlement or quota is exhausted; then the price, the mint and
+  // the redeem stop working for everyone.
+  //
+  // The fix is not a better numeric filter, it is an ALLOWLIST. Nothing in this app has ever requested
+  // another feed: the client sends `{}` and the contract is bound to 3154 by `config.pyth_lazer_feed_id`.
+  // A parameter with exactly one legal value should not be a parameter.
+  let requestedFeed: unknown;
   try {
     const body = await req.json().catch(() => ({}));
-    // Validate: a positive integer feed id only (prevents using this same-origin
-    // route to spend the server-held key's quota on junk/float/negative feeds).
-    if (
-      typeof body?.feedId === "number" &&
-      Number.isInteger(body.feedId) &&
-      body.feedId > 0
-    ) {
-      feedId = body.feedId;
-    }
+    requestedFeed = body?.feedId;
   } catch {
-    /* default feed */
+    /* no body: the default feed */
+  }
+  if (requestedFeed !== undefined && requestedFeed !== SILV_FEED_ID) {
+    return NextResponse.json(
+      {
+        error: "feed_not_allowed",
+        message: `This proxy serves feed ${SILV_FEED_ID} only.`,
+      },
+      { status: 400 },
+    );
+  }
+  const feedId = SILV_FEED_ID;
+
+  // A second, independent brake, because the allowlist alone does not bound VOLUME: 3154 is cached,
+  // but a cache expires every 2s, so a flood still becomes one upstream call per 2s per warm instance,
+  // plus one per cold start. This is a coarse per-instance token bucket, not a distributed limiter, and
+  // it is deliberately generous: the UI polls every 5s and a mint fetches one envelope, so a real user
+  // needs well under 1 request/second.
+  //
+  // Being per-instance is a real limitation and worth stating rather than implying otherwise. It caps
+  // what ONE serverless instance can spend; it does not stop an attacker who can cause many instances
+  // to spin up. The durable fix is a shared limiter (Upstash/Redis) keyed on IP, which needs
+  // infrastructure this app does not have yet. Recorded in the audit remediation notes as the
+  // follow-up; what is here now turns an unbounded drain into a bounded one.
+  if (!allowRequest()) {
+    return NextResponse.json(
+      { error: "rate_limited", message: "Too many price requests. Retry shortly." },
+      { status: 429, headers: { "Retry-After": "2" } },
+    );
   }
 
-  const isDefaultFeed = feedId === SILV_FEED_ID;
-  if (isDefaultFeed && silvCache && Date.now() - silvCache.at < CACHE_TTL_MS) {
+  if (silvCache && Date.now() - silvCache.at < CACHE_TTL_MS) {
     return NextResponse.json(silvCache.payload);
   }
 
@@ -136,6 +183,6 @@ export async function POST(req: NextRequest) {
       : null;
 
   const payload = { envelopeBase64: solana.data, price };
-  if (isDefaultFeed) silvCache = { at: Date.now(), payload };
+  silvCache = { at: Date.now(), payload };
   return NextResponse.json(payload);
 }

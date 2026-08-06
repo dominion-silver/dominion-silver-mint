@@ -10,7 +10,12 @@ import {
   floor6,
   effectiveRedeemPrice,
 } from "@/lib/pyth";
-import { DEFAULT_SLIPPAGE_BPS, REFRESH_INTERVAL_MS } from "@/lib/constants";
+import {
+  DEFAULT_SLIPPAGE_BPS,
+  REFRESH_INTERVAL_MS,
+  SOL_TOPUP_URL,
+  solscanTx,
+} from "@/lib/constants";
 import {
   fetchConfig,
   fetchTreasuryBalance,
@@ -29,6 +34,7 @@ import {
   buildLazerMintTx,
   buildLazerRedeemTx,
   resolveWalletFlags,
+  effectivePremiumBps,
 } from "@/lib/lazer-tx";
 import { fetchAndExecuteLazer } from "@/lib/lazer-execute";
 import { toast } from "@/components/Toaster";
@@ -95,8 +101,70 @@ export function MintRedeemCard() {
   // 6.7x too expensive and, worse, fed that wrong premium into the min_out the
   // transaction actually enforces. Quote nothing until the real config is in
   // hand: `null` propagates through every memo and disables the preview.
-  const premiumBpsMint = cfg?.premiumBpsMint ?? null;
-  const premiumBpsRedeem = cfg?.premiumBpsRedeem ?? null;
+  const configuredBpsMint = cfg?.premiumBpsMint ?? null;
+  const configuredBpsRedeem = cfg?.premiumBpsRedeem ?? null;
+
+  const nowSecs = Math.floor(Date.now() / 1000);
+
+  // The caller's on-chain per-wallet accounts. Needed so `classifyRedeem` can answer the KYC
+  // question for THIS wallet instead of only reporting that the gate is armed. Cheap: one batched
+  // RPC call, and only meaningful once an admin arms the gate.
+  //
+  // `error` is destructured DELIBERATELY. Making the resolver throw only helps if somebody reads the
+  // throw, and the first version of this fix ignored `error`, so a failed read was invisible: the
+  // route silently fell back to whatever `undefined` implies and the fee-exemption line just never
+  // appeared. The punch list claimed this call site surfaced the error before it actually did.
+  const { data: walletFlags, error: walletFlagsError } = useSWR(
+    wallet.publicKey ? `wallet-flags-${wallet.publicKey.toBase58()}` : null,
+    () => resolveWalletFlags(connection, wallet.publicKey!),
+    { refreshInterval: 30_000, keepPreviousData: true },
+  );
+  // Tri-state, and the third state has to stay reachable: `undefined` means NOT KNOWN, which
+  // `classifyRedeem` turns into the "kyc" route whenever the gate is armed (`kycAttested !== true`).
+  // That is the fail-closed direction, so an RPC failure blocks rather than promising an instant
+  // redeem the chain would revert.
+  const kycAttested = walletFlags ? walletFlags.kyc != null : undefined;
+
+  // AUDIT FINDING P-07. The premiums the quote uses are the ones THIS WALLET pays, not the global
+  // config values. The exemption PDA was already being loaded and its contents were simply never read,
+  // so a wallet whitelisted on mint was shown "1% fee" and an understated SILV output while the program
+  // would charge 0%. The user could not verify the commercial terms granted to them before signing.
+  //
+  // `effectivePremiumBps` mirrors `state/fee_exempt.rs::effective_premium_bps`, including treating a
+  // zero expiry as expired (audit C-01). Falling back to the CONFIGURED bps whenever the exemption is
+  // unknown is the safe direction: quoting 0% and then being charged the premium would mint less SILV
+  // than the quote promised, and `minSilvOut` is derived from this same number, so an over-optimistic
+  // quote becomes a hard SlippageExceeded rather than a small surprise.
+  const premiumBpsMint =
+    configuredBpsMint === null
+      ? null
+      : effectivePremiumBps(
+          configuredBpsMint,
+          walletFlags?.feeExemptFlags ?? null,
+          walletFlags?.feeExemptExpiresAt ?? null,
+          "mint",
+          nowSecs,
+        );
+  const premiumBpsRedeem =
+    configuredBpsRedeem === null
+      ? null
+      : effectivePremiumBps(
+          configuredBpsRedeem,
+          walletFlags?.feeExemptFlags ?? null,
+          walletFlags?.feeExemptExpiresAt ?? null,
+          "redeem",
+          nowSecs,
+        );
+  /** True when this wallet's quote is discounted, so the UI can say so instead of silently differing. */
+  const exemptSide =
+    premiumBpsMint === 0 && premiumBpsRedeem === 0
+      ? "both"
+      : premiumBpsMint === 0
+        ? "mint"
+        : premiumBpsRedeem === 0
+          ? "redeem"
+          : null;
+
 
   const preview = useMemo(() => {
     if (!price || !amount) return null;
@@ -118,7 +186,6 @@ export function MintRedeemCard() {
 
   // Option B: classify the redeem route (instant / limit / otc / kyc / disabled)
   // for the entered amount, so the UI tells the user up-front.
-  const nowSecs = Math.floor(Date.now() / 1000);
   // TWO figures, deliberately named apart, because conflating them was bug B2.
   //   GROSS = what leaves the treasury = what the program debits the budget by and checks
   //           solvency against.
@@ -141,25 +208,6 @@ export function MintRedeemCard() {
     const priceScaled1e9 = new BN(Math.round(price.priceUsd * 1e9));
     return redeemGrossUsdc(parseSilvAmount(amount), priceScaled1e9);
   }, [mode, price, amount, premiumBpsRedeem]);
-
-  // The caller's on-chain per-wallet accounts. Needed so `classifyRedeem` can answer the KYC
-  // question for THIS wallet instead of only reporting that the gate is armed. Cheap: one batched
-  // RPC call, and only meaningful once an admin arms the gate.
-  //
-  // `error` is destructured DELIBERATELY. Making the resolver throw only helps if somebody reads the
-  // throw, and the first version of this fix ignored `error`, so a failed read was invisible: the
-  // route silently fell back to whatever `undefined` implies and the fee-exemption line just never
-  // appeared. The punch list claimed this call site surfaced the error before it actually did.
-  const { data: walletFlags, error: walletFlagsError } = useSWR(
-    wallet.publicKey ? `wallet-flags-${wallet.publicKey.toBase58()}` : null,
-    () => resolveWalletFlags(connection, wallet.publicKey!),
-    { refreshInterval: 30_000, keepPreviousData: true },
-  );
-  // Tri-state, and the third state has to stay reachable: `undefined` means NOT KNOWN, which
-  // `classifyRedeem` turns into the "kyc" route whenever the gate is armed (`kycAttested !== true`).
-  // That is the fail-closed direction, so an RPC failure blocks rather than promising an instant
-  // redeem the chain would revert.
-  const kycAttested = walletFlags ? walletFlags.kyc != null : undefined;
 
   const redeemRoute: RedeemRoute | null = useMemo(() => {
     if (mode !== "redeem" || !cfg || !treasury || !redeemGross) return null;
@@ -270,7 +318,7 @@ export function MintRedeemCard() {
     toast({
       message: `${label} confirmed`,
       variant: "success",
-      href: `https://solscan.io/tx/${sig}?cluster=devnet`,
+      href: solscanTx(sig),
       hrefLabel: "View on Solscan",
     });
     setAmount("");
@@ -601,16 +649,40 @@ export function MintRedeemCard() {
           </div>
           <div className="flex justify-between">
             <span>Fee</span>
+            {/* AUDIT P-07: these two bps values are now the ones THIS WALLET pays, so an exempt wallet
+                shows 0.0% here and in the price and min-received rows above. Showing a bare "0.0%"
+                would read as a loading glitch, so an exemption is stated, with the configured rate it
+                replaces, and the expiry: a wallet holding a term-limited waiver should be able to see
+                when it lapses without asking. */}
             <span className="font-mono text-white">
-              {mode === "mint"
-                ? premiumBpsMint !== null
-                  ? `${(premiumBpsMint / 100).toFixed(1)}%`
-                  : "loading"
-                : premiumBpsRedeem !== null
-                  ? `${(premiumBpsRedeem / 100).toFixed(1)}%`
-                  : "loading"}
+              {(mode === "mint" ? premiumBpsMint : premiumBpsRedeem) === null ? (
+                "loading"
+              ) : (mode === "mint" ? premiumBpsMint : premiumBpsRedeem) === 0 &&
+                (mode === "mint" ? configuredBpsMint : configuredBpsRedeem) !== 0 ? (
+                <span className="text-accent">
+                  0.0% (waived
+                  {(mode === "mint" ? configuredBpsMint : configuredBpsRedeem) !== null &&
+                    `, normally ${(((mode === "mint" ? configuredBpsMint : configuredBpsRedeem) ?? 0) / 100).toFixed(1)}%`}
+                  )
+                </span>
+              ) : (
+                `${(((mode === "mint" ? premiumBpsMint : premiumBpsRedeem) ?? 0) / 100).toFixed(1)}%`
+              )}
             </span>
           </div>
+          {exemptSide && walletFlags?.feeExemptExpiresAt ? (
+            <div className="flex justify-between text-accent/80">
+              <span>
+                Fee exemption ({exemptSide === "both" ? "mint and redeem" : exemptSide} side)
+              </span>
+              <span className="font-mono">
+                until{" "}
+                {new Date(walletFlags.feeExemptExpiresAt * 1000)
+                  .toISOString()
+                  .slice(0, 10)}
+              </span>
+            </div>
+          ) : null}
           {/* Pyth Lazer rides the signed price inside the consumer tx (no
               separate temporary price account is posted), so the old Core
               price-account rent disclosure no longer applies. The only costs
@@ -622,16 +694,26 @@ export function MintRedeemCard() {
       {wallet.publicKey && insufficientSol && (
         <div className="mb-4 rounded-md border border-yellow-500 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-300 break-words">
           Low SOL ({(solBalance ?? 0).toFixed(4)}). Need ≥ {SOL_FOR_FEES_MIN} SOL
-          for fees. Top up at{" "}
-          <a
-            href="https://faucet.solana.com"
-            target="_blank"
-            rel="noreferrer"
-            className="underline"
-          >
-            faucet.solana.com
-          </a>{" "}
-          (devnet).
+          for fees.{" "}
+          {/* AUDIT P-08: this always pointed at the devnet faucet. On mainnet there is no faucet, so
+              linking one sends the user on an errand that cannot work, at the moment they are already
+              stuck. Say nothing rather than something false. */}
+          {SOL_TOPUP_URL ? (
+            <>
+              Top up at{" "}
+              <a
+                href={SOL_TOPUP_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="underline"
+              >
+                {new URL(SOL_TOPUP_URL).host}
+              </a>{" "}
+              (devnet).
+            </>
+          ) : (
+            <>Fund this wallet with SOL from an exchange or another wallet.</>
+          )}
         </div>
       )}
 

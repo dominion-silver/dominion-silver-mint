@@ -160,14 +160,19 @@ export function feeVaultUsdcAta(): PublicKey {
 export async function resolveWalletFlags(
   connection: Connection,
   user: PublicKey,
-): Promise<{ feeExempt: PublicKey | null; kyc: PublicKey | null }> {
+): Promise<WalletFlags> {
   const fe = feeExemptPda(user);
   const ky = kycPda(user);
   try {
     const infos = await connection.getMultipleAccountsInfo([fe, ky]);
+    const feeOk = usable(infos[0], FEE_EXEMPT_DISCRIMINATOR);
     return {
-      feeExempt: usable(infos[0], FEE_EXEMPT_DISCRIMINATOR) ? fe : null,
+      feeExempt: feeOk ? fe : null,
       kyc: usable(infos[1], KYC_DISCRIMINATOR) ? ky : null,
+      // AUDIT P-07: the account was located and never READ, so the UI could not tell WHICH side was
+      // waived or whether the term was still live, and every quote used the global premium.
+      feeExemptFlags: feeOk ? decodeFeeExemptFlags(infos[0]!.data) : null,
+      feeExemptExpiresAt: feeOk ? decodeFeeExemptExpiry(infos[0]!.data) : null,
     };
   } catch (e) {
     // Rethrow: the SWR consumer needs to see this as an error, not as "no accounts".
@@ -197,14 +202,14 @@ export async function resolveWalletFlags(
 async function resolveWalletFlagsOrDefault(
   connection: Connection,
   user: PublicKey,
-): Promise<{ feeExempt: PublicKey | null; kyc: PublicKey | null }> {
+): Promise<WalletFlags> {
   try {
     return await resolveWalletFlags(connection, user);
   } catch {
     try {
       return await resolveWalletFlags(connection, user);
     } catch {
-      return { feeExempt: null, kyc: null };
+      return { feeExempt: null, kyc: null, feeExemptFlags: null, feeExemptExpiresAt: null };
     }
   }
 }
@@ -242,6 +247,66 @@ const KYC_DISCRIMINATOR = discriminatorFromIdl("KycAccount");
  * else. Together they match exactly what `Account<'info, T>::try_from` enforces on chain, which is
  * the property this function has to mirror.
  */
+export interface WalletFlags {
+  feeExempt: PublicKey | null;
+  kyc: PublicKey | null;
+  /** `Side` bitfield from the on-chain account: 1 = mint, 2 = redeem, 3 = both. */
+  feeExemptFlags: number | null;
+  /** Unix seconds. Mandatory and strictly future on chain since audit C-01. */
+  feeExemptExpiresAt: number | null;
+}
+
+// FeeExemptAccount layout, from state/fee_exempt.rs::SIZE:
+//   8 discriminator | 32 wallet | 1 flags | 8 added_at | 32 added_by | 1 version | 8 expires_at | 24 reserved
+// Hand-decoded rather than via Anchor's coder because this runs inside `getMultipleAccountsInfo`, where
+// we already hold the raw bytes and want no second RPC. The offsets are asserted in
+// contract-parity.test.ts against the IDL so they cannot drift from the struct.
+const FEE_EXEMPT_FLAGS_OFFSET = 8 + 32;
+const FEE_EXEMPT_EXPIRES_AT_OFFSET = 8 + 32 + 1 + 8 + 32 + 1;
+
+export function decodeFeeExemptFlags(data: Uint8Array | Buffer): number | null {
+  if (data.length < FEE_EXEMPT_FLAGS_OFFSET + 1) return null;
+  return data[FEE_EXEMPT_FLAGS_OFFSET];
+}
+
+export function decodeFeeExemptExpiry(data: Uint8Array | Buffer): number | null {
+  if (data.length < FEE_EXEMPT_EXPIRES_AT_OFFSET + 8) return null;
+  // i64 LE. Read as BigInt then narrow: an expiry is seconds, so it fits a Number comfortably, and
+  // going through BigInt avoids the 32-bit truncation a DataView getInt32 pair would risk.
+  let v = 0n;
+  for (let i = 7; i >= 0; i--) v = (v << 8n) | BigInt(data[FEE_EXEMPT_EXPIRES_AT_OFFSET + i]);
+  // Interpret as signed.
+  if (v >= 1n << 63n) v -= 1n << 64n;
+  return Number(v);
+}
+
+/**
+ * The premium a GIVEN wallet actually pays on a GIVEN side, mirroring
+ * `state/fee_exempt.rs::effective_premium_bps`.
+ *
+ * AUDIT FINDING P-07. The resolver loaded the exemption PDA, but the preview, the effective price, the
+ * fee label and `min_out` all kept using the global bps. A wallet whitelisted on mint saw "1% fee" and
+ * an understated output while the program would charge 0%, so the user could not see the commercial
+ * terms they had been granted before signing. Distinct from the deliberate RPC fallback: this happened
+ * even when the read SUCCEEDED.
+ *
+ * `expiresAt` of 0 counts as EXPIRED here, matching `FeeExemptAccount::is_expired` after C-01. Failing
+ * open would quote 0% and then charge the premium, which is the worse direction: the user would sign
+ * expecting a discount and receive less SILV than the quote promised.
+ */
+export function effectivePremiumBps(
+  configuredBps: number,
+  flags: number | null,
+  expiresAt: number | null,
+  side: "mint" | "redeem",
+  nowSecs: number,
+): number {
+  if (flags == null || expiresAt == null) return configuredBps;
+  if (expiresAt === 0 || nowSecs >= expiresAt) return configuredBps;
+  const bit = side === "mint" ? 1 : 2;
+  return (flags & bit) !== 0 ? 0 : configuredBps;
+}
+
 export function usable(
   info: { owner: PublicKey; data: Uint8Array | Buffer } | null,
   discriminator: Uint8Array,

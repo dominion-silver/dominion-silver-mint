@@ -17,6 +17,11 @@ import BN from "bn.js";
 import { PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import idl from "../idl/dominion_silver_mint.json";
+import {
+  effectivePremiumBps,
+  decodeFeeExemptFlags,
+  decodeFeeExemptExpiry,
+} from "../lazer-tx";
 import { effectiveMintPrice, effectiveRedeemPrice, floor6 } from "../pyth";
 import {
   mintSilvAccounts,
@@ -29,6 +34,9 @@ import { USDC_MINT, TOKEN_PROGRAM_ID, PROGRAM_ID } from "../constants";
 import {
   feeFromAmount,
   redeemGrossUsdc,
+  redeemOutflowForGross,
+  classifyRedeem,
+  computeMaxInstantRedeemableUsdc,
   redeemUsdcOut,
   effectiveRedeemUsed,
   type ConfigAccount,
@@ -399,5 +407,152 @@ describe("sliding window parity with the program", () => {
     // the user has paid the Lazer verify fee.
     const used = effectiveRedeemUsed(cfg(1, BUDGET, 0n), 1 + W + 1);
     expect(BigInt(used.toString())).toBeGreaterThan((BUDGET * 999n) / 1000n);
+  });
+});
+
+describe("audit P-02: the client must bound OUTFLOW, not the trade size", () => {
+  // The finding's own worked example, kept as the first case so a regression reproduces the report.
+  const base = {
+    paused: false,
+    redemptionsEnabled: true,
+    premiumBpsRedeem: 150,
+    instantRedeemBudgetUsdc: new BN(98_500_000), // 98.50 USDC
+    instantRedeemWindowSeconds: 86_400,
+    instantUsedUsdc: new BN(0),
+    instantUsedPrevUsdc: new BN(0),
+    instantWindowStart: new BN(1_700_000_000),
+    kycScopeFlags: 0,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any;
+  const NOW = 1_700_000_100;
+  const TREASURY = new BN(98_500_000);
+  const GROSS = new BN(100_000_000); // 100 USDC gross
+
+  it("routing OFF: a redemption the chain would serve is NOT refused", () => {
+    const cfg = { ...base, feeRoutingDisabled: true };
+    // The program's arithmetic: to_user = 100 - ceil(100 * 150/1e4) = 98.50, fee_routed = 0,
+    // so total_out = 98.50, which fits both the 98.50 budget and the 98.50 treasury exactly.
+    expect(redeemOutflowForGross(cfg, GROSS).toString()).toBe("98500000");
+    expect(classifyRedeem(cfg, TREASURY, GROSS, NOW, undefined)).toBe("instant");
+  });
+
+  it("routing ON: the same redemption IS over the limit, because the fee leg also leaves", () => {
+    const cfg = { ...base, feeRoutingDisabled: false };
+    expect(redeemOutflowForGross(cfg, GROSS).toString()).toBe("100000000");
+    // 100 > 98.50 budget -> limit. This is the case the old code got right, and it must stay right:
+    // the fix must not have swapped one wrong answer for another.
+    expect(classifyRedeem(cfg, TREASURY, GROSS, NOW, undefined)).toBe("limit");
+  });
+
+  it("the treasury bound moves with the flag too, independently of the budget", () => {
+    // Budget generous, treasury exactly the net. Routing off -> serveable; routing on -> otc.
+    const wide = { ...base, instantRedeemBudgetUsdc: new BN(10_000_000_000) };
+    expect(
+      classifyRedeem({ ...wide, feeRoutingDisabled: true }, new BN(98_500_000), GROSS, NOW, undefined),
+    ).toBe("instant");
+    expect(
+      classifyRedeem({ ...wide, feeRoutingDisabled: false }, new BN(98_500_000), GROSS, NOW, undefined),
+    ).toBe("otc");
+  });
+
+  it("the advertised maximum matches what the flag makes possible", () => {
+    // With routing off the whole outflow allowance reaches the user, so "max instant" is the full
+    // budget. With routing on the user's share is the budget minus the premium leg.
+    const off = computeMaxInstantRedeemableUsdc({ ...base, feeRoutingDisabled: true }, TREASURY, NOW);
+    const on = computeMaxInstantRedeemableUsdc({ ...base, feeRoutingDisabled: false }, TREASURY, NOW);
+    expect(off.toString()).toBe("98500000");
+    expect(on.lt(off)).toBe(true);
+    // And the advertised maximum must itself be serveable: quoting a number that routes to "limit"
+    // is the same class of bug in the other direction.
+    for (const [cfgFlag, max] of [[true, off], [false, on]] as const) {
+      const cfg = { ...base, feeRoutingDisabled: cfgFlag };
+      // Convert the advertised NET back to the gross the user would submit.
+      const gross = cfgFlag
+        ? max
+        : max.mul(new BN(10_000)).div(new BN(10_000 - base.premiumBpsRedeem));
+      expect(
+        ["instant", "otc"].includes(classifyRedeem(cfg, TREASURY, gross, NOW, undefined)),
+        `advertised max must not be over the BUDGET (flag=${cfgFlag})`,
+      ).toBe(true);
+    }
+  });
+});
+
+describe("audit P-07: the per-wallet premium mirrors the program", () => {
+  // The IDL is the arbiter of the byte offsets the hand decoder uses. If a field is ever inserted into
+  // FeeExemptAccount, this fails instead of the decoder silently reading the wrong bytes.
+  it("the FeeExemptAccount offsets the decoder assumes match the IDL", () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const acc = (idl as any).accounts?.find((a: any) => a.name === "FeeExemptAccount");
+    expect(acc, "FeeExemptAccount must exist in the IDL").toBeDefined();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ty = (idl as any).types?.find((t: any) => t.name === "FeeExemptAccount");
+    const names = ty.type.fields.map((f: { name: string }) => f.name);
+    // The decoder assumes exactly this order. Anything else invalidates the offsets.
+    expect(names).toEqual([
+      "wallet",
+      "flags",
+      "added_at",
+      "added_by",
+      "version",
+      "expires_at",
+      "reserved",
+    ]);
+  });
+
+  const NOW = 1_800_000_000;
+  const LIVE = NOW + 86_400;
+
+  it("waives only the side whose bit is set", () => {
+    // flags 1 = mint only. The recommended grant: the redeem fee still closes any round trip.
+    expect(effectivePremiumBps(100, 1, LIVE, "mint", NOW)).toBe(0);
+    expect(effectivePremiumBps(150, 1, LIVE, "redeem", NOW)).toBe(150);
+    // flags 2 = redeem only.
+    expect(effectivePremiumBps(100, 2, LIVE, "mint", NOW)).toBe(100);
+    expect(effectivePremiumBps(150, 2, LIVE, "redeem", NOW)).toBe(0);
+    // flags 3 = both.
+    expect(effectivePremiumBps(100, 3, LIVE, "mint", NOW)).toBe(0);
+    expect(effectivePremiumBps(150, 3, LIVE, "redeem", NOW)).toBe(0);
+  });
+
+  it("charges the full premium once the term has lapsed", () => {
+    expect(effectivePremiumBps(100, 3, NOW - 1, "mint", NOW)).toBe(100);
+    expect(effectivePremiumBps(100, 3, NOW, "mint", NOW)).toBe(100); // expiry is exclusive
+    expect(effectivePremiumBps(100, 3, NOW + 1, "mint", NOW)).toBe(0);
+  });
+
+  it("treats a ZERO expiry as expired, matching the contract after C-01", () => {
+    // The Rust `is_expired` reads zero as dead. If the client read it as "never" it would quote 0%
+    // and the program would charge the premium, minting less SILV than the quote promised, and
+    // `minSilvOut` is derived from the same number so it becomes a hard SlippageExceeded.
+    expect(effectivePremiumBps(100, 3, 0, "mint", NOW)).toBe(100);
+  });
+
+  it("falls back to the configured premium when the exemption is unknown", () => {
+    expect(effectivePremiumBps(100, null, null, "mint", NOW)).toBe(100);
+    expect(effectivePremiumBps(100, 3, null, "mint", NOW)).toBe(100);
+    expect(effectivePremiumBps(100, null, LIVE, "mint", NOW)).toBe(100);
+  });
+
+  it("decodes flags and a signed i64 expiry out of the raw account bytes", () => {
+    // Build the exact byte layout the program writes, then round-trip it.
+    const buf = new Uint8Array(114);
+    buf[8 + 32] = 3; // flags
+    const off = 8 + 32 + 1 + 8 + 32 + 1;
+    const v = BigInt(LIVE);
+    for (let i = 0; i < 8; i++) buf[off + i] = Number((v >> BigInt(8 * i)) & 0xffn);
+    expect(decodeFeeExemptFlags(buf)).toBe(3);
+    expect(decodeFeeExemptExpiry(buf)).toBe(LIVE);
+
+    // A NEGATIVE i64 must decode negative, not as a huge positive. It would otherwise look like a
+    // far-future expiry, i.e. a permanent exemption, which is precisely what C-01 removed.
+    const neg = new Uint8Array(114);
+    neg.fill(0xff, off, off + 8); // -1
+    expect(decodeFeeExemptExpiry(neg)).toBe(-1);
+    expect(effectivePremiumBps(100, 3, decodeFeeExemptExpiry(neg)!, "mint", NOW)).toBe(100);
+
+    // Too-short data must not produce a confident answer.
+    expect(decodeFeeExemptFlags(new Uint8Array(4))).toBeNull();
+    expect(decodeFeeExemptExpiry(new Uint8Array(40))).toBeNull();
   });
 });

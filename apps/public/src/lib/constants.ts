@@ -18,8 +18,11 @@ export const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJD
 // Must be updated after every fresh init: read it back with scripts/read-config.ts.
 export const SILV_MINT = new PublicKey("62dTkSN7FF2HH8tENWL1mXmrCm8ouqX1bditK71yfxPr");
 
-// Pyth XAG/USD feed.
-export const PYTH_XAG_USD_FEED_ID = "0xf2fb02c32b055c805e7238d628e5e9dadef274376114eb1f012337cabe93871e";
+// AUDIT FINDING P-06: `PYTH_XAG_USD_FEED_ID` (the retired Pyth Core XAG/USD feed) was exported here
+// with zero call sites. The program reads Pyth LAZER feed 3154 via a signed message; there is no Core
+// receiver account on `initialize` any more. A live-looking export of a retired oracle is how a future
+// change reintroduces the wrong price source, and showing a different price than the contract mints at
+// is the specific mistake the note at the top of lib/pyth.ts exists to prevent.
 
 // Pyth Lazer (Pyth Pro) on-chain accounts. Program + Storage are the same
 // address on mainnet + devnet; the dominion oracle ix passes them.
@@ -45,6 +48,40 @@ export const LAZER_SILV_FEED_ID = 3154;
 export const DEVNET_RPC = "https://api.devnet.solana.com";
 export const HELIUS_RPC = process.env.NEXT_PUBLIC_HELIUS_RPC || DEVNET_RPC;
 export const TRITON_RPC = process.env.NEXT_PUBLIC_TRITON_RPC || DEVNET_RPC;
+
+/**
+ * Which cluster this build talks to, and everything that has to follow from it.
+ *
+ * AUDIT FINDING P-08. Explorer links were built with a literal `?cluster=devnet` in four places and the
+ * low-balance notice sent every user to the devnet faucet. Nothing in the app derived any of that from a
+ * cluster constant, so a mainnet deploy would have shipped links that open a nonexistent transaction on
+ * devnet, and told a mainnet user out of SOL to visit a faucet that cannot fund their transaction. The
+ * quiet version of the failure is the worse one: the toast after a successful mint links somewhere the
+ * transaction is not, which reads as "my mint did not go through".
+ *
+ * Derived from the RPC rather than a separate env var on purpose. A separate flag is one more thing to
+ * forget, and forgetting it reproduces the bug; the RPC is already required to be right for the app to
+ * function at all, so it cannot be stale while anything else works.
+ */
+export const CLUSTER: "devnet" | "mainnet-beta" =
+  /devnet/i.test(HELIUS_RPC) || /devnet/i.test(TRITON_RPC) ? "devnet" : "mainnet-beta";
+
+/** Query suffix for explorer URLs. Mainnet takes NO cluster parameter. */
+export const EXPLORER_CLUSTER_QS = CLUSTER === "devnet" ? "?cluster=devnet" : "";
+
+export function solscanTx(sig: string): string {
+  return `https://solscan.io/tx/${sig}${EXPLORER_CLUSTER_QS}`;
+}
+export function solscanAccount(addr: string): string {
+  return `https://solscan.io/account/${addr}${EXPLORER_CLUSTER_QS}`;
+}
+
+/**
+ * Where to send a user who has no SOL. On devnet that is the faucet. On mainnet there is no faucet, so
+ * pointing at one is worse than saying nothing: it sends the user on an errand that cannot work.
+ */
+export const SOL_TOPUP_URL: string | null =
+  CLUSTER === "devnet" ? "https://faucet.solana.com" : null;
 
 // PDA seeds.
 // V2 (Option B): daily/hourly seeds removed (those accounts no longer exist);

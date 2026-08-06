@@ -190,6 +190,22 @@ export async function fetchConfig(
   }
 }
 
+/**
+ * EXTERNAL AUDIT FINDING P-04. Both of these used to `catch { return new BN(0) }`.
+ *
+ * Zero is a MEANINGFUL protocol value, so returning it for "the RPC did not answer" makes the two
+ * indistinguishable. A 429 on the balance calls, with the config still served, rendered supply 0,
+ * treasury 0 and max-instant-redeem 0 on the ReservesPanel with its status light still green, and
+ * routed every redemption to "otc" or "limit" for as long as the SWR cache held.
+ *
+ * They THROW now. SWR treats a throw as an error, which is what surfaces the failure to the panel and
+ * what enables its retry and backoff; a resolved BN(0) was recorded as a SUCCESS and never retried.
+ * This is the same lesson as `resolveWalletFlags` in the previous batch, in a second place: a helper
+ * that cannot distinguish "no" from "do not know" must not answer.
+ *
+ * A non-existent account is a different case and stays non-throwing: `getTokenAccountBalance` on a
+ * missing ATA is a legitimate zero, so callers get zero for that and an error for a failure.
+ */
 export async function fetchTreasuryBalance(connection: Connection): Promise<BN> {
   const treasuryAta = getAssociatedTokenAddressSync(
     USDC_MINT,
@@ -200,8 +216,12 @@ export async function fetchTreasuryBalance(connection: Connection): Promise<BN> 
   try {
     const info = await connection.getTokenAccountBalance(treasuryAta);
     return new BN(info.value.amount);
-  } catch {
-    return new BN(0);
+  } catch (e) {
+    // "could not find account" is the ATA genuinely not existing: a real zero, not a failure.
+    if (/could not find account|Invalid param: could not find account/i.test(String(e))) {
+      return new BN(0);
+    }
+    throw new Error(`treasury balance unavailable: ${String(e).slice(0, 200)}`);
   }
 }
 
@@ -209,8 +229,8 @@ export async function fetchSilvSupply(connection: Connection): Promise<BN> {
   try {
     const info = await connection.getTokenSupply(SILV_MINT);
     return new BN(info.value.amount);
-  } catch {
-    return new BN(0);
+  } catch (e) {
+    throw new Error(`SILV supply unavailable: ${String(e).slice(0, 200)}`);
   }
 }
 
@@ -344,11 +364,43 @@ export function computeMaxInstantRedeemableUsdc(
   );
   if (budgetRemaining.ltn(0)) budgetRemaining = new BN(0);
 
-  let grossMax = budgetRemaining;
-  if (treasuryBalanceUsdc.lt(grossMax)) grossMax = treasuryBalanceUsdc;
-  if (grossMax.ltn(0)) grossMax = new BN(0);
+  let outflowMax = budgetRemaining;
+  if (treasuryBalanceUsdc.lt(outflowMax)) outflowMax = treasuryBalanceUsdc;
+  if (outflowMax.ltn(0)) outflowMax = new BN(0);
 
-  return grossMax.sub(feeFromAmount(grossMax, cfg.premiumBpsRedeem));
+  // What the program bounds is OUTFLOW, and outflow is not always the gross. See
+  // `redeemOutflowForGross` below: with fee routing off the premium is retained, so the whole of
+  // `outflowMax` reaches the user and there is nothing to subtract.
+  return cfg.feeRoutingDisabled
+    ? outflowMax
+    : outflowMax.sub(feeFromAmount(outflowMax, cfg.premiumBpsRedeem));
+}
+
+/**
+ * What a redemption of `grossUsdc` actually takes OUT of the treasury.
+ *
+ * EXTERNAL AUDIT FINDING P-02 (P1). Both prediction functions here compared the GROSS against the
+ * budget and the treasury balance, unconditionally. The program does not:
+ *
+ *   let fee_routed = if config.fee_routing_disabled { 0 } else { fee_usdc };
+ *   let total_out  = to_user_usdc + fee_routed;                 // redeem_silv.rs
+ *
+ * With routing OFF the premium stays in the treasury, so the outflow is the user's leg alone and the
+ * chain will happily serve a redemption this client refuses. Worked example from the finding: redeem
+ * premium 1.5%, budget remaining and treasury both 98.50 USDC, gross 100. The program computes an
+ * outflow of 98.50 and accepts. The client compared 100 against 98.50, returned "limit" or "otc", and
+ * disabled the submit button.
+ *
+ * That matters because of WHEN it happens. `fee_routing_disabled` is the incident switch, flipped when
+ * the fee vault is unusable; the moment it is on is the moment redemptions must keep working. The bug
+ * made the escape hatch quietly shrink the redeemable amount by the premium.
+ *
+ * The client mirrored a COMMENT rather than the code: `redeem_silv.rs` said "Debited by GROSS, not by
+ * the user's leg" twenty lines above the line that debits net. Both have been fixed.
+ */
+export function redeemOutflowForGross(cfg: ConfigAccount, grossUsdc: BN): BN {
+  if (!cfg.feeRoutingDisabled) return grossUsdc;
+  return grossUsdc.sub(feeFromAmount(grossUsdc, cfg.premiumBpsRedeem));
 }
 
 /**
@@ -379,14 +431,18 @@ export function classifyRedeem(
   // self-correcting and harmless, whereas promising "instant" and then reverting with a raw
   // KycRequired costs the user a Lazer fee to discover.
   if (((cfg.kycScopeFlags ?? 0) & 2) !== 0 && kycAttested !== true) return "kyc";
+  // Both limits are on TREASURY OUTFLOW, which equals the gross only while fee routing is on.
+  // Audit P-02: comparing the gross unconditionally refused solvable redemptions during exactly the
+  // incident that turns routing off.
+  const outflow = redeemOutflowForGross(cfg, grossUsdc);
   if (
     effectiveRedeemUsed(cfg, nowUnixSecs)
-      .add(grossUsdc)
+      .add(outflow)
       .gt(cfg.instantRedeemBudgetUsdc)
   ) {
     return "limit";
   }
-  if (treasuryBalanceUsdc.lt(grossUsdc)) return "otc";
+  if (treasuryBalanceUsdc.lt(outflow)) return "otc";
   return "instant";
 }
 
