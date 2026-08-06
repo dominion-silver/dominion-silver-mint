@@ -147,9 +147,16 @@ export function feeVaultUsdcAta(): PublicKey {
  * wallet that gets whitelisted or approved starts benefiting on its next transaction with no
  * front-end change and no cache to invalidate.
  *
- * On RPC failure both fall back to null, which is the safe direction: the caller pays the full
- * fee (never a wrong discount), and if the KYC gate is armed the transaction fails with a clear
- * KycRequired rather than silently pricing wrong. */
+ * THROWS on RPC failure. It used to swallow the error and return `{null, null}`, which looked like
+ * the safe choice and defeated the tri-state `classifyRedeem` was given: SWR recorded a SUCCESS,
+ * never retried with backoff, and `kycAttested` became a definite `false` rather than `undefined`.
+ * With `keepPreviousData` an ATTESTED user was told "Redemption requires identity verification on
+ * this wallet" for 30 seconds on any RPC blip. The `undefined` branch was only reachable before the
+ * first fetch, never after a failure.
+ *
+ * The transaction builders below catch and fall back to null themselves, where that IS the safe
+ * direction: full fee rather than a wrong discount, and a clear KycRequired rather than mispricing.
+ * The decision belongs at each call site, not buried here. */
 export async function resolveWalletFlags(
   connection: Connection,
   user: PublicKey,
@@ -162,6 +169,25 @@ export async function resolveWalletFlags(
       feeExempt: usable(infos[0], FEE_EXEMPT_DISCRIMINATOR) ? fe : null,
       kyc: usable(infos[1], KYC_DISCRIMINATOR) ? ky : null,
     };
+  } catch (e) {
+    // Rethrow: the SWR consumer needs to see this as an error, not as "no accounts".
+    throw e instanceof Error
+      ? e
+      : new Error(`could not resolve wallet flags: ${String(e)}`);
+  }
+}
+
+/** The builders' fallback: full fee, no exemption, no attestation.
+ *
+ * Safe HERE in a way it is not for display, because the program re-checks everything: an omitted
+ * exemption charges the full premium and an omitted attestation reverts KycRequired with a mapped
+ * message. Building nothing at all would be worse than building a correctly-priced transaction. */
+async function resolveWalletFlagsOrDefault(
+  connection: Connection,
+  user: PublicKey,
+): Promise<{ feeExempt: PublicKey | null; kyc: PublicKey | null }> {
+  try {
+    return await resolveWalletFlags(connection, user);
   } catch {
     return { feeExempt: null, kyc: null };
   }
@@ -297,7 +323,7 @@ export async function buildLazerMintTx(
   const messageData = Buffer.from(lazerMessageData(args.envelope));
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const opt = await resolveWalletFlags(connection, user);
+  const opt = await resolveWalletFlagsOrDefault(connection, user);
   const dominionIx = await (program.methods as any)
     .mintSilv(args.amountUsdc, args.minSilvOut, messageData, ED25519_IX_INDEX, 0)
     .accounts(mintSilvAccounts(user, opt))
@@ -330,7 +356,7 @@ export async function buildLazerRedeemTx(
   const messageData = Buffer.from(lazerMessageData(args.envelope));
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const opt = await resolveWalletFlags(connection, user);
+  const opt = await resolveWalletFlagsOrDefault(connection, user);
   const dominionIx = await (program.methods as any)
     .redeemSilv(args.amountSilv, args.minUsdcOut, messageData, ED25519_IX_INDEX, 0)
     .accounts(redeemSilvAccounts(user, opt))

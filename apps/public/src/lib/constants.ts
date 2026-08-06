@@ -48,7 +48,7 @@ export const TRITON_RPC = process.env.NEXT_PUBLIC_TRITON_RPC || DEVNET_RPC;
 
 // PDA seeds.
 // V2 (Option B): daily/hourly seeds removed (those accounts no longer exist);
-// redeem_request added for the queued-redemption PDA.
+// redeem_request REMOVED with the queued path (2026-08-05); fee_vault / fee_exempt / kyc added.
 export const SEEDS = {
   config: "config",
   treasury: "treasury",

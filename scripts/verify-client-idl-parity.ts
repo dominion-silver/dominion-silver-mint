@@ -28,6 +28,14 @@
  * so it cannot prove an account list is COMPLETE. That job belongs to the per-instruction parity
  * tests in apps/public/src/lib/__tests__/contract-parity.test.ts, which assert the exact set.
  *
+ * KNOWN LIMIT OF THE WHOLE CHAIN, worth stating because this gate is sold as preventing the class:
+ * it validates the clients against `target/idl/...json`, which is a GENERATED, gitignored artifact.
+ * Nothing here derives the IDL from `programs/**`. Change a Rust account list, forget
+ * `anchor idl build`, and all three copies still agree with each other, both gates go green, and both
+ * apps are broken. What closes that is the CI job order: the "Regenerate the IDL" step runs BEFORE
+ * this one and a separate step diffs the regenerated IDL against both committed copies, so on CI the
+ * artifact is always fresh. Locally it is only as fresh as your last build.
+ *
  * Run: npx tsx scripts/verify-client-idl-parity.ts
  */
 import fs from "fs";

@@ -33,6 +33,7 @@ const DEPLOY_SOL_NEEDED = 9.2;
 let ready = 0;
 let blocked = 0;
 let human = 0;
+let scheduled = 0;
 function ok(msg: string, detail = "") {
   console.log(`  READY    ${msg}${detail ? ` -> ${detail}` : ""}`);
   ready++;
@@ -41,10 +42,29 @@ function no(msg: string, detail = "") {
   console.log(`  BLOCKED  ${msg}${detail ? ` -> ${detail}` : ""}`);
   blocked++;
 }
+/** Will be satisfied BY A STEP OF THE CEREMONY THIS GATE GATES, so it must not block starting it.
+ *
+ * The gate used to exit 1 on any BLOCKED item with "Do NOT start the ceremony", and at least four of
+ * its blocked items can ONLY be resolved during that ceremony: the mainnet fee vault cannot exist
+ * before the mainnet deploy, and the apps' USDC/Lazer constants are devnet values until runbook step
+ * 2 swaps them. So the exit code was permanently non-zero and an operator told "the gate must be
+ * green" would be trained to override it. That is D2's failure mode, the item this pass just fixed,
+ * reproduced in the gate itself. */
+function atStep(step: string, msg: string, detail = "") {
+  console.log(`  AT STEP ${step}  ${msg}${detail ? ` -> ${detail}` : ""}`);
+  scheduled++;
+}
 function byHand(msg: string, detail = "") {
   console.log(`  BY HAND  ${msg}${detail ? ` -> ${detail}` : ""}`);
   human++;
 }
+// OFF-CURVE IS NECESSARY, NOT SUFFICIENT, and this gate is what stands in for verifying the trust
+// model. `PublicKey.isOnCurve` failing proves only that 32 bytes are not a valid ed25519 point, which
+// ANY PDA of ANY program satisfies, including one an attacker controls. Nothing here checks that the
+// account is a Squads vault, that its multisig exists, or what its threshold is. The stated model is
+// a 3-of-5 Squads vault; treat the "off-curve" lines as a shape check and verify the multisig itself
+// by hand in the Squads UI. Recorded rather than fixed because reading a Squads multisig account
+// properly is a real integration, not a one-line assertion.
 function section(t: string) {
   console.log(`\n${t}`);
 }
@@ -123,7 +143,7 @@ async function main() {
     );
     usdc === USDC_MAINNET
       ? ok(`apps/${app} USDC_MINT is the mainnet mint`)
-      : no(`apps/${app} USDC_MINT is NOT mainnet`, `${usdc} (swap at runbook step 2)`);
+      : atStep("2", `apps/${app} USDC_MINT is not mainnet yet`, `${usdc} (swapped at runbook step 2)`);
   }
   const lt = grep(
     "apps/public/src/lib/constants.ts",
@@ -131,7 +151,7 @@ async function main() {
   );
   lt === LAZER_TREASURY_MAINNET
     ? ok("apps/public LAZER_TREASURY is the mainnet value")
-    : no("apps/public LAZER_TREASURY is NOT mainnet", `${lt} (it is cluster-specific)`);
+    : atStep("2", "apps/public LAZER_TREASURY is not mainnet yet", `${lt} (it is cluster-specific)`);
   const feed = grep("apps/public/src/lib/constants.ts", /LAZER_SILV_FEED_ID\s*=\s*(\d+)/);
   Number(feed) === FEED_ID
     ? ok(`feed id is ${FEED_ID} (Metal.Index.SILVER/USD, pure spot)`)
@@ -225,8 +245,9 @@ async function main() {
     if (info) {
       ok("3c. the MAINNET fee vault exists", vault.toBase58());
     } else {
-      no(
-        "3c. the MAINNET fee vault does NOT exist",
+      atStep(
+        "9/10",
+        "3c. the MAINNET fee vault does not exist yet",
         `${vault.toBase58()} -- run scripts/create-fee-vault.ts AFTER the deploy and BEFORE opening ` +
           `mint or redeem, or every mint and every redeem reverts AccountNotInitialized`,
       );
@@ -257,10 +278,20 @@ async function main() {
   byHand("the mint-creation ceremony uses the COMPLIANCE vault, not the dev wallet");
 
   console.log(
-    `\n=== ${ready} ready, ${human} need a human, ${blocked} BLOCKED ===`,
+    `\n=== ${ready} ready, ${scheduled} satisfied by a ceremony step, ${human} need a human, ${blocked} BLOCKING ===`,
   );
+  if (scheduled > 0) {
+    console.log(
+      `\n  ${scheduled} item(s) are resolved BY a runbook step, so they are expected to be red\n` +
+        "  before the ceremony and must be re-run after that step. They do NOT block starting.",
+    );
+  }
   if (blocked > 0) {
-    console.log("Do NOT start the ceremony until the BLOCKED items are resolved.");
+    console.log(
+      `\nDo NOT start the ceremony: ${blocked} BLOCKING item(s) above must be resolved first.\n` +
+        "  BLOCKING means it cannot be fixed by any step of the runbook, so starting would strand you\n" +
+        "  mid-ceremony. That is a different thing from the AT STEP items, which are supposed to be red.",
+    );
     process.exit(1);
   }
   console.log("Nothing mechanically blocking. Work through docs/MAINNET_LAUNCH_RUNBOOK.md.");

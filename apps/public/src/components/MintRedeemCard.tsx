@@ -15,7 +15,6 @@ import {
   fetchConfig,
   fetchTreasuryBalance,
   computeMaxInstantRedeemableUsdc,
-  redeemUsdcOut,
   redeemGrossUsdc,
   classifyRedeem,
   parseRedeemError,
@@ -117,30 +116,31 @@ export function MintRedeemCard() {
     return { effPrice, out, minOut, inLabel: "SILV", outLabel: "USDC" };
   }, [price, amount, mode, slippageBps, premiumBpsMint, premiumBpsRedeem]);
 
-  // Option B: classify the redeem route (instant / queue / otc / disabled)
+  // Option B: classify the redeem route (instant / limit / otc / kyc / disabled)
   // for the entered amount, so the UI tells the user up-front.
   const nowSecs = Math.floor(Date.now() / 1000);
   // TWO figures, deliberately named apart, because conflating them was bug B2.
   //   GROSS = what leaves the treasury = what the program debits the budget by and checks
   //           solvency against.
   //   NET   = what the user receives = gross minus the premium.
-  // The UI shows NET. Every comparison against a protocol limit uses GROSS. The previous version
-  // passed the net into `classifyRedeem`, understating both checks by the redeem premium (1.5% at
-  // launch), so near either boundary the UI promised "instant" and the chain reverted. TypeScript
-  // cannot catch that: both are BN.
-  const redeemAmounts = useMemo(() => {
+  // Every comparison against a protocol limit uses GROSS, which is what this memo produces. The
+  // previous version passed the NET into `classifyRedeem`, understating both checks by the redeem
+  // premium (1.5% at launch), so near either boundary the UI promised "instant" and the chain
+  // reverted. TypeScript cannot catch that: both are BN.
+  //
+  // The displayed "You receive" net comes from the float `preview` path above
+  // (`effectiveRedeemPrice`), NOT from a BN. That is deliberate. `redeemUsdcOut` (the exact BN net,
+  // bit-for-bit with the program) is still exercised by contract-parity.test.ts, but nothing in the
+  // UI needs atomic precision on a figure already labelled "(est.)", and keeping a second unused
+  // net in this component is what produced the dead binding this cleanup removed.
+  const redeemGross = useMemo(() => {
     if (mode !== "redeem" || !price || !amount) return null;
     if (premiumBpsRedeem === null) return null; // A-26
     const n = parseFloat(amount);
     if (isNaN(n) || n <= 0) return null;
     const priceScaled1e9 = new BN(Math.round(price.priceUsd * 1e9));
-    const silv = parseSilvAmount(amount);
-    return {
-      gross: redeemGrossUsdc(silv, priceScaled1e9),
-      net: redeemUsdcOut(silv, priceScaled1e9, premiumBpsRedeem),
-    };
+    return redeemGrossUsdc(parseSilvAmount(amount), priceScaled1e9);
   }, [mode, price, amount, premiumBpsRedeem]);
-  const redeemUsdcOutBn = redeemAmounts?.net ?? null;
 
   // The caller's on-chain per-wallet accounts. Needed so `classifyRedeem` can answer the KYC
   // question for THIS wallet instead of only reporting that the gate is armed. Cheap: one batched
@@ -153,16 +153,10 @@ export function MintRedeemCard() {
   const kycAttested = walletFlags ? walletFlags.kyc != null : undefined;
 
   const redeemRoute: RedeemRoute | null = useMemo(() => {
-    if (mode !== "redeem" || !cfg || !treasury || !redeemAmounts) return null;
+    if (mode !== "redeem" || !cfg || !treasury || !redeemGross) return null;
     // GROSS, not net. See the note above.
-    return classifyRedeem(
-      cfg,
-      treasury,
-      redeemAmounts.gross,
-      nowSecs,
-      kycAttested,
-    );
-  }, [mode, cfg, treasury, redeemAmounts, nowSecs, kycAttested]);
+    return classifyRedeem(cfg, treasury, redeemGross, nowSecs, kycAttested);
+  }, [mode, cfg, treasury, redeemGross, nowSecs, kycAttested]);
 
   // Max instantly-redeemable, shown as USDC (and approx SILV via price).
   const maxInstant = useMemo(() => {
@@ -360,8 +354,8 @@ export function MintRedeemCard() {
         }
         if (route === "kyc") {
           throw new Error(
-            "Redemption now requires identity verification on this wallet. Nothing has been " +
-              "sent. Complete verification, then try again.",
+            "Redemption requires identity verification on this wallet. Nothing has been sent and " +
+              `your SILV is untouched. Contact ${OTC_EMAIL} to start verification, then try again.`,
           );
         }
         {
@@ -410,7 +404,7 @@ export function MintRedeemCard() {
           : reroute === "limit"
             ? "The protocol's rolling redemption limit for this window is used up. Your SILV was not touched. Retry after the window rolls, or redeem less."
             : reroute === "kyc"
-              ? "This wallet needs identity verification before it can redeem."
+              ? `This wallet needs identity verification before it can redeem. Contact ${OTC_EMAIL}.`
               : reroute === "otc"
               ? `Treasury can't cover this now. Redeem via OTC: ${OTC_EMAIL}.`
               : reroute === "disabled"
@@ -544,7 +538,7 @@ export function MintRedeemCard() {
               {redeemRoute === "limit" &&
                 "This amount exceeds the protocol's rolling redemption limit for the current window. Nothing is sent and your SILV stays yours: retry once the window rolls, or redeem a smaller amount now."}
               {redeemRoute === "kyc" &&
-                "Redemption requires identity verification on this wallet."}
+                `Redemption requires identity verification on this wallet. Contact ${OTC_EMAIL} to start.`}
               {redeemRoute === "otc" &&
                 `Treasury can't cover this on-chain now -> redeem via the OTC desk (${OTC_EMAIL}).`}
               {redeemRoute === "disabled" && "Redemptions are disabled/paused."}
@@ -637,7 +631,13 @@ export function MintRedeemCard() {
           !!paused ||
           mintDisabled ||
           redemptionsOff ||
+          // Every route the program cannot serve. "otc" was already here; "limit" and "kyc" were
+          // not, so the button stayed clickable while its own label read "Over the window limit" or
+          // "Verification required". Harmless (the submit path throws before any wallet interaction)
+          // but an enabled button that cannot succeed is an invitation to click it.
           redeemRoute === "otc" ||
+          redeemRoute === "limit" ||
+          redeemRoute === "kyc" ||
           submitting ||
           insufficientSol
         }

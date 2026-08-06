@@ -257,3 +257,83 @@ Two premises were WRONG in my original commits and must not be reintroduced:
 2. **The "dead" config fields are still decoded and carry real values.** Leaving them declared
    was correct for offset stability, but the clients read them, so "dead" only means "no
    on-chain instruction reads them".
+
+---
+
+## Second triple review, P2/P3 closure (2026-08-06)
+
+The P0s and P1s of the second review closed on 2026-08-05. These are the rest, all closed now.
+Where the honest close was "record it" rather than "fix it", that is stated as such.
+
+### [x] E1. Batch A, program side (commit 440d20f)
+Closed in that commit. Listed here so this file is the single index.
+
+### [x] E2. `resolveWalletFlags` swallowed RPC failure and returned "no exemption"
+A failed RPC read is not the same fact as "this wallet has no exemption", but the resolver returned
+the same value for both, so a flaky endpoint silently quoted a fee-exempt wallet the full premium.
+It now THROWS, and the transaction builders call `resolveWalletFlagsOrDefault`, which is the one
+place allowed to choose a fallback. The SWR call site surfaces the error instead of hiding it.
+
+### [x] E3. `pyth-posting.ts` was dead
+Deleted. Nothing imported it.
+
+### [x] E4. The `"kyc"` route named no contact, and two routes let the user submit anyway
+The route copy now names `OTC_EMAIL`, and the submit button is disabled for `"limit"` and `"kyc"`
+instead of letting the user pay for a transaction the program will revert.
+
+### [x] E5. Admin: the withdraw-amount label did not say which panel it belonged to
+Relabelled to point at the fee-vault panel. The fee-routing card also sat under the KYC section
+header, which read as though routing were part of the KYC gate. Moved out.
+
+### [x] E6. The admin app asserted nothing about its account lists
+`apps/admin/src/lib/__tests__/account-parity.test.ts`, 5 tests. Mutation-verified: deleting
+`usdcTreasury` from the list makes it fail. A gate that cannot fail is not a gate.
+
+### [x] E7. The readiness gate reproduced the exact failure it had just fixed (D2)
+It exited 1 with "Do NOT start the ceremony" on five BLOCKED items, four of which can ONLY be
+resolved during that ceremony (both apps' `USDC_MINT`, `LAZER_TREASURY`, the mainnet fee vault).
+Split into BLOCKING (cannot be fixed by any runbook step) versus AT STEP (expected red, re-run
+after). Now: 17 ready / 4 at step / 9 by hand / **1 BLOCKING**, the unfunded deployer wallet.
+Exit code verified DIRECTLY (`>/dev/null; echo $?`) rather than through a pipe, because the earlier
+reading of `exit=$?` had captured `tail`'s status, not the script's.
+
+### [x] E8. RECORDED, NOT FIXED: `isOnCurve` is necessary but not sufficient
+`PublicKey.isOnCurve` failing proves only that 32 bytes are not a valid ed25519 point, which every
+PDA of every program satisfies, including one an attacker controls. Nothing in the gate checks that
+the account is a Squads vault, that its multisig exists, or what its threshold is. Reading a Squads
+multisig properly is a real integration, not an assertion, so the gate now labels these lines as a
+shape check and says to verify the multisig by hand in the Squads UI.
+
+### [x] E9. RECORDED, NOT FIXED: the parity gate validates against a generated, gitignored artifact
+It reads `target/idl/...json`. Nothing derives that from `programs/**`. Change a Rust account list,
+skip `anchor idl build`, and all three copies still agree, both gates go green, and both apps are
+broken. What actually closes it is CI job ORDER: "Regenerate the IDL" runs BEFORE the gate and a
+separate step diffs the regenerated IDL against both committed copies, so on CI the artifact is
+always fresh. Locally it is only as fresh as your last build. Documented at the top of the script.
+
+### [x] E10. A stale second IDL artifact carried a RETIRED program id
+`target/idl/dominion_silver_mint_v2.json`, dated 10 June, `address` =
+`GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX`. Deleted. The live artifact is
+`dominion_silver_mint.json` at `6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh`, and the parity gate
+still exits 0 after the deletion, which confirms it was reading the right one all along.
+
+### [x] E11. `private/` docs sent auditors after scripts deleted in 42a502f
+Only the three INSTRUCTIONAL docs got a banner naming the replacements that exist today
+(`AUDIT_BRIEF.md`, `CODEX_FULLSTACK_AUDIT_GUIDE.md`, `FABLE_FULLSTACK_AUDIT_BRIEF.md`). The
+historical reports (`BATTLE_TEST_REPORT.md`, the `CODEX_*_REPORT`s, `SESSION_STATE.md`,
+`SAFETY_DOSSIER.md`, `LAUNCH_BUILD_BATCH1_2026_07.md`) keep their original text: they record what
+was run on a given date, and editing them would falsify a record rather than fix a bug.
+
+### [x] E12. Unused bindings
+`isLoading` in `Dashboard` (the FeeVault one IS used, kept), the orphaned comment above the
+guardians SWR describing a deleted redemptions SWR, and `redeemUsdcOutBn` in `MintRedeemCard`.
+The last one needed a decision rather than a delete: the memo produced both `gross` and `net`, and
+once the dead binding went, `net` was dead too. Kept the float `preview` path as the displayed
+"You receive (est.)" and reduced the memo to `redeemGross`, which is what every limit comparison
+must use. `redeemUsdcOut` stays exported and is still exercised by `contract-parity.test.ts`.
+
+### [x] E13. The next-steps doc still carried my refuted 1.5x window bound
+`docs/NEXT_STEPS_2026_08_05.md` told a future reader to size `instant_redeem_budget_usdc` against a
+1.5x worst case. The real supremum is just under **2x**. Left uncorrected it would have caused a
+budget to be set at 1.33x the intended outflow. Corrected, with the derivation and the practical
+rule: to cap a true 24h outflow at $X, set the budget to $X/2.

@@ -1,18 +1,24 @@
 # Next steps, paused 2026-08-05
 
-State at pause: working tree CLEAN, **17 commits local and NOT pushed**, punch list 28/28 closed.
+State at pause: working tree CLEAN, **24 commits local and NOT pushed**, punch list 28/28 closed,
+second triple review closed (P0/P1 on 2026-08-05, P2/P3 on 2026-08-06).
 
 Verification that passes right now, re-runnable at any time:
 
 ```bash
-cargo test --lib                              # 134 pass
+cargo test --lib                              # 141 pass
 cargo build-sbf -- --locked                   # clean, no stack-frame overflow
-npx tsx scripts/verify-client-idl-parity.ts   # PARITY OK
+npx tsx scripts/verify-client-idl-parity.ts   # PARITY OK, exit 0
 bash scripts/verify-constants-consistency.sh  # CONSTANTS OK
-npx tsx scripts/verify-mainnet-readiness.ts   # 17 ready / 9 by hand / 5 blocked
-cd apps/admin && npx vitest run && npm run build   # 17 pass
-cd apps/public && npx vitest run && npm run build  # 25 pass
+npx tsx scripts/verify-mainnet-readiness.ts   # 17 ready / 4 at step / 9 by hand / 1 BLOCKING, exit 1
+cd apps/admin && npx vitest run && npm run build   # 22 pass
+cd apps/public && npx vitest run && npm run build  # 33 pass
 ```
+
+The readiness gate exits **1 on purpose** and will keep doing so until the mainnet deployer wallet
+holds the ~6 SOL of rent for the bytecode. That is its only remaining BLOCKING item. The four
+"at step" items (both apps' `USDC_MINT`, `LAZER_TREASURY`, the mainnet fee vault) can only be
+satisfied DURING the ceremony, so they are supposed to be red beforehand and must be re-run after.
 
 Note `anchor build` is BROKEN in this repo. Use `cargo build-sbf -- --locked`, and run
 `anchor idl build -- --locked` from inside `programs/dominion_silver_mint_v2`, redirecting stdout.
@@ -100,8 +106,13 @@ Order matters:
   treasury to cushion it.
 - **GitHub branch protection** making the CI `gate` job a required check. Needs Thomas's admin
   rights; never done.
-- **The sliding window's 1.5x bound** is documented, not eliminated. Size
-  `instant_redeem_budget_usdc` knowing the worst-case alignment allows 1.5x over a trailing window.
+- **The sliding window's 2x bound** is documented, not eliminated. Size
+  `instant_redeem_budget_usdc` knowing the worst-case alignment allows just under **2x** the budget
+  inside one trailing window, NOT the 1.5x this line claimed until 2026-08-06. 1.5x came from
+  evaluating only the midpoint alignment (`into = w/2`); the supremum is at `into -> w`, where the
+  previous window's contribution tends to its full value while the current window is already fully
+  spent. Test: `two_spends_one_second_short_of_a_window_reach_almost_2x` in `redeem_window.rs`.
+  Practical consequence: to cap a true 24h outflow at $X, set the budget to **$X/2**, not $X/1.5.
 - **Before deploying the upgrade, check for a live `SetRedeemLimits` proposal on each cluster and
   cancel it.** `RedeemLimitsArgs` gained a borsh field, so a proposal queued under the old layout
   cannot execute (it is still cancellable).

@@ -453,13 +453,21 @@ const ACTIONS: ActionDesc[] = [
         label: "Destination wallet (owner pubkey)",
         kind: "pubkey",
       },
-      { name: "amount", label: "Amount (USDC)", kind: "usdc" },
+      {
+        // `fee_whitelist.rs` said of this instruction "the panel prefills the balance instead". It
+        // did not, and an empty amount parses to 0n and reverts ZeroAmount. The label now tells the
+        // operator where to read the figure, which is one panel above on the Redemptions tab.
+        name: "amount",
+        label: "Amount (USDC) - balance is on the Premium fee vault panel",
+        kind: "usdc",
+      },
     ],
     tip: "Sweeps premium revenue out of the program-owned fee vault. The destination's USDC ATA must already exist. Instant, unlike the treasury withdrawal: this vault backs nothing (it holds earned revenue, not the collateral users redeem against) and the admin is already a multisig. Sweep on a regular cadence so the standing balance stays small.",
     build: (c, p) => actions.withdrawFees(c, pk(p.dest), parseAtomic(p.amount, 6)),
   },
 
-  // --- KYC gate. DORMANT until armed. ---
+  // --- The fee-vault escape hatch. NOT part of the KYC gate below, despite having lived under its
+  // section header. ---
   {
     id: "fee-routing",
     label: "Premium routing ON / OFF (escape hatch)",
@@ -473,6 +481,8 @@ const ACTIONS: ActionDesc[] = [
       c.feeRoutingDisabled ? "OFF (premium stays in treasury)" : "ON (premium -> vault)",
     build: (c, p) => actions.setFeeRoutingEnabled(c, boolField(p, "on")),
   },
+
+  // --- KYC gate. DORMANT until armed. ---
   {
     id: "kyc-set-operator",
     label: "KYC: set attestor key",

@@ -38,7 +38,7 @@ export function Dashboard() {
   // The public devnet RPC rate-limits heavy reads. Keep the lightweight
   // snapshot resilient (retry + keep last good data) so a transient
   // "Failed to fetch" auto-recovers instead of nuking the page.
-  const { data, error, isLoading } = useSWR<DashboardSnapshot | null>(
+  const { data, error } = useSWR<DashboardSnapshot | null>(
     "dominion-dashboard",
     () => fetchDashboardSnapshot(connection),
     {
@@ -53,8 +53,6 @@ export function Dashboard() {
   // Only fire the heavy redemption-list query AFTER the snapshot loads, and
   // refresh it slowly, so the two don't saturate the RPC together.
   // The fetcher THROWS on failure (P2-01 review-of-fixes). With
-  // keepPreviousData, SWR then keeps the last successful `redemptions`
-  // array AND sets `redemptionsError`, so the operator keeps seeing the
   // real burned-SILV IOUs with a degraded banner instead of an empty queue.
   // AUDIT review of daac4ac (P1): `pending_removal_at` was written on-chain and
   // read by neither app. DOM-007's security property is that the TARGETED guardian
