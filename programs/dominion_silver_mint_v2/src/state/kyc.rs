@@ -196,71 +196,135 @@ pub fn next_attestation_count(current: u32, account_is_new: bool) -> Result<u32>
         .ok_or(error!(DominionError::ArithmeticOverflow))
 }
 
-/** The roster size after a revocation. `checked_sub`, never saturating: see the handler's note. */
-pub fn count_after_revocation(current: u32) -> Result<u32> {
-    current
-        .checked_sub(1)
-        .ok_or(error!(DominionError::ArithmeticOverflow))
-}
-
 /**
- * What a revocation must do, given the scope, the roster size it would LEAVE, and who signed.
- * Returns whether the gate must be DISARMED in the same instruction.
+ * The whole state transition a revocation performs. Not a predicate: the complete next value of every
+ * field the handler must write.
  *
- * ROUND 3 P0. The counter closed "arming an empty roster" and left the mirror image open: arm
- * legitimately with one attestation, then revoke that attestation. The count returns to zero WHILE the
- * gate stays armed, so nobody can pass and nobody new can be admitted. The exact total lockout C-02
- * exists to prevent, reached through a different door.
+ * REVIEW-OF-FIXES, second round, and the shape matters as much as the rule. My previous version returned
+ * `Result<bool>` and the handler applied the disarm inside `if must_disarm { ... }`. A reviewer deleted that
+ * whole block and measured 154/154 Rust green plus every gate green: section 4c proves the rule is CALLED,
+ * never that its answer is USED, and a `bool` carries no obligation where the old `Result<()>` at least had
+ * `#[must_use]`. So "armed gate with an empty roster", the round-3 P0, was re-openable by deleting a
+ * conditional.
  *
- * REVIEW-OF-FIXES P1, and the reason this returns a bool instead of `Result<()>`. My first fix simply
- * REFUSED the emptying revocation. Both reviewers found the same cost, independently: it deletes the
- * compliance-removal path for the last holder. Armed gate, roster of exactly one wallet W, and W must go
- * (sanctioned, failed re-screen, or an attestor typo, since a well-formed wrong address is attestable).
- * `revoke_kyc(W)` was refused for the ADMIN too. The only route out was `set_kyc_scope(0)`, which
- * un-gates redemption for everyone INCLUDING W, then revoke, and then the gate could not be re-armed at
- * all because arming needs `count > 0` and the count is now zero.
+ * Returning the next state removes the conditional entirely: the handler assigns `scope_after` and the
+ * derived `kyc_enforced` UNCONDITIONALLY, so there is no branch to delete. Only the event is conditional,
+ * and losing an event is not losing an invariant.
  *
- * So the bug was "an armed gate nobody can pass, recoverable by one instant admin disarm" and the fix
- * bought that at the price of "a wallet that must not redeem can redeem, and removing it requires opening
- * the gate to it". That is the same trade `set_kyc_operator` refused in 184a738, made in the opposite
- * direction. The round-3 report offered two remedies; the first one taken removed a capability.
+ * ---- the rule itself ----
  *
- * This is the second: DISARM ATOMICALLY when the roster would empty, and emit `KycScopeChanged` so the
- * loosening is as visible on chain as an explicit disarm. The lockout is closed AND revocation keeps
- * working, which is strictly better than either the bug or the first fix.
+ * ROUND 3 P0. The counter closed "arming an empty roster" and left the mirror image open: arm legitimately
+ * with one attestation, then revoke it. The count returns to zero WHILE the gate stays armed, so nobody can
+ * pass and nobody new can be admitted. The lockout C-02 exists to prevent, through a different door.
  *
- * ADMIN ONLY, and that asymmetry is the whole point. `revoke_kyc` is callable by the attestor as well,
- * and auto-disarming for the attestor would hand a compromised backend a one-transaction "open the gate
- * for everybody" button. The attestor keeps the refusal: it can offboard any holder but the last, and
- * the admin does the last one. The attestor is not thereby powerless-by-accident, it is
- * powerless-on-purpose, because emptying the roster IS a compliance decision.
+ * REVIEW-OF-FIXES P1: my first fix REFUSED that revocation, which deleted the compliance-removal path for
+ * the last holder. Armed gate, roster of exactly one wallet W, and W must go (sanctioned, failed re-screen,
+ * or an attestor typo, since any well-formed wrong address is attestable). The only route out was
+ * `set_kyc_scope(0)`, which un-gates redemption for everyone INCLUDING W, then revoke, and then the gate
+ * could not be re-armed because arming needs `count > 0`. The bug was recoverable by one instant admin
+ * disarm; the fix was not recoverable at all.
  *
- * (A compromised attestor can already admit any wallet it likes, so it can already let a chosen address
- * through. What it must not gain is the ability to drop the gate for every address at once.)
+ * So the emptying revocation DISARMS instead of being refused. Two conditions on it, and each closes a
+ * finding of its own:
+ *
+ * ADMIN ONLY. `revoke_kyc` is callable by the attestor as well, and auto-disarming for the attestor would
+ * hand a compromised backend a one-transaction "open the gate for everybody". The attestor can already
+ * admit any wallet it chooses, so it already has "let a chosen address through"; what it must not gain is
+ * "drop the gate for every address at once".
+ *
+ * AND EXPLICITLY REQUESTED, via `allow_disarm`. Both reviewers found the same escalation independently, and
+ * admin-only did not close it, because the attestor does not need to REACH the disarm, only to arrange for
+ * the admin to trigger it. The attestor revokes wallets down to a roster of exactly one (every step leaves
+ * `count_after > 0`, so nothing disarms), and then the admin's next revocation, whatever it was for, empties
+ * the roster and drops the gate. The window is real rather than theoretical: revocation goes through the
+ * Squads panel, so the admin approves at a moment when the roster holds fifty and the transaction executes
+ * later. Under the previous behaviour that transaction REVERTED and the admin investigated.
+ *
+ * `allow_disarm` puts the consent in the signed message. An admin who did not ask to loosen compliance gets
+ * the refusal and the visibility that comes with it; an admin who genuinely wants to remove the last holder
+ * says so. Squads assembles instruction arguments without trouble, which is exactly what the reverted
+ * co-signature approach could not do.
  *
  * NOT symmetric with `validate_kyc_arming` on purpose: arming needs `count > 0` BEFORE, this acts on
  * `count == 0` AFTER. Assuming one covers the other is how this half went missing in the first place.
  */
-pub fn revocation_must_disarm(
+#[derive(Debug, PartialEq, Eq)]
+pub struct RevocationOutcome {
+    /// The roster size to store.
+    pub count_after: u32,
+    /// The scope flags to store. Equal to the current flags unless this revocation disarms.
+    pub scope_after: u8,
+    /// Whether the gate was dropped, i.e. whether `KycScopeChanged` must be emitted.
+    pub disarmed: bool,
+}
+
+pub fn resolve_revocation(
     scope_flags: u8,
-    count_after: u32,
+    count_current: u32,
     signer_is_admin: bool,
-) -> Result<bool> {
-    // Nothing is armed: revocation is unconditional and changes no scope.
-    if scope_flags == 0 {
-        return Ok(false);
+    allow_disarm: bool,
+) -> Result<RevocationOutcome> {
+    // `checked_sub`, never saturating. A saturating decrement would paper over a counter that had drifted
+    // below the real roster size, and that direction is the dangerous one: it lets the gate be armed while
+    // the count claims attestations that no longer exist.
+    let count_after = count_current
+        .checked_sub(1)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
+
+    // Nothing armed, or somebody is still behind the gate afterwards: no scope change at all.
+    if scope_flags == 0 || count_after > 0 {
+        return Ok(RevocationOutcome {
+            count_after,
+            scope_after: scope_flags,
+            disarmed: false,
+        });
     }
-    // Somebody is still behind the gate afterwards, so the invariant holds untouched.
-    if count_after > 0 {
-        return Ok(false);
-    }
+
+    // This revocation would leave an ARMED gate with nobody behind it.
     require!(signer_is_admin, DominionError::KycLastAttestationWhileArmed);
-    Ok(true)
+    require!(allow_disarm, DominionError::KycRevokeWouldDisarm);
+    Ok(RevocationOutcome {
+        count_after: 0,
+        scope_after: 0,
+        disarmed: true,
+    })
 }
 
 /** Whether clearing the attestor is permitted, given the current scope. See C-02's second half. */
 pub fn kyc_operator_may_be_cleared(scope_flags: u8) -> bool {
     scope_flags == 0
+}
+
+/**
+ * Whether the attestor may be set to this key, given the admin and the current scope.
+ *
+ * Both halves of C-02's second finding, plus the review-of-fixes addition, in one place so section 4c can
+ * require the handler to call it. It was a bare `require_keys_neq!` in the handler first, and a handler-only
+ * check is invisible to every test and every gate: deleting it left 156/156 green.
+ *
+ * NOT THE ADMIN. The entire admin/attestor asymmetry rests on the two being different keys: `revoke_kyc`'s
+ * admin-only disarm, the hot/cold split, and the claim that a leaked attestor key cannot loosen compliance.
+ * Setting them equal collapses all three silently, and there is no legitimate configuration where the Squads
+ * vault is also the server key that signs every approval.
+ *
+ * NOT CLEARED WHILE ARMED. `set_kyc_scope(2)` legitimately, then `set_kyc_operator(Pubkey::default())`, and
+ * no new attestation can ever be written while the redeem side stays closed. Already-attested holders keep
+ * redeeming, so it is not a total lockout, but every holder not yet attested is shut out with nothing in the
+ * program saying so. Disarm first, then decommission: both are instant.
+ */
+pub fn validate_kyc_operator_assignment(
+    operator: Pubkey,
+    admin: Pubkey,
+    scope_flags: u8,
+) -> Result<()> {
+    require_keys_neq!(operator, admin, DominionError::KycOperatorMayNotBeAdmin);
+    if operator == Pubkey::default() {
+        require!(
+            kyc_operator_may_be_cleared(scope_flags),
+            DominionError::KycOperatorRequiredWhileArmed
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -394,61 +458,122 @@ mod tests {
 
 
     #[test]
-    fn emptying_an_armed_roster_disarms_for_the_admin_and_is_refused_for_the_attestor() {
-        // ROUND 3 P0, as amended by REVIEW-OF-FIXES P1. `count_after` is the roster size the revocation
-        // would LEAVE. The state "armed with an empty roster" must be unreachable, but the way to keep it
-        // unreachable is to disarm, not to refuse: refusing removed the only way to remove the last holder.
+    fn emptying_an_armed_roster_disarms_for_a_consenting_admin_and_is_refused_otherwise() {
+        // ROUND 3 P0, as amended twice. The state "armed with an empty roster" must be unreachable, and the
+        // way to keep it unreachable is to disarm, not to refuse: refusing removed the only way to remove
+        // the last holder. But the disarm needs BOTH the admin AND explicit consent, because the attestor
+        // can walk the roster down to one and let the admin's next revocation drop the gate for everybody.
         for flags in [1u8, 2, 3] {
-            assert_eq!(
-                revocation_must_disarm(flags, 0, true).unwrap(),
-                true,
-                "the admin removes the last holder and the gate drops with it"
+            let out = resolve_revocation(flags, 1, true, true).unwrap();
+            assert_eq!(out.count_after, 0);
+            assert_eq!(out.scope_after, 0, "the gate drops with the last holder");
+            assert!(out.disarmed, "and it is announced");
+
+            assert!(
+                resolve_revocation(flags, 1, true, false).is_err(),
+                "an admin who did not ASK to loosen compliance must be refused and see it"
             );
             assert!(
-                revocation_must_disarm(flags, 0, false).is_err(),
-                "the attestor must not get a one-transaction 'open the gate for everybody'"
+                resolve_revocation(flags, 1, false, true).is_err(),
+                "the attestor must not get a one-transaction 'open the gate for everybody', consent or not"
             );
-        }
-        // Revoking one of several is fine for EITHER signer, and changes no scope: somebody is still through.
-        for admin in [true, false] {
-            assert_eq!(revocation_must_disarm(2, 1, admin).unwrap(), false);
-            assert_eq!(revocation_must_disarm(3, 7, admin).unwrap(), false);
-        }
-        // Disarmed, revoke freely, including to zero, from either signer. Nothing is gated, so nothing
-        // locks out, and there is no scope left to drop.
-        for admin in [true, false] {
-            assert_eq!(revocation_must_disarm(0, 0, admin).unwrap(), false);
+            assert!(resolve_revocation(flags, 1, false, false).is_err());
         }
     }
 
     #[test]
-    fn the_admin_auto_disarm_cannot_be_reached_by_an_attestor_on_any_armed_scope() {
-        // The whole security value of the amended rule is this asymmetry, so it gets its own test rather
-        // than riding on a loop above. Every non-zero scope, attestor signer, emptying revocation: refused.
-        for flags in 1u8..=3 {
-            assert!(revocation_must_disarm(flags, 0, false).is_err());
+    fn a_revocation_that_leaves_anyone_behind_never_touches_the_scope() {
+        // The common case, and it must be untouched for EITHER signer and regardless of `allow_disarm`:
+        // passing the flag must not become a way to disarm while the roster is still populated.
+        for flags in [1u8, 2, 3] {
+            for admin in [true, false] {
+                for allow in [true, false] {
+                    let out = resolve_revocation(flags, 8, admin, allow).unwrap();
+                    assert_eq!(out.count_after, 7);
+                    assert_eq!(out.scope_after, flags, "the scope is not a side effect of a revocation");
+                    assert!(!out.disarmed);
+                }
+            }
         }
-        // And the refusal is specifically about EMPTYING, not about being the attestor: with anyone left
-        // behind the gate, the attestor's revocation goes through untouched.
-        for flags in 1u8..=3 {
-            assert_eq!(revocation_must_disarm(flags, 1, false).unwrap(), false);
+    }
+
+    #[test]
+    fn a_disarmed_gate_revokes_freely_including_to_zero() {
+        // Nothing is gated, so nothing can lock out, and there is no scope to drop.
+        for admin in [true, false] {
+            for allow in [true, false] {
+                let out = resolve_revocation(0, 1, admin, allow).unwrap();
+                assert_eq!(out.count_after, 0);
+                assert_eq!(out.scope_after, 0);
+                assert!(!out.disarmed, "no scope was armed, so nothing was disarmed");
+            }
         }
+    }
+
+    #[test]
+    fn revoking_from_a_zero_counter_refuses_rather_than_clamping() {
+        // The counter is already broken if this happens, and the direction of the drift is the dangerous
+        // one: a count below the real roster size lets the gate be armed against attestations that are
+        // gone. Refuse and be noticed.
+        for flags in [0u8, 1, 2, 3] {
+            assert!(resolve_revocation(flags, 0, true, true).is_err());
+        }
+    }
+
+
+    #[test]
+    fn the_attestor_may_never_be_the_admin_key() {
+        let admin = Pubkey::new_from_array([1u8; 32]);
+        let hot = Pubkey::new_from_array([2u8; 32]);
+        // REVIEW-OF-FIXES P2, both reviewers. Nothing forbade this, and it collapses every KYC authority
+        // argument at once: admin-only disarm, hot/cold split, "a leaked attestor cannot loosen compliance".
+        for flags in 0u8..=3 {
+            assert!(
+                validate_kyc_operator_assignment(admin, admin, flags).is_err(),
+                "operator == admin must be refused on every scope"
+            );
+            assert!(validate_kyc_operator_assignment(hot, admin, flags).is_ok() || flags != 0);
+        }
+        // An ordinary rotation to a different hot key is fine, armed or not.
+        assert!(validate_kyc_operator_assignment(hot, admin, 0).is_ok());
+        assert!(validate_kyc_operator_assignment(hot, admin, 2).is_ok());
+    }
+
+    #[test]
+    fn decommissioning_the_attestor_is_refused_while_the_gate_is_armed() {
+        let admin = Pubkey::new_from_array([1u8; 32]);
+        // C-02's second half: clearing it while armed leaves a gate with provably no way to admit anybody.
+        for flags in 1u8..=3 {
+            assert!(validate_kyc_operator_assignment(Pubkey::default(), admin, flags).is_err());
+        }
+        // Disarmed, decommissioning is allowed. It is the documented way to turn the mechanism off.
+        assert!(validate_kyc_operator_assignment(Pubkey::default(), admin, 0).is_ok());
     }
 
     #[test]
     fn arming_and_revoking_guard_ONE_invariant_from_opposite_sides() {
         // The invariant: an ARMED gate always has a non-empty roster. Arming checks it BEFORE the change,
-        // revocation AFTER. Writing one and assuming it covered the other is exactly how the second half
-        // went missing, so the pair is stated here explicitly.
+        // revocation resolves it AFTER. Writing one and assuming it covered the other is exactly how the
+        // second half went missing, so the pair is stated here explicitly.
         let op = Pubkey::new_from_array([5u8; 32]);
         assert!(validate_kyc_arming(2, op, 0).is_err(), "cannot ENTER armed from an empty roster");
         assert!(validate_kyc_arming(2, op, 1).is_ok());
-        // The other side of the invariant is no longer a refusal: reaching an empty roster while armed is
-        // allowed FOR THE ADMIN and disarms in the same instruction, so the state "armed with an empty
-        // roster" is still unreachable. The attestor is still refused.
-        assert_eq!(revocation_must_disarm(2, 0, true).unwrap(), true, "admin: disarm, do not refuse");
-        assert!(revocation_must_disarm(2, 0, false).is_err(), "attestor may not empty an armed roster");
-        assert_eq!(revocation_must_disarm(2, 1, false).unwrap(), false, "not the last: no scope change");
+        // And the other side never LEAVES the pair inconsistent: either the roster stays populated, or the
+        // scope goes to zero with it. There is no outcome where flags are non-zero and the count is zero.
+        for flags in [1u8, 2, 3] {
+            for count in [1u32, 2, 9] {
+                for admin in [true, false] {
+                    for allow in [true, false] {
+                        if let Ok(out) = resolve_revocation(flags, count, admin, allow) {
+                            assert!(
+                                out.scope_after == 0 || out.count_after > 0,
+                                "armed with an empty roster is reachable: flags={flags} count={count}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -472,10 +597,12 @@ mod tests {
 
         // Revocation decrements, and refuses at zero rather than saturating. Saturating would paper over a
         // counter already drifted below the real roster, in the direction that lets the gate be armed on a
-        // lie, so refusing and being noticed is the correct answer.
-        assert_eq!(count_after_revocation(1).unwrap(), 0);
-        assert_eq!(count_after_revocation(9).unwrap(), 8);
-        assert!(count_after_revocation(0).is_err(), "must refuse, not saturate to 0");
+        // lie, so refusing and being noticed is the correct answer. The decrement folded into
+        // `resolve_revocation` when the rule started returning the whole next state, so it is exercised
+        // through that.
+        assert_eq!(resolve_revocation(0, 1, false, false).unwrap().count_after, 0);
+        assert_eq!(resolve_revocation(0, 9, false, false).unwrap().count_after, 8);
+        assert!(resolve_revocation(0, 0, true, true).is_err(), "must refuse, not saturate to 0");
     }
 
     #[test]

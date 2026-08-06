@@ -236,10 +236,21 @@ async function main() {
 
   await program.methods
     .cancelTimelockedAction(nonce)
-    // Anchor 0.31's generated account types do not model an OPTIONAL account as nullable, so `null` for
-    // the absent guardian (the correct encoding) does not typecheck. Cast the literal, not the call, so
-    // every other key is still checked against the IDL.
-    .accounts({ config: configPda, timelock: tlPda, rentRecipient: admin, signer: admin, guardian: null } as never)
+    // Anchor 0.31's generated account types do not model an OPTIONAL account as nullable, so `null` for the
+    // absent guardian (the correct encoding) does not typecheck without a cast.
+    //
+    // REVIEW-OF-FIXES P1. This comment previously said `{...} as never` kept "every other key checked against
+    // the IDL", and a reviewer disproved it: `never` is assignable to everything, so the object was typed
+    // against nothing. Two misspelled required keys, a junk key and two missing required keys, and tsc exited
+    // 0. The cast is on the one offending VALUE now, which is narrower and honest.
+    //
+    // But do not read more into that than it buys. `new Program(idl, provider)` loads the IDL as a VALUE at
+    // runtime, so there are no generated types and the target type is an index signature of `never`: tsc
+    // cannot check these key names in any cast placement. What checks them is
+    // `scripts/verify-client-idl-parity.ts`, which reads every `.accounts({...})` in scripts/ and apps/ and
+    // compares the keys to the committed IDL. Verified: renaming `config` to `configTYPO` here fails that
+    // gate by name. It runs in CI as a blocking step.
+    .accounts({ config: configPda, timelock: tlPda, rentRecipient: admin, signer: admin, guardian: null as never })
     .rpc();
   cfg = await acct.fetch(configPda);
   ok("FIX A cancel clears pending nonce", cfg.pendingRedeemLimitsNonce === null);

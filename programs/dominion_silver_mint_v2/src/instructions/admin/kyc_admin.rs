@@ -65,15 +65,16 @@ pub fn set_kyc_operator_handler(ctx: Context<SetKycOperator>, operator: Pubkey) 
     //
     // Disarm first, then decommission. Both are instant, so this costs the admin one extra transaction
     // and removes a silent trap.
+    // BOTH conditions live in `state/kyc.rs::validate_kyc_operator_assignment` so they are unit-tested and so
+    // section 4c can require this handler to call them. The `operator != admin` half was a bare
+    // `require_keys_neq!` here first, and a handler-only check is invisible to every test and every gate:
+    // deleting it left 156/156 green.
+    validate_kyc_operator_assignment(
+        operator,
+        ctx.accounts.config.admin,
+        ctx.accounts.config.kyc_scope_flags,
+    )?;
     let config = &mut ctx.accounts.config;
-    // CLEARING the attestor while armed is refused: that is the one case we can detect and it leaves the gate
-    // with provably no way to admit anybody.
-    if operator == Pubkey::default() {
-        require!(
-            kyc_operator_may_be_cleared(config.kyc_scope_flags),
-            DominionError::KycOperatorRequiredWhileArmed
-        );
-    }
     // WHAT IS DELIBERATELY *NOT* CHECKED, and why, because I got this wrong once and reverted it.
     //
     // Round 3 P2 observes that rotating to any OTHER unusable key (a PDA, a typo) while armed has the same
@@ -303,39 +304,48 @@ pub struct RevokeKyc<'info> {
 ///
 /// The rent goes to whoever signed, which may not be whoever paid. That asymmetry is accepted:
 /// it is dust, and the alternative (tracking the payer) would add a field to serve no one.
-pub fn revoke_kyc_handler(ctx: Context<RevokeKyc>, wallet: Pubkey) -> Result<()> {
-    // C-02: the account is being CLOSED (see `close = signer` above), so the roster shrinks.
-    //
-    // `checked_sub` rather than `saturating_sub`. A saturating decrement would silently paper over a
-    // counter that had drifted below the real roster size, and the direction of that drift is the
-    // dangerous one: it would let the gate be armed while the count claims attestations that no longer
-    // exist. If this ever underflows, the invariant is already broken and the right answer is to refuse
-    // and be noticed, not to clamp to zero and carry on.
+pub fn revoke_kyc_handler(
+    ctx: Context<RevokeKyc>,
+    wallet: Pubkey,
+    // REVIEW-OF-FIXES: consent to the gate being DROPPED, in the signed message. See
+    // `state/kyc.rs::resolve_revocation` and `DominionError::KycRevokeWouldDisarm` for why an argument and
+    // not an authority check: the disarm is reachable by ORDERING, so admin-only was not enough.
+    // Ignored unless this revocation would empty the roster while a side is armed.
+    allow_disarm: bool,
+) -> Result<()> {
     let signer = ctx.accounts.signer.key();
-    // Read before the mutable borrow. `RevokeKyc` already constrains the signer to be one of the two.
+    // Read before the mutable borrow. `RevokeKyc` already constrains the signer to be one of the two, and
+    // `set_kyc_operator` refuses to make them equal, so this is a real distinction rather than a hopeful one.
     let signer_is_admin = signer == ctx.accounts.config.admin;
     let config = &mut ctx.accounts.config;
-    let count_after = count_after_revocation(config.kyc_attestation_count)?;
-    // ROUND 3 P0, as amended by REVIEW-OF-FIXES P1: the state "armed gate, empty roster" must be
-    // unreachable. The rule lives in `state/kyc.rs::revocation_must_disarm`, and it resolves BEFORE any
-    // write, so a refusal leaves both the counter and the scope untouched.
-    //
-    // My first fix refused this revocation outright, which deleted the only path to remove the LAST
-    // holder: see the function's doc block. It now disarms instead, for the admin only.
-    let must_disarm = revocation_must_disarm(config.kyc_scope_flags, count_after, signer_is_admin)?;
-    config.kyc_attestation_count = count_after;
 
-    if must_disarm {
-        // Removing the last holder while armed drops the gate in the SAME instruction. Not a silent
-        // loosening: it emits the same event an explicit `set_kyc_scope(0)` emits, so anything watching
-        // the highest-signal admin event sees it without having to correlate the counter.
-        let old_flags = config.kyc_scope_flags;
-        config.kyc_scope_flags = 0;
-        // The derived master signal, never set independently. Same rule as `set_kyc_scope`.
-        config.kyc_enforced = false;
+    // C-02: the account is being CLOSED (see `close = signer` above), so the roster shrinks. The whole
+    // transition resolves in `state/kyc.rs` BEFORE any write, so a refusal leaves the counter, the scope
+    // and the account untouched (Anchor rolls the instruction back on `Err`, and `close` runs only on `Ok`).
+    let outcome = resolve_revocation(
+        config.kyc_scope_flags,
+        config.kyc_attestation_count,
+        signer_is_admin,
+        allow_disarm,
+    )?;
+
+    // UNCONDITIONAL, all three, and that is the point. The previous version applied the disarm inside
+    // `if must_disarm { ... }`, and a reviewer deleted that block to find 154/154 tests and every gate still
+    // green: section 4c proves a rule is CALLED, never that its answer is USED. Assigning the resolved next
+    // state leaves no branch to delete, and `kyc_enforced` is derived from the same value in the same
+    // breath so the two cannot drift apart.
+    let old_flags = config.kyc_scope_flags;
+    config.kyc_attestation_count = outcome.count_after;
+    config.kyc_scope_flags = outcome.scope_after;
+    config.kyc_enforced = outcome.scope_after != 0;
+
+    if outcome.disarmed {
+        // Losing this emits nothing and breaks no invariant, which is why it is the only conditional left.
+        // It is the same event an explicit `set_kyc_scope(0)` emits, so anything watching the highest-signal
+        // admin event sees the loosening without having to correlate the counter.
         emit!(KycScopeChanged {
             old_flags,
-            new_flags: 0,
+            new_flags: outcome.scope_after,
             by: signer,
             timestamp: Clock::get()?.unix_timestamp,
         });
@@ -343,7 +353,7 @@ pub fn revoke_kyc_handler(ctx: Context<RevokeKyc>, wallet: Pubkey) -> Result<()>
 
     emit!(KycRevoked {
         wallet,
-        by: ctx.accounts.signer.key(),
+        by: signer,
         timestamp: Clock::get()?.unix_timestamp,
     });
     Ok(())

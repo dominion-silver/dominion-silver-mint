@@ -637,8 +637,10 @@ export function MintRedeemCard() {
           Could not read this wallet&apos;s fee-exemption
           {mode === "redeem" ? " or verification" : ""} status from the network.
           {mode === "mint"
-            ? " Minting is held until the read succeeds, so you cannot be quoted one fee and charged another."
-            : " Redeeming is held until the read succeeds, so you cannot be quoted one fee and charged another."}
+            ? " If you hold an exemption it will not be applied, so you may receive MORE SILV than quoted, never less."
+            : cfg?.feeRoutingDisabled === true
+              ? " Redeeming is held until the read succeeds, because an unread exemption would change the payout the window check uses."
+              : " If you hold an exemption it will not be applied, so you may be paid MORE than quoted, never less."}
           {" Retry in a moment."}
         </div>
       )}
@@ -822,21 +824,36 @@ export function MintRedeemCard() {
           // chain decide", which is the opposite of the tri-state doctrine applied to `kycAttested`
           // eight lines from here.
           (mode === "redeem" && redeemRoute === null) ||
-          // REVIEW-OF-FIXES P1, found independently by both reviewers. Treating a foreign snapshot as
-          // `undefined` was only half a fix: `undefined` makes the QUOTE fall back to the configured
-          // premium, and then the builders resolve the flags FRESH, so the transaction is priced from a
-          // different snapshot than the one the user was shown. That is the two-snapshot disagreement the
-          // round-3 P1 existed to close, reopened in more states than before (every wallet switch, plus any
-          // window where the flags read is failing while `keepPreviousData` serves the old wallet's).
+          // REVIEW-OF-FIXES P1, found independently by both reviewers, then NARROWED after the second pass.
           //
-          // The concrete revert, in the launch configuration: fee routing off, the new wallet holds a live
-          // redeem-side exemption, its budget is near the cap. The quote charges 150 bps, so outflow reads
-          // 98.50 and the route reads "instant". The chain charges 0 bps, outflow is 100.00, and the tx
-          // fails RedeemLimitExceeded AFTER the Lazer fee has been paid.
+          // Treating a foreign snapshot as `undefined` was only half a fix: `undefined` makes the QUOTE fall
+          // back to the configured premium, and then the builders resolve the flags FRESH, so the transaction
+          // is priced from a different snapshot than the one the user was shown. That is the two-snapshot
+          // disagreement round-3 P1 existed to close, reopened in more states than before (every wallet
+          // switch, plus any window where the flags read is failing while `keepPreviousData` serves the old
+          // wallet's).
           //
-          // So: do not sign what we cannot price. Unknown entitlements block, exactly as `kycAttested ===
-          // undefined` blocks. It costs one RPC round trip after connecting or switching wallets.
-          (wallet.connected && !flagsAreForThisWallet) ||
+          // My first fix blocked submit whenever the snapshot was not this wallet's, for BOTH modes. The
+          // second review measured what that costs: one failing `getMultipleAccountsInfo` (and the runbook
+          // itself warns the public RPC will rate-limit you) disabled mint AND redeem for every visitor,
+          // including the overwhelming majority who hold no exemption and were being quoted correctly.
+          //
+          // So block only where the unknown can actually change the outcome, which is ONE case:
+          //
+          //   MINT: an unknown exemption makes the quote charge the full premium while the chain charges 0,
+          //   so the user receives MORE SILV than `minSilvOut`. Succeeds. Never needs blocking.
+          //
+          //   REDEEM, fee routing ON: outflow is the gross either way, so neither the route nor the budget
+          //   check depends on the premium, and an unknown exemption only means the user is paid more than
+          //   quoted. Succeeds.
+          //
+          //   REDEEM, fee routing OFF: outflow is `gross - fee`, so the exemption CHANGES it. Quote says
+          //   98.50 and classifies "instant"; the chain computes 100.00 and reverts RedeemLimitExceeded,
+          //   after the Lazer fee has been paid. THIS is the case, and it is the launch configuration.
+          //
+          // KYC being armed is already covered: `kycAttested === undefined` routes to "kyc", which is in the
+          // list above.
+          (mode === "redeem" && cfg?.feeRoutingDisabled === true && wallet.connected && !flagsAreForThisWallet) ||
           // No config means no premium, no route and no min_out. Quoting would be inventing numbers, and
           // `preview` is already null so the button would say "0.00" with nothing behind it.
           !!cfgError ||
@@ -856,8 +873,8 @@ export function MintRedeemCard() {
                 ? "Mint not open yet"
                 : redemptionsOff
                   ? "Redemptions not open yet"
-                  : wallet.connected && !flagsAreForThisWallet
-                    ? "Checking your status..."
+                  : mode === "redeem" && cfg?.feeRoutingDisabled === true && wallet.connected && !flagsAreForThisWallet
+                    ? "Checking your fee status..."
                     : !amount
                     ? "Enter an amount"
                     : mode === "mint"

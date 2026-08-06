@@ -201,9 +201,15 @@ export async function POST(req: NextRequest) {
       // It has already paid its token; a second attempt costs one more and rescues its own transaction
       // along with everyone else's. Measured: 40 requests, one transient blip, 2 upstream calls, 40x200.
       if (attempt + 1 < 2) continue;
+      // REVIEW-OF-FIXES P2, found by both reviewers. This used to be `String(e).slice(0, 300)`, and `e` is
+      // the error `fetchAndCache` throws with the upstream status in its message, so an anonymous caller
+      // learned whether our Pyth key is 403 (no entitlement) or 429 (quota gone). That is exactly the signal
+      // the same file strips on every other path, and the detail is already logged server-side. Same bare
+      // body and the same Retry-After as the waiter path: one answer, one shape.
+      console.error(`[lazer] upstream failed after a retry: ${String(e).slice(0, 300)}`);
       return NextResponse.json(
-        { error: "lazer_unreachable", message: String(e).slice(0, 300) },
-        { status: 502 },
+        { error: "lazer_unreachable", message: "Upstream price request failed. Retry shortly." },
+        { status: 502, headers: { "Retry-After": "1" } },
       );
     }
 
@@ -247,6 +253,12 @@ async function fetchAndCache(apiKey: string, feedId: number): Promise<void> {
     body: JSON.stringify(lazerReq),
     // The key never leaves this server route.
     cache: "no-store",
+    // REVIEW-OF-FIXES P2, both reviewers. There was no timeout, and the in-request retry doubles the
+    // worst case: a slow-FAILING upstream now costs two attempts, which can exceed the serverless
+    // function limit and hand the caller a platform 504 instead of the intended 502 plus Retry-After.
+    // The two-attempt bound only delivers what it promises when a failure is fast, so make it fast.
+    // 3s is generous: the observed p99 for this endpoint is well under 500ms.
+    signal: AbortSignal.timeout(3_000),
   });
 
   if (!resp.ok) {

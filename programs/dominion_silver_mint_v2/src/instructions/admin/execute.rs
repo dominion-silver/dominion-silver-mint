@@ -79,6 +79,14 @@ pub fn execute_set_premium_mint_handler(ctx: Context<ExecutePremium>, nonce: u64
     );
 
     config.premium_bps_mint = new_bps;
+    // REVIEW-OF-FIXES P1: `ConfigAccount::assert_premium_within_bounds` was declared and called by NOTHING.
+    // The ceilings and the combined floor are re-expressed inline at each of the four mutation sites, so
+    // there was no live gap, but the orphan is the exact class section 4c exists to catch: a rule that is
+    // written, unit-tested, and never runs. Called here as a POST-WRITE invariant, which is a different and
+    // strictly complementary statement to the inline pre-write checks: the inline ones validate a CANDIDATE
+    // value, this one validates the STORED pair, so a future setter that forgets its inline check still
+    // cannot leave the config out of bounds.
+    config.assert_premium_within_bounds()?;
     config.pending_premium_mint_nonce = None;
     config.active_proposal_count = config.active_proposal_count.saturating_sub(1);
     config.mint_paused_until = 0;
@@ -123,6 +131,8 @@ pub fn execute_set_premium_redeem_handler(ctx: Context<ExecutePremium>, nonce: u
     );
 
     config.premium_bps_redeem = new_bps;
+    // Same post-write invariant as above.
+    config.assert_premium_within_bounds()?;
     config.pending_premium_redeem_nonce = None;
     config.active_proposal_count = config.active_proposal_count.saturating_sub(1);
     tl.executed_at = Some(now);

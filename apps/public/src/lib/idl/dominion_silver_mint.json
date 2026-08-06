@@ -3879,6 +3879,10 @@
         {
           "name": "wallet",
           "type": "pubkey"
+        },
+        {
+          "name": "allow_disarm",
+          "type": "bool"
         }
       ]
     },
@@ -5682,6 +5686,16 @@
       "code": 12115,
       "name": "KycSubjectInvalid",
       "msg": "that wallet cannot be attested: it can never sign as a holder"
+    },
+    {
+      "code": 12116,
+      "name": "KycRevokeWouldDisarm",
+      "msg": "this revocation would empty the roster and DISARM the KYC gate: pass allow_disarm to confirm"
+    },
+    {
+      "code": 12117,
+      "name": "KycOperatorMayNotBeAdmin",
+      "msg": "the KYC attestor may not be the admin key: the whole hot/cold split depends on them differing"
     }
   ],
   "types": [

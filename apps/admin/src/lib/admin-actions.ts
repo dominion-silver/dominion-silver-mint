@@ -404,14 +404,20 @@ export async function attestKyc(
 
 /** Withdraw an approval. Signable by EITHER the attestor or the admin: the attestor is the
  *  normal path (offboarding), the admin is the incident path, so a compromised attestor's
- *  writes can be undone without waiting to rotate it first. */
+ *  writes can be undone without waiting to rotate it first.
+ *
+ *  `allowDisarm` is consent to the KYC GATE BEING DROPPED, and it only ever matters when this revocation
+ *  would leave the roster empty while a side is armed. Leave it false unless that is what you mean: the
+ *  program refuses rather than loosening compliance silently. See `state/kyc.rs::resolve_revocation` and
+ *  `DominionError::KycRevokeWouldDisarm` for why the consent is an argument and not an authority check. */
 export async function revokeKyc(
   c: BuildCtx,
   signer: PublicKey,
   wallet: PublicKey,
+  allowDisarm = false,
 ): Ix {
   const ix = await (getProgram(c.connection).methods as any)
-    .revokeKyc(wallet)
+    .revokeKyc(wallet, allowDisarm)
     .accountsPartial({ signer, kyc: kycPda(wallet) })
     .instruction();
   return one(ix);

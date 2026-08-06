@@ -81,6 +81,14 @@ pub fn dev_set_premiums_handler(
     let config = &mut ctx.accounts.config;
     config.premium_bps_mint = mint_bps;
     config.premium_bps_redeem = redeem_bps;
+    // REVIEW-OF-FIXES P1: `ConfigAccount::assert_premium_within_bounds` was declared and called by NOTHING.
+    // The ceilings and the combined floor are re-expressed inline at each of the four mutation sites, so
+    // there was no live gap, but the orphan is the exact class section 4c exists to catch: a rule that is
+    // written, unit-tested, and never runs. Called here as a POST-WRITE invariant, which is a different and
+    // strictly complementary statement to the inline pre-write checks: the inline ones validate a CANDIDATE
+    // value, this one validates the STORED pair, so a future setter that forgets its inline check still
+    // cannot leave the config out of bounds.
+    config.assert_premium_within_bounds()?;
     let now = Clock::get()?.unix_timestamp;
     emit!(DevParamSet {
         admin: ctx.accounts.admin.key(),

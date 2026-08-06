@@ -307,4 +307,24 @@ pub enum DominionError {
     /// off-chain provider pipeline.
     #[msg("that wallet cannot be attested: it can never sign as a holder")]
     KycSubjectInvalid,
+
+    /// Review-of-fixes: revoking this attestation would EMPTY the roster while the gate is armed, which
+    /// drops the gate. The admin must ask for that explicitly by passing `allow_disarm = true`.
+    ///
+    /// The refusal exists because the disarm is reachable by ORDERING rather than by authority. The attestor
+    /// can revoke wallets down to a roster of exactly one without triggering anything, and then the admin's
+    /// next revocation, whatever it was actually for, empties the roster and un-gates both sides. Revocation
+    /// runs through the Squads panel, so the admin approves when the roster holds fifty and the transaction
+    /// executes later. Putting the consent in the signed message is what separates "I am removing a holder"
+    /// from "I am loosening compliance for everybody".
+    #[msg("this revocation would empty the roster and DISARM the KYC gate: pass allow_disarm to confirm")]
+    KycRevokeWouldDisarm,
+
+    /// Review-of-fixes: the KYC attestor may not be the admin key.
+    ///
+    /// The entire admin/attestor asymmetry rests on the two being different: the attestor is a hot server
+    /// key that signs every approval, the admin is the Squads vault. If they are ever set equal, "admin only"
+    /// stops meaning anything and a leaked attestor key silently becomes an admin key for this instruction.
+    #[msg("the KYC attestor may not be the admin key: the whole hot/cold split depends on them differing")]
+    KycOperatorMayNotBeAdmin,
 }

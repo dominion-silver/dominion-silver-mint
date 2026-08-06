@@ -593,10 +593,18 @@ const ACTIONS: ActionDesc[] = [
     label: "KYC: revoke attestation",
     group: "Emergency & ops",
     mode: "squads",
-    fields: [{ name: "wallet", label: "Wallet (pubkey)", kind: "pubkey" }],
-    tip: "Closes the attestation account, so revocation takes effect in the same slot with no flag for a stale cache to misread. Signable by the admin as well as the attestor, so a compromised attestor's writes can be undone without waiting to rotate it first.",
+    fields: [
+      { name: "wallet", label: "Wallet (pubkey)", kind: "pubkey" },
+      { name: "allowDisarm", label: "Also DISARM the gate if this empties the roster", kind: "bool" },
+    ],
+    tip: "Closes the attestation account, so revocation takes effect in the same slot with no flag for a stale cache to misread. Signable by the admin as well as the attestor, so a compromised attestor's writes can be undone without waiting to rotate it first. LEAVE THE SECOND FIELD OFF unless you mean it: if this is the LAST attestation while the gate is armed, the program refuses rather than dropping the gate silently, because an armed gate with an empty roster locks everybody out. Turning it on removes the holder AND un-gates that side for every wallet, in one transaction. The reason it is a checkbox and not automatic: a compromised attestor can revoke the roster down to one without triggering anything, and then your next revocation would have dropped the gate for everybody, approved at a moment when the roster still held fifty.",
     build: (c, p) =>
-      actions.revokeKyc(c, c.admin ?? actions.adminAuthority(), pk(p.wallet)),
+      actions.revokeKyc(
+        c,
+        c.admin ?? actions.adminAuthority(),
+        pk(p.wallet),
+        boolField(p, "allowDisarm"),
+      ),
   },
   {
     id: "propose-admin-transfer",

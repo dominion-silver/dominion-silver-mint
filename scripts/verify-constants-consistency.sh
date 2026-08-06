@@ -313,7 +313,27 @@ if _tc.returncode != 0 or _diags:
 else:
     print("   ok: scripts/ typechecks clean")
 
-print("4c. Every state rule is actually CALLED by a handler")
+# REVIEW-OF-FIXES, second round: the typecheck is silenced by ONE line. The reviewer added `// @ts-nocheck`
+# plus an undeclared call and a type error to `t1-hostile-bootstrap.ts` (the exact file whose 5-arg call to a
+# 6-arg function WAS round 3 P0-1) and the gate printed "ok: scripts/ typechecks clean". The commit closed
+# "tsc aborted before it got here" and left "tsc was told not to look" wide open.
+#
+# None of these directives exists in scripts/ today, which is why banning them costs nothing. If one is ever
+# genuinely needed, the right move is to fix the type or narrow the suppression to a single expression, not to
+# blind the only gate that reads this directory.
+_suppressors = []
+for _f in sorted(pathlib.Path("scripts").rglob("*.ts")):
+    for _n, _line in enumerate(_f.read_text().splitlines(), 1):
+        if re.search(r"@ts-(nocheck|ignore|expect-error)", _line):
+            _suppressors.append(f"{_f}:{_n}: {_line.strip()[:80]}")
+for _sp in _suppressors:
+    print(f"   FAIL: {_sp}")
+if _suppressors:
+    print("          A type-check suppression in scripts/ silences the gate that exists because these")
+    print("          scripts sign mainnet transactions. Fix the type instead.")
+check(not _suppressors, "no @ts-nocheck / @ts-ignore / @ts-expect-error anywhere in scripts/")
+
+print("4c. Every state rule is called, in the right place, outside test code")
 # REVIEW-OF-FIXES P1, measured by the reviewer and reproduced here: the five WIRING-level mutations of the
 # round-3 contract fixes each left all 153 Rust tests green.
 #
@@ -323,15 +343,23 @@ print("4c. Every state rule is actually CALLED by a handler")
 #
 # The rules are pure functions in `state/`, unit-tested to death, and the tests prove the RULE. Nothing
 # proved the HANDLER still calls it. That is the same shape as the P0 in section 4a (a mechanism present in
-# the source and absent from the executed path), so it gets the same treatment: a class check, not another
-# unit test. Only an on-chain integration test can prove the composed behaviour, and it is tracked as such;
-# this closes the cheap half now, which is "the rule was silently orphaned".
+# the source and absent from the executed path), so it gets the same treatment: a class check.
 #
-# Comments AND string literals are stripped before matching, so the gate cannot be satisfied by prose. That
-# is not a hypothetical: the sibling detector in verify-cluster-resolution.ts claimed to strip strings and
-# did not.
-_state_dir = pathlib.Path("programs/dominion_silver_mint_v2/src/state")
-_instr_dir = pathlib.Path("programs/dominion_silver_mint_v2/src/instructions")
+# REVIEW-OF-FIXES, SECOND ROUND. My first version of this section asserted only that each name appeared in a
+# call position SOMEWHERE under instructions/, and the reviewer defeated it three ways:
+#
+#   1. `enforce_kyc` has TWO call sites. Deleting the REDEEM-side gate (the side C-02 is armed for first)
+#      left 4c green because mint_silv.rs still calls it.
+#   2. Moving `validate_kyc_subject(wallet)?` out of the handler into a `#[cfg(test)] mod` in the same file
+#      left 4c green. Those mods already exist in three instruction files.
+#   3. The list named 8 of ~16 rule-shaped functions. Deleting `validate_fee_exempt_expiry` from
+#      fee_whitelist.rs left 4c green, and `assert_premium_within_bounds` was declared and called by
+#      NOTHING, which is precisely the orphan this section is for.
+#
+# So: each rule declares WHICH files must call it, `#[cfg(test)]` mods are stripped before looking, and the
+# manifest is checked for COMPLETENESS against what `state/` actually declares. That last part is what stops
+# the list from silently shrinking, which is how section 5 failed twice.
+_pdir = pathlib.Path("programs/dominion_silver_mint_v2/src")
 
 
 def _strip_code(text):
@@ -342,46 +370,123 @@ def _strip_code(text):
     return text
 
 
-# Rules, not accessors: a predicate or validator whose whole job is to be called by a handler. Named
-# explicitly rather than pattern-matched on the prefix, because a gate that guesses its own scope silently
-# shrinks to zero (section 5's recurring failure).
-_RULES = [
-    "validate_kyc_arming",
-    "revocation_must_disarm",
-    "validate_kyc_subject",
-    "validate_kyc_scope",
-    "next_attestation_count",
-    "count_after_revocation",
-    "kyc_operator_may_be_cleared",
-    "enforce_kyc",
-]
-_declared = {}
-for _f in sorted(_state_dir.rglob("*.rs")):
-    _body = _strip_code(_f.read_text())
-    for _m in re.finditer(r"\bpub fn ([a-z0-9_]+)\s*\(", _body):
-        _declared.setdefault(_m.group(1), _f.name)
+def _strip_test_mods(text):
+    """Remove every `#[cfg(test)] mod ... { ... }` block, brace-matched.
 
-_instr_src = "\n".join(_strip_code(_f.read_text()) for _f in sorted(_instr_dir.rglob("*.rs")))
-_orphans, _absent = [], []
-for _rule in _RULES:
-    if _rule not in _declared:
-        # The rule was renamed or deleted and this list was not updated. That is a FAILURE, not a skip:
-        # silently dropping unknown names is how a gate shrinks to checking nothing.
+    Hole 2 above: a call that has been MOVED INTO test code is not a call the program makes, and three
+    instruction files already carry such mods, so this is a live shape rather than a contrived one.
+    """
+    out, i = [], 0
+    while True:
+        m = re.search(r"#\[cfg\(test\)\]\s*mod\s+\w+\s*\{", text[i:])
+        if not m:
+            out.append(text[i:])
+            break
+        out.append(text[i : i + m.start()])
+        j, depth = i + m.end(), 1
+        while j < len(text) and depth > 0:
+            if text[j] == "{":
+                depth += 1
+            elif text[j] == "}":
+                depth -= 1
+            j += 1
+        i = j
+    return "".join(out)
+
+
+def _prog(rel):
+    return _strip_test_mods(_strip_code((_pdir / rel).read_text()))
+
+
+# THE MANIFEST. rule -> every file that must call it. A rule with two call sites names both, so deleting
+# either one fails. Paths are relative to programs/dominion_silver_mint_v2/src/.
+_RULES = {
+    # ---- KYC (C-02 and round 3) ----
+    "validate_kyc_scope": ["instructions/admin/kyc_admin.rs"],
+    "validate_kyc_arming": ["instructions/admin/kyc_admin.rs"],
+    "validate_kyc_subject": ["instructions/admin/kyc_admin.rs"],
+    "next_attestation_count": ["instructions/admin/kyc_admin.rs"],
+    "resolve_revocation": ["instructions/admin/kyc_admin.rs"],
+    "validate_kyc_operator_assignment": ["instructions/admin/kyc_admin.rs"],
+    # BOTH sides. The redeem side is the one the gate is armed for first, and it was the deletable one.
+    "enforce_kyc": ["instructions/mint_silv.rs", "instructions/redeem_silv.rs"],
+    # Called by validate_kyc_operator_assignment, not by a handler. Declared here so the completeness sweep
+    # below does not report it, and so moving it into a handler is a deliberate edit to this line.
+    "kyc_operator_may_be_cleared": ["state/kyc.rs"],
+    # ---- fee exemptions (C-01 and the whitelist) ----
+    "validate_fee_exempt_expiry": ["instructions/admin/fee_whitelist.rs"],
+    "validate_fee_exempt_flags": ["instructions/admin/fee_whitelist.rs"],
+    "effective_premium_bps": ["instructions/mint_silv.rs", "instructions/redeem_silv.rs"],
+    # ---- guardians ----
+    "may_act": [
+        "instructions/emergency/pause.rs",
+        "instructions/admin/timelock.rs",
+        "instructions/admin/transfer.rs",
+    ],
+    "may_schedule_removal": ["instructions/admin/guardian.rs"],
+    "removal_schedule_expired": ["instructions/admin/guardian.rs"],
+    "active_not_pending": ["state/guardian.rs"],
+    # ---- redeem budget ----
+    "roll_window": ["instructions/redeem_silv.rs"],
+    # ---- premiums ----
+    # Was ORPHANED. Now a post-write invariant at all four premium mutation sites.
+    "assert_premium_within_bounds": [
+        "instructions/initialize.rs",
+        "instructions/admin/execute.rs",
+        "instructions/admin/dev.rs",
+    ],
+    # ---- small predicates, called from within state/ ----
+    "attests": ["state/kyc.rs"],
+    "exempts": ["state/fee_exempt.rs"],
+    "is_expired": ["state/fee_exempt.rs"],
+    "is_set_in": ["state/fee_exempt.rs", "state/kyc.rs"],
+    "bit": ["state/side.rs"],
+    "side_flags_valid_allow_empty": ["state/kyc.rs"],
+    "side_flags_valid_nonempty": ["state/fee_exempt.rs"],
+}
+_missing, _absent, _uncovered = [], [], []
+for _rule, _wheres in sorted(_RULES.items()):
+    _decl = [
+        _f
+        for _f in sorted((_pdir / "state").rglob("*.rs"))
+        if re.search(r"\bpub fn " + _rule + r"\s*\(", _strip_test_mods(_strip_code(_f.read_text())))
+    ]
+    if not _decl:
+        # Renamed or retired without updating this list. A FAILURE, not a skip: silently dropping unknown
+        # names is exactly how a gate shrinks to checking nothing.
         _absent.append(_rule)
         continue
-    if not re.search(r"\b" + _rule + r"\s*\(", _instr_src):
-        _orphans.append(f"{_rule} (declared in state/{_declared[_rule]})")
+    for _where in _wheres:
+        if not re.search(r"\b" + _rule + r"\s*\(", _prog(_where)):
+            _missing.append(f"{_rule} is not called in {_where}")
+
+# COMPLETENESS: every public function declared in state/ must appear in the manifest. This is what catches a
+# newly added rule that nothing wires up, and it is the check whose absence let `assert_premium_within_bounds`
+# sit orphaned. `_NOT_RULES` is for genuine non-rules (constructors, size helpers); keep it short and justified.
+_NOT_RULES = {
+    "space",  # size helpers
+    "size",
+}
+for _f in sorted((_pdir / "state").rglob("*.rs")):
+    for _m in re.finditer(r"\bpub fn ([a-z0-9_]+)\s*\(", _strip_test_mods(_strip_code(_f.read_text()))):
+        _n = _m.group(1)
+        if _n in _RULES or _n in _NOT_RULES:
+            continue
+        _uncovered.append(f"{_n} (state/{_f.name})")
 if _absent:
     print(f"   FAIL: rule(s) named here no longer exist in state/: {', '.join(_absent)}")
     print("          If a rule was renamed or genuinely retired, update _RULES in the SAME commit.")
-if _orphans:
-    print("   FAIL: rule(s) declared and unit-tested but never called by any handler:")
-    for _o in _orphans:
-        print(f"          {_o}")
+for _mi in _missing:
+    print(f"   FAIL: {_mi}")
+if _missing:
     print("          A rule nothing calls is a rule that does not run. This is section 4a's class,")
     print("          one level up: present in the source, absent from the executed path.")
-check(not _absent and not _orphans,
-      f"all {len(_RULES)} state rules are called from instructions/")
+for _u in sorted(set(_uncovered)):
+    print(f"   FAIL: {_u} is declared in state/ and absent from the 4c manifest, so nothing checks it runs")
+check(
+    not _absent and not _missing and not _uncovered,
+    f"all {len(_RULES)} state rules are called where they must be ({sum(len(v) for v in _RULES.values())} sites)",
+)
 
 print("5. Retired program ids")
 # Review-of-fixes F1: this list was STALE ON THE COMMIT THAT INTRODUCED IT. gc5TW,

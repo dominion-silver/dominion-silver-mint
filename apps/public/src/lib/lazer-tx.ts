@@ -492,7 +492,7 @@ export async function buildLazerMintTx(
   // showing another wallet's entitlements, so resolving fresh is both correct and the only safe option; the
   // quote will be re-derived on the next render anyway.
   const opt = flagsMatchOwner(args.walletFlags, user)
-    ? args.walletFlags!
+    ? args.walletFlags
     : await resolveWalletFlagsOrDefault(connection, user);
   const dominionIx = await (program.methods as any)
     .mintSilv(args.amountUsdc, args.minSilvOut, messageData, ED25519_IX_INDEX, 0)
@@ -516,7 +516,13 @@ export async function buildLazerMintTx(
  * zero test coverage. Reverting it in both builders and in the card left 60/60 and 25/25 green. One
  * exported predicate, tested here, used everywhere.
  */
-export function flagsMatchOwner(flags: WalletFlags | undefined | null, owner: PublicKey): boolean {
+// A type predicate, not a `boolean`. REVIEW-OF-FIXES P2: returning `boolean` forced `args.walletFlags!` at
+// both call sites, so the non-null was ASSERTED by hand where it can be DERIVED. Narrowing means the compiler
+// carries the guarantee instead of the author.
+export function flagsMatchOwner(
+  flags: WalletFlags | undefined | null,
+  owner: PublicKey,
+): flags is WalletFlags {
   return !!flags && flags.owner.equals(owner);
 }
 
@@ -546,7 +552,7 @@ export async function buildLazerRedeemTx(
   // showing another wallet's entitlements, so resolving fresh is both correct and the only safe option; the
   // quote will be re-derived on the next render anyway.
   const opt = flagsMatchOwner(args.walletFlags, user)
-    ? args.walletFlags!
+    ? args.walletFlags
     : await resolveWalletFlagsOrDefault(connection, user);
   const dominionIx = await (program.methods as any)
     .redeemSilv(args.amountSilv, args.minUsdcOut, messageData, ED25519_IX_INDEX, 0)

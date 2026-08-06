@@ -37,6 +37,7 @@
  * `solana program extend` is IRREVERSIBLE: the rent for the added bytes is locked for as long as the
  * program exists, and there is no shrink. Hence the intent gate.
  */
+import { PublicKey } from "@solana/web3.js";
 import { execFileSync } from "child_process";
 import fs from "fs";
 import os from "os";
@@ -143,6 +144,8 @@ async function main() {
   // ---- 4. snapshot BEFORE ----
   step("4", "config snapshot BEFORE the upgrade");
   const before = readConfig();
+  // The raw bytes too, because the decoded snapshot cannot testify about the layout: see step 7b.
+  const rawBefore = readConfigRaw();
   if (!before) {
     die(
       "the config account does not decode. This script upgrades an INITIALISED program; " +
@@ -322,52 +325,98 @@ async function main() {
     );
   }
 
-  step("7b", "fields carved from `reserved` are intact and in range");
-  // ROUND 3 P2: three of these four were merely PRINTED. Only `feeRoutingDisabled` was asserted, so a layout
-  // error decoding `kycScopeFlags = 2` (users unexpectedly gated), `instantUsedPrevUsdc = 10_000_000` (the
-  // rolling budget distorted) or `kycAttestationCount = 1` (an empty-roster arm authorised) produced no drift
-  // and no failure, and the script printed "carved fields correct". Printing is not checking.
+  step("7b", "the config account survived byte-for-byte and the carved fields are coherent");
+  // ROUND 3 P2: three of these four were merely PRINTED, so a layout error decoding `kycScopeFlags = 2`,
+  // `instantUsedPrevUsdc = 10_000_000` or `kycAttestationCount = 1` produced no failure and the script
+  // printed "carved fields correct". Printing is not checking.
   //
-  // REVIEW-OF-FIXES P2: asserting they are ZERO was correct exactly once. The zero expectation comes from the
-  // fields being read out of bytes the PRE-carve binary left as `reserved`, which is true only on the first
-  // in-place upgrade. The SECOND upgrade runs against an account where `kycScopeFlags` may legitimately be 2
-  // and the counter may legitimately be 40, and the script would have `die()`d on correct state: an upgrade
-  // path that refuses to run after it has been used once.
+  // REVIEW-OF-FIXES, and this section has now been wrong twice in opposite directions. Both are recorded
+  // because the second mistake was caused by fixing the first carelessly.
   //
-  // The invariant that holds on EVERY upgrade is different, and it is the one a layout break violates: an
-  // upgrade must not CHANGE these values, and whatever they hold must be inside its domain. Both are checked
-  // here. All-zero is then reported rather than required, because which case is expected depends on whether
-  // this is the first upgrade over a pre-carve account, and the script cannot know that. The operator can.
-  const DOMAIN: Record<string, (v: unknown) => boolean> = {
-    // A bool decoded from a byte that is neither 0 nor 1 is the clearest possible layout signal.
-    feeRoutingDisabled: (v) => v === true || v === false,
-    // Side bits: 1 = mint, 2 = redeem, 3 = both. Anything else means the byte came from the wrong offset.
-    kycScopeFlags: (v) => Number(v) >= 0 && Number(v) <= 3,
-    // A u64 of micro-USDC. Anything above the max supply's worth is not a budget, it is a misread field.
-    instantUsedPrevUsdc: (v) => Number(v) >= 0 && Number(v) <= 1e15,
-    // A u32 roster size. Bounded well below u32::MAX for the same reason.
-    kycAttestationCount: (v) => Number(v) >= 0 && Number(v) <= 1e6,
-  };
-  const carvedNames = ["feeRoutingDisabled", "kycScopeFlags", "instantUsedPrevUsdc", "kycAttestationCount"];
-  let carvedBad = 0;
-  let allZero = true;
-  for (const k of carvedNames) {
-    const b = String(before[k]);
-    const a = String(afterCfg[k]);
-    const unchanged = b === a;
-    const inRange = DOMAIN[k](afterCfg[k]);
-    if (!unchanged || !inRange) carvedBad++;
-    if (!(a === "0" || a === "false")) allZero = false;
-    const note = !unchanged ? `CHANGED from ${b}` : !inRange ? "OUT OF RANGE" : "";
-    console.log(`  ${unchanged && inRange ? "ok  " : "BAD "} ${k.padEnd(24)} = ${a}${note ? "  <- " + note : ""}`);
-  }
-  if (carvedBad > 0) {
+  //   Round 3's version asserted the four read ZERO. Correct exactly once: the zero expectation comes from
+  //   the fields being read out of bytes the PRE-carve binary left as `reserved`. The SECOND upgrade runs
+  //   against an account where `kycScopeFlags` is legitimately 2 and the counter is legitimately 40, and it
+  //   would have died on correct state.
+  //
+  //   My replacement asserted "unchanged across the upgrade, and inside its domain". Two faults. The domain
+  //   predicate was `v === true || v === false` against a value read-config prints as the STRING "false",
+  //   so it could never hold and step 7b called die() on every healthy upgrade, AFTER the deploy and the IDL
+  //   republish. And "unchanged" was vacuous: both snapshots come from the same read-config run against the
+  //   same in-repo IDL, decoding an account an in-place upgrade never touches, so it was structurally true.
+  //
+  // So neither the value nor a self-comparison of the decode is the evidence. Two things are:
+  //
+  //   1. THE RAW BYTES. An in-place bytecode upgrade must not modify the config account at all. Comparing
+  //      the account data before and after is a real statement about the chain, not about our decoder, and
+  //      it is the one that would catch an upgrade that migrated state it should not have.
+  //   2. CROSS-FIELD INVARIANTS the program itself maintains. A wrong offset breaks the relationship
+  //      between two fields even when each value looks plausible on its own. These are the checks that
+  //      survive both the first upgrade and the fortieth.
+  const rawAfter = readConfigRaw();
+  if (!rawBefore || !rawAfter) {
     die(
-      `${carvedBad} field(s) carved from \`reserved\` either CHANGED across the upgrade or decoded outside ` +
-        `their domain. That is a LAYOUT error, not a config difference: an upgrade must not move them, and ` +
-        `a value out of range means the decoder is reading the wrong offset. Do not use this program.`,
+      "could not read the config account's raw bytes on both sides of the upgrade, so the strongest " +
+        "available check could not run. Do not proceed until a plain `getAccountInfo` works.",
     );
   }
+  if (!rawBefore.equals(rawAfter)) {
+    die(
+      `THE CONFIG ACCOUNT'S BYTES CHANGED ACROSS THE UPGRADE (${rawBefore.length} -> ${rawAfter.length} ` +
+        `bytes). An in-place bytecode upgrade must not touch account state. Something migrated or ` +
+        `corrupted the config. Do not use this program.`,
+    );
+  }
+  console.log(`  ok   config account bytes identical across the upgrade (${rawAfter.length} bytes)`);
+
+  const g = (k: string) => String(afterCfg[k]);
+  const num = (k: string) => {
+    const n = Number(g(k));
+    return Number.isFinite(n) && Number.isInteger(n) && n >= 0 ? n : NaN;
+  };
+  const scope = g("kycScopeFlags");
+  const problems: string[] = [];
+  // A bool that is neither: Anchor would normally refuse to decode it, so this is the belt to step 7's braces.
+  if (g("feeRoutingDisabled") !== "true" && g("feeRoutingDisabled") !== "false") {
+    problems.push(`feeRoutingDisabled decoded as ${g("feeRoutingDisabled")}, which is not a bool`);
+  }
+  // Side bits: 1 = mint, 2 = redeem, 3 = both.
+  if (!["0", "1", "2", "3"].includes(scope)) {
+    problems.push(`kycScopeFlags = ${scope}, outside the side-bit set {0,1,2,3}`);
+  }
+  // THE DERIVED-SIGNAL INVARIANT, and the strongest single line here. `kyc_enforced` is written only as
+  // `flags != 0`, never independently, so external readers are promised the two cannot disagree
+  // (state/config.rs). A shift that moves one field and not the other breaks this while both values still
+  // look individually plausible.
+  const enforced = g("kycEnforced");
+  if (enforced !== String(scope !== "0")) {
+    problems.push(
+      `kycEnforced = ${enforced} but kycScopeFlags = ${scope}. These are written together and cannot ` +
+        `legitimately disagree, so one of them is being read from the wrong offset.`,
+    );
+  }
+  // THE C-02 INVARIANT: an armed gate always has somebody behind it.
+  const count = num("kycAttestationCount");
+  if (Number.isNaN(count)) problems.push(`kycAttestationCount = ${g("kycAttestationCount")} is not a count`);
+  else if (scope !== "0" && count === 0) {
+    problems.push(
+      `kycScopeFlags = ${scope} with kycAttestationCount = 0. The program refuses to reach that state, ` +
+        `so reading it back means the decode is wrong.`,
+    );
+  }
+  const used = num("instantUsedPrevUsdc");
+  if (Number.isNaN(used)) problems.push(`instantUsedPrevUsdc = ${g("instantUsedPrevUsdc")} is not an amount`);
+  for (const k of ["feeRoutingDisabled", "kycScopeFlags", "instantUsedPrevUsdc", "kycAttestationCount"]) {
+    console.log(`  ${" ".repeat(4)} ${k.padEnd(24)} = ${g(k)}`);
+  }
+  if (problems.length > 0) {
+    for (const pr of problems) console.error(`  BAD  ${pr}`);
+    die(
+      `${problems.length} carved-field invariant(s) broken. That is a LAYOUT error, not a config ` +
+        `difference: the fields carved from \`reserved\` are being read from the wrong offsets. ` +
+        `Do not use this program.`,
+    );
+  }
+  const allZero = g("feeRoutingDisabled") === "false" && scope === "0" && used === 0 && count === 0;
   console.log(
     allZero
       ? "  all four read zero: expected on the FIRST in-place upgrade over a pre-carve account."
@@ -391,11 +440,43 @@ async function main() {
 
 /** Read the config through the same helper the admin app uses, so a decode difference here is a real
  *  decode difference and not a second implementation of the layout. */
-function readConfig(): Record<string, unknown> | null {
+/**
+ * The config account as read-config.ts prints it: EVERY VALUE IS A STRING.
+ *
+ * REVIEW-OF-FIXES P0. This was typed `Record<string, unknown>`, and I then wrote a check
+ * (`v === true || v === false`) that can never hold against a string. Because it can never hold, step 7b
+ * called `die()` on every CORRECT upgrade, after the bytecode had already landed and the IDL had already
+ * been republished. Reviewer measured it against the live devnet config: `"feeRoutingDisabled": "false"`.
+ *
+ * The type says string now, so the compiler refuses the next person's `=== true`.
+ */
+/** The config account's raw data, or null. The evidence step 7b actually relies on. */
+function readConfigRaw(): Buffer | null {
+  try {
+    const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
+    const out = sh("solana", [
+      "account",
+      configPda.toBase58(),
+      "-u",
+      CLUSTER.rpc,
+      "--output",
+      "json",
+    ]);
+    const parsed = JSON.parse(out.slice(out.indexOf("{")));
+    const b64 = parsed?.account?.data?.[0];
+    if (typeof b64 !== "string") return null;
+    return Buffer.from(b64, "base64");
+  } catch (e) {
+    console.error(`  (raw config read failed: ${String(e).slice(0, 200)})`);
+    return null;
+  }
+}
+
+function readConfig(): Record<string, string> | null {
   try {
     const out = sh("npx", ["tsx", path.join(__dirname, "read-config.ts")]);
     const json = out.slice(out.indexOf("{"));
-    return JSON.parse(json) as Record<string, unknown>;
+    return JSON.parse(json) as Record<string, string>;
   } catch (e) {
     console.error(`  (read-config failed: ${String(e).slice(0, 200)})`);
     return null;

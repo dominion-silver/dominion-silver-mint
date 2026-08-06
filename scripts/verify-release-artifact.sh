@@ -39,6 +39,25 @@
 #                    loop, never as the pre-deploy gate)
 set -euo pipefail
 
+# REVIEW-OF-FIXES P2, and this deletes a class rather than an instance. The runbook carried the release
+# hash INLINE, and it went stale three times: twice within the hour of the commit that changed the program.
+# A number maintained by hand in two places disagrees with itself. So `config/mainnet-authorities.json` is
+# the only copy, and no document may reintroduce one: a bare 64-hex string in docs/ is now a hard failure,
+# whether or not it happens to be correct today, because "correct today" is exactly what the last three were.
+#
+# Placed BEFORE the --skip-rebuild early exit: it costs nothing, needs no toolchain, and the skip path is
+# exactly when an operator is in a hurry.
+# Recursive, and by extension not just docs/*.md: the first version used a flat glob, so a hash in
+# docs/<subdir>/x.md was still allowed. `--include` keeps it to prose files.
+_stray=$(grep -rnoE --include="*.md" "\b[0-9a-f]{64}\b" docs 2>/dev/null || true)
+if [ -n "$_stray" ]; then
+  echo ""
+  echo "FAIL: a bare sha256 appears in docs/. The release hash has ONE home:"
+  echo "      config/mainnet-authorities.json -> release_artifact.sha256"
+  echo "      Replace the literal with a pointer to that file plus 'bash scripts/verify-release-artifact.sh'."
+  echo "$_stray"
+  exit 1
+fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFEST="$ROOT/programs/dominion_silver_mint_v2/Cargo.toml"
 SKIP_REBUILD=0
@@ -190,20 +209,6 @@ if [[ "$SKIP_REBUILD" -eq 1 ]]; then
   echo "A binary built with a feature flag can pass everything above. Re-run without"
   echo "--skip-rebuild before any deploy."
   exit 2
-fi
-# REVIEW-OF-FIXES P2, and this deletes a class rather than an instance. The runbook carried the release
-# hash INLINE, and it went stale three times: twice within the hour of the commit that changed the program.
-# A number maintained by hand in two places disagrees with itself. So `config/mainnet-authorities.json` is
-# the only copy, and no document may reintroduce one: a bare 64-hex string in docs/ is now a hard failure,
-# whether or not it happens to be correct today, because "correct today" is exactly what the last three were.
-_stray=$(grep -rnoE "\b[0-9a-f]{64}\b" docs/*.md 2>/dev/null || true)
-if [ -n "$_stray" ]; then
-  echo ""
-  echo "FAIL: a bare sha256 appears in docs/. The release hash has ONE home:"
-  echo "      config/mainnet-authorities.json -> release_artifact.sha256"
-  echo "      Replace the literal with a pointer to that file plus 'bash scripts/verify-release-artifact.sh'."
-  echo "$_stray"
-  exit 1
 fi
 
 echo "ARTIFACT OK: matches a clean default rebuild, no forbidden instruction."

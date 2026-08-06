@@ -223,15 +223,23 @@ for (const rpc of [
     /\bsendAndConfirm\s*\(/,                // AnchorProvider.sendAndConfirm
     /\bsendRawTransaction\s*\(/,
     /\.\s*sendTransaction\s*\(/,            // Connection.sendTransaction
+    /\.\s*sendEncodedTransaction\s*\(/,     // Connection.sendEncodedTransaction: not matched by the above
     /\.\s*sendAll\s*\(/,                    // AnchorProvider.sendAll
     /\.\s*rpc\s*\(/,                        // Anchor methods().rpc(), tolerating whitespace
   ];
   // Matched against code with comments stripped and strings KEPT, since the command name is a literal.
   // Paired with a write verb: a bare /solana/ matched read-only preflights, and forcing those to guard is
   // how the consent variable ends up permanently exported.
-  const CLI_INVOCATION = /(?:exec(?:File)?Sync|spawn(?:Sync)?)\s*\(\s*["'`]solana["'`]/;
+  // Two shapes, because requiring `"solana"` as the FIRST argument only covers execFile style. The reviewer
+  // got an unguarded `execSync("solana program deploy … --url mainnet-beta")` past the gate: the single
+  // command string form is far more common and was invisible.
+  const CLI_INVOCATION = [
+    /(?:exec(?:File)?Sync|spawn(?:Sync)?)\s*\(\s*["'`]solana["'`]/,
+    /(?:exec(?:File)?Sync|execSync|spawn(?:Sync)?)\s*\(\s*["'`][^"'`]*\bsolana\s+\w/,
+  ];
+  // Quoted as a discrete argument, OR appearing after `solana program` in a single command string.
   const CLI_WRITE_VERB =
-    /["'`](?:deploy|extend|close|set-upgrade-authority|transfer|airdrop|write-buffer)["'`]/;
+    /["'`](?:deploy|extend|close|set-upgrade-authority|transfer|airdrop|write-buffer)["'`]|\bsolana\s+(?:program\s+)?(?:deploy|extend|close|set-upgrade-authority|transfer|airdrop|write-buffer)\b/;
 
   const scriptsDir = path.join(__dirname);
   const helpers = new Set([
@@ -266,8 +274,30 @@ for (const rpc of [
     "upgrade-program.ts",
   ]);
   const INDIRECT = new Set(["upgrade-program.ts"]);
-  // Invoke the solana CLI to READ. Must not be required to consent to a mainnet WRITE in order to look.
+  // Shell out to READ, or to run other scripts. Must not be required to consent to a mainnet WRITE in order
+  // to look: making a read demand DOMINION_ALLOW_MAINNET trains the operator to keep the write-consent
+  // variable exported, which is itself one of round 3's findings.
+  //
+  // This list is a CLAIM, and the claim is checked below: a member that matches any send primitive fails.
+  // It was a silencer before. The reviewer appended a real `conn.sendRawTransaction(raw)` to
+  // verify-mainnet-readiness.ts, with no guard, and the gate printed 33/33 with "17 detected, 17 in the
+  // manifest" while one of the seventeen was an unguarded sender.
   const READ_ONLY_CLI = new Set(["verify-mainnet-authorities.ts", "verify-mainnet-readiness.ts"]);
+  // Everything else: probes, decoders, gates. No transaction, no CLI write. Listed by name so that ADDING a
+  // script is a decision someone records rather than something the regexes silently bless.
+  const NON_SENDERS = new Set([
+    "check-onchain.ts",
+    "check-onchain2.ts",
+    "check-pda.ts",
+    "check-reserve.ts",
+    "premint-sizing.ts",
+    "probe-fetch.ts",
+    "probe-lazer-feed.ts",
+    "read-config.ts",
+    "squads-vault-pda.ts",
+    "verify-client-idl-parity.ts",
+    "verify-oracle-sync.ts",
+  ]);
 
   const files = fs.readdirSync(scriptsDir).filter((x) => x.endsWith(".ts") && !helpers.has(x));
   const detected: string[] = [];
@@ -280,14 +310,17 @@ for (const rpc of [
     const code = stripStrings(noComments);
     const sends =
       SEND_PRIMITIVES.some((re) => re.test(code)) ||
-      (CLI_INVOCATION.test(noComments) && CLI_WRITE_VERB.test(noComments));
+      (CLI_INVOCATION.some((re) => re.test(noComments)) && CLI_WRITE_VERB.test(noComments));
     if (sends) detected.push(f);
 
     // A script the manifest names must guard, even if no pattern can see how it sends.
     if (!SENDERS.has(f)) {
-      // A NEW sender that nobody listed. Not silently tolerated: either it belongs in SENDERS or it is a
-      // read-only CLI caller and belongs in READ_ONLY_CLI. The choice has to be made by a person.
-      if (sends && !READ_ONLY_CLI.has(f)) unlisted.push(f);
+      // EVERY script must be triaged, not just the ones a regex happens to recognise. `unlisted` used to be
+      // fed from `sends`, so what the detector could not see was never demanded into the manifest: the
+      // reviewer added a whole new unguarded mainnet deployer and the gate stayed at 33/33 while cheerfully
+      // reporting "no sending script is missing from the manifest". The detector is a HINT now; the manifest
+      // is the floor, and an unclassified file fails whether or not anything matched it.
+      if (!READ_ONLY_CLI.has(f) && !NON_SENDERS.has(f)) unlisted.push(f + (sends ? " (detected as a sender)" : ""));
       continue;
     }
     if (!/requireSanctionedCluster\s*\(/.test(code)) {
@@ -312,10 +345,21 @@ for (const rpc of [
   );
 
   ok(
-    "no sending script is missing from the manifest",
+    "every script in scripts/ is classified",
     unlisted.length === 0,
     unlisted.length
-      ? `add to SENDERS (or READ_ONLY_CLI if it only reads): ${unlisted.join(", ")}`
+      ? `unclassified: ${unlisted.join(", ")} -- add each to SENDERS, READ_ONLY_CLI or NON_SENDERS`
+      : `${SENDERS.size} senders, ${READ_ONLY_CLI.size} read-only, ${NON_SENDERS.size} non-senders, ${files.length} files`,
+  );
+
+  // The read-only and non-sender CLAIMS, checked rather than trusted. This is what turns both lists from
+  // exemptions into assertions: a member that matches a send primitive fails here by name.
+  const liars = [...READ_ONLY_CLI, ...NON_SENDERS].filter((f) => detected.includes(f)).sort();
+  ok(
+    "nothing claiming not to send actually sends",
+    liars.length === 0,
+    liars.length
+      ? `these are listed as read-only or non-sending but match a send primitive: ${liars.join(", ")}`
       : "none",
   );
 
@@ -347,7 +391,7 @@ for (const rpc of [
   );
 
   // And the manifest may not name a script that no longer exists: a stale entry is a line nobody reads.
-  const ghosts = [...SENDERS, ...READ_ONLY_CLI].filter(
+  const ghosts = [...SENDERS, ...READ_ONLY_CLI, ...NON_SENDERS].filter(
     (f) => !fs.existsSync(path.join(scriptsDir, f)),
   );
   ok(

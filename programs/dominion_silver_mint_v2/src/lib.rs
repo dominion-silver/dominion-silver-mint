@@ -167,8 +167,8 @@ pub mod dominion_silver_mint {
         instructions::admin::kyc_admin::attest_kyc_handler(ctx, wallet, reference)
     }
 
-    pub fn revoke_kyc(ctx: Context<RevokeKyc>, wallet: Pubkey) -> Result<()> {
-        instructions::admin::kyc_admin::revoke_kyc_handler(ctx, wallet)
+    pub fn revoke_kyc(ctx: Context<RevokeKyc>, wallet: Pubkey, allow_disarm: bool) -> Result<()> {
+        instructions::admin::kyc_admin::revoke_kyc_handler(ctx, wallet, allow_disarm)
     }
 
     pub fn deposit_usdc(ctx: Context<DepositUsdc>, amount: u64) -> Result<()> {
