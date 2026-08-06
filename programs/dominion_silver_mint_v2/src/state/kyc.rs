@@ -158,6 +158,32 @@ pub fn validate_kyc_arming(
 }
 
 /// Whether clearing the attestor is permitted, given the current scope. See C-02's second half.
+/**
+ * Whether a revocation may proceed, given the scope and the roster size it would LEAVE.
+ *
+ * ROUND 3 P0. The counter closed "arming an empty roster" and left the mirror image open: arm legitimately
+ * with one attestation, then revoke that attestation. The count returns to zero WHILE the gate stays armed,
+ * so nobody can pass and nobody new can be admitted. The exact total lockout C-02 exists to prevent,
+ * reached through a different door.
+ *
+ * Worse than an admin footgun: `revoke_kyc` is callable by the ATTESTOR as well as the admin, so a
+ * compromised or merely buggy backend can brick redemption for every holder with no admin action at all.
+ *
+ * While any side is armed, the roster may not be emptied. Disarm first. Every legitimate use survives
+ * (revoke one of several, or revoke freely once disarmed); only the transition that leaves an armed gate
+ * with nobody behind it is refused.
+ *
+ * NOT symmetric with `validate_kyc_arming` on purpose: arming needs `count > 0` BEFORE, this needs
+ * `count > 0` AFTER. Assuming one covers the other is how this half went missing in the first place.
+ */
+pub fn validate_kyc_revocation(scope_flags: u8, count_after: u32) -> Result<()> {
+    if scope_flags == 0 {
+        return Ok(());
+    }
+    require!(count_after > 0, DominionError::KycLastAttestationWhileArmed);
+    Ok(())
+}
+
 pub fn kyc_operator_may_be_cleared(scope_flags: u8) -> bool {
     scope_flags == 0
 }
@@ -313,6 +339,31 @@ mod tests {
         // `version` is the right signal: every account this handler has written carries a non-zero
         // KYC_ACCOUNT_VERSION, so zero means "created by init_if_needed on this call".
         assert_ne!(KYC_ACCOUNT_VERSION, 0, "version 0 must mean 'freshly created'");
+    }
+
+    #[test]
+    fn the_LAST_attestation_cannot_be_revoked_while_the_gate_is_armed() {
+        // ROUND 3 P0. `count_after` is the roster size the revocation would LEAVE.
+        assert!(validate_kyc_revocation(2, 0).is_err(), "armed: emptying the roster must be refused");
+        assert!(validate_kyc_revocation(1, 0).is_err());
+        assert!(validate_kyc_revocation(3, 0).is_err());
+        // Revoking one of several is fine: somebody is still through.
+        assert!(validate_kyc_revocation(2, 1).is_ok());
+        assert!(validate_kyc_revocation(3, 7).is_ok());
+        // Disarmed, revoke freely, including to zero. Nothing is gated, so nothing locks out.
+        assert!(validate_kyc_revocation(0, 0).is_ok());
+    }
+
+    #[test]
+    fn arming_and_revoking_guard_ONE_invariant_from_opposite_sides() {
+        // The invariant: an ARMED gate always has a non-empty roster. Arming checks it BEFORE the change,
+        // revocation AFTER. Writing one and assuming it covered the other is exactly how the second half
+        // went missing, so the pair is stated here explicitly.
+        let op = Pubkey::new_from_array([5u8; 32]);
+        assert!(validate_kyc_arming(2, op, 0).is_err(), "cannot ENTER armed from an empty roster");
+        assert!(validate_kyc_revocation(2, 0).is_err(), "cannot REACH an empty roster while armed");
+        assert!(validate_kyc_arming(2, op, 1).is_ok());
+        assert!(validate_kyc_revocation(2, 1).is_ok());
     }
 
 }

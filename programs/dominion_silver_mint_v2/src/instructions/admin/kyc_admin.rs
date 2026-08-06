@@ -155,7 +155,19 @@ pub fn set_kyc_scope_handler(ctx: Context<SetKycScope>, flags: u8) -> Result<()>
 #[derive(Accounts)]
 #[instruction(wallet: Pubkey, reference: [u8; 32])]
 pub struct AttestKyc<'info> {
-    #[account(seeds = [CONFIG_SEED], bump)]
+    // `mut` since C-02, and its ABSENCE was a P0 that made the whole mechanism inert.
+    //
+    // ROUND 3 P0. The handler incremented `config.kyc_attestation_count`, but Anchor only serialises
+    // accounts marked `mut` back to the chain, so the increment was computed and silently discarded. The
+    // counter stayed at 0 forever, `set_kyc_scope` refused to arm forever, and the KYC gate was
+    // permanently unusable. Not "weakened": unusable.
+    //
+    // WHY MY TESTS DID NOT CATCH IT, because that matters more than the missing keyword. I extracted
+    // `validate_kyc_arming` as a pure function and wrote six tests for it, then reported the mechanism as
+    // verified. Those tests exercise the RULE. Nothing exercised the HANDLER, so nothing observed whether
+    // the value the rule reads is ever written. A pure-function test proves an implication, never that its
+    // premise is reachable.
+    #[account(mut, seeds = [CONFIG_SEED], bump)]
     pub config: Box<Account<'info, ConfigAccount>>,
 
     // The hot attestor key. Pinned to config, and note that when `kyc_operator` is
@@ -282,10 +294,14 @@ pub fn revoke_kyc_handler(ctx: Context<RevokeKyc>, wallet: Pubkey) -> Result<()>
     // exist. If this ever underflows, the invariant is already broken and the right answer is to refuse
     // and be noticed, not to clamp to zero and carry on.
     let config = &mut ctx.accounts.config;
-    config.kyc_attestation_count = config
+    let count_after = config
         .kyc_attestation_count
         .checked_sub(1)
         .ok_or(error!(DominionError::ArithmeticOverflow))?;
+    // ROUND 3 P0: refuse to leave an ARMED gate with an empty roster. Checked BEFORE the write, so a
+    // refusal leaves the counter untouched.
+    validate_kyc_revocation(config.kyc_scope_flags, count_after)?;
+    config.kyc_attestation_count = count_after;
 
     emit!(KycRevoked {
         wallet,

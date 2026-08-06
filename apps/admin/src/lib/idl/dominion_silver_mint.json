@@ -235,6 +235,7 @@
       "accounts": [
         {
           "name": "config",
+          "writable": true,
           "pda": {
             "seeds": [
               {
@@ -5671,6 +5672,11 @@
       "code": 12113,
       "name": "KycOperatorRequiredWhileArmed",
       "msg": "cannot clear the KYC operator while the gate is armed: disarm the scope first"
+    },
+    {
+      "code": 12114,
+      "name": "KycLastAttestationWhileArmed",
+      "msg": "cannot revoke the last KYC attestation while the gate is armed: disarm the scope first"
     }
   ],
   "types": [

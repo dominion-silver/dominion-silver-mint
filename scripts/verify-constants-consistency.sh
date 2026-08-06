@@ -27,7 +27,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 python3 - <<'PY'
-import json, re, sys, hashlib, pathlib
+import json
+import pathlib
+import re
+import subprocess, re, sys, hashlib, pathlib
 
 fail = []
 def _json_or_die(raw, path):
@@ -186,6 +189,71 @@ if "SILV_MINT" in a and "SILV_MINT" in p_:
           "SILV_MINT is not a known-retired mint")
 
 # ---- retired program ids must not appear on any live path ----
+print("4a. Anchor account mutability")
+# ROUND 3 P0-2, and this is the CLASS check, not the instance.
+#
+# `attest_kyc` incremented `config.kyc_attestation_count` while its `config` account was declared WITHOUT
+# `mut`. Anchor only serialises `mut` accounts back to the chain, so the increment was computed and silently
+# discarded: the counter stayed at 0 forever and the KYC gate could never be armed. The mechanism was not
+# weakened, it was inert.
+#
+# Nothing caught it. `cargo build` is happy, `cargo test` is happy (the six tests I wrote exercise the pure
+# RULE, never the handler), and no gate looked at the relationship between an Accounts struct and the
+# handler that writes through it. A pure-function test proves an implication; it never proves its premise
+# is reachable.
+#
+# So: for every `#[derive(Accounts)]` struct, any field the matching handler writes must be declared
+# `mut`, or `init`/`init_if_needed`/`close`/`realloc`, all of which imply writability.
+_MUT_IMPLIED = ("mut", "init", "init_if_needed", "close", "realloc", "zero")
+_bad = []
+for _path in sorted(pathlib.Path("programs/dominion_silver_mint_v2/src/instructions").rglob("*.rs")):
+    _src = _path.read_text()
+    for _m in re.finditer(r"pub struct (\w+)<'info> \{(.*?)\n\}", _src, re.S):
+        _name, _body = _m.group(1), _m.group(2)
+        _nonmut = set()
+        for _fm in re.finditer(r"((?:\s*#\[account\((?:[^()]|\([^()]*\))*\)\]\s*)?)pub (\w+):", _body):
+            _attrs, _field = _fm.group(1), _fm.group(2)
+            if "#[account(" not in _attrs:
+                continue
+            if not any(re.search(r"\b" + _k + r"\b", _attrs) for _k in _MUT_IMPLIED):
+                _nonmut.add(_field)
+        if not _nonmut:
+            continue
+        _hm = re.search(r"fn \w+\(\s*ctx: Context<" + _name + r">.*?\n\}", _src, re.S)
+        if not _hm:
+            continue
+        _hb = _hm.group(0)
+        for _field in sorted(_nonmut):
+            if re.search(r"&mut ctx\.accounts\." + _field + r"\b", _hb) or \
+               re.search(r"ctx\.accounts\." + _field + r"\.[a-z_]+\s*=[^=]", _hb):
+                _bad.append(f"{_path.name}: {_name}.{_field} is written but not declared mut")
+if _bad:
+    for _b in _bad:
+        print(f"   FAIL: {_b}")
+    check(False, f"every written account is declared mut ({len(_bad)} violation(s))")
+else:
+    print("   ok: every account a handler writes is declared mut")
+
+print("4b. scripts/ typecheck")
+# ROUND 3 P0-1 shipped because NOTHING typechecked scripts/. A five-argument call to a six-argument
+# function sat in T1's hostile-mint case, so the ceremony could not compile, and `npx tsx script.ts`
+# does not typecheck: it transpiles and runs, and the error was on a line the run never reached.
+#
+# My own attempts reported zero diagnostics and exit 0. They were checking nothing: tsc aborts on PARSE
+# errors inside a nested node_modules .d.ts before it reaches this directory, and skipLibCheck does not
+# suppress parse errors. tsconfig.scripts.json stubs that ONE package so the run gets that far.
+_tc = subprocess.run(
+    ["npx", "tsc", "-p", "tsconfig.scripts.json"],
+    capture_output=True, text=True,
+)
+_diags = [l for l in _tc.stdout.splitlines() if l.startswith("scripts/") and "error" in l]
+if _diags:
+    for _d in _diags[:10]:
+        print(f"   FAIL: {_d}")
+    check(False, f"scripts/ typechecks clean ({len(_diags)} diagnostic(s))")
+else:
+    print("   ok: scripts/ typechecks clean")
+
 print("5. Retired program ids")
 # Review-of-fixes F1: this list was STALE ON THE COMMIT THAT INTRODUCED IT. gc5TW,
 # the id that commit retired, was missing, so a wholesale self-consistent regression

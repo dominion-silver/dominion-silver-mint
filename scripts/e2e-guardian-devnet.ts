@@ -39,6 +39,7 @@ import os from "os";
 import path from "path";
 import { createHash } from "crypto";
 import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
+import { requireSanctionedCluster, intentFromEnv } from "./_guard";
 
 // Review-of-fixes F15: the devnet guard below compared a module-level literal, so it
 // was a tautology and its comment claimed to distrust an environment that was never

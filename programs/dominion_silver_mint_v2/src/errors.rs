@@ -291,4 +291,12 @@ pub enum DominionError {
     /// decommission. Both are instant.
     #[msg("cannot clear the KYC operator while the gate is armed: disarm the scope first")]
     KycOperatorRequiredWhileArmed,
+
+    /// C-02, round 3: the roster may not be emptied while the KYC gate is armed.
+    ///
+    /// Arming requires a non-empty roster; this is the same invariant from the other side. Revoking the
+    /// last attestation while a side is gated leaves an armed gate nobody can pass, which is the total
+    /// lockout the counter exists to prevent. Disarm first, then revoke.
+    #[msg("cannot revoke the last KYC attestation while the gate is armed: disarm the scope first")]
+    KycLastAttestationWhileArmed,
 }

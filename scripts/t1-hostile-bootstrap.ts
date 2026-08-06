@@ -368,12 +368,17 @@ async function main() {
   // the check is not accidentally dependent on mint shape.
   {
     const attackerMint = Keypair.generate();
+    // ROUND 3 P0: this call was left at FIVE arguments when the helper gained a sixth (the compliance
+    // authority), so T1 could not compile and the ceremony could not complete. It is the hostile mint, so
+    // the attacker is deliberately its own compliance authority: case 2 must fail on AUTHENTICATION, not on
+    // mint shape, which is the whole point of giving the attacker a well-formed mint of its own.
     await createSilvMintForTest(
       conn,
       attacker,
       attackerMint,
       mintAuthPda,
       PROGRAM_ID,
+      attacker.publicKey,
     );
     const accsOwnMint = {
       ...accs(attacker.publicKey, programData(PROGRAM_ID), PROGRAM_ID),
