@@ -4161,6 +4161,34 @@
           "relations": [
             "config"
           ]
+        },
+        {
+          "name": "kyc_operator",
+          "docs": [
+            "The configured attestor, WHICH MUST CO-SIGN TO ARM. Absent when disarming.",
+            "",
+            "EXTERNAL AUDIT FINDING C-02. Arming only checked `config.kyc_operator != Pubkey::default()`.",
+            "Any PDA, any program address, any typo'd 32 bytes satisfies that while being unable to sign",
+            "anything at all. Point the operator at the `config` PDA, arm the redeem side, and no attestation",
+            "can ever be written again: every holder not already attested is locked out of redeeming until an",
+            "admin notices and disarms.",
+            "",
+            "A signature is the only on-chain proof that a key can act. An on-curve check would be the",
+            "cheaper move and it is WRONG here: a Squads vault is a PDA, hence off-curve, and a Squads vault",
+            "is a legitimate attestor. On-curve would reject the good case while still accepting any",
+            "attacker-controlled plain keypair. A signature accepts both, since a vault signs through",
+            "`invoke_signed` when the multisig executes.",
+            "",
+            "WHY HERE AND NOT ON `set_kyc_operator`, which is where I first put it: rotation is the incident",
+            "response path for a leaked server key and must stay a single fast signature. Checking at ARM time",
+            "is also strictly stronger, because a key that could sign at appointment might be lost by the time",
+            "the gate closes. This proves the gate can be passed at the moment it is shut.",
+            "",
+            "It does NOT prove any attestation has been WRITTEN. That footgun is unchanged and still",
+            "documented below: write the attestations first."
+          ],
+          "signer": true,
+          "optional": true
         }
       ],
       "args": [
@@ -5006,19 +5034,6 @@
         104,
         27,
         50
-      ]
-    },
-    {
-      "name": "RedeemQueued",
-      "discriminator": [
-        186,
-        209,
-        22,
-        172,
-        152,
-        246,
-        125,
-        186
       ]
     },
     {
@@ -6271,31 +6286,36 @@
           {
             "name": "expires_at",
             "docs": [
-              "Unix timestamp after which this exemption stops applying. 0 = NEVER EXPIRES.",
+              "Unix timestamp after which this exemption stops applying. MANDATORY, strictly in the future,",
+              "at most `MAX_FEE_EXEMPT_TERM_SECONDS` out. **0 grants NOTHING** (see `is_expired`).",
               "",
-              "A6, WITH THE RATIONALE CORRECTED. The first version of this note claimed the expiry bounded a",
-              "COMPROMISED ADMIN: \"until someone notices\" becoming \"until the clock runs out\". The",
-              "review-of-fixes pointed out that it does not. The admin CHOOSES `expires_at`, and 0 (never) is",
-              "permitted, so against a compromised admin the expiry adds nothing at all.",
+              "A6, and the rationale has now been corrected TWICE. Worth keeping both corrections visible,",
+              "because the second one is a case of an argument surviving after its premise died.",
               "",
-              "What it genuinely bounds is FORGETFULNESS: a market-making arrangement that ends, a",
-              "counterparty that stops providing liquidity, an exemption granted for a launch window and",
-              "never revisited. That is a real and common failure and worth the eight bytes, but it is an",
-              "operational control, not a security one, and it should not be cited as the latter.",
+              "Correction 1 (review-of-fixes). The first note claimed the expiry bounded a COMPROMISED ADMIN:",
+              "\"until someone notices\" becoming \"until the clock runs out\". It does not. The admin CHOOSES",
+              "`expires_at`, so against a compromised admin the term adds nothing. What it genuinely bounds is",
+              "FORGETFULNESS: an arrangement that ends, a counterparty that stops providing liquidity, a",
+              "launch-window favour nobody revisits. Real, common, worth eight bytes, but an OPERATIONAL",
+              "control and not a security one, and it must not be cited as the latter.",
               "",
-              "Bounding the compromised-admin case would need `expires_at` to be mandatory with a",
-              "compile-time maximum, or grants to be timelocked. Neither is done: grants are instant by",
-              "deliberate choice (see the note on the struct) and a permanent exemption is a legitimate",
-              "operational option. The monitoring requirement stands in its place: alert on `FeeExemptSet`,",
-              "and treat one with `expires_at == 0` as the shape a compromised admin would use.",
+              "Correction 2 (external audit C-01, 2026-08-06). This note then argued that 0 \"stays permitted",
+              "because a genuinely indefinite exemption is a real operational choice\", and closed with: \"An",
+              "in-place upgrade over an existing exemption decodes this as 0 from the zeroed `reserved`, i.e.",
+              "never expires, which preserves the current behaviour of every live exemption.\"",
               "",
-              "0 stays permitted because a genuinely indefinite exemption is a real operational choice, and",
-              "forcing a fake far-future date would be worse: it would look like a term while behaving like",
-              "none. A term absurdly far out is rejected for exactly that reason (see",
-              "MAX_FEE_EXEMPT_TERM_SECONDS), which is what catches a millisecond-timestamp paste.",
+              "That last sentence was FALSE and it was doing the persuading. `FeeExemptAccount` is introduced",
+              "BY this upgrade. There are no existing exemptions, no live ones, and no current behaviour to",
+              "preserve. I invented a migration constraint and then deferred to it.",
               "",
-              "An in-place upgrade over an existing exemption decodes this as 0 from the zeroed `reserved`,",
-              "i.e. \"never expires\", which preserves the current behaviour of every live exemption."
+              "With that gone, nothing was left holding zero up. Against it: the audit brief asserted the",
+              "expiry was mandatory (so the code contradicted its own documentation), the admin panel field",
+              "read \"type 0 for never\" (so it was the path of least resistance, not a corner case), and a",
+              "permanent both-sides exemption erases the 2.485% round-trip fee band that is the only thing",
+              "making oracle movement unprofitable to farm at the treasury's expense.",
+              "",
+              "So it is mandatory now. If an indefinite arrangement is ever genuinely wanted, renewing a",
+              "two-year term is one instant transaction, and the renewal is the review that never happened."
             ],
             "type": "i64"
           },
@@ -7136,8 +7156,18 @@
           {
             "name": "amount_usdc",
             "docs": [
-              "USDC the user RECEIVED, i.e. net. The treasury paid out `amount_usdc + fee_usdc` in",
-              "total, because the premium leg also comes from the treasury."
+              "USDC the user RECEIVED, i.e. net.",
+              "",
+              "The treasury's TOTAL outflow is `amount_usdc + fee_usdc` **only while fee routing is on**.",
+              "",
+              "AUDIT D-04: this said the treasury always paid `amount_usdc + fee_usdc`, \"because the premium",
+              "leg also comes from the treasury\". That is false whenever `config.fee_routing_disabled` is",
+              "true: the premium is then RETAINED, so `redeem_silv.rs` debits the budget by the user's leg",
+              "alone and the treasury pays exactly `amount_usdc`. An alerting rule built on the old sentence",
+              "would over-count outflow by the premium during precisely the incident that turns routing off.",
+              "",
+              "To reconstruct the real outflow from this event alone you cannot: you need the config flag as",
+              "of that slot. `FeeRoutingChanged` is the event that tells you when it moved."
             ],
             "type": "u64"
           },
@@ -7263,34 +7293,6 @@
           {
             "name": "by",
             "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
-      "name": "RedeemQueued",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "owner",
-            "type": "pubkey"
-          },
-          {
-            "name": "amount_silv",
-            "type": "u64"
-          },
-          {
-            "name": "nonce",
-            "type": "u64"
-          },
-          {
-            "name": "claimable_at",
-            "type": "i64"
-          },
-          {
-            "name": "timestamp",
-            "type": "i64"
           }
         ]
       }

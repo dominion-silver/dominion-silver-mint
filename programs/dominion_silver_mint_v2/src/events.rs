@@ -50,8 +50,18 @@ pub struct PremintEvent {
 pub struct RedeemEvent {
     pub user: Pubkey,
     pub amount_silv: u64,
-    /// USDC the user RECEIVED, i.e. net. The treasury paid out `amount_usdc + fee_usdc` in
-    /// total, because the premium leg also comes from the treasury.
+    /// USDC the user RECEIVED, i.e. net.
+    ///
+    /// The treasury's TOTAL outflow is `amount_usdc + fee_usdc` **only while fee routing is on**.
+    ///
+    /// AUDIT D-04: this said the treasury always paid `amount_usdc + fee_usdc`, "because the premium
+    /// leg also comes from the treasury". That is false whenever `config.fee_routing_disabled` is
+    /// true: the premium is then RETAINED, so `redeem_silv.rs` debits the budget by the user's leg
+    /// alone and the treasury pays exactly `amount_usdc`. An alerting rule built on the old sentence
+    /// would over-count outflow by the premium during precisely the incident that turns routing off.
+    ///
+    /// To reconstruct the real outflow from this event alone you cannot: you need the config flag as
+    /// of that slot. `FeeRoutingChanged` is the event that tells you when it moved.
     pub amount_usdc: u64,
     pub price_used_scaled: u128,
     /// The premium ACTUALLY applied. 0 when the caller holds a redeem-side exemption.
@@ -241,15 +251,13 @@ pub struct MetadataUpdated {
     pub new_uri: Option<String>,
 }
 
-// Option B queued-redemption lifecycle (CONFIRMED_SPEC.md §4.3/§4.4).
-#[event]
-pub struct RedeemQueued {
-    pub owner: Pubkey,
-    pub amount_silv: u64,
-    pub nonce: u64,
-    pub claimable_at: i64,
-    pub timestamp: i64,
-}
+// AUDIT D-04: `RedeemQueued` was declared here and emitted NOWHERE. The queued redemption lifecycle
+// was deleted on 2026-08-05; the event definition outlived it and stayed in the IDL, where it reads as
+// a documented part of the protocol. An integrator building an indexer would have subscribed to a
+// stream that can never produce a message, and concluded their integration was broken.
+//
+// Removing an event is safe in a way that removing a field is not: events carry no account layout and
+// no instruction encoding, so nothing on chain shifts. Verified that no client or script referenced it.
 
 #[event]
 pub struct RedemptionClaimed {

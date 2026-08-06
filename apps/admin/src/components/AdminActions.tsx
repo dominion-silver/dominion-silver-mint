@@ -510,14 +510,21 @@ const ACTIONS: ActionDesc[] = [
         label: "Scope: 0=off, 1=mint, 2=redeem, 3=both",
         kind: "int",
       },
+      {
+        name: "operator",
+        label: "Attestor pubkey (REQUIRED to arm, and it must co-sign; leave blank to disarm)",
+        kind: "pubkey",
+      },
     ],
-    tip: "WRITE THE ATTESTATIONS FIRST. Arming before any approval exists locks out every holder instantly, and the contract can only catch the extreme case where no attestor is configured at all. Redeem-only (2) is the usual first step, so public mint stays open for DEX arbitrage.",
+    tip: "WRITE THE ATTESTATIONS FIRST. Arming before any approval exists locks out every holder instantly, and no on-chain check can tell an empty roster from a deliberately empty one. Redeem-only (2) is the usual first step, so public mint stays open for DEX arbitrage. ARMING NOW REQUIRES THE ATTESTOR TO CO-SIGN (contract change, audit C-02): 'configured' never meant 'able to sign', and a PDA or a typo'd key passed the old check while making every future attestation impossible. Since this card routes through Squads, the attestor signature has to be added to the same Squads transaction. DISARMING needs no co-signer and never will: it is the only way out of a wrongly-armed gate.",
     current: (c) =>
       `scope ${c.kycScopeFlags ?? 0}${c.kycEnforced ? " (ARMED)" : " (dormant)"}`,
     build: (c, p) => {
       const f = parseUint(p.flags, 3);
       if (f > 3) throw new Error("Scope must be 0, 1, 2 or 3");
-      return actions.setKycScope(c, f);
+      // Audit C-02: arming needs the attestor to CO-SIGN, so the form has to collect it. Disarming
+      // does not, and must not: it is the only way to unbrick a wrongly-armed gate.
+      return actions.setKycScope(c, f, f === 0 ? undefined : pk(p.operator));
     },
   },
   {

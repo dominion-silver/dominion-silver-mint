@@ -563,12 +563,27 @@ pub struct RedeemLimitsArgs {
     pub redemptions_enabled: Option<bool>,
 }
 
-/// True if at least one field is provided (else the call is a pure no-op).
+/// True if at least one field with a LIVE EFFECT is provided (else the call is a pure no-op).
+///
+/// EXTERNAL AUDIT FINDING C-03. `large_redeem_threshold_usdc` and `redeem_queue_delay_seconds` used to
+/// count here. They are dead on chain: no instruction reads either one since the queue was deleted.
+/// They are still declared, and must stay declared, because removing a field would shift every borsh
+/// offset after it in a live `ConfigAccount`. But keeping the LAYOUT does not oblige us to keep
+/// accepting mutations.
+///
+/// What accepting them cost: proposing only a new `redeem_queue_delay_seconds` passed both no-op
+/// gates, reserved `pending_redeem_limits_nonce` for 24 hours (blocking any real redeem-limit change
+/// behind it), raised `active_proposal_count`, then emitted an event and wrote a value that changes no
+/// behaviour whatsoever. An operator watching the log would read "the redemption throttle was
+/// changed" during an incident when nothing had been.
+///
+/// So a proposal touching ONLY dead fields is now `RedeemLimitsAllNone`, the same answer as an empty
+/// one, which is what it effectively is. A proposal that sets a dead field ALONGSIDE a live one still
+/// works and still writes it, deliberately: refusing that would break `RedeemLimitsArgs`'s borsh shape
+/// for no gain, and the live field makes the proposal meaningful on its own.
 pub fn redeem_limits_any_set(args: &RedeemLimitsArgs) -> bool {
     args.instant_redeem_budget_usdc.is_some()
         || args.instant_redeem_window_seconds.is_some()
-        || args.large_redeem_threshold_usdc.is_some()
-        || args.redeem_queue_delay_seconds.is_some()
         || args.redemptions_enabled.is_some()
 }
 
@@ -1635,6 +1650,71 @@ mod fix_a_tests {
             ..Default::default()
         };
         assert!(!changed(&already_closed, false));
+    }
+
+    #[test]
+    fn a_proposal_touching_only_DEAD_fields_is_refused() {
+        // AUDIT C-03. `large_redeem_threshold_usdc` and `redeem_queue_delay_seconds` are read by no
+        // instruction since the queue was deleted. Proposing one alone used to pass the no-op gates,
+        // hold the single redeem-limits slot for 24h, bump active_proposal_count, and emit an event
+        // announcing a throttle change that changed nothing.
+        for dead in [
+            RedeemLimitsArgs {
+                large_redeem_threshold_usdc: Some(CUR_THRESHOLD + 1),
+                ..Default::default()
+            },
+            RedeemLimitsArgs {
+                redeem_queue_delay_seconds: Some(CUR_DELAY + 1),
+                ..Default::default()
+            },
+            // Both dead fields together are still nothing.
+            RedeemLimitsArgs {
+                large_redeem_threshold_usdc: Some(CUR_THRESHOLD + 1),
+                redeem_queue_delay_seconds: Some(CUR_DELAY + 1),
+                ..Default::default()
+            },
+        ] {
+            assert!(
+                !redeem_limits_any_set(&dead),
+                "a dead-field-only proposal must be indistinguishable from an empty one"
+            );
+        }
+
+        // But a dead field alongside a LIVE one is still a valid proposal. Refusing that would break
+        // the borsh shape of RedeemLimitsArgs for no benefit, and the live field carries it.
+        for mixed in [
+            RedeemLimitsArgs {
+                redeem_queue_delay_seconds: Some(CUR_DELAY + 1),
+                instant_redeem_budget_usdc: Some(CUR_BUDGET + 1),
+                ..Default::default()
+            },
+            RedeemLimitsArgs {
+                large_redeem_threshold_usdc: Some(CUR_THRESHOLD + 1),
+                redemptions_enabled: Some(true),
+                ..Default::default()
+            },
+        ] {
+            assert!(redeem_limits_any_set(&mixed));
+        }
+
+        // The three LIVE fields each carry a proposal on their own. If a future edit drops one of
+        // these from `any_set`, that capability disappears silently; this is the test that notices.
+        for live in [
+            RedeemLimitsArgs {
+                instant_redeem_budget_usdc: Some(CUR_BUDGET + 1),
+                ..Default::default()
+            },
+            RedeemLimitsArgs {
+                instant_redeem_window_seconds: Some(CUR_WINDOW + 1),
+                ..Default::default()
+            },
+            RedeemLimitsArgs {
+                redemptions_enabled: Some(true),
+                ..Default::default()
+            },
+        ] {
+            assert!(redeem_limits_any_set(&live));
+        }
     }
 
     #[test]

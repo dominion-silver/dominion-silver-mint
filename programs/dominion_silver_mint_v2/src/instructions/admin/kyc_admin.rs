@@ -50,6 +50,10 @@ pub struct SetKycOperator<'info> {
 /// the zero pubkey has no private key, so nothing can sign as it, and `set_kyc_scope` refuses
 /// to arm the gate while the operator is unset.
 pub fn set_kyc_operator_handler(ctx: Context<SetKycOperator>, operator: Pubkey) -> Result<()> {
+    // C-02 is enforced at ARM time, not here. Deliberately: see `set_kyc_scope_handler`. Rotation
+    // stays a single admin signature because rotation is the INCIDENT RESPONSE path (this key lives on
+    // a server, so the realistic failure is a leak), and making it need a co-signature would slow down
+    // the one operation that must be fast.
     let config = &mut ctx.accounts.config;
     let old_operator = config.kyc_operator;
     config.kyc_operator = operator;
@@ -71,6 +75,29 @@ pub struct SetKycScope<'info> {
     #[account(mut, seeds = [CONFIG_SEED], bump, has_one = admin)]
     pub config: Box<Account<'info, ConfigAccount>>,
     pub admin: Signer<'info>,
+
+    /// The configured attestor, WHICH MUST CO-SIGN TO ARM. Absent when disarming.
+    ///
+    /// EXTERNAL AUDIT FINDING C-02. Arming only checked `config.kyc_operator != Pubkey::default()`.
+    /// Any PDA, any program address, any typo'd 32 bytes satisfies that while being unable to sign
+    /// anything at all. Point the operator at the `config` PDA, arm the redeem side, and no attestation
+    /// can ever be written again: every holder not already attested is locked out of redeeming until an
+    /// admin notices and disarms.
+    ///
+    /// A signature is the only on-chain proof that a key can act. An on-curve check would be the
+    /// cheaper move and it is WRONG here: a Squads vault is a PDA, hence off-curve, and a Squads vault
+    /// is a legitimate attestor. On-curve would reject the good case while still accepting any
+    /// attacker-controlled plain keypair. A signature accepts both, since a vault signs through
+    /// `invoke_signed` when the multisig executes.
+    ///
+    /// WHY HERE AND NOT ON `set_kyc_operator`, which is where I first put it: rotation is the incident
+    /// response path for a leaked server key and must stay a single fast signature. Checking at ARM time
+    /// is also strictly stronger, because a key that could sign at appointment might be lost by the time
+    /// the gate closes. This proves the gate can be passed at the moment it is shut.
+    ///
+    /// It does NOT prove any attestation has been WRITTEN. That footgun is unchanged and still
+    /// documented below: write the attestations first.
+    pub kyc_operator: Option<Signer<'info>>,
 }
 
 /// Arm or disarm the KYC gate. `flags` is a `Side` bitfield: bit 0 mint, bit 1 redeem, 0 off.
@@ -90,22 +117,36 @@ pub struct SetKycScope<'info> {
 /// exactly the people the delay is meant to protect. Disarming cannot move value; it restores
 /// access.
 ///
-/// THE OPERATIONAL FOOTGUN this cannot prevent: write the attestations BEFORE arming. Arming
-/// first locks out every existing holder instantly. The `kyc_operator` check below catches only
-/// the most extreme version, where no attestor exists at all and therefore no approval could
-/// ever have been written.
+/// THE OPERATIONAL FOOTGUN this still cannot prevent: write the attestations BEFORE arming. Arming
+/// first locks out every existing holder instantly, and no on-chain check can tell an empty roster
+/// from a deliberately empty one.
+///
+/// What it CAN now prove, since audit C-02, is that the attestor is able to act: arming requires the
+/// configured `kyc_operator` to co-sign. Before that, "an attestor is configured" was checked and
+/// "the attestor can sign" was not, and the two come apart for any PDA or mistyped key.
 pub fn set_kyc_scope_handler(ctx: Context<SetKycScope>, flags: u8) -> Result<()> {
     validate_kyc_scope(flags)?;
     let config = &mut ctx.accounts.config;
     let old_flags = config.kyc_scope_flags;
     require!(flags != old_flags, DominionError::KycScopeInvalid);
 
-    // Refuse to arm a gate that nobody can let anyone through. With no attestor there are no
-    // attestations and none can be written, so this would be an unconditional lockout on the
-    // armed side. Disarming (flags == 0) is always allowed regardless.
+    // Refuse to arm a gate that nobody can let anyone through. Disarming (flags == 0) is always
+    // allowed regardless, and must be: it is the unbrick path.
     if flags != 0 {
         require!(
             config.kyc_operator != Pubkey::default(),
+            DominionError::KycAttestorNotSet
+        );
+        // C-02: and the configured attestor must PROVE it can sign, here, now. "Configured" was never
+        // the same claim as "able to act", and only the second one keeps holders redeemable.
+        let signer = ctx
+            .accounts
+            .kyc_operator
+            .as_ref()
+            .ok_or(error!(DominionError::KycAttestorNotSet))?;
+        require_keys_eq!(
+            signer.key(),
+            config.kyc_operator,
             DominionError::KycAttestorNotSet
         );
     }

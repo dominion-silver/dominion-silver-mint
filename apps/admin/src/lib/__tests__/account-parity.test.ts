@@ -67,4 +67,37 @@ describe("admin builder account parity with the IDL", () => {
       expect(names).not.toContain(gone);
     }
   });
+
+  // --- audit C-02: an OPTIONAL account that is REQUIRED by the handler ---
+  //
+  // This is the case neither existing gate can see. `verify-client-idl-parity.ts` checks that account
+  // NAMES exist in the IDL; a name that is present but never PASSED is invisible to it. And Anchor
+  // 0.31's `.accounts()` delegates to `accountsPartial()`, so an omitted optional account encodes as
+  // absent without a word of complaint: the transaction builds, the user signs, the chain reverts.
+  //
+  // The contract requires `kyc_operator` to co-sign whenever `flags != 0`, so the arm path must carry
+  // a THIRD key and the disarm path must not.
+  it("arming the KYC gate passes the attestor as a signer", async () => {
+    const attestor = PublicKey.unique();
+    const built = await actions.setKycScope(ctx, 2, attestor);
+    expect(built[0].keys).toHaveLength(ix("set_kyc_scope").accounts.length);
+    const k = built[0].keys.find((x) => x.pubkey.equals(attestor));
+    expect(k, "the attestor must be among the instruction's keys").toBeDefined();
+    expect(k!.isSigner, "and it must be marked as a SIGNER, not just present").toBe(true);
+  });
+
+  it("disarming the KYC gate needs no attestor, and encodes its absence", async () => {
+    // Disarming must never depend on the attestor: it is the only way out of a wrongly-armed gate,
+    // and the attestor may be exactly what is broken. Anchor encodes an absent optional account as
+    // the PROGRAM ID, so the key count is unchanged and the slot holds the program.
+    const built = await actions.setKycScope(ctx, 0);
+    const programId = new PublicKey((idl as { address: string }).address);
+    expect(built[0].keys.some((x) => x.pubkey.equals(programId))).toBe(true);
+  });
+
+  it("arming without an attestor is refused BEFORE a signature is requested", async () => {
+    // Failing in the builder rather than on chain is the point: an on-chain revert has already cost
+    // the operator a signature and a fee to learn something knowable offline.
+    await expect(actions.setKycScope(ctx, 3)).rejects.toThrow(/co-sign/i);
+  });
 });

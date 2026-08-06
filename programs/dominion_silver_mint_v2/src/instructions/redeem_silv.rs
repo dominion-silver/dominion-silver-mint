@@ -274,9 +274,16 @@ pub fn handler(
     // 6. Rolling-window budget state. Computed here, COMMITTED at step 8 only after every
     // check has passed: no config mutation may survive a revert path.
     //
-    // Debited by GROSS, not by the user's leg. The budget exists to limit TREASURY OUTFLOW
-    // and both legs leave the treasury; debiting only the user's share would let the
-    // effective outflow exceed the configured ceiling by the premium.
+    // Debited by WHAT ACTUALLY LEAVES THE TREASURY, which is the gross while fee routing is on and
+    // the user's leg alone while it is off. The budget exists to limit TREASURY OUTFLOW, so it has to
+    // track the outflow rather than the trade size.
+    //
+    // AUDIT D-04: this comment read "Debited by GROSS, not by the user's leg" full stop, and the code
+    // twenty lines below already contradicted it with `let fee_routed = if
+    // config.fee_routing_disabled { 0 }`. Two statements of the same rule, one stale. It also fed a
+    // real client bug: the public app mirrored the comment rather than the code and compared the
+    // budget against the gross unconditionally, so with routing off it blocked redemptions the chain
+    // would have accepted (finding P-02).
     // The limiter is a SLIDING window counter (state/redeem_window.rs), not the fixed window this
     // used to be. The fixed version reset the counter to zero the moment it expired, so draining
     // the budget just before a boundary and again just after yielded TWICE the configured ceiling

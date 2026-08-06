@@ -63,8 +63,18 @@ pub mod dominion_silver_mint {
         )
     }
 
-    // Option B redeem = INSTANT path only (§4.3). A redeem that must queue
-    // reverts MustUseQueue; the client then calls `redeem_silv_queued`.
+    // Redeem is a SINGLE INSTANT ROUTE. Burn SILV, receive USDC, same transaction.
+    //
+    // AUDIT D-04: this comment used to end "A redeem that must queue reverts MustUseQueue; the client
+    // then calls `redeem_silv_queued`." Both halves are gone: there is no MustUseQueue and no
+    // `redeem_silv_queued`. It sat on the PUBLIC API of the program, which is the worst place for it,
+    // because an integrator reading the entrypoint would build a queue client against an instruction
+    // that does not exist.
+    //
+    // What a redeem that cannot be served does instead: it REVERTS. Over the rolling window budget it
+    // is InstantRedeemBudgetExceeded, over the treasury it is InsufficientTreasury, and the client's
+    // `classifyRedeem` predicts both before the user signs so they are not paying a Lazer fee to
+    // discover it.
     pub fn redeem_silv(
         ctx: Context<RedeemSilv>,
         amount_silv: u64,

@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 
 use crate::errors::DominionError;
+use crate::state::config::MAX_FEE_EXEMPT_TERM_SECONDS;
 use crate::state::side::{side_flags_valid_nonempty, Side};
 
 /// Current FeeExemptAccount schema.
@@ -56,31 +57,36 @@ pub struct FeeExemptAccount {
     /// event alone stops being enough once RPC logs age out.
     pub added_by: Pubkey,
     pub version: u8,
-    /// Unix timestamp after which this exemption stops applying. 0 = NEVER EXPIRES.
+    /// Unix timestamp after which this exemption stops applying. MANDATORY, strictly in the future,
+    /// at most `MAX_FEE_EXEMPT_TERM_SECONDS` out. **0 grants NOTHING** (see `is_expired`).
     ///
-    /// A6, WITH THE RATIONALE CORRECTED. The first version of this note claimed the expiry bounded a
-    /// COMPROMISED ADMIN: "until someone notices" becoming "until the clock runs out". The
-    /// review-of-fixes pointed out that it does not. The admin CHOOSES `expires_at`, and 0 (never) is
-    /// permitted, so against a compromised admin the expiry adds nothing at all.
+    /// A6, and the rationale has now been corrected TWICE. Worth keeping both corrections visible,
+    /// because the second one is a case of an argument surviving after its premise died.
     ///
-    /// What it genuinely bounds is FORGETFULNESS: a market-making arrangement that ends, a
-    /// counterparty that stops providing liquidity, an exemption granted for a launch window and
-    /// never revisited. That is a real and common failure and worth the eight bytes, but it is an
-    /// operational control, not a security one, and it should not be cited as the latter.
+    /// Correction 1 (review-of-fixes). The first note claimed the expiry bounded a COMPROMISED ADMIN:
+    /// "until someone notices" becoming "until the clock runs out". It does not. The admin CHOOSES
+    /// `expires_at`, so against a compromised admin the term adds nothing. What it genuinely bounds is
+    /// FORGETFULNESS: an arrangement that ends, a counterparty that stops providing liquidity, a
+    /// launch-window favour nobody revisits. Real, common, worth eight bytes, but an OPERATIONAL
+    /// control and not a security one, and it must not be cited as the latter.
     ///
-    /// Bounding the compromised-admin case would need `expires_at` to be mandatory with a
-    /// compile-time maximum, or grants to be timelocked. Neither is done: grants are instant by
-    /// deliberate choice (see the note on the struct) and a permanent exemption is a legitimate
-    /// operational option. The monitoring requirement stands in its place: alert on `FeeExemptSet`,
-    /// and treat one with `expires_at == 0` as the shape a compromised admin would use.
+    /// Correction 2 (external audit C-01, 2026-08-06). This note then argued that 0 "stays permitted
+    /// because a genuinely indefinite exemption is a real operational choice", and closed with: "An
+    /// in-place upgrade over an existing exemption decodes this as 0 from the zeroed `reserved`, i.e.
+    /// never expires, which preserves the current behaviour of every live exemption."
     ///
-    /// 0 stays permitted because a genuinely indefinite exemption is a real operational choice, and
-    /// forcing a fake far-future date would be worse: it would look like a term while behaving like
-    /// none. A term absurdly far out is rejected for exactly that reason (see
-    /// MAX_FEE_EXEMPT_TERM_SECONDS), which is what catches a millisecond-timestamp paste.
+    /// That last sentence was FALSE and it was doing the persuading. `FeeExemptAccount` is introduced
+    /// BY this upgrade. There are no existing exemptions, no live ones, and no current behaviour to
+    /// preserve. I invented a migration constraint and then deferred to it.
     ///
-    /// An in-place upgrade over an existing exemption decodes this as 0 from the zeroed `reserved`,
-    /// i.e. "never expires", which preserves the current behaviour of every live exemption.
+    /// With that gone, nothing was left holding zero up. Against it: the audit brief asserted the
+    /// expiry was mandatory (so the code contradicted its own documentation), the admin panel field
+    /// read "type 0 for never" (so it was the path of least resistance, not a corner case), and a
+    /// permanent both-sides exemption erases the 2.485% round-trip fee band that is the only thing
+    /// making oracle movement unprofitable to farm at the treasury's expense.
+    ///
+    /// So it is mandatory now. If an indefinite arrangement is ever genuinely wanted, renewing a
+    /// two-year term is one instant transaction, and the renewal is the review that never happened.
     pub expires_at: i64,
     /// Room for a future per-wallet fee OVERRIDE (a reduced rate rather than zero) without
     /// changing the account size.
@@ -97,9 +103,20 @@ impl FeeExemptAccount {
         + 8  // expires_at
         + 24; // reserved
 
-    /// Whether this exemption has passed its expiry at `now`. Always false when `expires_at` is 0.
+    /// Whether this exemption has passed its expiry at `now`. **A zero expiry counts as EXPIRED.**
+    ///
+    /// This used to read `self.expires_at != 0 && now >= self.expires_at`, so zero meant "never
+    /// expires" and an account with a zero expiry was exempt forever. Now that
+    /// `set_fee_exempt_handler` refuses zero (audit C-01), no account it writes can hold one, and the
+    /// question is only what to do if a zero ever shows up anyway: a freshly `init_if_needed`-zeroed
+    /// account read before its handler finishes writing, a future refactor that adds a second writer,
+    /// a partially applied transaction.
+    ///
+    /// Fail CLOSED. Under the old reading, any of those would have granted a permanent free pass to
+    /// whichever wallet the PDA belongs to. Under this one they grant nothing, which is recoverable in
+    /// one transaction. The two directions are not symmetric, so the choice is not either.
     pub fn is_expired(&self, now: i64) -> bool {
-        self.expires_at != 0 && now >= self.expires_at
+        self.expires_at == 0 || now >= self.expires_at
     }
 
     /// Whether this account genuinely exempts `signer` on `side` at `now`.
@@ -140,6 +157,23 @@ pub fn validate_fee_exempt_flags(flags: u8) -> Result<()> {
 /// The KYC gate resolves the same ambiguity the OPPOSITE way (an unprovable attestation
 /// denies the action), because there "fail closed" means denying rather than charging. The
 /// two are consistent in intent, not in outcome.
+/// The expiry rail for `set_fee_exempt`, as a PURE function so it can actually be tested.
+///
+/// Audit C-01. The rule used to live inline in the handler behind a `Clock::get()`, which made it
+/// untestable without a validator, which is why the accepted-zero case shipped with no test asserting
+/// either behaviour. Extracted for the same reason `validate_new_max_supply` is: a rail nobody can
+/// unit-test is a rail nobody notices changing.
+///
+/// MANDATORY, strictly future, capped. See the note on `FeeExemptAccount::expires_at` for why zero is
+/// no longer a legitimate "never".
+pub fn validate_fee_exempt_expiry(expires_at: i64, now: i64) -> Result<()> {
+    require!(
+        expires_at > now && expires_at <= now.saturating_add(MAX_FEE_EXEMPT_TERM_SECONDS),
+        DominionError::FeeExemptExpiryInvalid
+    );
+    Ok(())
+}
+
 pub fn effective_premium_bps(
     configured_bps: u16,
     exemption: Option<&FeeExemptAccount>,
@@ -162,7 +196,13 @@ mod tests {
     const OTHER: Pubkey = Pubkey::new_from_array([9u8; 32]);
     const ADMIN: Pubkey = Pubkey::new_from_array([1u8; 32]);
 
-    /// Never expires, which is what every test below wants unless it says otherwise.
+    /// A LIVE exemption: valid at `T` and for a long while after.
+    ///
+    /// This used to build `expires_at: 0` and was described as "never expires, which is what every
+    /// test below wants". Audit C-01 made zero mean EXPIRED, and the five tests that leaned on this
+    /// helper failed immediately, which is the correct reaction and worth recording: the helper had
+    /// quietly made "permanent" the default shape of every fee-exemption test, so the permanent case
+    /// was over-tested and the ordinary case with a real term was barely tested at all.
     fn exemption(wallet: Pubkey, flags: u8) -> FeeExemptAccount {
         FeeExemptAccount {
             wallet,
@@ -170,7 +210,7 @@ mod tests {
             added_at: 1,
             added_by: ADMIN,
             version: FEE_EXEMPT_ACCOUNT_VERSION,
-            expires_at: 0,
+            expires_at: T + 86_400,
             reserved: [0u8; 24],
         }
     }
@@ -281,13 +321,20 @@ mod tests {
     }
 
     #[test]
-    fn an_expiry_of_zero_never_expires() {
-        let e = exemption(WALLET, SIDE_ALL_BITS);
-        assert!(!e.is_expired(0));
-        assert!(!e.is_expired(i64::MAX));
+    fn an_expiry_of_zero_grants_NOTHING() {
+        // Was `an_expiry_of_zero_never_expires`, asserting the opposite. Audit C-01: the writer now
+        // refuses a zero expiry, so the only way one can appear is a bug or a half-written account,
+        // and in that case granting a permanent fee waiver is the worst available default.
+        let e = expiring(WALLET, SIDE_ALL_BITS, 0);
+        assert!(e.is_expired(T), "a zero expiry must read as expired");
+        assert!(e.is_expired(0), "including at t=0");
+        assert!(!e.exempts(&WALLET, Side::Mint, T));
+        assert!(!e.exempts(&WALLET, Side::Redeem, T));
+        // And it must fall back to the CONFIGURED premium, not to zero.
+        assert_eq!(effective_premium_bps(100, Some(&e), &WALLET, Side::Mint, T), 100);
         assert_eq!(
-            effective_premium_bps(100, Some(&e), &WALLET, Side::Mint, i64::MAX),
-            0
+            effective_premium_bps(150, Some(&e), &WALLET, Side::Redeem, T),
+            150
         );
     }
 
@@ -346,4 +393,35 @@ mod tests {
             0
         );
     }
+    #[test]
+    fn the_expiry_rail_requires_a_real_future_term() {
+        const NOW: i64 = 1_700_000_000;
+        // ZERO is refused. This is the whole of C-01: it used to be accepted and meant "forever".
+        assert!(validate_fee_exempt_expiry(0, NOW).is_err());
+        // The past, and the present instant, are refused: an already-dead exemption would still show
+        // up in every roster as active.
+        assert!(validate_fee_exempt_expiry(NOW - 1, NOW).is_err());
+        assert!(validate_fee_exempt_expiry(NOW, NOW).is_err());
+        // Negative, in case a client sends a signed garbage value.
+        assert!(validate_fee_exempt_expiry(-1, NOW).is_err());
+        // One second out is legal: the rail bounds the SHAPE, it does not second-guess the term.
+        assert!(validate_fee_exempt_expiry(NOW + 1, NOW).is_ok());
+        // Exactly at the two-year cap is legal; one second past it is not.
+        assert!(validate_fee_exempt_expiry(NOW + MAX_FEE_EXEMPT_TERM_SECONDS, NOW).is_ok());
+        assert!(validate_fee_exempt_expiry(NOW + MAX_FEE_EXEMPT_TERM_SECONDS + 1, NOW).is_err());
+        // The realistic fat finger: a 13-digit millisecond timestamp pasted where seconds go. It
+        // LOOKS like a term and behaves like "never", which is exactly what C-01 removed.
+        assert!(validate_fee_exempt_expiry(NOW * 1_000, NOW).is_err());
+    }
+
+    #[test]
+    fn the_rail_and_is_expired_agree_that_zero_is_not_a_term() {
+        // Two independent code paths, one rule. If a future edit re-permits zero on the way IN
+        // without also changing `is_expired`, the grant would silently be dead on arrival; if it
+        // changes `is_expired` alone, zero becomes permanent again. This test fails either way.
+        const NOW: i64 = 1_700_000_000;
+        assert!(validate_fee_exempt_expiry(0, NOW).is_err(), "writer must refuse zero");
+        assert!(expiring(WALLET, SIDE_ALL_BITS, 0).is_expired(NOW), "reader must treat zero as dead");
+    }
+
 }

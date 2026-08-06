@@ -55,7 +55,9 @@ pub struct SetFeeExempt<'info> {
 ///
 /// Residual risk, stated so it is not discovered later: a compromised admin can exempt itself and
 /// trade fee-free until someone notices, and the expiry does NOT bound that (the admin picks it).
-/// `FeeExemptSet` is the event to alert on, and a grant with `expires_at == 0` is the shape to flag.
+/// `FeeExemptSet` is the event to alert on. It used to say "a grant with `expires_at == 0` is the
+/// shape to flag"; zero is refused outright now (audit C-01), so the shape to flag is instead a grant
+/// with BOTH side bits set, or a term near the two-year cap, or a grant whose wallet is the admin.
 pub fn set_fee_exempt_handler(
     ctx: Context<SetFeeExempt>,
     wallet: Pubkey,
@@ -64,23 +66,43 @@ pub fn set_fee_exempt_handler(
 ) -> Result<()> {
     validate_fee_exempt_flags(flags)?;
     let now = Clock::get()?.unix_timestamp;
-    // Reject a term already in the past, and a term absurdly far out. 0 ("never") stays allowed.
+    // An expiry is MANDATORY: strictly in the future, at most MAX_FEE_EXEMPT_TERM_SECONDS out.
     //
-    // A PAST term would create an account that grants nothing while appearing in every roster as an
-    // active exemption: the same trap zero flags would be, rejected for the same reason.
+    // EXTERNAL AUDIT FINDING C-01. `expires_at == 0` used to mean "never" and was accepted. Three
+    // things made that worse than it looks:
+    //
+    //   1. The audit brief I wrote for the reviewer asserted the expiry was "mandatory and capped at
+    //      two years". It was not, and the auditor caught the code contradicting its own brief.
+    //   2. The admin panel's field label was literally "type 0 for never", so the permanent case was
+    //      not a theoretical hole, it was the documented shortcut sitting on the form.
+    //   3. The usual reason to keep a zero case, migrating accounts written by an older layout, does
+    //      not apply: `FeeExemptAccount` is introduced by THIS upgrade, so no account with
+    //      `expires_at == 0` exists anywhere to be preserved.
+    //
+    // What zero actually cost, with numbers. At 1% mint and 1.5% redeem a normal round trip of 100
+    // USDC returns 100 * 0.99 * 0.985 = 97.515, so the pair of fees is a 2.485% band the price must
+    // move through before a round trip profits. A both-sides exemption removes the band entirely and
+    // returns 100.000, which converts every favourable oracle tick into free extractable value paid
+    // out of the treasury. With `expires_at == 0` that lasts until a human notices.
+    //
+    // A term does NOT defend against a compromised admin, and state/fee_exempt.rs is careful to say
+    // so: the admin picks the number. What it defends against is FORGETTING, which is the failure
+    // that actually happens: a market-making arrangement that ends, a launch-window favour nobody
+    // revisits. Making it mandatory means the forgetting has a deadline.
+    //
+    // A PAST term is refused too. It would create an account granting nothing while appearing in
+    // every roster as an active exemption: the same trap as zero flags, refused for the same reason.
     //
     // The UPPER rail catches the realistic operator error the review-of-fixes named: pasting a
     // 13-digit JavaScript millisecond timestamp instead of seconds yields a year-57000 expiry that
     // LOOKS like a term while behaving like "never", which is exactly the trap this field exists to
     // avoid. Every other tunable in this program has a fat-finger ceiling; this one did not.
-    require!(
-        expires_at == 0
-            || (expires_at > now
-                && expires_at <= now.saturating_add(MAX_FEE_EXEMPT_TERM_SECONDS)),
-        // A DEDICATED error, not FeeExemptFlagsInvalid. Reporting a flags problem for a bad DATE sent
-        // the operator to debug the scope field, which is the wrong half of the form.
-        DominionError::FeeExemptExpiryInvalid
-    );
+    //
+    // The rule itself lives in `state/fee_exempt.rs::validate_fee_exempt_expiry`, as a pure function,
+    // so it is unit-tested and so this handler and the reader cannot drift apart. It raises a
+    // DEDICATED error rather than FeeExemptFlagsInvalid: reporting a flags problem for a bad DATE sent
+    // the operator to debug the scope field, which is the wrong half of the form.
+    validate_fee_exempt_expiry(expires_at, now)?;
     let admin_key = ctx.accounts.admin.key();
     let acc = &mut ctx.accounts.fee_exempt;
 

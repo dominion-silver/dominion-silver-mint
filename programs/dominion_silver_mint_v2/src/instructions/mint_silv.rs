@@ -1,9 +1,22 @@
-// mint_silv: user sends USDC, receives SILV at Pyth oracle * (1 + premium_bps_mint/10000).
-// Option B (CONFIRMED_SPEC.md Section 4.2): the Option A daily cap + on-chain
-// reserve are replaced by a single HARD supply cap (D2). Mint always brings
-// USDC in; SILV is backed by physical silver in custody (off-chain), so there
-// is no on-chain solvency invariant. Launch discount = admin lowers
-// premium_bps_mint via the timelocked setter (D4), no special logic here.
+// mint_silv: user sends USDC, the premium is taken OFF THE TOP, and SILV is minted for the
+// remainder at PURE SPOT.
+//
+//   fee      = ceil(amount_usdc * premium_bps_mint / 10_000)     (math.rs::fee_from_amount)
+//   silv_out = (amount_usdc - fee) / spot
+//
+// AUDIT D-04: this header said "receives SILV at Pyth oracle * (1 + premium_bps_mint/10000)". That
+// described the pre-2026-08-05 economics, where the premium was folded into a marked-up price. It is
+// not a paraphrase of the current code, it is a different formula: the all-in price per ounce a minter
+// pays is `spot / (1 - bps/1e4)`, not `spot * (1 + bps/1e4)`. The two differ by bps^2/1e8, which is
+// 1bp at the launch 1% and 25bp at the 500bp ceiling. The public client shipped the wrong one of these
+// for a while (finding B4 of the internal review), so a stale header here is not a cosmetic problem.
+//
+// The premium is ALWAYS charged; only its DESTINATION is conditional on `fee_routing_disabled`.
+//
+// Supply: a single HARD cap (D2) replaced the old daily cap plus on-chain reserve. Mint always brings
+// USDC in, and SILV is backed by physical silver in off-chain custody, so there is no on-chain
+// solvency invariant to maintain here. A launch discount is just the admin lowering premium_bps_mint
+// through its timelocked setter; no special logic in this file.
 
 use crate::assertions::assert_silv_mint_invariants;
 use crate::cpi::{silv_mint_to, usdc_transfer_user_to_fee_vault, usdc_transfer_user_to_treasury};
