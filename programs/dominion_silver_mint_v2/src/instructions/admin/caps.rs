@@ -143,6 +143,19 @@ pub fn set_redemptions_enabled_handler(ctx: Context<SetParam>, enabled: bool) ->
     // Yes, this also discards any unrelated numeric loosening the proposal carried. That is the
     // right trade during an incident: losing a queued budget raise costs one re-proposal, while
     // keeping it armed costs an unwanted re-open at the worst possible moment.
+    if let Some(orphan) = ctx.accounts.config.pending_redeem_limits_nonce {
+        // Breadcrumb, because disarming the slot leaves the timelock ACCOUNT alive and it still
+        // counts toward MAX_ACTIVE_PROPOSALS. `close_timelock_account` refuses it (neither cancelled
+        // nor executed), so the only exit is `cancel_timelocked_action(orphan)`, which needs the
+        // nonce. Without this the operator would have to enumerate every surviving timelock account
+        // to find it. Repeated disarm-then-re-propose cycles otherwise leak count slots until every
+        // propose_* reverts TooManyActiveProposals.
+        msg!(
+            "disarmed pending redeem-limits proposal nonce {}: cancel_timelocked_action({}) to free the slot and reclaim rent",
+            orphan,
+            orphan
+        );
+    }
     ctx.accounts.config.pending_redeem_limits_nonce = None;
     // SolidProof LOW #3.
     emit!(RedemptionsEnabledChanged {
@@ -173,6 +186,17 @@ pub fn set_public_mint_enabled_handler(ctx: Context<SetParam>, enabled: bool) ->
     ctx.accounts.config.public_mint_enabled = enabled;
     // Also clear any in-flight OPEN proposal: leaving one pending after a deliberate
     // emergency close would let the open land later without a fresh decision.
+    // NOTE ON REACHABILITY, from the review-of-fixes. This clear can never fire on a LIVE nonce:
+    // `propose_set_public_mint` requires `new_value != public_mint_enabled` with `new_value` forced
+    // true, so a pending open can only exist while the mint is CLOSED, and this handler requires
+    // `old_enabled != enabled`, so it reverts PublicMintUnchanged when the mint is already closed.
+    // The two states are mutually exclusive.
+    //
+    // Kept for uniformity with the redeem switch, and harmless. But commit 1851324's headline
+    // justification for the A7 bind ("closing the public mint did not disarm a pending open, so the
+    // mint would re-open on its own schedule") described a sequence that cannot occur. The bind is
+    // still right and still buys a redundant second reason for a cancelled proposal to fail; it was
+    // not the urgent one, and the redeem switch was.
     ctx.accounts.config.pending_public_mint_nonce = None;
     emit!(PublicMintEnabledChanged {
         old_enabled,

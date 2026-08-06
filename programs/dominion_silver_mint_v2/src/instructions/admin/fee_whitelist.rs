@@ -77,7 +77,9 @@ pub fn set_fee_exempt_handler(
         expires_at == 0
             || (expires_at > now
                 && expires_at <= now.saturating_add(MAX_FEE_EXEMPT_TERM_SECONDS)),
-        DominionError::FeeExemptFlagsInvalid
+        // A DEDICATED error, not FeeExemptFlagsInvalid. Reporting a flags problem for a bad DATE sent
+        // the operator to debug the scope field, which is the wrong half of the form.
+        DominionError::FeeExemptExpiryInvalid
     );
     let admin_key = ctx.accounts.admin.key();
     let acc = &mut ctx.accounts.fee_exempt;
@@ -248,9 +250,14 @@ pub fn withdraw_fees_handler(ctx: Context<WithdrawFees>, amount: u64) -> Result<
     // the admin's ability to move cash out. Here the cost lands on the admin instead, which is
     // where it belongs, and the revenue is not lost, only deferred until the buffer recovers.
     //
-    // Note the float is read as a raw balance, NOT balance-minus-amount: the question is whether
-    // the buffer is currently healthy, not whether it would survive this sweep. A treasury sitting
-    // exactly at its floor should not fund a fee withdrawal at all.
+    // The float is read as a raw balance, NOT balance-minus-amount: the question is whether the
+    // buffer is currently healthy, not whether it would survive this sweep.
+    //
+    // Note `>=`, so a treasury sitting EXACTLY at its floor DOES permit a sweep. An earlier version
+    // of this comment said it should not, which contradicted the line below it. `>=` is the right
+    // choice and the comment was the error: the float is a floor on the BACKING, and the vault holds
+    // no backing, so being exactly at the floor is "healthy" by definition. Anything stricter would
+    // make the common case (float set to the current balance) permanently unsweepable.
     // CANNOT STRAND REVENUE PERMANENTLY, checked during the review-of-fixes because "gate a
     // withdrawal on a threshold" is a classic way to build an inescapable trap. Two independent
     // exits exist, both admin-reachable: `deposit_usdc` tops the treasury back above the floor, and
@@ -270,6 +277,16 @@ pub fn withdraw_fees_handler(ctx: Context<WithdrawFees>, amount: u64) -> Result<
     require!(
         ctx.accounts.destination.key() != ctx.accounts.fee_vault.key(),
         DominionError::WithdrawRecipientMismatch
+    );
+
+    // And not any OTHER account owned by the fee-vault PDA. The source here is constrained to the
+    // PDA's ATA, so a non-ATA token account owned by the same PDA would receive the funds into an
+    // account this program can never sign for again: permanently stranded, not merely misdirected.
+    // That defeats the "a wrong address costs one misdirected sweep" framing above, because in that
+    // one case it costs the funds outright. Admin fat-finger only, and cheap to forbid.
+    require!(
+        ctx.accounts.destination.owner != ctx.accounts.fee_vault_pda.key(),
+        DominionError::FeeWithdrawDestinationStranded
     );
 
     let available = ctx.accounts.fee_vault.amount;

@@ -389,7 +389,9 @@ pub struct ConfigAccount {
     // queue.
     //
     // STILL LIVE and load-bearing: `instant_redeem_budget_usdc`,
-    // `instant_redeem_window_seconds`, `instant_window_start`, `instant_used_usdc`. This
+    // `instant_redeem_window_seconds`, `instant_window_start`, `instant_used_usdc`, and
+    // `instant_used_prev_usdc` (declared further down, carved out of `reserved`; the list omitted it
+    // for a whole review cycle after the sliding-window change added it). This
     // is ONE global ceiling per rolling window, applied identically to every caller
     // whatever their size, so it is not amount discrimination. It is the only brake
     // between a bad oracle print and the entire treasury leaving in a single transaction:
@@ -401,7 +403,15 @@ pub struct ConfigAccount {
     // fresh wallets cannot exceed one shared counter.
     pub large_redeem_threshold_usdc: u64, // DEAD since 2026-08-05, do not read
     pub instant_redeem_budget_usdc: u64,  // LIVE: max redeemed per window, all users
-    pub instant_redeem_window_seconds: u32, // LIVE
+    // LIVE. NOTE FOR WHOEVER CARVES THE NEXT BYTE NEAR HERE: this is the one field in this struct
+    // whose ZERO value is the LOOSE direction. `roll_window` deliberately fails OPEN at `w <= 0`
+    // (effective_used = 0, no rate limiting), whereas every other candidate fails closed at zero:
+    // max_staleness rejects every price, max_silv_supply stops issuance, instant_redeem_budget_usdc
+    // stops redemption, kyc_operator authorises nobody. Unreachable today (INSTANT_WINDOW_MIN_SECONDS
+    // is 60, enforced on propose and execute, and the emergency path only raises it) but worth
+    // knowing, because "a field taken from reserved must have the intended behaviour at zero" is the
+    // rule the fee_routing polarity inversion exists to enforce.
+    pub instant_redeem_window_seconds: u32,
     pub redeem_queue_delay_seconds: u32,  // DEAD since 2026-08-05, do not read
     pub instant_window_start: i64,        // LIVE: current window start (rolling)
     pub instant_used_usdc: u64,           // LIVE: cumulative redeemed in current window
