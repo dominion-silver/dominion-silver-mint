@@ -89,6 +89,27 @@ export function Dashboard() {
 
   return (
     <div className="space-y-6">
+      {/* AUDIT FINDING A-01. The snapshot used to convert a failed treasury or supply read into zero and
+          return successfully, so the operator saw Treasury $0 / supply 0 oz / 0% cap used with no
+          warning and could act on it: a withdrawal, a premint, an opening, all decided on numbers that
+          were never read. This banner sits above the tabs deliberately, because the figures it taints
+          are spread across several of them and a per-tile marker is missable. */}
+      {data.degraded.length > 0 && (
+        <div className="rounded-md border border-danger bg-danger/10 p-4 text-sm text-danger">
+          <div className="font-semibold">
+            DEGRADED SNAPSHOT: {data.degraded.length} on-chain read(s) FAILED.
+          </div>
+          <ul className="mt-1 list-inside list-disc text-xs">
+            {data.degraded.map((d) => (
+              <li key={d}>{d}</li>
+            ))}
+          </ul>
+          <div className="mt-2 text-xs">
+            The affected figures below are showing ZERO because they could not be read, not because
+            they are zero. Do NOT withdraw, premint, or change a limit until this clears.
+          </div>
+        </div>
+      )}
       <nav className="flex flex-wrap gap-1 border-b border-border">
         {TABS.map((t) => (
           <button
@@ -163,7 +184,7 @@ function OverviewTab({ data }: { data: DashboardSnapshot }) {
           label="Redemptions"
           value={cfg.redemptionsEnabled ? "Enabled" : "DISABLED"}
           good={cfg.redemptionsEnabled}
-          tip="Master on/off switch for users selling SILV back for USDC. When OFF, no new mints or redemptions are accepted."
+          tip="Master on/off switch for users selling SILV back for USDC. When OFF, redeem_silv reverts. It does NOT touch minting: this tooltip claimed 'no new mints or redemptions are accepted' (audit A-02), and an operator containing a treasury incident would have closed redemptions, trusted that sentence, and left public mint open the whole time. Minting is governed separately by public_mint_enabled and by paused. To stop everything, use Paused."
         />
         <StatusTile
           label="Mint pause window"

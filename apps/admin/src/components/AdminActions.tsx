@@ -150,7 +150,7 @@ const ACTIONS: ActionDesc[] = [
     group: "Instant",
     mode: "squads",
     fields: [{ name: "oz", label: "Max supply (oz)", kind: "silv" }],
-    tip: "Hard ceiling on total SILV. Raise only with matching physical silver.",
+    tip: "Hard ceiling on total SILV. TIGHTEN-ONLY: any value ABOVE the current cap reverts SupplyCapRaiseBlocked. This said 'Raise only with matching physical silver' (audit A-04), which described a workflow the contract does not have, and it would have been read at the exact moment the cap is reached and minting is already blocked: buy metal, type a bigger number, sign, revert. Raising the cap needs a program upgrade. Lowering is instant and PERMANENT (a one-way ratchet), and cannot go below the live supply, which would brick admin_premint.",
     current: (c) => `${Number(c.maxSilvSupply) / 1e6} oz`,
     build: (c, p) => actions.setMaxSilvSupply(c, parseAtomic(p.oz, 6)),
   },
@@ -413,11 +413,11 @@ const ACTIONS: ActionDesc[] = [
         // what is encoded, reintroduced for a non-bool field in the very file form-defaults.ts exists
         // to protect. Typing "0" explicitly is one keystroke and it makes the dialog honest.
         name: "expires",
-        label: "Expires (unix SECONDS; type 0 for never, max 2 years out)",
+        label: "Expires (unix SECONDS; REQUIRED, must be future, max 2 years out)",
         kind: "optbig",
       },
     ],
-    tip: "Waives the premium for one wallet. SET AN EXPIRY: without one, a compromised admin can self-exempt and trade fee-free until a human reads the event log. PREFER 1 (mint only): a both-sides exemption makes a round trip free, which hands that wallet a free option on oracle movement paid by the treasury, whereas the normal fees require a ~2.5% move before a round trip profits. Instant, because the worst case is foregone revenue, not a loss of principal.",
+    tip: "Waives the premium for one wallet. PREFER 1 (mint only): a both-sides exemption makes a round trip free, which hands that wallet a free option on oracle movement PAID OUT OF THE TREASURY, whereas the normal 1% + 1.5% requires a ~2.485% move before a round trip profits. This tooltip used to end 'the worst case is foregone revenue, not a loss of principal' (audit A-03). That is wrong, and the contract's own comment in state/fee_exempt.rs says so: a free option settled against the treasury IS a transfer of value out of it. AN EXPIRY IS NOW MANDATORY (audit C-01): the contract rejects 0 and rejects any date more than two years out, so this form no longer accepts 'never'.",
     build: (c, p) => {
       const f = parseUint(p.flags, 3);
       if (f !== 1 && f !== 2 && f !== 3) {
@@ -425,11 +425,43 @@ const ACTIONS: ActionDesc[] = [
       }
       if (!p.expires || !p.expires.trim()) {
         throw new Error(
-          "Expiry is required. Type a unix timestamp in SECONDS, or 0 for never. " +
-            "Leaving it blank used to silently grant a permanent exemption.",
+          "Expiry is required: a unix timestamp in SECONDS, strictly in the future, " +
+            "at most two years out.",
         );
       }
       const exp = parseBigUint(p.expires);
+      // The contract enforces all of this (audit C-01), so these checks buy nothing in security. They
+      // buy the operator a sentence instead of a hex error code, and they catch the three mistakes
+      // that actually happen, at the only moment the operator still has the form open.
+      //
+      // The reason this validation was worth writing rather than deferring to the chain: this field's
+      // label used to read "type 0 for never", so the permanent grant was not an edge case anyone had
+      // to reach for, it was the documented shortcut. An operator who types 0 out of habit now learns
+      // why it is refused here, not from a reverted Squads transaction an hour later.
+      const nowSecs = Math.floor(Date.now() / 1000);
+      const TWO_YEARS = 2 * 365 * 86400;
+      if (exp === 0n) {
+        throw new Error(
+          "0 is no longer accepted (audit C-01). A permanent exemption removes the ~2.485% " +
+            "round-trip fee band indefinitely, which is what makes oracle movement unprofitable " +
+            "to farm against the treasury. Renewing a two-year term is one instant transaction.",
+        );
+      }
+      if (exp <= BigInt(nowSecs)) {
+        throw new Error(
+          `Expiry must be in the FUTURE. ${exp} is at or before now (${nowSecs}). ` +
+            "A past expiry creates an account that grants nothing while still appearing in every " +
+            "roster as an active exemption.",
+        );
+      }
+      if (exp > BigInt(nowSecs + TWO_YEARS)) {
+        // The realistic fat finger: a 13-digit JavaScript millisecond timestamp pasted into a
+        // seconds field, which yields a year-57000 expiry that looks like a term and behaves like none.
+        throw new Error(
+          `Expiry is more than two years out (${exp}). If you pasted a millisecond timestamp, ` +
+            `divide by 1000: ${exp / 1000n}.`,
+        );
+      }
       return actions.setFeeExempt(c, pk(p.wallet), f, exp);
     },
   },

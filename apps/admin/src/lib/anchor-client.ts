@@ -166,6 +166,19 @@ export interface DashboardSnapshot {
   instantWindowExpired: boolean; // true => budget effectively reset
   instantWindowNeverStarted: boolean; // window_start == 0 (no instant redeem ever)
   treasuryFloatOk: boolean; // treasury >= treasury_min_float_usdc
+  /**
+   * Which reads FAILED, if any. Empty means every figure below is real.
+   *
+   * AUDIT FINDING A-01. `Promise.allSettled` turned a rejected treasury or supply read into `BN(0)`
+   * and returned a snapshot that looked complete. With the config still readable, the operator saw
+   * `Treasury USDC $0`, `SILV supply 0 oz` and `0%` cap utilisation, with no indication anything had
+   * gone wrong, and could then decide a withdrawal, a premint or an opening on a false photograph.
+   *
+   * allSettled was the right primitive for the wrong reason: it exists so ONE failure does not lose the
+   * other results, which is genuinely what we want, but the caller then has to be TOLD. Reporting the
+   * failures alongside the partial data keeps the resilience and drops the lie.
+   */
+  degraded: string[];
 }
 
 function getReadOnlyProgram(connection: Connection): Program {
@@ -189,6 +202,43 @@ function getReadOnlyProgram(connection: Connection): Program {
  * Snapshot fetch: config + treasury USDC + SILV supply in parallel.
  * Returns null if config not yet initialized.
  */
+/** A settled `getTokenAccountBalance` / `getTokenSupply` result, narrowed to what we read. */
+type SettledAmount = PromiseSettledResult<{ value: { amount: string } }>;
+
+/**
+ * Turn two settled token reads into amounts PLUS the list of the ones that failed.
+ *
+ * AUDIT FINDING A-01, and extracted as a pure function so the property can actually be tested. The
+ * logic used to be three lines inline (`status === "fulfilled" ? new BN(...) : new BN(0)`) reachable
+ * only through Anchor's `Program`, which needs a real encoded config account on a real connection. A
+ * behaviour that can only be exercised end to end is a behaviour with no test, and this one had none.
+ *
+ * Zero is deliberately still the numeric fallback: every derived figure downstream (cap utilisation,
+ * budget remaining, float check) has to compute or the whole console goes blank on one bad read. What
+ * changed is that the caller is TOLD, so it can refuse to present those figures as facts.
+ */
+export function readTokenAmounts(
+  balanceInfo: SettledAmount,
+  supplyInfo: SettledAmount,
+): { treasuryUsdc: BN; silvSupply: BN; degraded: string[] } {
+  const degraded: string[] = [];
+  let treasuryUsdc = new BN(0);
+  if (balanceInfo.status === "fulfilled") {
+    treasuryUsdc = new BN(balanceInfo.value.value.amount);
+  } else {
+    degraded.push(
+      `treasury USDC balance (${String(balanceInfo.reason).slice(0, 120)})`,
+    );
+  }
+  let silvSupply = new BN(0);
+  if (supplyInfo.status === "fulfilled") {
+    silvSupply = new BN(supplyInfo.value.value.amount);
+  } else {
+    degraded.push(`SILV supply (${String(supplyInfo.reason).slice(0, 120)})`);
+  }
+  return { treasuryUsdc, silvSupply, degraded };
+}
+
 export async function fetchDashboardSnapshot(
   connection: Connection,
 ): Promise<DashboardSnapshot | null> {
@@ -212,14 +262,12 @@ export async function fetchDashboardSnapshot(
     connection.getTokenSupply(SILV_MINT),
   ]);
 
-  const treasuryUsdc =
-    balanceInfo.status === "fulfilled"
-      ? new BN(balanceInfo.value.value.amount)
-      : new BN(0);
-  const silvSupply =
-    supplyInfo.status === "fulfilled"
-      ? new BN(supplyInfo.value.value.amount)
-      : new BN(0);
+  // A-01: a failed read is recorded, not silently rendered as zero. Zero stays the numeric value so
+  // every derived figure below still computes, but `degraded` tells the UI not to trust it.
+  const { treasuryUsdc, silvSupply, degraded } = readTokenAmounts(
+    balanceInfo,
+    supplyInfo,
+  );
 
   const c = cfg as ConfigAccount;
 
@@ -292,6 +340,7 @@ export async function fetchDashboardSnapshot(
     instantWindowExpired,
     instantWindowNeverStarted,
     treasuryFloatOk,
+    degraded,
   };
 }
 

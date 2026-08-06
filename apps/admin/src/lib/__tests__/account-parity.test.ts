@@ -15,6 +15,7 @@ import { describe, it, expect } from "vitest";
 import { Connection, PublicKey } from "@solana/web3.js";
 import idl from "../idl/dominion_silver_mint.json";
 import * as actions from "../admin-actions";
+import * as actions_ac from "../anchor-client";
 
 const conn = new Connection("http://127.0.0.1:8899");
 const ctx = { connection: conn, admin: PublicKey.unique() };
@@ -99,5 +100,49 @@ describe("admin builder account parity with the IDL", () => {
     // Failing in the builder rather than on chain is the point: an on-chain revert has already cost
     // the operator a signature and a fee to learn something knowable offline.
     await expect(actions.setKycScope(ctx, 3)).rejects.toThrow(/co-sign/i);
+  });
+
+  // --- audit A-01: a failed read must be REPORTED, not rendered as zero ---
+  //
+  // `fetchDashboardSnapshot` mapped a rejected treasury or supply read to BN(0) and returned a snapshot
+  // that looked complete: the operator saw Treasury $0 / supply 0 oz / 0% cap used with nothing marking
+  // those as unread, and could then decide a withdrawal, a premint, or an opening on them.
+  //
+  // Tested through the extracted `readTokenAmounts` rather than the whole snapshot. My first attempt
+  // faked a Connection and died on `getAccountInfoAndContext`: reaching the branch through Anchor needs
+  // a real encoded 800-byte config account, which is why this logic had no test in the first place.
+  it("A-01: a failed token read is listed in `degraded`, not silently zeroed", () => {
+    const ok = (amount: string) => ({
+      status: "fulfilled" as const,
+      value: { value: { amount } },
+    });
+    const bad = (msg: string) => ({ status: "rejected" as const, reason: new Error(msg) });
+
+    // Both succeed: no degradation, real numbers.
+    const good = actions_ac.readTokenAmounts(ok("1234"), ok("5678"));
+    expect(good.degraded).toEqual([]);
+    expect(good.treasuryUsdc.toString()).toBe("1234");
+    expect(good.silvSupply.toString()).toBe("5678");
+
+    // The finding's exact scenario: config readable, both token reads 429.
+    const both = actions_ac.readTokenAmounts(bad("429 Too Many Requests"), bad("429 Too Many Requests"));
+    expect(both.degraded).toHaveLength(2);
+    expect(both.degraded.join(" ")).toMatch(/treasury/i);
+    expect(both.degraded.join(" ")).toMatch(/supply/i);
+    // Zero is still the numeric fallback, deliberately, so downstream figures compute. The point is
+    // that it now arrives WITH a warning rather than as a fact.
+    expect(both.treasuryUsdc.isZero()).toBe(true);
+    expect(both.silvSupply.isZero()).toBe(true);
+
+    // A PARTIAL failure is the dangerous one, because the surviving number looks corroborating.
+    const partial = actions_ac.readTokenAmounts(bad("timeout"), ok("999"));
+    expect(partial.degraded).toHaveLength(1);
+    expect(partial.degraded[0]).toMatch(/treasury/i);
+    expect(partial.silvSupply.toString()).toBe("999");
+
+    // The reason is carried through, so the banner can say WHY, and it is bounded so a huge RPC error
+    // body cannot blow up the console.
+    const long = actions_ac.readTokenAmounts(bad("x".repeat(500)), ok("1"));
+    expect(long.degraded[0].length).toBeLessThan(200);
   });
 });
