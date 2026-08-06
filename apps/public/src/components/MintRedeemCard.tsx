@@ -7,6 +7,7 @@ import { BN } from "@coral-xyz/anchor";
 import {
   fetchSilverPrice,
   effectiveMintPrice,
+  floor6,
   effectiveRedeemPrice,
 } from "@/lib/pyth";
 import { DEFAULT_SLIPPAGE_BPS, REFRESH_INTERVAL_MS } from "@/lib/constants";
@@ -37,6 +38,8 @@ import { recordTxKind } from "@/components/TransactionHistory";
 type Mode = "mint" | "redeem";
 
 const OTC_EMAIL = "mark@dominion.market";
+
+
 
 export function MintRedeemCard() {
   const wallet = useWallet();
@@ -312,12 +315,12 @@ export function MintRedeemCard() {
             const minSilvOut =
               priceUsd != null
                 ? parseSilvAmount(
-                    (
+                    floor6(
                       (parseFloat(amount) / effectiveMintPrice(priceUsd, premiumBpsMint)) *
-                      (1 - slippageBps / 10_000)
-                    ).toFixed(6),
+                        (1 - slippageBps / 10_000),
+                    ),
                   )
-                : parseSilvAmount(preview.minOut.toFixed(6));
+                : parseSilvAmount(floor6(preview.minOut));
             return buildLazerMintTx(connection, wallet, {
               amountUsdc: parseUsdcAmount(amount),
               minSilvOut,
@@ -371,13 +374,13 @@ export function MintRedeemCard() {
               const minUsdcOut =
                 priceUsd != null
                   ? parseUsdcAmount(
-                      (
+                      floor6(
                         parseFloat(amount) *
-                        effectiveRedeemPrice(priceUsd, premiumBpsRedeem) *
-                        (1 - slippageBps / 10_000)
-                      ).toFixed(6),
+                          effectiveRedeemPrice(priceUsd, premiumBpsRedeem) *
+                          (1 - slippageBps / 10_000),
+                      ),
                     )
-                  : parseUsdcAmount(preview.minOut.toFixed(6));
+                  : parseUsdcAmount(floor6(preview.minOut));
               return buildLazerRedeemTx(connection, wallet, {
                 amountSilv: parseSilvAmount(amount),
                 minUsdcOut,

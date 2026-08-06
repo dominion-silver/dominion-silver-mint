@@ -188,7 +188,7 @@ spl-token display <SILV_MINT> -u mainnet-beta
 Check by eye: decimals 6, mint authority = the `silv_mint_authority` PDA, freeze
 authority = compliance vault, extensions exactly {PermanentDelegate, MetadataPointer,
 TokenMetadata}, `paused = true`, `public_mint_enabled = false`,
-`redemptions_enabled = false`, `max_silv_supply = 100000000000`.
+`redemptions_enabled = false`, `max_silv_supply = 150000000000` (150,000 oz).
 
 ### 7. Propose the public-mint open NOW, so the 24h runs during setup
 
@@ -296,16 +296,31 @@ be opened by an upgrade. Immutability is a decision for after the redeem flow sh
 | Thing | Why not | Cost to change |
 |---|---|---|
 | Enable KYC | The gate ships DORMANT and IS read by mint and redeem. Arm with `set_kyc_operator` then attestations then `set_kyc_scope` (bit 0 mint, bit 1 redeem). | config change, instant |
-| Open redemptions | `set_redemptions_enabled` refuses `true` in bytecode, by design | program upgrade |
-| Raise the 100,000 oz cap | tighten-only, by design | program upgrade |
+| Open redemptions | The 24h-timelocked SetRedeemLimits action carries the switch: `propose_set_redeem_limits` with `redemptionsEnabled = true`, wait, execute. See the PREREQUISITES section. | config change, 24h |
+| Raise the 150,000 oz cap | tighten-only, by design | program upgrade |
 | A minimum redemption size (Mark's 5,000 oz) | does not exist; only `amount > 0` | program upgrade, same batch as redeem |
-| Lower the redeem queue delay below 1h | `REDEEM_QUEUE_DELAY_MIN_SECONDS` hard floor | program upgrade |
+| ~~Lower the redeem queue delay~~ | REMOVED 2026-08-05: `redeem_queue_delay_seconds` is dead on chain, the queued path is gone. | n/a |
 | `min_publishers` below 2 | `MIN_PUBLISHERS_FLOOR_HARD` | program upgrade |
-| Mint premium above 3% | `PREMIUM_BPS_MINT_CEILING = 300` | program upgrade |
+| Mint premium above 5% | `PREMIUM_BPS_MINT_CEILING = 500` (raised 2026-08-05) | program upgrade |
 | Redeem premium above 5% | `PREMIUM_BPS_REDEEM_CEILING = 500`, and Mark's 5% is AT it | program upgrade |
 
 All of these are deliberate. They exist so a compromised admin cannot do them either.
 Group them into one Phase 1 upgrade rather than shipping several.
+
+## REAL RESIDUAL, added 2026-08-05
+
+The redemption rate limiter is a SLIDING WINDOW COUNTER, which is an approximation. Its worst case
+over a trailing window is **2x `instant_redeem_budget_usdc`**, not 1x, reachable by draining the
+budget near the end of one bucket and again near the end of the next (the two spends land nearly a
+full window apart, so both fall inside one trailing window).
+
+What the sliding counter fixed was the RATE, not the bound: the fixed window it replaced allowed the
+same 2x in about ONE SECOND, by waiting for a reset. Now it takes nearly a full window, which is the
+difference between an unobservable event and one a guardian can pause during.
+
+**So size `instant_redeem_budget_usdc` at HALF the maximum daily outflow you are willing to see.**
+The derivation and the concrete construction are in `state/redeem_window.rs`. This was documented as
+1.5x until the review-of-fixes maximised it properly.
 
 ## PREREQUISITES ADDED 2026-08-05 (the bundled pre-mainnet upgrade)
 
@@ -368,6 +383,6 @@ treasury is below its float. Sweep on a cadence so the standing balance stays sm
 2. **Pyth guarantees only 1 publisher on feed 3154; the contract requires 2.** It
    observes 3 today. A legitimate degradation to 1 halts every priced operation.
 3. **The inventory wallet is a single-signer key holding the whole pre-mint.**
-4. **`admin_settle_redemption_offchain` can void a payable claim** (all three audits).
+- ~~`admin_settle_redemption_offchain` can void a payable claim~~ RESOLVED 2026-08-05: the instruction was DELETED with the queued path, which removed SolidProof MEDIUM #4 from the codebase rather than accepting it. This was listed as "must be fixed before they open" and is now a phantom blocker: do not hold the launch on it.
    Unreachable while redemptions are closed. Must be fixed before they open.
-5. **The queued redeem path does no volume accounting.** The delay is its only throttle.
+- ~~The queued redeem path does no volume accounting~~ RESOLVED 2026-08-05: there is no queued path. Redemption is one instant route and it DOES debit a global sliding-window budget.

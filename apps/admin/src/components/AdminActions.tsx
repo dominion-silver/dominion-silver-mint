@@ -407,8 +407,13 @@ const ACTIONS: ActionDesc[] = [
       { name: "wallet", label: "Wallet to exempt (pubkey)", kind: "pubkey" },
       { name: "flags", label: "Scope: 1=mint, 2=redeem, 3=both", kind: "int" },
       {
+        // Deliberately NOT optional. Left blank it used to encode 0n ("never expires") while the
+        // confirm dialog rendered "(not chosen)", so an operator could read "(not chosen)", confirm,
+        // and grant a PERMANENT exemption. That is A-02's failure mode, the dialog disagreeing with
+        // what is encoded, reintroduced for a non-bool field in the very file form-defaults.ts exists
+        // to protect. Typing "0" explicitly is one keystroke and it makes the dialog honest.
         name: "expires",
-        label: "Expires (unix seconds, 0 = never - prefer a term)",
+        label: "Expires (unix SECONDS; type 0 for never, max 2 years out)",
         kind: "optbig",
       },
     ],
@@ -418,7 +423,13 @@ const ACTIONS: ActionDesc[] = [
       if (f !== 1 && f !== 2 && f !== 3) {
         throw new Error("Scope must be 1 (mint), 2 (redeem) or 3 (both)");
       }
-      const exp = p.expires && p.expires.trim() ? parseBigUint(p.expires) : 0n;
+      if (!p.expires || !p.expires.trim()) {
+        throw new Error(
+          "Expiry is required. Type a unix timestamp in SECONDS, or 0 for never. " +
+            "Leaving it blank used to silently grant a permanent exemption.",
+        );
+      }
+      const exp = parseBigUint(p.expires);
       return actions.setFeeExempt(c, pk(p.wallet), f, exp);
     },
   },

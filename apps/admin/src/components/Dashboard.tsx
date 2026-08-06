@@ -165,7 +165,7 @@ function OverviewTab({ data }: { data: DashboardSnapshot }) {
           label="Redemptions"
           value={cfg.redemptionsEnabled ? "Enabled" : "DISABLED"}
           good={cfg.redemptionsEnabled}
-          tip="Master on/off switch for users selling SILV back for USDC. When OFF, no new redemptions or queue entries are accepted."
+          tip="Master on/off switch for users selling SILV back for USDC. When OFF, no new mints or redemptions are accepted."
         />
         <StatusTile
           label="Mint pause window"
@@ -574,8 +574,11 @@ function HelpTab() {
           Instant vs delayed changes
         </h3>
         <p>
-          Low-risk operational settings (the redemptions switch, supply cap,
-          instant budget, window, threshold, queue delay) change instantly.
+          Low-risk operational settings change instantly: lowering the supply
+          cap, tightening the redemption budget or window, CLOSING redemptions
+          or public mint, the fee-exemption whitelist, the fee sweep and the
+          KYC scope. Note both switches are close-only: OPENING redemptions or
+          public mint takes the 24-hour path.
           Sensitive settings (fees, treasury withdrawals, price-feed safety,
           metadata, ownership) are proposed and only take effect after a
           24-hour delay, during which a guardian can cancel them.
@@ -586,13 +589,13 @@ function HelpTab() {
           How redemptions work
         </h3>
         <p>
-          Small redemptions that fit the instant budget and that the treasury
-          can cover are paid instantly. Larger ones, or ones beyond the
-          instant budget, go to a queue: the user&apos;s SILV is burned
-          immediately and they claim their USDC after the queue delay, priced
-          at claim time. If the treasury cannot cover a claim, the request
-          stays open and the operator pays the user off-chain, then marks it
-          settled here so it cannot be claimed again.
+          One instant route. The user burns SILV and receives USDC from the
+          treasury in the same transaction, or the whole thing reverts and
+          their SILV is untouched. Two things can refuse it: the sliding
+          window budget (retry once it decays) and the treasury balance. There
+          is no queue, no burned-SILV IOU and no off-chain settlement step. The
+          T+3 queue and the off-chain settlement instruction were deleted on
+          2026-08-05, which also removed SolidProof MEDIUM #4.
         </p>
       </div>
       <div>

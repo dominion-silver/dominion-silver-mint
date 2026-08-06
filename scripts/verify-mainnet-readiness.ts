@@ -177,7 +177,7 @@ async function main() {
         const ozFor100k = 100_000 / (px * 1.015);
         ok(
           "a 100,000 USDC pool needs roughly",
-          `${ozFor100k.toFixed(0)} oz, vs the 100,000 oz cap`,
+          `${ozFor100k.toFixed(0)} oz, vs the 150,000 oz cap`,
         );
       }
     }

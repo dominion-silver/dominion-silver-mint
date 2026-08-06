@@ -237,10 +237,29 @@ export function feeVaultUsdcAta(): PublicKey {
 export async function fetchFeeVaultBalance(
   connection: Connection,
 ): Promise<bigint | null> {
-  const r = await connection
-    .getTokenAccountBalance(feeVaultUsdcAta())
-    .catch(() => null);
-  return r ? BigInt(r.value.amount) : null;
+  // `null` means ABSENT. Anything else THROWS, so SWR records an error and the panel can tell the
+  // two states apart.
+  //
+  // This used to be `.catch(() => null)`, which swallowed EVERYTHING. The fetcher therefore never
+  // threw, SWR's `error` was never set, and the panel's RPC-error branch was dead code: a single
+  // devnet rate-limit rendered "THE FEE VAULT DOES NOT EXIST. Do not open public mint or
+  // redemption." The one panel written specifically to distinguish those two states collapsed them,
+  // on the flakiest RPC in the project, which trains an operator to ignore it and take the genuinely
+  // blocked mainnet vault with it.
+  //
+  // The account-not-found case is identified by message rather than by type because web3.js throws a
+  // plain Error for it. Matching narrowly and rethrowing everything else is the safe direction: an
+  // unrecognised failure surfaces as an error rather than as "missing".
+  try {
+    const r = await connection.getTokenAccountBalance(feeVaultUsdcAta());
+    return BigInt(r.value.amount);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/could not find account|Invalid param|AccountNotFound/i.test(msg)) {
+      return null;
+    }
+    throw e;
+  }
 }
 
 /** Grant or update a fee exemption. `flags`: 1 = mint, 2 = redeem, 3 = both.

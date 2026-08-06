@@ -100,6 +100,13 @@ export interface ConfigAccount {
    *  written before this upgrade decodes it as 0 rather than undefined, but `?? 0` at the read
    *  sites costs nothing and survives a stale RPC snapshot. */
   kycScopeFlags?: number;
+  /** The fee-vault escape hatch, NEGATED: false = routing ON. Declared so this app can SEE it.
+   *
+   *  It does not change what a user pays (the premium is charged in both modes, only its destination
+   *  moves), so quotes are correct either way and the client deliberately does not branch on it. It
+   *  is here because "the public app cannot see this field" is how the KYC gate would have been
+   *  invisible too, and because a future display of protocol revenue would need it. */
+  feeRoutingDisabled?: boolean;
   porFeed: PublicKey;
   porMaxStalenessSeconds: number;
   porEnforced: boolean;
@@ -109,17 +116,11 @@ export interface ConfigAccount {
   version: number;
 }
 
-export type RedemptionStatusKind = "pending" | "claimed" | "settledOffchain";
-
-export interface RedemptionRequestView {
-  pubkey: PublicKey;
-  owner: PublicKey;
-  amountSilv: BN;
-  requestedAt: number;
-  claimableAt: number;
-  nonce: BN;
-  status: RedemptionStatusKind;
-}
+// `RedemptionStatusKind` and `RedemptionRequestView` REMOVED 2026-08-05. They described the
+// `RedemptionRequest` account, which no longer exists in the program or the IDL. They survived the
+// first purge as exported-but-unused types plus one unused import in lazer-tx.ts, which is the last
+// live reference to a removed account type anywhere. `noUnusedLocals` is off in both apps, so
+// nothing caught it.
 
 /** Where a redemption lands. "queue" is GONE (2026-08-05: the T+3 queue was deleted from the
  *  program), replaced by "limit": the global rolling budget for this window is exhausted and the

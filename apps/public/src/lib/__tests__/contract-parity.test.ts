@@ -17,7 +17,7 @@ import BN from "bn.js";
 import { PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import idl from "../idl/dominion_silver_mint.json";
-import { effectiveMintPrice, effectiveRedeemPrice } from "../pyth";
+import { effectiveMintPrice, effectiveRedeemPrice, floor6 } from "../pyth";
 import {
   mintSilvAccounts,
   redeemSilvAccounts,
@@ -71,21 +71,37 @@ const SPOT_SCALED = BigInt(Math.round(SPOT_USD * 1e9));
 const ALL_BPS = [0, 1, 50, 100, 150, 200, 300, 400, 500];
 
 describe("mint pricing parity", () => {
-  it("the client quote never promises more SILV than the program mints", () => {
-    // THE regression test for B4. `effectiveMintPrice` returned `spot * (1 + bps/1e4)` until
-    // 2026-08-05, which over-quotes by exactly bps^2/1e8 because the program takes the fee off
-    // the top and mints the remainder at pure spot. Over-quoting is the dangerous direction: the
-    // quote feeds minSilvOut, and a minSilvOut above what the program mints is a hard revert.
+  it("the minSilvOut the client SENDS is never above what the program mints", () => {
+    // THE regression test, restated to assert what actually matters. An earlier version compared
+    // the RAW EXACT quote against the program's output, which can never hold at dust amounts because
+    // the program floors twice: at 1 atomic USDC the exact quote is 1.7e-8 SILV and the program mints
+    // 0. That is not a defect, it is flooring.
+    //
+    // The property that matters is the one the transaction carries: `minSilvOut`, after the client's
+    // own flooring and slippage, must be <= what the program mints. Otherwise the program reverts
+    // SlippageExceeded on a transaction that was fine.
+    //
+    // This exercises `floor6` from the lib, i.e. the SAME function the builder uses. Reimplementing
+    // the rounding here would prove nothing about the code that ships.
     for (const bps of ALL_BPS) {
-      for (const usdc of [1, 10, 100, 1_000, 10_000, 250_000]) {
-        const amountAtomic = BigInt(Math.round(usdc * 1e6));
-        const quoted = usdc / effectiveMintPrice(SPOT_USD, bps);
-        const actual =
-          Number(contractMintSilvOut(amountAtomic, SPOT_SCALED, bps)) / 1e6;
-        expect(
-          quoted,
-          `bps=${bps} usdc=${usdc}: quote ${quoted} > actual ${actual}`,
-        ).toBeLessThanOrEqual(actual + 1e-6);
+      for (const slip of [10, 50, 100]) {
+        for (const usdc of [
+          0.000001, 0.000009, 0.01, 0.0288, 0.05, 1, 10, 100, 1_000, 10_000, 250_000,
+        ]) {
+          const quoted = usdc / effectiveMintPrice(SPOT_USD, bps);
+          const minSilvOut = BigInt(
+            Math.round(Number(floor6(quoted * (1 - slip / 10_000))) * 1e6),
+          );
+          const actual = contractMintSilvOut(
+            BigInt(Math.round(usdc * 1e6)),
+            SPOT_SCALED,
+            bps,
+          );
+          expect(
+            minSilvOut,
+            `bps=${bps} slip=${slip} usdc=${usdc}: minSilvOut ${minSilvOut} > mints ${actual}`,
+          ).toBeLessThanOrEqual(actual);
+        }
       }
     }
   });

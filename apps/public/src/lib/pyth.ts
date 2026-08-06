@@ -73,3 +73,18 @@ export function effectiveRedeemPrice(spot: number, premiumBps: number): number {
   // of the codebase (we call it "redeem premium" everywhere else).
   return (spot * (10_000 - premiumBps)) / 10_000;
 }
+
+/** Floor a float to 6 decimals as a string, for feeding `minOut` into the program.
+ *
+ * `toFixed(6)` rounds HALF UP, which is the WRONG direction for a slippage FLOOR: it can push
+ * `minSilvOut` above what the program mints and turn a valid transaction into a hard
+ * SlippageExceeded. The review-of-fixes brute-forced it: 25,025 (bps, slippage, amount)
+ * combinations failed, all at amounts at or below $0.0288, because half-up rounding adds up to 0.5
+ * atomic on top of the ~1.02 atomic gap left by the program's two floors, and a 10 bps buffer only
+ * absorbs that once the quote exceeds roughly 1,500 atomic units.
+ *
+ * Lives here rather than in the component so the parity test can exercise the SAME code the
+ * transaction builder uses. A test that reimplements the rounding would prove nothing about it. */
+export function floor6(n: number): string {
+  return (Math.floor(n * 1e6) / 1e6).toFixed(6);
+}
