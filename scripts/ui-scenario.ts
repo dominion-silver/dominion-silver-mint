@@ -1,12 +1,7 @@
 /**
- * SUPERSEDED. Do not use.
- *
- * AUDIT review of daac4ac (P2): this script calls instructions that no longer exist
- * in the program ABI:
- *   set_large_redeem_threshold / set_redeem_queue_delay (replaced by FIX A)
- * It also held a program id retired one or two generations ago. It cannot work, and
- * it fails deep inside with an opaque error that reads like a protocol fault rather
- * than a stale script. Kept for its historical assertions only.
+ * SUPERSEDED. Do not use. It calls set_large_redeem_threshold and set_redeem_queue_delay, which no
+ * longer exist in the ABI (replaced by FIX A), so it fails deep inside with an opaque error that
+ * reads like a protocol fault rather than a stale script. Kept for its historical assertions only.
  *
  * Current equivalents:
   scripts/e2e-fixa-devnet.ts        launch posture + FIX A, on the live program
@@ -24,25 +19,16 @@ if (!process.env.DOMINION_RUN_SUPERSEDED) {
 }
 
 /**
- * UI test scenario controller (devnet, admin-keyed). Flips on-chain params so
- * Thomas can manually exercise V2-specific UI paths, then restores §6.
- *
- * Usage (from dominion root):
- *   PATH="<solana-bin>:$PATH" node_modules/.bin/tsx scripts/ui-scenario.ts <cmd>
- *
- * cmd:
- *   state            print current relevant config + live SILV supply
- *   roundA-setup     supply cap barely above supply (mint-too-big fails) +
- *                    large_redeem_threshold $0.10 + redeem_queue_delay 0
- *                    (queued-redeem + claim testable instantly)
- *   roundA-restore   restore cap 712M / threshold $5000 / delay T+3
- *   redemptions-off  set redemptions_enabled = false
- *   redemptions-on   set redemptions_enabled = true
- *   pause            set paused = true
- *   unpause          set paused = false
- *   restore-all      §6 defaults for every param above + redemptions on + unpaused
- *
- * Deps resolved from apps/public/node_modules (single web3 instance).
+ * UI test scenario controller (devnet, admin-keyed). Flips on-chain params so V2-specific UI paths
+ * can be exercised by hand, then restores the §6 defaults. Deps resolve from apps/public/node_modules
+ * so there is a single web3 instance.
+ * Usage: PATH="<solana-bin>:$PATH" node_modules/.bin/tsx scripts/ui-scenario.ts <cmd>
+ *   state            print the current relevant config + live SILV supply
+ *   roundA-setup     supply cap barely above supply (mint-too-big fails), threshold $0.10,
+ *                    queue delay 0 (queued-redeem + claim testable instantly)
+ *   roundA-restore   cap 712M / threshold $5000 / delay T+3
+ *   redemptions-off | redemptions-on | pause | unpause
+ *   restore-all      §6 defaults for every param above, redemptions on, unpaused
  */
 import { createRequire } from "module";
 import * as fs from "fs";
@@ -51,11 +37,8 @@ import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 import { requireSanctionedCluster } from "./_guard";
 import { resolveCluster, describeCluster } from "./_cluster";
 
-// ROUND 3 P2. This script calls `conn.sendRawTransaction(...)` and had NO cluster guard. The structural
-// assertion in verify-cluster-resolution.ts missed it because its send detector recognised only
-// `sendAndConfirmTransaction` and an exact `.rpc()`, so the gate printed a clean 30/30 over an incomplete
-// set. Both are fixed: the detector is wider, and this script now resolves its cluster from the environment
-// and passes through the one guard.
+// This script sends via conn.sendRawTransaction, so it resolves its cluster from the environment and
+// passes through the one guard. verify-cluster-resolution.ts asserts that it still does.
 const CLUSTER = resolveCluster();
 
 const APUB = "/Users/thomasblanc/1_app/dominion/apps/public/";

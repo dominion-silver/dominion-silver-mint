@@ -1,30 +1,14 @@
 /**
- * Create the premium FEE VAULT and prove it exists.
+ * Create the premium FEE VAULT and prove it exists. A DEPLOY BLOCKER, not a convenience: mint_silv
+ * and redeem_silv both take the fee vault as a REQUIRED account, so until it exists every mint and
+ * every redeem reverts with a constraint error that reads like a client bug. Run once per cluster,
+ * BEFORE public mint or redemption is opened.
  *
- * WHY THIS IS A DEPLOY BLOCKER, not a convenience script. Since 2026-08-05 both `mint_silv`
- * and `redeem_silv` take the fee vault as a REQUIRED account. If it does not exist, EVERY mint
- * and EVERY redeem reverts with a constraint error that reads like a client bug. So this must
- * run once per cluster, BEFORE public mint or redemption is opened.
- *
- * The vault is the associated token account of the `fee_vault` PDA for `config.usdc_mint`. Two
- * things about that shape matter:
- *
- *   - The owner is a PDA, so `getAssociatedTokenAddressSync` MUST be called with
- *     allowOwnerOffCurve = true. Omitting it throws TokenOwnerOffCurveError. That exact mistake
- *     already cost this project a debugging session on the treasury ATA, which is why the
- *     helper below is the only place the address is derived.
- *   - Once created it can NEVER be closed. Closing a token account needs the owner's signature,
- *     and this program never signs a CloseAccount for this PDA. So this is a one-time,
- *     one-directional setup step: run it once and it is permanently satisfied.
- *
- * Idempotent: safe to re-run. It reports whether it created the account or found it already
- * there, and it always ends by READING THE ACCOUNT BACK from chain rather than trusting that the
- * transaction it just sent did what it intended.
- *
- * Run:
- *   npx tsx scripts/create-fee-vault.ts
- *   DOMINION_RPC=... npx tsx scripts/create-fee-vault.ts
- *   DOMINION_KEYPAIR=/path/to/payer.json npx tsx scripts/create-fee-vault.ts
+ * The vault is the ATA of the `fee_vault` PDA for `config.usdc_mint`, and once created it can NEVER
+ * be closed: closing needs the owner's signature and this program never signs CloseAccount for that
+ * PDA. So the step is one-way and idempotent, and it ends by READING THE ACCOUNT BACK rather than
+ * trusting the transaction it just sent.
+ * Run: [DOMINION_RPC=...] [DOMINION_KEYPAIR=/path/to/payer.json] npx tsx scripts/create-fee-vault.ts
  */
 import {
   Connection,
@@ -66,9 +50,8 @@ export function feeVaultUsdcAta(usdcMint: PublicKey): PublicKey {
 }
 
 function loadPayer(): Keypair {
-  // `dominion-dev.json` before `id.json`: this repo's convention is a project-specific key,
-  // and defaulting to the global `id.json` first would make the script pay from whatever
-  // wallet the operator's Solana CLI happens to point at.
+  // dominion-dev.json before id.json: defaulting to the global key would pay from whatever wallet
+  // the operator's Solana CLI happens to point at.
   const candidates = [
     process.env.DOMINION_KEYPAIR,
     path.join(os.homedir(), ".config", "solana", "dominion-dev.json"),
@@ -88,11 +71,9 @@ function loadPayer(): Keypair {
 }
 
 async function main() {
-  // D4: this is one of the very few scripts that is a MANDATORY MAINNET STEP, so a bare
-  // requireSanctionedCluster throw is the wrong ergonomics: an operator following the runbook would hit an
-  // opaque refusal on the one script the launch cannot proceed without. The guard is KEPT (running
-  // it against the wrong cluster by accident is still worth preventing), but the refusal now names
-  // the exact override and says why it exists.
+  // A MANDATORY MAINNET STEP, so the guard is kept (an accidental wrong cluster is still worth
+  // preventing) but its refusal names the exact override: an opaque throw on the one script the
+  // launch cannot proceed without is the wrong ergonomics.
   try {
     await requireSanctionedCluster(RPC, "create-fee-vault");
   } catch (e) {
@@ -105,15 +86,14 @@ async function main() {
     );
     throw e;
   }
-  // Creating the vault is cheap and required, but it still goes through the guard so that the
-  // action is declared rather than assumed. See ACTION_COST in _guard.ts.
+  // Cheap and required, but still declared rather than assumed. See ACTION_COST in _guard.ts.
   assertReversible("create_fee_vault", intentFromEnv());
 
   const conn = new Connection(RPC, "confirmed");
   const payer = loadPayer();
 
-  // Read the USDC mint from the LIVE config rather than a constant, so this script cannot
-  // create a vault for the wrong mint on a cluster whose config disagrees with the repo.
+  // USDC mint from the LIVE config, never a constant: a cluster whose config disagrees with the repo
+  // would otherwise get a vault for the wrong mint.
   const idl = JSON.parse(
     fs.readFileSync(
       path.join(__dirname, "..", "target", "idl", "dominion_silver_mint.json"),
@@ -148,8 +128,7 @@ async function main() {
   } else {
     console.log("\n  does not exist, creating...");
     const tx = new Transaction().add(
-      // Idempotent instruction AND the address is passed explicitly, rather than using the
-      // convenience helper that re-derives it: that helper rejects an off-curve owner.
+      // Address passed explicitly: the convenience helper re-derives it and rejects an off-curve owner.
       createAssociatedTokenAccountIdempotentInstruction(
         payer.publicKey,
         vault,
@@ -164,8 +143,7 @@ async function main() {
     console.log("  tx:", sig);
   }
 
-  // VERIFY BY READING BACK. A sent transaction is not proof: confirm the account exists, is
-  // owned by the classic Token program, and holds the right mint and the right authority.
+  // VERIFY BY READING BACK: a sent transaction is not proof.
   const after = await conn.getAccountInfo(vault);
   if (!after) {
     throw new Error(

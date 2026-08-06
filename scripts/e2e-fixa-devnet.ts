@@ -1,13 +1,8 @@
 /**
- * Functional E2E against the LIVE devnet program (launch-spec-2026-07 + FIX A).
- * Exercises the real launch mint path + the revert guards + FIX A on-chain.
- *
- * Run:
- *   DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json \
- *   npx tsx scripts/e2e-fixa-devnet.ts
- *
- * NOTE: execute_set_redeem_limits is NOT covered (24h timelock, no dev-hatch
- * bypass in the release build). We cover propose + cancel of that path.
+ * Functional E2E against the LIVE devnet program (launch-spec-2026-07 + FIX A). Exercises the launch
+ * mint path, the revert guards and FIX A on chain. execute_set_redeem_limits is NOT covered (24h
+ * timelock, no dev-hatch bypass in the release build); propose + cancel of that path are.
+ * Run: DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json npx tsx scripts/e2e-fixa-devnet.ts
  */
 import * as anchor from "@coral-xyz/anchor";
 import { AnchorProvider, Program, BN, Wallet, Idl } from "@coral-xyz/anchor";
@@ -26,16 +21,10 @@ import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 import { requireSanctionedCluster, assertReversible, intentFromEnv } from "./_guard";
 
 const RPC = "https://api.devnet.solana.com";
-// Review-of-fixes F6: no hardcoded id fallback. _program-id.ts resolves it from
-// DOMINION_PROGRAM_ID or the generated IDL, and the consistency gate pins that
-// to declare_id!.
+// No hardcoded id: _program-id.ts resolves it and the consistency gate pins it to declare_id!.
 const PROGRAM_ID = SHARED_PROGRAM_ID;
-// AUDIT review of daac4ac (P2): PROGRAM_ID is env-overridable but SILV_MINT was a
-// hardcoded constant, so ANY use of DOMINION_PROGRAM_ID produced a guaranteed-broken
-// run (WrongMint on set_max_silv_supply, the wrong mint on premint) that looked like a
-// real failure. The mint is now read from the live config, which is the only authority
-// on which mint a given program is bound to. Set DOMINION_SILV_MINT only to override
-// deliberately.
+// Read from the live config, the only authority on which mint a program is bound to. Hardcoding it
+// turns any DOMINION_PROGRAM_ID override into a WrongMint that reads like a real failure.
 let SILV_MINT: PublicKey;
 
 let pass = 0,
@@ -58,8 +47,7 @@ async function expectRevert(name: string, code: string, fn: () => Promise<unknow
 }
 
 async function main() {
-  // RULE 1 (scripts/_guard.ts): refuse any cluster but devnet unless
-  // DOMINION_ALLOW_MAINNET is explicitly set.
+  // RULE 1 (_guard.ts): refuse any cluster but devnet unless DOMINION_ALLOW_MAINNET is set.
   await requireSanctionedCluster(RPC, "FIX A E2E");
   const INTENT = intentFromEnv();
   const conn = new Connection(RPC, "confirmed");
@@ -118,8 +106,7 @@ async function main() {
   const supplyAfter = (await getMint(conn, SILV_MINT, "confirmed", TOKEN_2022_PROGRAM_ID)).supply;
   const invBalAfter = (await getAccount(conn, invAta, "confirmed", TOKEN_2022_PROGRAM_ID)).amount;
   ok("admin_premint: supply += 1000oz", supplyAfter - supplyBefore === BigInt(AMT.toString()));
-  // delta, not absolute: this script is run repeatedly against the same live
-  // devnet config, so the inventory ATA already holds earlier premints.
+  // delta, not absolute: repeated runs share one live config, so the ATA holds earlier premints.
   ok(
     "admin_premint: inventory credited",
     invBalAfter - invBalBefore === BigInt(AMT.toString()),
@@ -146,8 +133,8 @@ async function main() {
     program.methods.setRedemptionsEnabled(true).accounts({ config: configPda, admin }).rpc(),
   );
 
-  // 7. set_max_silv_supply raise -> blocked. Takes silv_mint since the
-  // SupplyCapBelowSupply invariant (audit DOM-011) reads the live supply.
+  // 7. set_max_silv_supply raise -> blocked. Takes silv_mint because the SupplyCapBelowSupply
+  // invariant (DOM-011) reads the live supply.
   await expectRevert("supply-cap raise reverts", "SupplyCapRaiseBlocked", () =>
     program.methods
       .setMaxSilvSupply(new BN(cfg.maxSilvSupply).add(new BN(1)))
@@ -155,10 +142,8 @@ async function main() {
       .rpc(),
   );
 
-  // 7b. a tighten BELOW the live supply is rejected (DOM-011). Derived from the LIVE
-  // supply rather than hardcoded: the previous 999_000_000 only happened to be below
-  // supply because a single premint had run, and would have silently stopped testing
-  // anything the moment the devnet supply changed.
+  // 7b. a tighten BELOW the live supply is rejected (DOM-011). Derived from the LIVE supply, never
+  // hardcoded: a literal stops testing anything the moment the devnet supply moves past it.
   const liveSupply = new BN(supplyAfter.toString());
   await expectRevert("supply-cap tighten below live supply reverts", "SupplyCapBelowSupply", () =>
     program.methods
@@ -167,28 +152,17 @@ async function main() {
       .rpc(),
   );
 
-  // 7c. The happy path (tighten to >= live supply) is deliberately NOT exercised
-  // here: the cap is tighten-only, so a successful tighten on this live devnet config
-  // could never be undone and would cripple it for UI testing.
-  //
-  // CORRECTED after the review of daac4ac: this comment used to claim the branch was
-  // "covered by the caps.rs unit tests instead". It was not. caps.rs had no test
-  // module at all, which two reviewers checked and I had not. The tests now exist
-  // (validate_new_max_supply, 9 cases including the exactly-at-supply boundary), so
-  // the claim is finally true. Stated here because the wrong version of this sentence
-  // is exactly the kind of thing an auditor takes at face value.
+  // 7c. The happy path (tighten to >= live supply) is deliberately NOT exercised: the cap is
+  // tighten-only, so a successful tighten here could never be undone and would cripple this live
+  // devnet config for UI testing. Covered by caps.rs::validate_new_max_supply.
 
   // 8. FIX A: emergency_tighten (lower budget) applies
   const budBefore = new BN(cfg.instantRedeemBudgetUsdc);
-  // Tighten by the smallest possible step. A tighten cannot be undone without the
-  // 24h timelock, so halving the budget on every run would silently degrade the
-  // live devnet config toward zero.
+  // Smallest possible step: a tighten cannot be undone without the 24h timelock, so halving the
+  // budget every run would degrade the live devnet config toward zero.
   const budTight = budBefore.sub(new BN(1));
-  // RULE 2 (scripts/_guard.ts). This is the SAME class of hazard that closed the public
-  // mint on 2026-07-29: tightening is instant, but LOOSENING back needs the 24h
-  // timelock, so every run permanently shaves the live budget. It is only 1 atomic unit
-  // per run, which is why it went unnoticed, but "small and irreversible" is still
-  // irreversible. The operator must sanction it explicitly:
+  // RULE 2 (_guard.ts). Tightening is instant, loosening back needs the 24h timelock, so every run
+  // permanently shaves the live budget. Small and irreversible is still irreversible, so:
   //   DOMINION_INTENT=emergency_tighten_redeem_limits npx tsx scripts/e2e-fixa-devnet.ts
   assertReversible("emergency_tighten_redeem_limits", INTENT);
   await program.methods
@@ -236,33 +210,20 @@ async function main() {
 
   await program.methods
     .cancelTimelockedAction(nonce)
-    // Anchor 0.31's generated account types do not model an OPTIONAL account as nullable, so `null` for the
-    // absent guardian (the correct encoding) does not typecheck without a cast.
-    //
-    // REVIEW-OF-FIXES P1. This comment previously said `{...} as never` kept "every other key checked against
-    // the IDL", and a reviewer disproved it: `never` is assignable to everything, so the object was typed
-    // against nothing. Two misspelled required keys, a junk key and two missing required keys, and tsc exited
-    // 0. The cast is on the one offending VALUE now, which is narrower and honest.
-    //
-    // But do not read more into that than it buys. `new Program(idl, provider)` loads the IDL as a VALUE at
-    // runtime, so there are no generated types and the target type is an index signature of `never`: tsc
-    // cannot check these key names in any cast placement. What checks them is
-    // `scripts/verify-client-idl-parity.ts`, which reads every `.accounts({...})` in scripts/ and apps/ and
-    // compares the keys to the committed IDL. Verified: renaming `config` to `configTYPO` here fails that
-    // gate by name. It runs in CI as a blocking step.
+    // THE canonical note on this cast; the other e2e scripts point here. Anchor 0.31 does not model
+    // an OPTIONAL account as nullable, so `null` for the absent guardian (the correct encoding) needs
+    // a cast. Keep it on the offending VALUE: `never` is assignable to everything, so `{...} as never`
+    // types the object against nothing and misspelled, junk and missing keys all pass tsc. tsc cannot
+    // check these key names in ANY placement, because `new Program(idl, provider)` loads the IDL as a
+    // runtime value. scripts/verify-client-idl-parity.ts checks them against the IDL, blocking in CI.
     .accounts({ config: configPda, timelock: tlPda, rentRecipient: admin, signer: admin, guardian: null as never })
     .rpc();
   cfg = await acct.fetch(configPda);
   ok("FIX A cancel clears pending nonce", cfg.pendingRedeemLimitsNonce === null);
 
-  // 11. restore the inventory wallet. Step 2 had to point it at the admin (the
-  // premint destination ATA must be owned by config.inventory_wallet), so without
-  // this the script silently leaves the live config pointing at the deployer.
-  //
-  // AUDIT review of daac4ac (P2): the restore was skipped when inventoryBefore was
-  // null, which is exactly the fresh-config first run the step exists for. It now
-  // falls back to the intended launch inventory wallet, so the config always ends in
-  // the posture it should be in rather than in the test's posture.
+  // 11. restore the inventory wallet. Step 2 had to point it at the admin (the premint destination
+  // ATA must be owned by config.inventory_wallet). The fallback is load-bearing: a fresh config has
+  // no previous wallet, which is exactly the run this step exists for.
   const INTENDED_INVENTORY = new PublicKey(
     process.env.DOMINION_INVENTORY_WALLET ||
       "EkDhR65JUL8tGhxRhnueaqri6zNzxMEJ82UU35pQ7V56",

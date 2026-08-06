@@ -10,30 +10,22 @@ pub struct GuardianAccount {
     pub guardian: Pubkey,
     pub added_at: i64,
     pub cooldown_until: i64, // 0 if active. Non-zero after removal: re-add requires now > cooldown_until
-    // AUDIT action 0.12b (DOM-007 real fix): deferred removal. 0 means no removal
-    // is scheduled. Non-zero is the timestamp at which `finalize_guardian_removal`
-    // may be applied. Crucially the guardian stays ACTIVE while this is pending,
-    // because every authorization site tests `cooldown_until == 0` and this field
-    // does not touch that. So a guardian targeted by a compromised admin keeps its
-    // pause and cancel powers for the whole window and can veto its own removal.
+    // Unix timestamp at which `finalize_guardian_removal` may be applied, 0 when no
+    // removal is scheduled. INVARIANT: the guardian stays ACTIVE for the whole
+    // window, because every authorization site tests `cooldown_until == 0` and this
+    // field does not touch that. That is what lets a targeted guardian pause, cancel
+    // the action the removal was clearing the way for, and veto its own removal.
     pub pending_removal_at: i64,
-    // AUDIT review of daac4ac (P0, found independently by two reviewers): the
-    // self-veto was originally UNLIMITED, which made a rogue guardian permanently
-    // unremovable and handed it an indefinite protocol halt (a guardian may `pause`
-    // repeatedly while `unpause` is admin-only). One self-cancel is enough to defeat
-    // a single opportunistic removal and to force the admin to re-commit publicly;
-    // unlimited self-cancels invert the model the deferral exists to serve.
-    // Consumed the first time the TARGET cancels its own removal. Reset only by a
-    // fresh appointment (add_guardian, which is admin-only and requires the removal
-    // cooldown to have elapsed), so a guardian can never restore its own budget.
+    // Consumed the first time the TARGET cancels its own removal, capping the
+    // self-veto at one use. Unlimited self-cancels would make a rogue guardian
+    // permanently unremovable and hand it an indefinite halt (it may `pause`
+    // repeatedly while `unpause` is admin-only). Reset only by a fresh appointment,
+    // so a guardian can never restore its own budget.
     pub self_cancel_used: bool,
     pub version: u8,
-    // AUDIT review of daac4ac (P1): this account grew 56 -> 64 with no realloc and no
-    // version byte, so the first in-place upgrade over a deployment that already held
-    // guardians would have bricked every guardian path with AccountDidNotDeserialize
-    // while leaving admin-only paths working: an asymmetric brick. Reserved space and
-    // a version byte so the next field is a logic change only. ConfigAccount has had
-    // both from the start for exactly this reason; this account should have too.
+    // Reserved so the next field is a logic change only. Growing this account
+    // without realloc bricks every guardian path with AccountDidNotDeserialize while
+    // admin-only paths keep working, which is an asymmetric brick.
     pub reserved: [u8; 32],
 }
 
@@ -47,40 +39,17 @@ impl GuardianAccount {
         + 1  // version
         + 32; // reserved
 
-    /// A guardian may exercise its powers only while active AND while it is not
-    /// itself the current admin.
-    ///
-    /// The second half closes the appointment-then-transfer overlap a reviewer
-    /// raised: `add_guardian` refuses `config.admin`, but admin-ship can move
-    /// afterwards via propose/accept_admin_transfer, so without this check one key
-    /// could hold both roles and "the admin is not a guardian" would silently stop
-    /// being true. It costs nothing operationally, because every guardian power
-    /// (pause, cancel_timelocked_action, cancel_admin_transfer) is already available
-    /// to the admin directly.
-    ///
-    /// RESIDUAL, found by the review-of-fixes and NOT closed here. Both floor checks
-    /// count REGISTRATIONS, and this predicate is invisible to them. So an admin
-    /// holding a second key K can: add K as a guardian (legal, no transfer pending),
-    /// transfer admin-ship to K, then remove the honest guardians. The end state
-    /// passes every check: `guardian_count == MIN_ACTIVE_GUARDIANS`,
-    /// `pending_removal_count == 0`, no error, no event, and the surviving "guardian"
-    /// is the admin, whose powers this predicate refuses. The config then claims a
-    /// veto that no independent key can exercise.
-    ///
-    /// Scope of the harm, precisely: the ADMIN can still pause and cancel (every such
-    /// site checks `is_admin || is_guardian`), so nothing is bricked. What is lost is
-    /// the INDEPENDENT veto, and what is wrong is that `guardian_count`
-    /// misrepresents it. This is the same end state as the residual already documented
-    /// in the MIN_ACTIVE_GUARDIANS comment (an admin can appoint puppets it controls);
-    /// this path merely makes the puppet inert rather than active.
-    ///
-    /// Structural fix, recommended and deliberately not taken in this pass because it
-    /// changes a governance instruction's ABI: `accept_admin_transfer` should take the
-    /// incoming admin's guardian PDA as a seeds-bound account and refuse to complete
-    /// while that guardian is active. Raising MIN_ACTIVE_GUARDIANS does not help, the
-    /// same trick works one step later. Until then the guardian roster in the admin
-    /// console marks a guardian whose key equals the admin as INERT, so an operator
-    /// can at least see the state.
+    /// True only while the guardian is active AND is not itself the current admin.
+    /// The admin exclusion is needed because admin-ship can move by admin transfer
+    /// after an appointment, which `add_guardian` cannot see.
+    // OPEN RESIDUAL: the floor checks count REGISTRATIONS and are blind to this
+    // predicate, so an admin holding a second key K can appoint K, transfer
+    // admin-ship to K, then remove the honest guardians. Every check still passes
+    // while the surviving guardian is inert, so `guardian_count` overstates the veto.
+    // Nothing is bricked (pause and cancel accept `is_admin || is_guardian`); the
+    // INDEPENDENT veto is what is lost. Fix, not taken because it changes a
+    // governance ABI: `accept_admin_transfer` should take the incoming admin's
+    // guardian PDA and refuse while it is active. The admin console marks it INERT.
     pub fn may_act(&self, signer: &Pubkey, admin: &Pubkey) -> bool {
         self.guardian == *signer && self.cooldown_until == 0 && self.guardian != *admin
     }
@@ -91,24 +60,16 @@ pub fn active_not_pending(guardian_count: u8, pending_removal_count: u8) -> u8 {
     guardian_count.saturating_sub(pending_removal_count)
 }
 
-/// Whether a NEW removal may be scheduled.
-///
-/// AUDIT review of daac4ac (P1): the floor used to be tested against
-/// `guardian_count` alone, so with 3 guardians an admin could schedule all 3 (each
-/// passing `3 > 1`) and the whole purge cost ONE 24h window instead of three. The
-/// floor now counts only guardians not already under notice, so the set of guardians
-/// able to react can never be driven to zero by scheduling alone.
+/// Whether a NEW removal may be scheduled. The floor counts only guardians not
+/// already under notice, so scheduling alone can never drive the set able to react
+/// to zero: testing `guardian_count` alone would let one 24h window purge all of them.
 pub fn may_schedule_removal(guardian_count: u8, pending_removal_count: u8) -> bool {
     active_not_pending(guardian_count, pending_removal_count) > MIN_ACTIVE_GUARDIANS
 }
 
-/// Whether a scheduled removal has aged out of its execution window.
-///
-/// AUDIT review of daac4ac (P1): `finalize` only checked `now >= scheduled`, so a
-/// matured schedule stayed armed forever. That turned an old schedule into a stored
-/// instant-removal coupon: pre-arm during quiet operation, then evict with zero
-/// reaction window whenever convenient. `pending_admin_expires_at` already solved
-/// exactly this for the sibling admin-transfer mechanism.
+/// Whether a scheduled removal has aged out of its execution window. Without the
+/// window a matured schedule stays armed forever, which is a stored instant-removal
+/// coupon: pre-arm while quiet, evict later with no reaction time.
 pub fn removal_schedule_expired(scheduled_at: i64, now: i64) -> bool {
     scheduled_at != 0 && now > scheduled_at.saturating_add(GUARDIAN_REMOVAL_EXEC_WINDOW_SECONDS)
 }
@@ -152,8 +113,6 @@ mod tests {
 
     #[test]
     fn may_act_rejects_the_admin_wearing_both_hats() {
-        // The overlap add_guardian cannot prevent, because admin-ship can move
-        // after the appointment.
         assert!(!guardian(0).may_act(&G, &G));
     }
 
@@ -173,9 +132,7 @@ mod tests {
 
     #[test]
     fn the_parallel_purge_from_the_review_is_now_blocked() {
-        // 3 guardians. Before this fix all three could be scheduled inside one
-        // window, so the entire guardian set could be cleared for the price of a
-        // single 24h delay.
+        // All three must not be schedulable inside one window.
         let count = 3u8;
         let mut pending = 0u8;
         assert!(may_schedule_removal(count, pending));
@@ -207,16 +164,10 @@ mod tests {
         assert!(!removal_schedule_expired(i64::MAX, i64::MAX));
     }
 
-    // ---------------------------------------------------------------------
-    // The review-of-fixes noted that `may_schedule_removal` and
-    // `removal_schedule_expired` were each tested as pure predicates, but their
-    // INTERACTION inside remove_handler is the only place `pending_removal_count`
-    // can desynchronise, and it had no coverage at all (the expired-re-arm branch
-    // skips BOTH the floor check and the increment, and needs a 31-day clock to
-    // reach on-chain). This is a model of the three handlers over
-    // (guardian_count, pending_removal_count, pending_removal_at) so the
-    // interaction is exercised without a validator.
-    // ---------------------------------------------------------------------
+    // A model of the three handlers over (guardian_count, pending_removal_count,
+    // pending_removal_at). Their INTERACTION is the only place the counter can
+    // desynchronise, and the expired-re-arm branch skips both the floor check and
+    // the increment, which would otherwise need a 31-day clock to reach on chain.
     const TIMELOCK: i64 = 86_400;
 
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -282,13 +233,11 @@ mod tests {
         };
         m.schedule(1_000).unwrap();
         assert_eq!(m.pending, 1);
-        // Let it expire, then re-arm. The guardian was already counted as pending,
-        // so the counter must NOT increment again.
+        // Already counted as pending, so re-arming must not increment again.
         let later = 1_000 + TIMELOCK + GUARDIAN_REMOVAL_EXEC_WINDOW_SECONDS + 1;
         m.schedule(later).unwrap();
         assert_eq!(m.pending, 1, "re-arming double-counted the pending removal");
-        // And the fresh ETA is a full timelock away: no zero-notice removal.
-        assert_eq!(m.at, later + TIMELOCK);
+        assert_eq!(m.at, later + TIMELOCK); // a full fresh window, no zero-notice removal
     }
 
     #[test]
@@ -316,7 +265,7 @@ mod tests {
         m.schedule(1_000).unwrap();
         let dead = 1_000 + TIMELOCK + GUARDIAN_REMOVAL_EXEC_WINDOW_SECONDS + 1;
         assert_eq!(m.finalize(dead), Err("Expired"));
-        // Still armed-but-dead, and the counter is still 1 until someone clears it.
+        // Armed but dead: the counter stays at 1 until someone clears it.
         assert_eq!(m.pending, 1);
         m.cancel().unwrap();
         assert_eq!(m.pending, 0);
@@ -357,8 +306,8 @@ mod tests {
 
     #[test]
     fn the_last_guardian_can_never_be_put_under_notice() {
-        // Corollary the review verified by hand: count == 1 implies pending == 0, so
-        // the no-floor-check re-arm branch can never apply to the last guardian.
+        // count == 1 implies pending == 0, so the no-floor-check re-arm branch
+        // can never apply to the last guardian.
         let mut m = Model {
             count: 1,
             pending: 0,

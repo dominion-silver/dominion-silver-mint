@@ -1,17 +1,8 @@
-// Dominion admin instruction builders.
-//
-// Each builder returns the dominion_silver_mint TransactionInstruction(s)
-// whose required signer is the on-chain `config.admin` = the Ops Squads
-// VAULT PDA. Squads-routed actions are wrapped by squads.ts
-// `buildCreateProposalTx` (the vault PDA signs at Squads execution).
-//
-// PDA correctness: `config` and `guardian_account` (add/remove) carry IDL
-// const/arg seeds so Anchor auto-derives them. The `timelock` PDA seed is
-// `[b"timelock", nonce_u64_le]` (account-data-dependent for propose_*), so
-// we derive + pass it EXPLICITLY rather than rely on the resolver. The
-// OPTIONAL `guardian` account on pause/cancel is also passed explicitly
-// (Anchor 0.31 does not auto-add optional accounts). Shapes verified
-// against the committed IDL + the contract source.
+// Dominion admin instruction builders. Each returns instruction(s) whose required signer is the
+// on-chain `config.admin` = the Ops Squads VAULT PDA; squads.ts `buildCreateProposalTx` wraps the
+// Squads-routed ones. PDA rules: `config` and `guardian_account` carry IDL seeds and are auto-derived.
+// The `timelock` PDA seed is `[b"timelock", nonce_u64_le]`, account-data-dependent, so it is derived
+// and passed EXPLICITLY, as is the OPTIONAL `guardian` on pause/cancel (Anchor 0.31 skips optionals).
 
 import { AnchorProvider, BN, Program } from "@coral-xyz/anchor";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
@@ -68,8 +59,7 @@ export function adminAuthority(): PublicKey {
   return roleVaultPda("ops");
 }
 
-/** The treasury USDC token account (ATA of the treasury authority PDA,
- *  classic Token program) - matches the live deploy + test scripts. */
+/** Treasury USDC ATA: the owner is the treasury PDA, on the classic Token program. */
 function treasuryUsdcAta(): PublicKey {
   return getAssociatedTokenAddressSync(
     USDC_MINT,
@@ -89,9 +79,7 @@ export async function fetchOnchainAdmin(
   return new PublicKey(c.admin);
 }
 
-/** Fetch the full decoded config account (for showing current values in the
- *  Actions UI). Returns the raw Anchor-decoded account (camelCase fields;
- *  BN for u64/i64 fields, raw bytes/PublicKey for pubkeys). */
+/** The raw Anchor-decoded config: camelCase fields, BN for u64/i64, PublicKey for pubkeys. */
 export async function fetchConfig(connection: Connection): Promise<any> {
   return (getProgram(connection).account as any).configAccount.fetch(
     configPda(),
@@ -107,19 +95,15 @@ async function nextTimelockNonce(connection: Connection): Promise<bigint> {
 
 export interface BuildCtx {
   connection: Connection;
-  /** Direct-admin override: when the connected wallet IS the on-chain
-   *  config.admin (a plain wallet, not the Ops Squads vault), pass it here so
-   *  the admin-role account/signer is the connected key and the instruction is
-   *  signed DIRECTLY (no Squads wrapper). When absent, builders fall back to
-   *  adminAuthority() (the Ops vault PDA) exactly as before. */
+  /** Direct-admin override: when the connected wallet IS `config.admin` (a plain wallet, not the Ops
+   *  vault), pass it here to sign directly, with no Squads wrapper. Absent, builders use
+   *  adminAuthority(), the Ops vault PDA. */
   admin?: PublicKey;
 }
 type Ix = Promise<TransactionInstruction[]>;
 const one = (ix: TransactionInstruction): TransactionInstruction[] => [ix];
 
-// ---------------------------------------------------------------------------
 // Instant setters (Ops vault, no timelock). Accounts: { config(auto), admin }.
-// ---------------------------------------------------------------------------
 async function instant(c: BuildCtx, method: string, arg: any): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     [method](arg)
@@ -127,10 +111,8 @@ async function instant(c: BuildCtx, method: string, arg: any): Ix {
     .instruction();
   return one(ix);
 }
-// AUDIT A-31: set_max_silv_supply now reads the live mint supply (so the cap can
-// never be set below what is already minted, which would permanently brick
-// admin_premint since raising the cap is blocked). It therefore has its own
-// Accounts struct with the SILV mint, and cannot use the shared `instant` helper.
+// Reads the live mint supply, so the cap can never land below what is already minted (which would
+// brick admin_premint, since raising is blocked). Hence silvMint, and no shared `instant` helper.
 export async function setMaxSilvSupply(c: BuildCtx, v: bigint): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .setMaxSilvSupply(new BN(v.toString()))
@@ -141,11 +123,8 @@ export async function setMaxSilvSupply(c: BuildCtx, v: bigint): Ix {
     .instruction();
   return one(ix);
 }
-// "Mint at launch" (Thomas, 2026-07-26). Deliberately asymmetric, matching the
-// program: CLOSING is instant, OPENING is 24h-timelocked and guardian-cancellable.
-// Opening wakes the oracle path, which is dormant while mint and redeem are both
-// closed, so every staleness / confidence / publisher guard becomes load-bearing the
-// moment it lands.
+// Asymmetric, matching the program: CLOSING is instant, OPENING is 24h-timelocked and
+// guardian-cancellable. Opening also wakes the oracle path, so every oracle guard becomes load-bearing.
 export const setPublicMintEnabled = (c: BuildCtx, on: boolean): Ix =>
   instant(c, "setPublicMintEnabled", on);
 export const proposeSetPublicMint = (c: BuildCtx, on: boolean): Ix =>
@@ -153,36 +132,24 @@ export const proposeSetPublicMint = (c: BuildCtx, on: boolean): Ix =>
 
 export const setRedemptionsEnabled = (c: BuildCtx, on: boolean): Ix =>
   instant(c, "setRedemptionsEnabled", on);
-// Instant, admin-only. Sets the inventory wallet the admin_premint destination
-// ATA is derived against off-chain. Accounts: { config(auto), admin }.
+// Instant. The admin_premint destination ATA is derived off-chain against this wallet.
 export const setInventoryWallet = (c: BuildCtx, wallet: PublicKey): Ix =>
   instant(c, "setInventoryWallet", wallet);
 
-/** RedeemLimitsArgs: every field is optional (null = leave unchanged).
- *  Same Borsh-camelCase constraint as OracleGuardsArgs (Fable audit P1-A): the
- *  keys MUST be camelCase (Anchor camelCases the IDL at runtime); a snake_case
- *  key silently encodes None and the field is dropped with NO error.
- *
- *  Two callers share this shape:
- *   - emergencyTightenRedeemLimits: instant admin-only; the contract ONLY
- *     accepts SAFE-DIRECTION values (budget DOWN, window UP, threshold DOWN,
- *     queue_delay UP). A loosen reverts LooseningRequiresTimelock.
- *   - proposeSetRedeemLimits: the 24h-timelocked LOOSEN path. */
+/** Every field is optional (null = leave unchanged). The keys MUST be camelCase: Anchor camelCases the
+ *  IDL at runtime, so a snake_case key silently encodes None and the field is dropped with NO error.
+ *  emergencyTightenRedeemLimits is instant and takes SAFE-DIRECTION values only (budget DOWN, window
+ *  UP); a loosen reverts LooseningRequiresTimelock. proposeSetRedeemLimits is the 24h LOOSEN path. */
 export interface RedeemLimitsInput {
   instantRedeemBudgetUsdc?: bigint;
   instantRedeemWindowSeconds?: number;
-  /** DEAD on chain since 2026-08-05 (the per-size tier went with the queue). Still encoded
-   *  because removing it would change the borsh layout of the timelocked action data. */
+  /** DEAD on chain. Still encoded: removing it changes the borsh layout of the action data. */
   largeRedeemThresholdUsdc?: bigint;
-  /** DEAD on chain since 2026-08-05 (there is no queue). Same reason. */
+  /** DEAD on chain. Same reason. */
   redeemQueueDelaySeconds?: number;
-  /** THE REDEEM SWITCH (2026-08-05). `true` is a LOOSENING, so it is only reachable through
-   *  proposeSetRedeemLimits + the 24h wait + executeSetRedeemLimits;
-   *  emergencyTightenRedeemLimits rejects it with LooseningRequiresTimelock. `false` is a
-   *  tightening and works on either path.
-   *
-   *  This is the ONLY way to open redemptions: setRedemptionsEnabled still refuses `true`
-   *  in the deployed bytecode. */
+  /** THE REDEEM SWITCH. `true` is a LOOSENING, reachable only through proposeSetRedeemLimits + the 24h
+   *  wait + executeSetRedeemLimits (emergencyTighten rejects it); `false` works on either path. It is
+   *  the ONLY way to open redemptions: setRedemptionsEnabled still refuses `true` in the deployed code. */
   redemptionsEnabled?: boolean;
 }
 export function redeemLimitsArgsObject(a: RedeemLimitsInput) {
@@ -197,9 +164,7 @@ export function redeemLimitsArgsObject(a: RedeemLimitsInput) {
         ? new BN(a.largeRedeemThresholdUsdc.toString())
         : null,
     redeemQueueDelaySeconds: a.redeemQueueDelaySeconds ?? null,
-    // `?? null` and NOT `|| null`: `false` is a meaningful value here and `||` would
-    // silently convert it to null, dropping the field with no error. Same camelCase trap the
-    // comment above describes, one step further along.
+    // `?? null`, never `|| null`: `false` is meaningful here, and `||` would drop the field silently.
     redemptionsEnabled: a.redemptionsEnabled ?? null,
   };
 }
@@ -210,15 +175,10 @@ export const emergencyTightenRedeemLimits = (
 ): Ix =>
   instant(c, "emergencyTightenRedeemLimits", redeemLimitsArgsObject(a));
 
-// ---------------------------------------------------------------------------
-// Premium fee vault + fee-exemption whitelist (Thomas, 2026-08-05).
-// ---------------------------------------------------------------------------
+// Premium fee vault + fee-exemption whitelist.
 
-/** The premium fee vault: the USDC ATA of the fee_vault PDA.
- *
- *  allowOwnerOffCurve = true is MANDATORY (the owner is a PDA); omitting it throws
- *  TokenOwnerOffCurveError, which has already cost this project a debugging session on the
- *  treasury ATA. */
+/** The premium fee vault: the USDC ATA of the fee_vault PDA. allowOwnerOffCurve = true is MANDATORY
+ *  because the owner is a PDA; omitting it throws TokenOwnerOffCurveError. */
 export function feeVaultUsdcAta(): PublicKey {
   return getAssociatedTokenAddressSync(
     USDC_MINT,
@@ -228,28 +188,13 @@ export function feeVaultUsdcAta(): PublicKey {
   );
 }
 
-/** Accrued premium in USDC atomic units, or NULL when the vault account does not exist.
- *
- *  The null case is not cosmetic and the UI must surface it loudly: mint_silv and redeem_silv
- *  both REQUIRE this account, so a missing vault makes every mint and every redeem revert. It
- *  has to be created once (createAssociatedTokenAccountIdempotent, allowOwnerOffCurve) before
- *  public mint or redeem is opened. Once created it can never be closed. */
+/** Accrued premium in USDC atomic units, or NULL when the vault does not exist. The UI must surface
+ *  null loudly: mint_silv and redeem_silv both REQUIRE this account, so a missing vault reverts both. */
 export async function fetchFeeVaultBalance(
   connection: Connection,
 ): Promise<bigint | null> {
-  // `null` means ABSENT. Anything else THROWS, so SWR records an error and the panel can tell the
-  // two states apart.
-  //
-  // This used to be `.catch(() => null)`, which swallowed EVERYTHING. The fetcher therefore never
-  // threw, SWR's `error` was never set, and the panel's RPC-error branch was dead code: a single
-  // devnet rate-limit rendered "THE FEE VAULT DOES NOT EXIST. Do not open public mint or
-  // redemption." The one panel written specifically to distinguish those two states collapsed them,
-  // on the flakiest RPC in the project, which trains an operator to ignore it and take the genuinely
-  // blocked mainnet vault with it.
-  //
-  // The account-not-found case is identified by message rather than by type because web3.js throws a
-  // plain Error for it. Matching narrowly and rethrowing everything else is the safe direction: an
-  // unrecognised failure surfaces as an error rather than as "missing".
+  // `null` means ABSENT, and anything else THROWS so SWR can tell the two states apart. Never widen
+  // to a bare catch. The match is on the message: web3.js throws a plain Error for account-not-found.
   try {
     const r = await connection.getTokenAccountBalance(feeVaultUsdcAta());
     return BigInt(r.value.amount);
@@ -262,16 +207,10 @@ export async function fetchFeeVaultBalance(
   }
 }
 
-/** Grant or update a fee exemption. `flags`: 1 = mint, 2 = redeem, 3 = both.
- *
- *  Instant, admin-only. Prefer 1 (mint only) unless there is a specific reason to waive both:
- *  a both-sides exemption makes a round trip free, which hands that wallet a free option on
- *  oracle movement, paid by the treasury. See state/fee_exempt.rs.
- *
- *  `expiresAtUnix` is a unix timestamp, or 0n for "never expires". A term is STRONGLY preferred:
- *  without one, a compromised admin can self-exempt and run the mint-side capture loop until a
- *  human happens to read a FeeExemptSet event. An expiry bounds that. An expiry already in the
- *  past is rejected on chain, because it would grant nothing while appearing active in a roster. */
+/** Grant or update a fee exemption. Instant, admin-only. `flags`: 1 = mint, 2 = redeem, 3 = both.
+ *  Prefer 1: a both-sides exemption makes a round trip free, a free option on oracle movement paid by
+ *  the treasury (state/fee_exempt.rs). `expiresAtUnix` is a unix timestamp, or 0n for never; a term is
+ *  STRONGLY preferred, since it bounds a self-exempting compromised admin. A past expiry is rejected. */
 export async function setFeeExempt(
   c: BuildCtx,
   wallet: PublicKey,
@@ -289,9 +228,8 @@ export async function setFeeExempt(
   return one(ix);
 }
 
-/** Revoke an exemption entirely and reclaim its rent. Instant. There is no "set flags to 0":
- *  the contract rejects zero flags, because an existing-but-empty account would still read as
- *  whitelisted in any roster listing. */
+/** Revoke an exemption and reclaim its rent. Instant. There is no "set flags to 0": the contract
+ *  rejects zero flags, since an existing-but-empty account still reads as whitelisted in a roster. */
 export async function removeFeeExempt(c: BuildCtx, wallet: PublicKey): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .removeFeeExempt(wallet)
@@ -303,16 +241,9 @@ export async function removeFeeExempt(c: BuildCtx, wallet: PublicKey): Ix {
   return one(ix);
 }
 
-/** Sweep accrued premium to `destinationOwner`'s USDC ATA. Instant, admin-only.
- *
- *  Instant on purpose: the vault backs nothing (it holds earned revenue, not the collateral
- *  users redeem against) and the admin is already a Squads multisig, so a 24h delay would
- *  protect Dominion from itself rather than protecting users. `withdraw_usdc`, which touches
- *  the TREASURY, remains 24h-timelocked for exactly the opposite reason.
- *
- *  The destination ATA must already exist. Passing an owner whose ATA is missing fails the
- *  transaction, which is harmless: unlike a stored fee destination, a bad address here cannot
- *  affect mint or redeem. */
+/** Sweep accrued premium to `destinationOwner`'s USDC ATA. Instant on purpose: the vault holds earned
+ *  revenue, not the collateral users redeem against, and the admin is already a Squads multisig.
+ *  `withdraw_usdc` touches the TREASURY and stays 24h-timelocked. The destination ATA must exist. */
 export async function withdrawFees(
   c: BuildCtx,
   destinationOwner: PublicKey,
@@ -331,9 +262,7 @@ export async function withdrawFees(
         true,
         TOKEN_PROGRAM_ID,
       ),
-      // Read-only, and required since 2026-08-05: the sweep is now gated on the treasury's
-      // float. Premium revenue is only Dominion's to take once the redemption buffer is healthy,
-      // because the redeem premium leg drains the treasury without a float check of its own.
+      // Read-only, but REQUIRED: the sweep is gated on the treasury's float.
       usdcTreasury: treasuryUsdcAta(),
       classicTokenProgram: TOKEN_PROGRAM_ID,
     })
@@ -341,45 +270,26 @@ export async function withdrawFees(
   return one(ix);
 }
 
-// ---------------------------------------------------------------------------
-// KYC gate (2026-08-05). DORMANT until set_kyc_scope is armed.
-// ---------------------------------------------------------------------------
+// KYC gate. DORMANT until set_kyc_scope is armed.
 
-/** Set or rotate the attestor key. Instant, admin-only.
- *
- *  Instant because the realistic failure is that this key LEAKS (it lives on a server and
- *  signs every approval), and a timelock on rotation would mean 24h with a compromised
- *  attestor live. Pass PublicKey.default to decommission it. */
-// One signature. The co-signature-while-armed variant was reverted: see the long note in
-// `kyc_admin.rs::set_kyc_operator_handler`. Squads cannot assemble two signatures, so requiring one broke
-// rotation-while-armed, which is the incident path for a leaked attestor key.
-//
-// Back to an arrow, like its siblings: the revert left an `async function` wrapping a single `return
-// instant(...)`, which is harmless but reads as if this call site still had something to resolve.
+/** Set or rotate the attestor key. Instant, admin-only: the realistic failure is this key LEAKING (it
+ *  lives on a server and signs every approval), and a timelock on rotation would mean 24h with a
+ *  compromised attestor live. Pass PublicKey.default to decommission it. ONE signature, and it must
+ *  stay one: Squads wraps with `ephemeralSigners: 0` and its execute path compiles a single signer, so
+ *  a two-signature instruction cannot be assembled at all. An attestor co-signature would break
+ *  rotation-while-armed, the incident path for a leaked key. */
 export const setKycOperator = (c: BuildCtx, operator: PublicKey): Ix =>
   instant(c, "setKycOperator", operator);
 
-/** Arm or disarm the gate. `flags`: 0 = off, 1 = mint, 2 = redeem, 3 = both.
- *
- *  ONE SIGNATURE, and back to `instant()` deliberately. The first C-02 fix required the attestor to
- *  CO-SIGN arming, which the Squads path cannot assemble (`ephemeralSigners: 0`, one signer on the
- *  execute message), so the card was unusable: arming only worked if the connected wallet was
- *  simultaneously admin and attestor, which is the shape C-02 exists to rule out.
- *
- *  Both audits recommended the on-chain attestation COUNTER instead. The contract now refuses to arm
- *  while `kyc_attestation_count == 0`, which proves somebody is already through the gate rather than
- *  merely that a key could sign once, and needs nothing from the client.
- *
- *  THE ORDER IS NOW ENFORCED BY THE PROGRAM: attest at least one wallet, then arm. It used to be advice. */
+/** Arm or disarm the gate. `flags`: 0 = off, 1 = mint, 2 = redeem, 3 = both. Instant, and ONE
+ *  signature for the same reason as setKycOperator. THE ORDER IS ENFORCED BY THE PROGRAM: the
+ *  contract refuses to arm while `kyc_attestation_count == 0`, so attest at least one wallet first. */
 export const setKycScope = (c: BuildCtx, flags: number): Ix =>
   instant(c, "setKycScope", flags);
 
-/** Record an approval. Signed by the ATTESTOR, not the admin, so this is only buildable from
- *  the panel when the connected wallet holds the operator key. Normally Mark's backend calls it.
- *
- *  `reference` is a 32-byte HASH of the provider's record id. NEVER PII, not even hashed PII:
- *  an email hash is brute-forceable and Solana cannot honour a GDPR erasure request. All-zero
- *  is valid and means "no reference". */
+/** Record an approval. Signed by the ATTESTOR, not the admin, so the panel can only build it when the
+ *  connected wallet holds the operator key. `reference` is a 32-byte HASH of the provider's record id,
+ *  NEVER PII even hashed (brute-forceable, and no GDPR erasure on chain). All-zero = no reference. */
 export async function attestKyc(
   c: BuildCtx,
   attestor: PublicKey,
@@ -402,14 +312,10 @@ export async function attestKyc(
   return one(ix);
 }
 
-/** Withdraw an approval. Signable by EITHER the attestor or the admin: the attestor is the
- *  normal path (offboarding), the admin is the incident path, so a compromised attestor's
- *  writes can be undone without waiting to rotate it first.
- *
- *  `allowDisarm` is consent to the KYC GATE BEING DROPPED, and it only ever matters when this revocation
- *  would leave the roster empty while a side is armed. Leave it false unless that is what you mean: the
- *  program refuses rather than loosening compliance silently. See `state/kyc.rs::resolve_revocation` and
- *  `DominionError::KycRevokeWouldDisarm` for why the consent is an argument and not an authority check. */
+/** Withdraw an approval. Signable by EITHER the attestor (normal offboarding) or the admin (the
+ *  incident path, so a compromised attestor's writes can be undone before rotating it). `allowDisarm`
+ *  is consent to the KYC GATE BEING DROPPED, and it only matters when this revocation would leave the
+ *  roster empty while a side is armed. Leave it false: the program refuses rather than loosening. */
 export async function revokeKyc(
   c: BuildCtx,
   signer: PublicKey,
@@ -423,11 +329,7 @@ export async function revokeKyc(
   return one(ix);
 }
 
-// ---------------------------------------------------------------------------
-// admin_premint: admin-only mint of SILV directly into the inventory owner's
-// Token-2022 ATA. Accounts: { config(auto), admin, silvMint, inventorySilvAta,
-// silvMintAuthority(PDA ["silv_mint_authority"]), token2022Program }.
-// ---------------------------------------------------------------------------
+// admin_premint: admin-only mint of SILV straight into the inventory owner's Token-2022 ATA.
 export async function adminPremint(
   c: BuildCtx,
   amount: bigint,
@@ -452,9 +354,6 @@ export async function adminPremint(
   return one(ix);
 }
 
-// ---------------------------------------------------------------------------
-// Deposit USDC (adds funds). usdc_treasury = treasury USDC ATA.
-// ---------------------------------------------------------------------------
 export async function depositUsdc(
   c: BuildCtx,
   amount: bigint,
@@ -473,9 +372,7 @@ export async function depositUsdc(
   return one(ix);
 }
 
-// ---------------------------------------------------------------------------
-// Guardians (admin-managed). guardian_account auto-derived from the arg.
-// ---------------------------------------------------------------------------
+// Guardians (admin-managed). `guardian_account` is auto-derived from the arg.
 export async function addGuardian(c: BuildCtx, g: PublicKey): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .addGuardian(g)
@@ -487,10 +384,9 @@ export async function addGuardian(c: BuildCtx, g: PublicKey): Ix {
     .instruction();
   return one(ix);
 }
-/** AUDIT 0.12b: this SCHEDULES a removal, it does not apply it. The guardian keeps
- *  full powers for admin_timelock_seconds and may cancel its own removal, so a
- *  compromised admin can no longer clear the veto in one signature. Apply it after
- *  the window with `finalizeGuardianRemoval`. */
+/** SCHEDULES a removal, it does not apply it: the guardian keeps full powers for admin_timelock_seconds
+ *  and may cancel its own removal, so a compromised admin cannot clear the veto in one signature.
+ *  Apply it after the window with `finalizeGuardianRemoval`. */
 export async function removeGuardian(c: BuildCtx, g: PublicKey): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .removeGuardian(g)
@@ -499,8 +395,7 @@ export async function removeGuardian(c: BuildCtx, g: PublicKey): Ix {
   return one(ix);
 }
 
-/** Applies a removal scheduled by removeGuardian, once its window has elapsed.
- *  Permissionless on-chain, so no admin account is needed. */
+/** Applies a removal scheduled by removeGuardian, once its window has elapsed. Permissionless. */
 export async function finalizeGuardianRemoval(c: BuildCtx, g: PublicKey): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .finalizeGuardianRemoval(g)
@@ -509,9 +404,8 @@ export async function finalizeGuardianRemoval(c: BuildCtx, g: PublicKey): Ix {
   return one(ix);
 }
 
-/** Cancels a scheduled removal. Signed by the admin OR by the targeted guardian
- *  itself, which is the point of the mechanism. `signer` defaults to the acting
- *  admin; pass the guardian key to exercise the self-veto path. */
+/** Cancels a scheduled removal. Signed by the admin OR by the targeted guardian itself, which is the
+ *  point of the mechanism. `signer` defaults to the admin; pass the guardian key for the self-veto. */
 export async function cancelGuardianRemoval(
   c: BuildCtx,
   g: PublicKey,
@@ -524,10 +418,7 @@ export async function cancelGuardianRemoval(
   return one(ix);
 }
 
-// ---------------------------------------------------------------------------
-// Pause / unpause. The OPTIONAL `guardian` account is passed explicitly for
-// the guardian path (Anchor 0.31 will NOT auto-add an optional account).
-// ---------------------------------------------------------------------------
+// Pause / unpause. The OPTIONAL `guardian` is explicit: Anchor 0.31 will NOT auto-add an optional.
 export async function pauseAsAdmin(c: BuildCtx): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .pause()
@@ -555,14 +446,7 @@ export async function unpause(c: BuildCtx): Ix {
     .instruction();
   return one(ix);
 }
-// `settleRedemptionOffchain` REMOVED 2026-08-05. The instruction it called
-// (`admin_settle_redemption_offchain`) no longer exists on chain: the whole queued path was
-// deleted when redemption became a single instant route.
-//
-// It was also SolidProof TrustNet MEDIUM #4 -- the admin marking a request settled with no
-// on-chain proof while the user's SILV was already burned -- so removing the queue removed the
-// finding rather than justifying it. Nothing to migrate: redemptions were never enabled on any
-// cluster, so no request account exists anywhere and this builder was never successfully used.
+// `settleRedemptionOffchain` is gone with the queued path: there is no such on-chain instruction.
 export async function cancelTimelockedAction(
   c: BuildCtx,
   nonce: bigint,
@@ -581,21 +465,11 @@ export async function cancelTimelockedAction(
   return one(ix);
 }
 
-// ---------------------------------------------------------------------------
-// Timelocked propose_* : derive the timelock PDA from the CURRENT
-// config.next_timelock_nonce and pass it explicitly.
-//
-// OPERATIONAL CONSTRAINT (Fable audit P2-E): the nonce is read HERE, at build
-// time, but a Squads proposal executes LATER (after the multisig ceremony) and
-// its message is immutable. The contract `init`s the timelock PDA from the
-// nonce at EXECUTION time. So if you stage TWO timelocked proposals via Squads
-// before the first one executes, both bake the PDA for the same nonce N; after
-// the first executes, the second fails ConstraintSeeds forever (approved but
-// dead, needs a full re-propose). RULE: execute timelocked proposals SERIALLY -
-// complete one Squads ceremony (create -> approve -> execute the dominion
-// propose_*) before staging the next. A contract-level fix (client-provided
-// nonce) is deferred to the Lazer frontend phase.
-// ---------------------------------------------------------------------------
+// Timelocked propose_*: the timelock PDA is derived from the CURRENT config.next_timelock_nonce and
+// passed explicitly. OPERATIONAL CONSTRAINT: the nonce is read HERE at build time, but a Squads
+// proposal executes LATER with an immutable message, and the contract `init`s the PDA from the nonce at
+// EXECUTION time. Stage TWO before the first executes and both bake nonce N; the second then fails
+// ConstraintSeeds forever, approved but dead. RULE: run them SERIALLY, one full ceremony at a time.
 async function propose(c: BuildCtx, method: string, args: any[]): Ix {
   const nonce = await nextTimelockNonce(c.connection);
   const ix = await (getProgram(c.connection).methods as any)
@@ -618,10 +492,8 @@ export const proposeSetAdminTimelock = (c: BuildCtx, secs: number): Ix =>
   propose(c, "proposeSetAdminTimelock", [secs]);
 export const proposeSetComplianceMode = (c: BuildCtx, on: boolean): Ix =>
   propose(c, "proposeSetComplianceMode", [on]);
-// P2-05: each field is Option<String>. Pass null to LEAVE A FIELD UNCHANGED
-// (Anchor encodes null as Rust Option::None; the contract skips that field's
-// CPI so it cannot be blanked). A provided field must be non-empty and within
-// its size cap (name<=32, symbol<=10, uri<=180) or the contract reverts.
+// Each field is Option<String>: null LEAVES IT UNCHANGED (the contract skips that field's CPI, so a
+// field cannot be blanked). A provided field must be non-empty and within its cap (32 / 10 / 180).
 export const proposeUpdateMetadata = (
   c: BuildCtx,
   name: string | null,
@@ -634,20 +506,15 @@ export const proposeWithdrawUsdc = (
   recipient: PublicKey,
 ): Ix =>
   propose(c, "proposeWithdrawUsdc", [new BN(amount.toString()), recipient]);
-// Pyth Lazer migration: a single numeric feed id (u32). The Core receiver
-// program arg is gone (the Lazer program is a compile-time contract constant).
+// A single numeric Lazer feed id (u32); the Lazer program is a compile-time contract constant.
 export const proposeSetPythFeed = (c: BuildCtx, lazerFeedId: number): Ix =>
   propose(c, "proposeSetPythFeed", [lazerFeedId]);
 export const proposeAdminTransfer = (c: BuildCtx, newAdmin: PublicKey): Ix =>
   propose(c, "proposeAdminTransfer", [newAdmin]);
 
-/** OracleGuardsArgs: every field is optional (null = leave unchanged).
- *  CRITICAL (Fable audit P1-A): the Borsh coder reads the CAMELCASED field
- *  names. Anchor >=0.30 runs convertIdlToCamelCase at Program construction, so
- *  the keys passed here MUST be camelCase (confBps, minPriceScaled, ...). Any
- *  snake_case key is silently treated as `undefined` => encoded as None => the
- *  field is dropped from the proposal with NO error. `min_publishers` is
- *  included (Fable P1-B): the launch GO gate raises it via this instruction. */
+/** Every field is optional (null = leave unchanged). CRITICAL: the Borsh coder reads the CAMELCASED
+ *  names (Anchor runs convertIdlToCamelCase at construction), so a snake_case key is `undefined`,
+ *  encodes as None, and the field is dropped with NO error. minPublishers is the launch GO gate. */
 export interface OracleGuardsInput {
   stalenessSeconds?: number;
   confBps?: number;
@@ -658,9 +525,6 @@ export interface OracleGuardsInput {
   dustFilterMinUsdc?: bigint;
   minPublishers?: number;
 }
-// Extracted + exported so the encoding regression test can assert every
-// provided field round-trips as Some. The keys MUST stay camelCase (Anchor
-// camelCases the IDL at runtime); a snake_case key silently encodes None.
 export function oracleGuardsArgsObject(a: OracleGuardsInput) {
   return {
     staleness: a.stalenessSeconds ?? null,
@@ -680,8 +544,7 @@ export function oracleGuardsArgsObject(a: OracleGuardsInput) {
 }
 export const proposeSetOracleGuards = (c: BuildCtx, a: OracleGuardsInput): Ix =>
   propose(c, "proposeSetOracleGuards", [oracleGuardsArgsObject(a)]);
-// 24h-timelocked LOOSEN path for the redeem limits (tighten is instant via
-// emergencyTightenRedeemLimits). Same RedeemLimitsArgs shape.
+// The 24h-timelocked LOOSEN path (tightening is instant, via emergencyTightenRedeemLimits).
 export const proposeSetRedeemLimits = (
   c: BuildCtx,
   a: RedeemLimitsInput,
@@ -695,10 +558,8 @@ export async function acceptAdminTransfer(c: BuildCtx): Ix {
     .instruction();
   return one(ix);
 }
-// The `admin` account was renamed to `signer` and a NEW optional `guardian`
-// account (PDA ["guardian", signer]) was added. Admin path: pass the Ops vault
-// as `signer` and `guardian: null` (Anchor sends the program-id sentinel for
-// the null optional, matching the pause/cancelTimelockedAction convention).
+// Admin path: the Ops vault as `signer`, plus `guardian: null` (Anchor sends the program-id sentinel
+// for a null optional, matching the pause / cancelTimelockedAction convention).
 export async function cancelAdminTransfer(c: BuildCtx): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .cancelAdminTransfer()
@@ -785,15 +646,8 @@ export async function executeWithdrawUsdc(
   return one(ix);
 }
 
-/** The fee-vault ESCAPE HATCH. Instant in both directions.
- *
- *  With this false the premium stays in the treasury, which is how the program behaved before
- *  2026-08-05. It exists because USDC carries a Circle freeze authority and the premium transfer
- *  inside mint and redeem is unconditional, so a frozen fee vault would otherwise brick mint AND
- *  redeem for every non-exempt wallet with no on-chain remedy short of a program upgrade.
- *
- *  Turning it OFF forgoes revenue and keeps the product working. That is the right trade in an
- *  incident, and the fallback is not an untested mode: it is the design that ran for this
- *  program's entire prior history. */
+/** The fee-vault ESCAPE HATCH. Instant in both directions. USDC carries a Circle freeze authority and
+ *  the premium transfer inside mint and redeem is unconditional, so a frozen fee vault would brick both
+ *  with no remedy short of an upgrade. With this false the premium stays in the treasury instead. */
 export const setFeeRoutingEnabled = (c: BuildCtx, enabled: boolean): Ix =>
   instant(c, "setFeeRoutingEnabled", enabled);

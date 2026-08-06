@@ -1,23 +1,13 @@
 /**
- * T3: on-chain proof of the public-mint gate ("mint at launch", Thomas 2026-07-26).
- *
- * The gate is deliberately ASYMMETRIC, the same tighten-fast/loosen-slow shape as FIX A:
- *
- *   OPEN  = propose_set_public_mint(true) -> wait 24h -> execute_set_public_mint
- *           (announced, guardian-cancellable)
- *   CLOSE = set_public_mint_enabled(false)
- *           (instant, one transaction)
- *
- * Why: opening wakes the ORACLE path, which is completely dormant while public mint and
- * redemptions are both closed, so every staleness / confidence / publisher-floor /
- * price-band guard becomes load-bearing at that instant. It also lets the public consume
- * the supply-cap headroom that backs the pre-minted inventory. Closing is the emergency
- * direction and must take one transaction: if the feed degrades, minting has to stop NOW.
- *
- * NON-DESTRUCTIVE: leaves public_mint_enabled exactly as it found it. The 24h execute
- * happy path is not covered here (real wait, no timelock bypass in the release build);
- * the revert-before-ETA is.
- *
+ * T3: on-chain proof of the public-mint gate. ASYMMETRIC by design, the FIX A shape:
+ *   OPEN  = propose_set_public_mint(true) -> wait 24h -> execute_set_public_mint (guardian-cancellable)
+ *   CLOSE = set_public_mint_enabled(false), instant, one transaction
+ * Opening wakes the ORACLE path, dormant while public mint and redemptions are both closed, so every
+ * staleness, confidence, publisher-floor and price-band guard becomes load-bearing at that instant,
+ * and it lets the public consume the supply-cap headroom backing the premint. Closing is the
+ * emergency direction: if the feed degrades, minting has to stop NOW.
+ * NON-DESTRUCTIVE: leaves public_mint_enabled as it found it. The 24h execute happy path is not
+ * covered (real wait, no bypass in the release build); the revert-before-ETA is.
  * Run: DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json npx tsx scripts/e2e-public-mint-devnet.ts
  */
 import { AnchorProvider, Program, Wallet, Idl, BN } from "@coral-xyz/anchor";
@@ -48,8 +38,7 @@ async function expectRevert(name: string, code: string, fn: () => Promise<unknow
 }
 
 async function main() {
-  // RULE 1 (scripts/_guard.ts): refuse any cluster but devnet unless
-  // DOMINION_ALLOW_MAINNET is explicitly set.
+  // RULE 1 (_guard.ts): refuse any cluster but devnet unless DOMINION_ALLOW_MAINNET is set.
   await requireSanctionedCluster(RPC, "T3 public-mint gate");
   const INTENT = intentFromEnv();
   const conn = new Connection(RPC, "confirmed");
@@ -89,15 +78,12 @@ async function main() {
   console.log("  public_mint_enabled:", startedOpen);
   console.log("  pending_public_mint_nonce:", String(cfg.pendingPublicMintNonce), "\n");
 
-  // The migration check: this field was carved out of `reserved` AFTER `version`, so an
-  // in-place upgrade over a config written by the previous layout must read None here
-  // and must NOT have shifted `version`. Getting this wrong bricks guardian removal
-  // (see the ConfigAccount carve-out note in state/config.rs).
+  // The migration check. pending_public_mint_nonce was carved out of `reserved` AFTER `version`, so
+  // an in-place upgrade over the previous layout must not have shifted `version`. Getting this wrong
+  // bricks guardian removal (see the ConfigAccount carve-out note in state/config.rs).
   ok("config still decodes with version == 2 after the layout carve-out", cfg.version === 2, `version=${cfg.version}`);
-  // This asserts the carve-out DECODES, not that it is None: a legitimately pending
-  // proposal makes it Some, and the first version of this check treated that as a
-  // failure. What matters for the layout is that `version` is still 2 (above) and that
-  // this field is either null or a plausible small nonce rather than garbage.
+  // Asserts the carve-out DECODES, not that it is None: a legitimately pending proposal makes it
+  // Some. What the layout needs is `version == 2` above plus null or a plausible small nonce here.
   const pn = cfg.pendingPublicMintNonce;
   ok(
     "pending_public_mint_nonce decodes cleanly from the carved-out bytes",
@@ -136,11 +122,8 @@ async function main() {
     },
   );
 
-  // RULE 2 (scripts/_guard.ts). If a proposal is ALREADY pending, this script must not
-  // touch it: cancelling it costs another 24h to re-propose, which is exactly the
-  // slow-to-undo action the guard exists to prevent. The first version instead tried to
-  // create a second proposal and crashed on ProposalAlreadyActive after printing 4
-  // PASSes, which is the worst of both worlds.
+  // RULE 2 (_guard.ts). A proposal that is ALREADY pending must not be touched: cancelling costs
+  // another 24h to re-propose, exactly the slow-to-undo action the guard exists to prevent.
   const alreadyPending = cfg.pendingPublicMintNonce !== null;
   if (alreadyPending) {
     console.log(
@@ -243,20 +226,14 @@ async function main() {
     );
     ok("the mint is still closed after the cancel", cfg.publicMintEnabled === false);
   } else if (startedOpen) {
-    // DESIGN CORRECTION, learned the hard way on 2026-07-29. This branch used to
-    // exercise the instant close when it found the mint already OPEN, then count a
-    // failure because it could not restore the posture. That is worse than useless: it
-    // CLOSED a mint that had just been opened through a 24h timelock, and reopening
-    // costs another 24h. A test must never take an action whose undo is a day long.
-    //
-    // The instant-close path is covered by caps.rs::public_mint_tests, where undoing
-    // costs nothing.
+    // REFUSE the destructive half when the mint is already OPEN: the instant close would shut a mint
+    // that took a 24h timelock to open, and a test must never take an action whose undo is a day long.
+    // The instant-close path is covered by caps.rs::public_mint_tests, where undoing costs nothing.
     console.log("\n  REFUSING the destructive half: public mint is currently OPEN.");
     console.log("  Exercising the instant close would shut a mint that took a 24h");
     console.log("  timelock to open. Covered by caps.rs::public_mint_tests instead.");
   }
-  // The remaining case (mint closed AND a proposal already pending) was reported by the
-  // alreadyPending block above; saying anything more here would be a duplicate.
+  // The remaining case (closed AND a proposal pending) was already reported by the block above.
 
   const finalCfg: any = await acct.fetch(configPda);
   console.log(`\n=== T3 result: ${pass} passed, ${fail} failed ===`);

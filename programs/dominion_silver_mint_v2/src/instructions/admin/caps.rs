@@ -27,8 +27,7 @@ use crate::events::{
 };
 use crate::instructions::admin::execute::{
     redeem_limits_all_tighten, redeem_limits_any_set, redeem_limits_effective_change,
-    validate_redeem_limits_ceilings,
-    RedeemLimitsArgs,
+    validate_redeem_limits_ceilings, RedeemLimitsArgs,
 };
 use crate::state::*;
 

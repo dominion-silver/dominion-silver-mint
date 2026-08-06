@@ -23,8 +23,7 @@ function fromHex(h: string): Uint8Array {
   return a;
 }
 
-// SSR-disabled like Header's button (wallet state is client-only -> avoids
-// a hydration mismatch).
+// SSR-disabled like Header's button (wallet state is client-only) -> no hydration mismatch.
 const WalletMultiButton = dynamic(
   async () =>
     (await import("@solana/wallet-adapter-react-ui")).WalletMultiButton,
@@ -32,11 +31,9 @@ const WalletMultiButton = dynamic(
 );
 
 /**
- * Ownership-proof gate. A connected wallet only means the extension is
- * linked; it does not prove the user controls the key. This forces an
- * explicit ed25519 message signature (no transaction, no fee, nothing
- * on-chain) and verifies it locally before unlocking minting/redeeming.
- * Cached per-pubkey in sessionStorage with a short TTL.
+ * Ownership gate on mint and redeem: a connected wallet only means the extension is linked, so an
+ * ed25519 message signature (no transaction, no fee, nothing on-chain) is verified locally and cached
+ * per-pubkey in sessionStorage under a TTL. No identity check here, unlike the admin console's gate.
  */
 
 const TTL_MS = 12 * 60 * 60 * 1000;
@@ -79,10 +76,8 @@ export function WalletAuthGate({ children }: { children: ReactNode }) {
   const [signing, setSigning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const pk = publicKey?.toBase58() ?? null;
-  // Gate on the pubkey the verification belongs to, not a bare boolean, so a
-  // wallet SWITCH (A -> B) never flashes B's content as verified for one frame
-  // before the [pk] effect re-checks (Fable audit P3-i). First load is already
-  // fail-closed (verifiedPk starts null).
+  // Keyed on the pubkey the proof belongs to, not a bare boolean, so a wallet SWITCH (A -> B) cannot
+  // flash B's content as verified for one frame before the [pk] effect re-checks.
   const verified = pk !== null && verifiedPk === pk;
 
   useEffect(() => {

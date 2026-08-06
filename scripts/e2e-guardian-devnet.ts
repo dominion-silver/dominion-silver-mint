@@ -1,29 +1,14 @@
 /**
- * T2: on-chain proof that audit DOM-007 (the guardian-set capture) is closed.
- *
- * DOM-007 was: the admin could add a puppet guardian and instantly remove every
- * real guardian, so the guardian veto was decorative. The fix, after the review of
- * daac4ac corrected it twice:
+ * T2: on-chain proof that audit DOM-007 (the guardian-set capture) is closed. The rule:
  *   (a) neither the current NOR the pending admin can be added as a guardian,
  *   (b) removal is DEFERRED by admin_timelock_seconds: schedule -> wait -> finalize,
- *   (c) the floor counts only guardians NOT already under notice, so the whole set
- *       cannot be scheduled inside one window,
- *   (d) the targeted guardian may veto its own removal ONCE. Unlimited self-veto
- *       (the first version) made a ROGUE guardian permanently unremovable while it
- *       held an indefinite pause, which was a P0 in the other direction.
- *
- * Run (devnet, admin keypair):
- *   DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json npx tsx scripts/e2e-guardian-devnet.ts
- *
- * Non-destructive as to the guardian SET: every guardian this script adds is left in
- * place with pending_removal_at == 0, because finalizing a removal needs a 24h wait.
- *
- * NOT non-destructive as to G2's one-shot self-veto budget: section 8 deliberately
- * spends it and asserts that it stays spent. Only a full remove + cooldown + re-add
- * resets it, which needs 24h, so section 8 branches on the live flag and reports which
- * half of the rule it exercised. Do not "fix" that branch by re-deriving a fresh
- * guardian per run: max_guardian_count is 5 and the script would leak a slot each
- * time.
+ *   (c) the floor counts only guardians NOT under notice, so the set cannot be scheduled away at once,
+ *   (d) the target may veto its own removal ONCE, since unlimited self-veto makes a ROGUE guardian
+ *       unremovable while it holds an indefinite pause.
+ * Guardians added here stay installed (finalizing needs 24h) and section 8 spends G2's one-shot
+ * self-veto, so it branches on the live flag rather than deriving a fresh guardian per run:
+ * max_guardian_count is 5 and that leaks a slot every run.
+ * Run: DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json npx tsx scripts/e2e-guardian-devnet.ts
  */
 import { AnchorProvider, Program, Wallet, Idl } from "@coral-xyz/anchor";
 import {
@@ -41,13 +26,9 @@ import { createHash } from "crypto";
 import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 import { requireSanctionedCluster, intentFromEnv } from "./_guard";
 
-// Review-of-fixes F15: the devnet guard below compared a module-level literal, so it
-// was a tautology and its comment claimed to distrust an environment that was never
-// read. Now the endpoint IS an environment input, so the guard has something to guard.
+// An environment input, so the devnet guard in main() has something to guard.
 const RPC = process.env.DOMINION_RPC || "https://api.devnet.solana.com";
-// Review-of-fixes F6: no hardcoded id fallback. _program-id.ts resolves it from
-// DOMINION_PROGRAM_ID or the generated IDL, and the consistency gate pins that
-// to declare_id!.
+// No hardcoded id: _program-id.ts resolves it and the consistency gate pins it to declare_id!.
 const PROGRAM_ID = SHARED_PROGRAM_ID;
 
 let pass = 0,
@@ -67,13 +48,11 @@ async function expectRevert(name: string, code: string, fn: () => Promise<unknow
 }
 
 async function main() {
-  // RULE 1 (scripts/_guard.ts): refuse any cluster but devnet unless
-  // DOMINION_ALLOW_MAINNET is explicitly set.
+  // RULE 1 (_guard.ts): refuse any cluster but devnet unless DOMINION_ALLOW_MAINNET is set.
   await requireSanctionedCluster(RPC, "T2 guardian lifecycle");
   const INTENT = intentFromEnv();
-  // This script INSTALLS guardians and leaves them installed. That is acceptable on
-  // devnet and unacceptable anywhere else, so refuse to run against a non-devnet
-  // endpoint rather than trusting the operator's environment.
+  // This script INSTALLS guardians and leaves them installed, so refuse a non-devnet endpoint rather
+  // than trusting the operator's environment.
   if (!/devnet/i.test(RPC)) {
     throw new Error(
       `refusing to run: ${RPC} is not a devnet endpoint. This script installs ` +
@@ -123,19 +102,10 @@ async function main() {
       .rpc(),
   );
 
-  // --- 2. add G1 and G2.
-  //
-  // AUDIT review of daac4ac (P0, found independently by two reviewers): these used to
-  // be Keypair.fromSeed(Buffer.alloc(32, 0xa1)) / 0xa2, i.e. DERIVABLE BY ANYONE WHO
-  // READS THIS FILE. The script leaves them installed, so for as long as they were
-  // live, any reader of the repo could `pause()` the program both apps point at,
-  // `cancel_timelocked_action` on any queued proposal, and `cancel_admin_transfer`.
-  // They also occupied real slots against max_guardian_count.
-  //
-  // Now derived from the ADMIN'S OWN SECRET KEY, which gives the same idempotence
-  // (the same operator gets the same test guardians every run, so the script does not
-  // leak slots) without the keys being recoverable from source. Only the holder of the
-  // admin keypair can derive or use them.
+  // --- 2. add G1 and G2, derived from the ADMIN'S OWN SECRET KEY and never from a literal seed.
+  // These guardians are left installed, so a seed readable in this file would let any reader of the
+  // repo pause the program both apps point at, cancel queued proposals and cancel admin transfers.
+  // Hashing the admin key keeps the idempotence (same operator, same guardians, no leaked slots).
   const testGuardian = (label: string) =>
     Keypair.fromSeed(
       createHash("sha256")
@@ -241,17 +211,9 @@ async function main() {
       .rpc(),
   );
 
-  // --- 7. THE FLOOR. This is the anti-purge check, and in the previous version of
-  // this script it was unreachable dead code: it was gated on `guardianCount === 1`
-  // while the script itself had just added two guardians and never finalized either,
-  // so the count was always >= 2 and the branch never ran. It printed SKIP, but the
-  // headline "10/10" implied the floor was covered. It was not covered anywhere: no
-  // Rust test referenced MIN_ACTIVE_GUARDIANS or GuardianFloorBreached either.
-  //
-  // The fix in this batch makes the check testable with the guardians we already
-  // have. The floor is now evaluated against guardians NOT ALREADY UNDER NOTICE, so
-  // with exactly 2 guardians the FIRST schedule is legal and the SECOND must be
-  // refused: one guardian has to stay free to react.
+  // --- 7. THE FLOOR, the anti-purge check. Evaluated against guardians NOT ALREADY UNDER NOTICE, so
+  // with exactly 2 guardians the FIRST schedule is legal and the SECOND must be refused: one guardian
+  // has to stay free to react. Gating this on guardianCount === 1 makes it unreachable dead code.
   const cfgN: any = await cfgAcct.fetch(configPda);
   if (cfgN.guardianCount === 2) {
     // Clean slate: neither guardian under notice.
@@ -274,8 +236,7 @@ async function main() {
       mid.pendingRemovalCount === 1,
       `pending_removal_count=${mid.pendingRemovalCount}`,
     );
-    // The parallel purge from the review: scheduling BOTH would have cost one single
-    // 24h window for the whole guardian set.
+    // The parallel purge: scheduling BOTH would cost one single 24h window for the whole set.
     await expectRevert(
       "scheduling the LAST free guardian is refused (floor)",
       "GuardianFloorBreached",
@@ -333,18 +294,11 @@ async function main() {
       new AnchorProvider(conn, new Wallet(G2kp), { commitment: "confirmed" }),
     );
 
-    // Review-of-fixes: this section is what makes the script SINGLE-USE, and the
-    // first version crashed on run 2 instead of failing cleanly. The self-veto is
-    // one-shot BY DESIGN and only a full remove + 1h cooldown + re-add resets it,
-    // which this script cannot do (finalizing needs 24h). So G2 keeps
-    // self_cancel_used == true forever, and a bare `await` of the self-cancel throws
-    // an unhandled GuardianSelfCancelExhausted on every later run, after ~14
-    // assertions have already printed PASS. Since "T2 green" is a release gate, a
-    // gate satisfiable exactly once per admin keypair is not a gate.
-    //
-    // Handled by branching on the live flag: whichever state the guardian is in, the
-    // rule being tested is asserted, and the run is honest about which half it
-    // exercised.
+    // The self-veto is one-shot BY DESIGN and only a full remove + 1h cooldown + re-add resets it,
+    // which this script cannot do (finalizing needs 24h). So G2 keeps self_cancel_used == true
+    // forever, and a bare await of the self-cancel throws GuardianSelfCancelExhausted on every later
+    // run. "T2 green" is a release gate, so branch on the live flag: whichever state the guardian is
+    // in, the rule is asserted and the run says which half it exercised.
     const g2Pre: any = await gAcct.fetch(gPda(G2));
     if (!g2Pre.selfCancelUsed) {
       await asG2.methods
@@ -406,11 +360,9 @@ async function main() {
     );
   }
 
-  // --- 9. add_guardian refuses the INCOMING admin, not just the current one.
-  // Without this, the "admin may not be a guardian" barrier is sidestepped by
-  // appointing K as guardian while A is admin and then completing a transfer of
-  // admin-ship to K. The test CREATES the condition (a real pending transfer) rather
-  // than skipping when none happens to exist, then cancels it to restore the config.
+  // --- 9. add_guardian refuses the INCOMING admin, not just the current one. Otherwise the barrier
+  // is sidestepped by appointing K as guardian while A is admin, then transferring admin-ship to K.
+  // The test CREATES a real pending transfer rather than skipping when none exists, then cancels it.
   {
     const incoming = testGuardian("incoming-admin").publicKey;
     await program.methods
@@ -439,8 +391,8 @@ async function main() {
     );
     await program.methods
       .cancelAdminTransfer()
-      // See the note in e2e-fixa-devnet.ts. The cast is on the VALUE, and key names are checked by
-      // scripts/verify-client-idl-parity.ts rather than by tsc: this Program is untyped at compile time.
+      // Cast on the VALUE, key names checked by verify-client-idl-parity.ts, not by tsc.
+      // Full note in e2e-fixa-devnet.ts.
       .accounts({ config: configPda, signer: admin, guardian: null as never })
       .rpc();
     const restored: any = await cfgAcct.fetch(configPda);

@@ -1,25 +1,9 @@
 // Shared readers for the admin action form fields.
 //
-// AUDIT finding A-02 (P1, operator integrity) and its follow-up review.
-//
-// Original defect: the boolean <select> rendered `value={params[...] ?? "true"}`
-// so it DISPLAYED "on / true", but the value was never written to state until the
-// operator changed it, and the builders read `p.on === "true"`, which is FALSE
-// for `undefined`. An untouched dropdown submitted the OPPOSITE of what it showed.
-//
-// First remediation shared a single default between the render and the read. The
-// review then showed that was still wrong in two ways:
-//   1. `window.confirm`'s summary read the raw params map, a THIRD default, so the
-//      operator's last-chance dialog said "(empty)" while the builder encoded true.
-//   2. Defaulting to "true" made an unconsidered click MORE dangerous, not less:
-//      an untouched `propose_set_compliance_mode` would queue compliance ON, and
-//      executing a compliance change auto-pauses the protocol. The previous bug at
-//      least encoded a harmless no-op.
-//
-// So there is now NO default for these fields. A privileged two-sided switch must
-// be chosen explicitly: the <select> renders an empty placeholder first, and every
-// reader (builder AND confirmation summary) goes through these helpers, which throw
-// when nothing was chosen. One code path, no default to diverge from.
+// A privileged two-sided switch has NO default: the <select> renders an empty placeholder first, and
+// every reader (transaction builder AND the confirmation summary) goes through these helpers, which
+// THROW when nothing was chosen. One code path, so no default can diverge between what the operator was
+// shown and what gets encoded, and an unconsidered click cannot queue a live setting change.
 
 /** Rendered as the placeholder option value. Empty means "not chosen yet". */
 export const UNCHOSEN = "";

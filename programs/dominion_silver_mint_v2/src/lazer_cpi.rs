@@ -1,28 +1,15 @@
-// Pyth Lazer (Pyth Pro) verify_message CPI wrapper + isolated fee-payer PDA.
-// Section 5.2 / 5.2.1 of private/PYTH_PRO_MIGRATION_PLAN.md.
-//
-// The Lazer program (`pytd2yyk...`) is UPGRADEABLE and Solana propagates
-// signer/writable privileges through a CPI. Therefore the `payer` we hand to
-// `verify_message` (which does a System transfer of the fee) MUST NEVER be the
-// user wallet: a malicious Lazer upgrade could drain it. We use a dedicated,
-// System-owned `lazer_fee_payer` PDA, funded with EXACTLY the (capped) fee just
-// before the CPI and left at zero after, so a compromised callee can only ever
-// take the PDA's tiny transient balance, never a user wallet.
-//
-// Trust: `verify_message` proves "a trusted Lazer signer signed message_data"
-// and returns the inner `VerifiedMessage.payload`. We parse ONLY that returned
-// payload (never the input envelope). The ed25519 ix that proves the signature
-// is referenced by `ed25519_instruction_index` / `signature_index`; the Lazer
-// program binds it to OUR exact `message_data` (signature.rs slice_eq), so the
-// one-buffer invariant (5.2) holds as long as the caller passes the SAME
-// `message_data` here that it parses for price. The caller passes the RETURNED
-// payload to `crate::lazer::extract_feed_price`, never the input.
-//
-// BEHAVIORAL verification (invoke_signed, the malicious-callee resistance, the
-// rent mechanics of the transient PDA) is covered by the litesvm
-// harness with a mock + malicious Lazer program (Section 9). The PURE helpers
-// here (instruction encoding, fee read, return-data parse) are host-unit-tested
-// below.
+// Pyth Lazer (Pyth Pro) verify_message CPI wrapper plus its isolated fee-payer PDA.
+
+// INVARIANT: the `payer` handed to `verify_message` is never a user wallet. Lazer
+// is upgradeable and Solana propagates signer privileges through a CPI, so the
+// System-owned `lazer_fee_payer` PDA is funded with exactly the capped fee just
+// before the CPI and left at zero after, bounding a malicious upgrade's take.
+
+// INVARIANT (one buffer): the caller must price the SAME `message_data` it passes
+// here, and must price only the payload this returns, never the input envelope.
+// Lazer binds the ed25519 instruction to that exact buffer.
+
+// invoke_signed and malicious-callee resistance are covered by the litesvm harness.
 
 use anchor_lang::prelude::*;
 use anchor_lang::solana_program::{
@@ -35,47 +22,34 @@ use anchor_lang::solana_program::{
 
 use crate::errors::DominionError;
 
-// Hard-pins (Section 4). Same on devnet + mainnet.
+// Hard-pins. Same on devnet and mainnet.
 pub const LAZER_PROGRAM_ID: Pubkey =
     anchor_lang::solana_program::pubkey!("pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt");
 pub const LAZER_STORAGE: Pubkey =
     anchor_lang::solana_program::pubkey!("3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpPuSCQVyQL");
-// NOTE (Fable audit P3-a, resolved 2026-06-10): the Lazer treasury is a runtime
-// artifact (NOT derivable from the SDK) and it DIFFERS between mainnet
-// (`Gx4MBPb1...`) and devnet (`opsLibxVY7...`, where the test Storage sets
-// treasury == top_authority). Rather than pin a per-cluster constant (which
-// needed a mainnet-footgun `--features devnet` build), we read `Storage.treasury`
-// (offset 40) from the already-pinned + trusted LAZER_STORAGE account at runtime
-// (read_treasury below). Cluster-agnostic: one build works on both. The caller
-// must still PASS the treasury account; we validate it == the Storage's own
-// treasury, so a wrong account is fail-closed (never fund-loss).
+// The Lazer treasury is deliberately NOT a pinned constant: it differs between
+// mainnet and devnet, so pinning it would force a per-cluster build. It is read
+// at runtime from the pinned LAZER_STORAGE account (read_treasury below).
 
-// Anchor instruction discriminator = sha256("global:verify_message")[..8].
-// The Lazer contract is anchor 0.31.1 (verified). Locked here; the host-only
-// verification crate asserts this byte-for-byte against
-// `pyth_lazer_solana_contract::instruction::VerifyMessage::DISCRIMINATOR`.
+// sha256("global:verify_message")[..8]. The host-only verification crate asserts
+// this against the Lazer SDK's own constant.
 pub const VERIFY_MESSAGE_DISCRIMINATOR: [u8; 8] = [180, 193, 120, 55, 189, 135, 203, 83];
 
-// The current on-chain fee is 1 lamport; this is the absolute ceiling we will
-// fund / pay. A malicious Lazer upgrade that raised the fee beyond this is
-// rejected (and could only ever take up to this much from the transient PDA).
+// Ceiling in lamports on the Lazer fee we will fund or pay (the live fee is 1).
+// A Lazer upgrade raising the fee past this is rejected.
 pub const LAZER_FEE_CEILING: u64 = 10_000; // 0.00001 SOL
 
 pub const LAZER_FEE_PAYER_SEED: &[u8] = b"lazer_fee_payer";
 
-// Lazer Storage layout: 8 (anchor disc) + 32 (top_authority) + 32 (treasury) +
-// 8 (single_update_fee_in_lamports) + ...
+// Lazer Storage layout: disc(8) top_authority(32) treasury(32) fee(8) ...
 const STORAGE_TREASURY_OFFSET: usize = 8 + 32;
 const STORAGE_FEE_OFFSET: usize = 8 + 32 + 32;
 
-// Defensive cap on the returned payload size. The real ceiling is far lower
-// (Solana return-data is capped at 1024 B; the SILV payload is ~50 B); this is
-// a loose belt-and-suspenders bound, not the active limit (Fable audit P3-b).
+// Loose cap in bytes; Solana's own return-data limit is 1024 B.
 const MAX_RETURN_PAYLOAD: usize = 2048;
 
-// Defensive cap on the inbound SolanaMessage envelope (4 magic + 64 sig +
-// 32 pubkey + 2 len + ~50 payload ~= 152 bytes). Bounds the `as u32` length
-// encoding + the ix data size; a real Solana tx is <= 1232 bytes anyway.
+// Loose cap in bytes on the inbound envelope (a real one is ~152 B). Bounds the
+// `as u32` length encoding and the ix data size.
 const MAX_MESSAGE_DATA: usize = 1024;
 
 /// PURE: build the `verify_message` instruction data (discriminator + borsh
@@ -109,10 +83,8 @@ fn read_fee(storage_data: &[u8]) -> Result<u64> {
     Ok(fee)
 }
 
-/// PURE: read the Lazer Storage's own `treasury` pubkey. Cluster-agnostic - the
-/// treasury differs between mainnet + devnet, so we read it from the pinned
-/// (LAZER_STORAGE) trusted account at runtime instead of a compile-time constant
-/// (which would otherwise need a per-cluster build + a mainnet-footgun feature).
+/// PURE: read the Lazer Storage's own `treasury` pubkey, so the wrapper stays
+/// cluster-agnostic. See the note on the treasury near LAZER_STORAGE.
 fn read_treasury(storage_data: &[u8]) -> Result<Pubkey> {
     require!(
         storage_data.len() >= STORAGE_TREASURY_OFFSET + 32,
@@ -125,9 +97,8 @@ fn read_treasury(storage_data: &[u8]) -> Result<Pubkey> {
     ))
 }
 
-/// PURE: parse `VerifiedMessage` return-data (borsh: public_key: Pubkey [32] +
-/// payload: Vec<u8> [4-byte len + bytes]) and return the inner payload, with no
-/// trailing bytes and a size cap.
+/// PURE: parse `VerifiedMessage` return-data (borsh: public_key Pubkey, then
+/// payload Vec<u8>) into the inner payload. Rejects trailing bytes and oversize.
 fn parse_verified_message(ret: &[u8]) -> Result<Vec<u8>> {
     require!(ret.len() >= 36, DominionError::LazerReturnDataMalformed);
     let len = u32::from_le_bytes(ret[32..36].try_into().unwrap()) as usize;
@@ -155,9 +126,8 @@ pub struct LazerVerifyAccounts<'a, 'info> {
     pub funder: &'a AccountInfo<'info>,
 }
 
-/// Verify a Lazer message via the upgradeable Lazer program and return the
-/// inner signed payload. RUNTIME (invoke); behavioral tests are in the
-/// litesvm harness.
+/// Verify a Lazer message via the upgradeable Lazer program and return the inner
+/// signed payload. Only that return value may be parsed for price.
 pub fn verify_and_get_payload(
     accts: &LazerVerifyAccounts,
     fee_payer_bump: u8,
@@ -165,13 +135,11 @@ pub fn verify_and_get_payload(
     ed25519_instruction_index: u16,
     signature_index: u8,
 ) -> Result<Vec<u8>> {
-    // 0. Bound the inbound message (defense in depth; spec 5.2).
     require!(
         message_data.len() <= MAX_MESSAGE_DATA,
         DominionError::LazerMessageTooLarge
     );
 
-    // 1. Hard-pin every Lazer account; require the program executable.
     require!(
         accts.lazer_program.key() == LAZER_PROGRAM_ID,
         DominionError::LazerWrongAccount
@@ -180,8 +148,7 @@ pub fn verify_and_get_payload(
         accts.storage.key() == LAZER_STORAGE,
         DominionError::LazerWrongAccount
     );
-    // treasury is validated against the Storage's OWN treasury field at the
-    // storage borrow below (cluster-agnostic; see read_treasury).
+    // The treasury is validated at the storage borrow below, not here.
     require!(
         accts.instructions_sysvar.key() == sysvar_instructions::ID,
         DominionError::LazerWrongAccount
@@ -204,10 +171,9 @@ pub fn verify_and_get_payload(
         DominionError::LazerFeePayerMismatch
     );
 
-    // 2. Validate the treasury account against the Storage's own treasury field
-    //    (cluster-agnostic) + read the bounded fee, in one borrow of the pinned
-    //    storage. The Lazer program's own `has_one = treasury` will also enforce
-    //    this; we pre-check so a wrong treasury is our explicit LazerWrongAccount.
+    // Treasury check and bounded fee read share one borrow of the pinned
+    // storage. Lazer's own `has_one = treasury` would also catch a wrong
+    // account; pre-checking turns it into our explicit LazerWrongAccount.
     let fee = {
         let data = accts.storage.try_borrow_data()?;
         require!(
@@ -217,15 +183,10 @@ pub fn verify_and_get_payload(
         read_fee(&data)?
     };
 
-    // 3. Fund the PDA with EXACTLY the fee (user -> PDA). The user is the outer
-    //    signer; its signer privilege propagates to this System CPI. The user
-    //    is NEVER passed to the Lazer CPI below.
-    //    fee == 0 (the on-chain fee is currently 1 lamport, so this is not a
-    //    live config): no funding occurs and the PDA stays at zero. The
-    //    behavior of `verify_message` with a zero-balance PDA payer + a
-    //    zero-value internal transfer is a corner case verified explicitly by
-    //    the litesvm harness (fee = 0 / 1 / ceiling); do NOT add an
-    //    untested "fix" here without that harness.
+    // Fund the PDA with EXACTLY the fee. The user's signer privilege reaches
+    // this System CPI but the user never reaches the Lazer CPI below. The
+    // fee == 0 case (PDA stays at zero) is exercised by the litesvm harness at
+    // fee 0, 1 and ceiling; do not "fix" it here without running that.
     if fee > 0 {
         invoke(
             &system_instruction::transfer(accts.funder.key, accts.fee_payer.key, fee),
@@ -237,9 +198,8 @@ pub fn verify_and_get_payload(
         )?;
     }
 
-    // 4. CPI verify_message with the PDA as `payer`, signed via seeds. The
-    //    Lazer program's internal transfer drains the PDA's fee to its treasury,
-    //    leaving the PDA at zero.
+    // CPI with the PDA as `payer`, signed via seeds. Lazer's internal transfer
+    // drains the fee to its treasury, leaving the PDA at zero.
     let ix = Instruction {
         program_id: LAZER_PROGRAM_ID,
         accounts: vec![
@@ -264,7 +224,6 @@ pub fn verify_and_get_payload(
         &[&[LAZER_FEE_PAYER_SEED, &[fee_payer_bump]]],
     )?;
 
-    // 5. Return-data discipline: present, from the Lazer program, well-formed.
     let (prog, ret) = get_return_data().ok_or(error!(DominionError::LazerReturnDataMissing))?;
     require!(
         prog == LAZER_PROGRAM_ID,
@@ -279,8 +238,6 @@ mod tests {
 
     #[test]
     fn discriminator_is_anchor_global_verify_message() {
-        // sha256("global:verify_message")[..8], recomputed independently.
-        // (The host-only verification crate also asserts this == the SDK's.)
         assert_eq!(
             VERIFY_MESSAGE_DISCRIMINATOR,
             [180, 193, 120, 55, 189, 135, 203, 83]
@@ -291,15 +248,11 @@ mod tests {
     fn ix_data_layout() {
         let msg = vec![0xAAu8, 0xBB, 0xCC];
         let d = build_verify_ix_data(&msg, 0x0102, 0x07);
-        // discriminator
+        // disc, then u32-LE vec len, bytes, u16-LE ed25519 index, u8 sig index.
         assert_eq!(&d[0..8], &VERIFY_MESSAGE_DISCRIMINATOR);
-        // vec len (u32 LE) = 3
         assert_eq!(&d[8..12], &[3, 0, 0, 0]);
-        // bytes
         assert_eq!(&d[12..15], &[0xAA, 0xBB, 0xCC]);
-        // ed25519_instruction_index (u16 LE) = 0x0102
         assert_eq!(&d[15..17], &[0x02, 0x01]);
-        // signature_index (u8)
         assert_eq!(d[17], 0x07);
         assert_eq!(d.len(), 18);
     }
@@ -327,14 +280,12 @@ mod tests {
         let mut s = vec![0u8; STORAGE_FEE_OFFSET + 8];
         s[STORAGE_TREASURY_OFFSET..STORAGE_TREASURY_OFFSET + 32].copy_from_slice(&want.to_bytes());
         assert_eq!(read_treasury(&s).unwrap(), want);
-        // too small (< treasury offset + 32) -> LazerStorageMalformed.
-        assert!(read_treasury(&[0u8; STORAGE_TREASURY_OFFSET + 31]).is_err());
+        assert!(read_treasury(&[0u8; STORAGE_TREASURY_OFFSET + 31]).is_err()); // too small
     }
 
     #[test]
     fn parse_verified_message_ok() {
-        // 32-byte pubkey + len(4) + payload
-        let mut ret = vec![9u8; 32];
+        let mut ret = vec![9u8; 32]; // pubkey, then u32-LE len, then payload
         let payload = vec![1u8, 2, 3, 4, 5];
         ret.extend_from_slice(&(payload.len() as u32).to_le_bytes());
         ret.extend_from_slice(&payload);
@@ -343,14 +294,11 @@ mod tests {
 
     #[test]
     fn parse_verified_message_rejects_trailing_and_short_and_oversize() {
-        // trailing byte
         let mut ret = vec![9u8; 32];
         ret.extend_from_slice(&(2u32).to_le_bytes());
-        ret.extend_from_slice(&[1u8, 2, 0xFF]); // 1 extra
+        ret.extend_from_slice(&[1u8, 2, 0xFF]); // one byte past the declared length
         assert!(parse_verified_message(&ret).is_err());
-        // too short
-        assert!(parse_verified_message(&[0u8; 35]).is_err());
-        // oversize length field
+        assert!(parse_verified_message(&[0u8; 35]).is_err()); // too short
         let mut big = vec![9u8; 32];
         big.extend_from_slice(&((MAX_RETURN_PAYLOAD as u32) + 1).to_le_bytes());
         assert!(parse_verified_message(&big).is_err());

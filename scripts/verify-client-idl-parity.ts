@@ -1,47 +1,21 @@
 /**
- * Cross-reference what the CLIENTS call against what the IDL declares.
+ * Cross-reference what the CLIENTS call against what the IDL declares: every `.methods` chain names a
+ * real instruction, every `.accounts({...})` key is an account of SOME instruction, every
+ * `("ErrorName", 12345)` pair matches the IDL's code, and no removed instruction name appears in a
+ * call position. A stale client does not fail at build time, because the method builders are cast to
+ * `any` and `.accounts()` is not strict in Anchor 0.31.1 (it delegates to `accountsPartial` and
+ * derives a missing account from the IDL seeds); it fails at signing time, in front of a user.
  *
- * WHY THIS EXISTS. The 2026-08-05 batch removed four instructions and an account type, and added
- * four accounts to mint and redeem. The triple review then found that both apps and two scripts
- * were still calling removed instructions and still omitting the new accounts, and that NOTHING
- * caught it:
- *
- *   - the method builders go through `as any`, so TypeScript sees nothing;
- *   - `.accounts()` is NOT strict in Anchor 0.31.1 (it delegates to `accountsPartial`), so Anchor
- *     silently derives a missing account from the IDL seeds rather than rejecting the call. For
- *     OPTIONAL accounts that derivation yields a real PDA address for an account that does not
- *     exist, which the program then fails to deserialize;
- *   - the existing constants gate checks addresses and IDL byte-identity, not names.
- *
- * So a stale client failed at SIGNING TIME, in front of a user, with a bare TypeError or an
- * AccountNotInitialized that reads like a broken protocol. This is the mechanical guard for that
- * whole class, and it is cheap: three string-level checks against the committed IDL.
- *
- * WHAT IT CHECKS
- *   1. Every `.methods`-chain instruction name exists in the IDL.
- *   2. Every key inside `.accounts({...})` / `.accountsPartial({...})` is a real account name for
- *      SOME instruction in the IDL.
- *   3. Every `("ErrorName", 12345)` pair matches the IDL's code for that error.
- *
- * WHAT IT DOES NOT CHECK, stated so nobody trusts it further than it goes: it cannot tell which
- * instruction a given `.accounts({...})` belongs to (the chains span lines and are cast to `any`),
- * so it cannot prove an account list is COMPLETE. That job belongs to the per-instruction parity
- * tests in apps/public/src/lib/__tests__/contract-parity.test.ts, which assert the exact set.
- *
- * KNOWN LIMIT OF THE WHOLE CHAIN, worth stating because this gate is sold as preventing the class:
- * it validates the clients against `target/idl/...json`, which is a GENERATED, gitignored artifact.
- * Nothing here derives the IDL from `programs/**`. Change a Rust account list, forget
- * `anchor idl build`, and all three copies still agree with each other, both gates go green, and both
- * apps are broken. What closes that is the CI job order: the "Regenerate the IDL" step runs BEFORE
- * this one and a separate step diffs the regenerated IDL against both committed copies, so on CI the
- * artifact is always fresh. Locally it is only as fresh as your last build.
- *
- * Run: npx tsx scripts/verify-client-idl-parity.ts
+ * It does NOT prove an account list is COMPLETE: it cannot tell which instruction a given
+ * `.accounts({...})` belongs to. apps/public/src/lib/__tests__/contract-parity.test.ts asserts the
+ * exact per-instruction sets. Run: npx tsx scripts/verify-client-idl-parity.ts
  */
 import fs from "fs";
 import path from "path";
 
 const ROOT = path.join(__dirname, "..");
+// A GENERATED, gitignored artifact: nothing here derives the IDL from `programs/**`, so locally this is
+// only as fresh as your last build. On CI the regenerate step runs first and diffs both committed copies.
 const IDL_PATH = path.join(ROOT, "target", "idl", "dominion_silver_mint.json");
 
 const SCAN_DIRS = [
@@ -63,8 +37,7 @@ function walk(dir: string, out: string[] = []): string[] {
       if (e.name === "node_modules" || e.name === ".next" || e.name === "idl") continue;
       walk(rel, out);
     } else if (/\.(ts|tsx)$/.test(e.name)) {
-      // Skip THIS file: it carries the removed instruction names as string literals in its own
-      // denylist, so scanning itself is a guaranteed false positive.
+      // Skip THIS file: its own denylist carries the removed instruction names as string literals.
       if (e.name === "verify-client-idl-parity.ts") continue;
       out.push(rel);
     }
@@ -168,9 +141,8 @@ function main() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for (const e of idl.errors ?? []) errorCodes.set(e.name, e.code);
 
-  // Names this project has REMOVED. Listed explicitly because check 1 can only see a method call
-  // in a chain it managed to parse, and a removed name is the case that must never slip through.
-  // Anything here is a hard failure wherever it appears in a call position.
+  // Names this project has REMOVED, listed explicitly because check 2 only sees a chain it managed to
+  // parse. Anything here is a hard failure wherever it appears in a call position.
   const REMOVED = [
     "redeemSilvQueued",
     "claimRedemption",
@@ -183,14 +155,8 @@ function main() {
 
   for (const rel of files) {
     const raw = fs.readFileSync(path.join(ROOT, rel), "utf8");
-    // Blank out comments before scanning, PRESERVING line numbers and length so every offset below
-    // still maps to the real file.
-    //
-    // Without this, check 1 greps `.claimRedemption(` across prose, and this codebase's style is long
-    // explanatory comments that name exactly the things that were removed. One comment written as
-    // "the old code called `.claimRedemption()`" would hard-fail CI with no code defect, and a gate
-    // that cries wolf is a gate somebody deletes. Same hazard for check 3 scanning `__tests__`, where
-    // a negative test deliberately passes a bogus account key.
+    // Blank out comments first, PRESERVING line numbers and length so every offset below still maps to
+    // the real file. Prose here names the removed instructions, so a gate that read it would cry wolf.
     const src = stripComments(raw);
 
     // --- 1. removed instruction names in a CALL position ---
@@ -207,12 +173,9 @@ function main() {
     }
 
     // --- 2. `.methods` chains: the instruction name must exist ---
-    // Matches `.methods` (optionally `as any)`) followed IMMEDIATELY by `.name(`, with only
-    // whitespace between. An earlier version allowed up to 80 characters of anything, which
-    // happily matched the NEXT link in the chain (`.accountsPartial(`, `.toString(`) and produced
-    // false positives. A CI gate that cries wolf gets switched off, so the pattern is deliberately
-    // narrow: it under-reports rather than over-reports, and check 1 plus the parity unit tests
-    // cover what it misses.
+    // `.methods` (optionally `as any)`) followed IMMEDIATELY by `.name(`, whitespace only in between.
+    // Deliberately narrow: any characters in the gap matched the next link (`.accountsPartial(`), so it
+    // under-reports rather than over-reports, and check 1 plus the unit tests cover the difference.
     const chainRe = /\.methods\s*(?:as\s+\w+\s*)?\)?\s*\.(\w+)\s*\(/g;
     let cm: RegExpExecArray | null;
     while ((cm = chainRe.exec(src)) !== null) {
@@ -232,8 +195,7 @@ function main() {
     while ((am = accRe.exec(src)) !== null) {
       const body = am[1];
       const startLine = src.slice(0, am.index).split("\n").length;
-      // Top-level `key:` occurrences. Spreads and nested objects are skipped rather than
-      // half-parsed: a false positive in a CI gate gets the gate disabled.
+      // Top-level `key:` only. Spreads and nested objects are skipped rather than half-parsed.
       const keyRe = /(?:^|\n)\s*(\w+)\s*:/g;
       let km: RegExpExecArray | null;
       while ((km = keyRe.exec(body)) !== null) {
@@ -250,11 +212,9 @@ function main() {
 
     // --- 4. ("ErrorName", 12345) pairs must match the IDL ---
     //
-    // Matches ANY CamelCase identifier paired with a code, rather than a suffix allowlist. The
-    // allowlist this replaced silently skipped `StaleOracle` (12004, mapped in the public client),
-    // `ZeroAmount`, `Unauthorized`, `WrongMint` and `PriceOutOfBounds`, while the gate's own output
-    // claimed to check "every error code the clients use". If a variant is ever inserted before
-    // StaleOracle in the enum, the client keeps 12004 and the user gets a raw Custom dump.
+    // ANY CamelCase identifier paired with a code, never a suffix allowlist: the allowlist this
+    // replaced silently skipped five live mappings while claiming to check every error code the
+    // clients use. Insert a variant before StaleOracle and a stale client shows a raw Custom dump.
     const errRe = /["']([A-Z][A-Za-z0-9]{3,})["']\s*,\s*(\d{4,6})\b/g;
     let em: RegExpExecArray | null;
     while ((em = errRe.exec(src)) !== null) {

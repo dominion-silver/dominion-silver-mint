@@ -56,8 +56,8 @@ export function MintRedeemCard() {
     revalidateOnFocus: false,
   });
 
-  // `error` destructured: `fetchConfig` throws on an RPC failure now (re-audit P2), and without the
-  // config there is no premium, no route and no min_out, so quoting anything would be inventing numbers.
+  // `fetchConfig` throws on an RPC failure, and without the config there is no premium, no route and no
+  // min_out, so `cfgError` must be read: quoting without it would be inventing numbers.
   const { data: cfg, error: cfgError } = useSWR(
     "onchain-config",
     () => fetchConfig(connection),
@@ -77,8 +77,7 @@ export function MintRedeemCard() {
   const [slippageBps, setSlippageBps] = useState<number>(DEFAULT_SLIPPAGE_BPS);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  // Red is reserved for ERRORS. Progress/status text (e.g. "Preparing
-  // transaction...") renders neutral so normal flow doesn't look alarming.
+  // Red is reserved for ERRORS. Progress text renders neutral so normal flow does not look alarming.
   const [msgIsError, setMsgIsError] = useState(false);
   const showProgress = (t: string) => {
     setErrorMsg(t);
@@ -100,84 +99,49 @@ export function MintRedeemCard() {
     setAmount("");
   }, [mode]);
 
-  // AUDIT finding A-26: these used to fall back to 1000 / 200 bps when `cfg` had
-  // not loaded. The live mint premium is 150 bps, so the fallback quoted a price
-  // 6.7x too expensive and, worse, fed that wrong premium into the min_out the
-  // transaction actually enforces. Quote nothing until the real config is in
-  // hand: `null` propagates through every memo and disables the preview.
+  // A-26: NO default premium. A fallback bps quotes a wrong price and, worse, feeds the wrong premium into
+  // the min_out the transaction enforces. `null` propagates through every memo and disables the preview.
   const configuredBpsMint = cfg?.premiumBpsMint ?? null;
   const configuredBpsRedeem = cfg?.premiumBpsRedeem ?? null;
 
-  /**
-   * The clock the redemption-window prediction runs on.
-   *
-   * REVIEW-OF-FIXES P1: this was `Math.floor(Date.now()/1000)`, the BROWSER clock, feeding
-   * `effectiveRedeemUsed`, which is a faithful port of the program's `roll_window`. The program uses
-   * `Clock::unix_timestamp`. A client an hour fast promotes the previous bucket early; two windows fast
-   * takes the `elapsed >= 2*w` branch and reports used = 0 while the chain still counts the full previous
-   * bucket. The card then says "redeems INSTANTLY, max now $20,000", the user pays the Lazer verify fee,
-   * and the chain answers RedeemLimitExceeded. The port was faithful; the input was not.
-   *
-   * The Lazer price carries `publishTime`, produced by the oracle and refreshed every few seconds, so it
-   * is a far better clock than the local one and it is already in hand. Fall back to the local clock only
-   * when no price has loaded, in which case nothing is being quoted anyway.
-   *
-   * Not perfect: the envelope is up to a couple of seconds old, which makes the prediction very slightly
-   * CONSERVATIVE (it treats the window as marginally younger, so it decays the previous bucket less). That
-   * is the safe direction: it can refuse something the chain would serve, never the reverse.
-   */
+  // The clock the redemption-window prediction runs on. NOT the browser clock: the program uses
+  // `Clock::unix_timestamp`, and a client two windows fast takes the `elapsed >= 2*w` branch and reports
+  // used = 0 while the chain still counts the full previous bucket, so the card promises "instant" and the
+  // chain answers RedeemLimitExceeded. The oracle's `publishTime` is a few seconds old at worst, which
+  // makes the prediction slightly CONSERVATIVE: it can refuse what the chain would serve, never the reverse.
   const nowSecs = price?.publishTime ?? Math.floor(Date.now() / 1000);
 
-  // The caller's on-chain per-wallet accounts. Needed so `classifyRedeem` can answer the KYC
-  // question for THIS wallet instead of only reporting that the gate is armed. Cheap: one batched
-  // RPC call, and only meaningful once an admin arms the gate.
+  // The caller's on-chain per-wallet accounts, so `classifyRedeem` can answer the KYC question for THIS
+  // wallet rather than only reporting that the gate is armed. One batched RPC call.
   //
-  // `error` is destructured DELIBERATELY. Making the resolver throw only helps if somebody reads the
-  // throw, and the first version of this fix ignored `error`, so a failed read was invisible: the
-  // route silently fell back to whatever `undefined` implies and the fee-exemption line just never
-  // appeared. The punch list claimed this call site surfaced the error before it actually did.
-  // ONE SNAPSHOT, used by the quote AND handed to the builder.
+  // ONE SNAPSHOT, used by the quote AND handed to the builder, so the transaction is priced by the same
+  // facts the user was shown. Letting the builder re-read at send time puts one transaction on two
+  // snapshots that can disagree, and that disagreement surfaces as arithmetic nobody can see (a bare
+  // SlippageExceeded, or a budget check that counts 100.00 where the quote classified 98.50). A
+  // stale-but-CONSISTENT quote is the better trade: it reverts on a program check the user can read.
   //
-  // RE-AUDIT P2: the UI cached these flags for 30s and derived the premium, the route and `min_out` from
-  // them, while both builders independently RE-READ the accounts at send time. So a single transaction
-  // rested on two snapshots that could disagree. Revoke a mint exemption after SWR cached it: the UI
-  // quotes 0% and derives a spot `minSilvOut`, the builder sees the revocation and omits the account, the
-  // chain charges 1%, and the transaction reverts SlippageExceeded. The mirror case is worse: granting a
-  // redeem exemption while routing is off makes the UI classify 98.50 of outflow as inside budget while
-  // the fresh builder makes the chain count 100.00 and reject.
-  //
-  // The builders now take the flags the quote used, so the transaction is priced by the same facts the
-  // user was shown. Staleness is the accepted cost and it is the right one: a stale-but-CONSISTENT quote
-  // reverts on a program check the user can read, whereas two disagreeing snapshots revert on arithmetic
-  // nobody can see.
+  // `error` is destructured deliberately: making the resolver throw only helps if a call site reads it.
   const { data: walletFlags, error: walletFlagsError } = useSWR(
     wallet.publicKey ? `wallet-flags-${wallet.publicKey.toBase58()}` : null,
     () => resolveWalletFlags(connection, wallet.publicKey!),
     { refreshInterval: 30_000, keepPreviousData: true },
   );
-  // Tri-state, and the third state has to stay reachable: `undefined` means NOT KNOWN, which
-  // `classifyRedeem` turns into the "kyc" route whenever the gate is armed (`kycAttested !== true`).
-  // That is the fail-closed direction, so an RPC failure blocks rather than promising an instant
-  // redeem the chain would revert.
-  // ROUND 3 P1: `keepPreviousData` serves the PREVIOUS wallet's flags until the new fetch settles, so the
-  // snapshot has to be checked against the connected wallet before anything is derived from it. Treating a
-  // foreign snapshot as `undefined` puts every consumer back on the fail-closed path it already handles.
-  // The SAME predicate the builders use, imported rather than re-expressed: three copies of this
-  // comparison is how one of them would have drifted. See lazer-tx.ts::flagsMatchOwner.
+  // TRI-STATE, and the third state must stay reachable: `undefined` means NOT KNOWN, never "no exemption".
+  // `classifyRedeem` turns it into the "kyc" route whenever the gate is armed, which is the fail-closed
+  // direction, so an RPC failure blocks instead of promising an instant redeem the chain would revert.
+  //
+  // `keepPreviousData` serves the PREVIOUS wallet's flags until the new fetch settles, so a foreign
+  // snapshot is downgraded to `undefined`, back onto that same fail-closed path. Uses the SAME predicate
+  // the builders use, imported rather than re-expressed: three copies is how one of them drifts.
   const flagsAreForThisWallet = !!wallet.publicKey && flagsMatchOwner(walletFlags, wallet.publicKey);
   const flags = flagsAreForThisWallet ? walletFlags : undefined;
   const kycAttested = flags ? flags.kyc != null : undefined;
 
-  // AUDIT FINDING P-07. The premiums the quote uses are the ones THIS WALLET pays, not the global
-  // config values. The exemption PDA was already being loaded and its contents were simply never read,
-  // so a wallet whitelisted on mint was shown "1% fee" and an understated SILV output while the program
-  // would charge 0%. The user could not verify the commercial terms granted to them before signing.
-  //
-  // `effectivePremiumBps` mirrors `state/fee_exempt.rs::effective_premium_bps`, including treating a
-  // zero expiry as expired (audit C-01). Falling back to the CONFIGURED bps whenever the exemption is
-  // unknown is the safe direction: quoting 0% and then being charged the premium would mint less SILV
-  // than the quote promised, and `minSilvOut` is derived from this same number, so an over-optimistic
-  // quote becomes a hard SlippageExceeded rather than a small surprise.
+  // P-07: the quote uses the premiums THIS WALLET pays, not the global config values, so a whitelisted
+  // wallet can see the terms it was granted before signing. `effectivePremiumBps` mirrors
+  // `state/fee_exempt.rs::effective_premium_bps`, including a zero expiry counting as expired (C-01).
+  // Falling back to the CONFIGURED bps when the exemption is unknown is the safe direction: `minSilvOut`
+  // comes from this same number, so an over-optimistic quote is a hard SlippageExceeded, not a surprise.
   const premiumBpsMint =
     configuredBpsMint === null
       ? null
@@ -227,24 +191,13 @@ export function MintRedeemCard() {
     return { effPrice, out, minOut, inLabel: "SILV", outLabel: "USDC" };
   }, [price, amount, mode, slippageBps, premiumBpsMint, premiumBpsRedeem]);
 
-  // Option B: classify the redeem route (instant / limit / otc / kyc / disabled)
-  // for the entered amount, so the UI tells the user up-front.
-  // TWO figures, deliberately named apart, because conflating them was bug B2.
-  //   GROSS = the full oracle value of the SILV being burned. It is what the program debits the budget by
-  //           and checks solvency against ONLY while fee routing is on; with routing off the outflow is the
-  //           user's leg alone. Round 3 P2: this line said "what leaves the treasury" flat out, which is the
-  //           stale rule that produced the original client bug.
-  //   NET   = what the user receives = gross minus the premium.
-  // Every comparison against a protocol limit uses GROSS, which is what this memo produces. The
-  // previous version passed the NET into `classifyRedeem`, understating both checks by the redeem
-  // premium (1.5% at launch), so near either boundary the UI promised "instant" and the chain
-  // reverted. TypeScript cannot catch that: both are BN.
-  //
-  // The displayed "You receive" net comes from the float `preview` path above
-  // (`effectiveRedeemPrice`), NOT from a BN. That is deliberate. `redeemUsdcOut` (the exact BN net,
-  // bit-for-bit with the program) is still exercised by contract-parity.test.ts, but nothing in the
-  // UI needs atomic precision on a figure already labelled "(est.)", and keeping a second unused
-  // net in this component is what produced the dead binding this cleanup removed.
+  // TWO figures, deliberately named apart:
+  //   GROSS = the full oracle value of the SILV being burned. This memo produces it, and every comparison
+  //           against a protocol limit uses it. Passing the NET into `classifyRedeem` under-states both
+  //           checks by the redeem premium, and both are BN, so TypeScript cannot catch it.
+  //   NET   = what the user receives, gross minus the premium.
+  // The displayed "You receive" net comes from the float `preview` path (`effectiveRedeemPrice`), not from
+  // a BN: nothing in the UI needs atomic precision on a figure already labelled "(est.)".
   const redeemGross = useMemo(() => {
     if (mode !== "redeem" || !price || !amount) return null;
     if (premiumBpsRedeem === null) return null; // A-26
@@ -277,10 +230,8 @@ export function MintRedeemCard() {
       premiumBpsRedeem ?? undefined,
     );
     const usdcNum = usdc.toNumber() / 1e6;
-    // `usdc` is the NET the user receives. The SILV that produces it is gross/spot, and
-    // gross = net / (1 - bps/1e4), so divide the net by spot*(1-bps/1e4). That is what
-    // `effectiveRedeemPrice` returns, and it is exact rather than approximate now that the
-    // program takes the fee off the top of the gross.
+    // `usdc` is the NET. The SILV producing it is gross/spot and gross = net / (1 - bps/1e4), so divide the
+    // net by `effectiveRedeemPrice`, which is spot*(1-bps/1e4). Exact, not approximate.
     const silvApprox =
       price && price.priceUsd > 0 && premiumBpsRedeem !== null
         ? usdcNum / effectiveRedeemPrice(price.priceUsd, premiumBpsRedeem)
@@ -359,12 +310,9 @@ export function MintRedeemCard() {
       cfg.mintPausedUntil.gt(new BN(Math.floor(Date.now() / 1000))))
   );
   const redemptionsOff = !!(mode === "redeem" && cfg && !cfg.redemptionsEnabled);
-  // Launch posture: the redeployed program ships with public direct mint
-  // CLOSED (`public_mint_enabled=false` -> `mint_silv` reverts
-  // PublicMintDisabled). At launch users trade SILV on a DEX instead of
-  // minting/redeeming directly. Gate the CTA so a click can't hit the revert.
+  // Launch posture: `public_mint_enabled=false`, so `mint_silv` reverts PublicMintDisabled and users trade
+  // SILV on a DEX instead. Gate the CTA so a click cannot reach that revert.
   const mintDisabled = !!(mode === "mint" && cfg && !cfg.publicMintEnabled);
-  // Either direction's DIRECT path is closed for the current mode.
   const directClosed = mintDisabled || redemptionsOff;
 
   function afterTx(sig: string, label: string) {
@@ -383,9 +331,7 @@ export function MintRedeemCard() {
 
   async function handleSubmit() {
     if (inFlight.current) return;
-    // A-26 defense in depth: never build a transaction whose enforced min_out
-    // was derived from a guessed premium. The button is already disabled without
-    // a preview; this makes the invariant explicit at the money path.
+    // A-26, defence in depth: never build a transaction whose enforced min_out came from a guessed premium.
     if (premiumBpsMint === null || premiumBpsRedeem === null) {
       setErrorMsg("Protocol parameters are still loading. Please retry in a moment.");
       return;
@@ -417,9 +363,8 @@ export function MintRedeemCard() {
           connection,
           wallet,
           (envelope, priceUsd) => {
-            // Compute min_out off the ENVELOPE's own price (priceUsd) so the
-            // slippage floor matches what the contract prices at; fall back to
-            // the preview only if the proxy returned no price.
+            // min_out comes off the ENVELOPE's own price, so the slippage floor matches what the contract
+            // prices at. The preview is the fallback only when the proxy returned no price.
             const minSilvOut =
               priceUsd != null
                 ? parseSilvAmount(
@@ -430,7 +375,7 @@ export function MintRedeemCard() {
                   )
                 : parseSilvAmount(floor6(preview.minOut));
             return buildLazerMintTx(connection, wallet, {
-                // RE-AUDIT P2: the SAME snapshot the quote above used.
+                // The SAME snapshot the quote above used.
                 walletFlags: flags,
               amountUsdc: parseUsdcAmount(amount),
               minSilvOut,
@@ -455,12 +400,7 @@ export function MintRedeemCard() {
             `Treasury can't cover this on-chain right now. For this size, redeem via the OTC desk: ${OTC_EMAIL} (physical-silver settlement).`,
           );
         }
-        // The "queue" branch that lived here is GONE, along with the T+3 queue it drove
-        // (deleted from the program on 2026-08-05). It was reachable from a LIVE config value
-        // (`largeRedeemThresholdUsdc`, dead on chain but still $5,000), so every redemption at
-        // or above $5,000 hit a builder that throws. The program would have settled those
-        // instantly. Its ~95 lines of nonce-race retry machinery guarded a burn that can no
-        // longer happen.
+        // There is no "queue" branch: the T+3 queue no longer exists in the program.
         if (route === "limit") {
           throw new Error(
             "This redemption would exceed the protocol's rolling limit for the current window. " +
@@ -492,7 +432,7 @@ export function MintRedeemCard() {
                     )
                   : parseUsdcAmount(floor6(preview.minOut));
               return buildLazerRedeemTx(connection, wallet, {
-                  // RE-AUDIT P2: the SAME snapshot the quote and the route used.
+                  // The SAME snapshot the quote and the route used.
                   walletFlags: flags,
                 amountSilv: parseSilvAmount(amount),
                 minUsdcOut,
@@ -506,14 +446,11 @@ export function MintRedeemCard() {
       }
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
-      // Flatten once (message + program logs + structured err): a
-      // confirmed-but-reverted tx carries the signal in logs/onChainErr,
-      // not just `.message`.
+      // Flatten once (message + program logs + structured err): a confirmed-but-reverted tx carries the
+      // signal in logs/onChainErr, not in `.message`.
       const flat = errorToText(e);
-      // StaleOracle (12004) takes priority on EVERY Pyth path (mint /
-      // redeem / claim). pyth-posting already maps the simulation-revert
-      // case to this copy; this also covers the confirmed-on-chain-revert
-      // path (raw "Transaction reverted on-chain" + logs).
+      // StaleOracle takes priority on EVERY Pyth path, and this covers the confirmed-on-chain-revert case
+      // as well as the simulation revert that pyth-posting already maps.
       const reroute =
         mode === "redeem" ? parseRedeemError(flat) : null;
       const friendly =
@@ -620,10 +557,10 @@ export function MintRedeemCard() {
         </span>
       </div>
 
-      {/* The per-wallet read failed. Say so, in both modes, because the consequence differs and both
-          are things the user would want to know BEFORE signing. On mint, a fee exemption we cannot
-          see is a fee exemption the program is not told about, so an exempt wallet pays full
-          premium with nothing reverting. On redeem, an attestation we cannot see routes to "kyc". */}
+      {/* The per-wallet read failed. Surfaced in BOTH modes, because the consequence differs and each
+          matters before signing: on mint an unseen exemption means the program is never told about it and
+          the wallet pays full premium with nothing reverting; on redeem an unseen attestation routes
+          to "kyc". */}
       {cfgError && (
         <div className="mb-4 rounded-md border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">
           Could not read the protocol configuration from the network, so no quote can be produced. This is
@@ -721,11 +658,9 @@ export function MintRedeemCard() {
           </div>
           <div className="flex justify-between">
             <span>Fee</span>
-            {/* AUDIT P-07: these two bps values are now the ones THIS WALLET pays, so an exempt wallet
-                shows 0.0% here and in the price and min-received rows above. Showing a bare "0.0%"
-                would read as a loading glitch, so an exemption is stated, with the configured rate it
-                replaces, and the expiry: a wallet holding a term-limited waiver should be able to see
-                when it lapses without asking. */}
+            {/* P-07: these bps are the ones THIS WALLET pays, so an exempt wallet shows 0.0% here and in
+                the rows above. A bare "0.0%" would read as a loading glitch, so the waiver is named with
+                the rate it replaces and its expiry. */}
             <span className="font-mono text-white">
               {(mode === "mint" ? premiumBpsMint : premiumBpsRedeem) === null ? (
                 "loading"
@@ -755,11 +690,8 @@ export function MintRedeemCard() {
               </span>
             </div>
           ) : null}
-          {/* Pyth Lazer rides the signed price inside the consumer tx (no
-              separate temporary price account is posted), so the old Core
-              price-account rent disclosure no longer applies. The only costs
-              are the standard tx fee + a one-time token-account rent the first
-              time you mint, both standard Solana costs. */}
+          {/* No price-account rent to disclose: Lazer rides the signed price inside the consumer tx, so the
+              only costs are the tx fee and a one-time token-account rent on the first mint. */}
         </div>
       )}
 
@@ -767,9 +699,8 @@ export function MintRedeemCard() {
         <div className="mb-4 rounded-md border border-yellow-500 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-300 break-words">
           Low SOL ({(solBalance ?? 0).toFixed(4)}). Need ≥ {SOL_FOR_FEES_MIN} SOL
           for fees.{" "}
-          {/* AUDIT P-08: this always pointed at the devnet faucet. On mainnet there is no faucet, so
-              linking one sends the user on an errand that cannot work, at the moment they are already
-              stuck. Say nothing rather than something false. */}
+          {/* P-08: only link a faucet when one exists. On mainnet there is none, and linking it sends an
+              already-stuck user on an errand that cannot work. */}
           {SOL_TOPUP_URL ? (
             <>
               Top up at{" "}
@@ -808,54 +739,26 @@ export function MintRedeemCard() {
           !!paused ||
           mintDisabled ||
           redemptionsOff ||
-          // Every route the program cannot serve. "otc" was already here; "limit" and "kyc" were
-          // not, so the button stayed clickable while its own label read "Over the window limit" or
-          // "Verification required". Harmless (the submit path throws before any wallet interaction)
-          // but an enabled button that cannot succeed is an invitation to click it.
+          // EVERY route the program cannot serve, not just "otc": an enabled button whose own label reads
+          // "Over the window limit" is an invitation to click something that cannot succeed.
           redeemRoute === "otc" ||
           redeemRoute === "limit" ||
           redeemRoute === "kyc" ||
-          // REVIEW-OF-FIXES: and NOT-YET-KNOWN blocks too. The P-04 fix made
-          // `fetchTreasuryBalance` throw on an RPC failure instead of returning BN(0), which was right
-          // in itself and turned this path FAIL-OPEN as a side effect: `treasury` becomes undefined,
-          // `redeemRoute` becomes null, null matched none of the four cases above, and `handleSubmit`
-          // fell through every guard straight to the instant send. Before the fix, BN(0) forced "otc"
-          // and blocked. So a 429 on one balance read went from "blocked" to "submit blind and let the
-          // chain decide", which is the opposite of the tri-state doctrine applied to `kycAttested`
-          // eight lines from here.
+          // NOT-YET-KNOWN blocks too, and it must: `fetchTreasuryBalance` throws on an RPC failure (P-04),
+          // so `treasury` becomes undefined and `redeemRoute` becomes null. null matches none of the cases
+          // above, and `handleSubmit` would then fall through every guard straight to the instant send.
+          // Same tri-state doctrine as `kycAttested`: unknown is not permission.
           (mode === "redeem" && redeemRoute === null) ||
-          // REVIEW-OF-FIXES P1, found independently by both reviewers, then NARROWED after the second pass.
-          //
-          // Treating a foreign snapshot as `undefined` was only half a fix: `undefined` makes the QUOTE fall
-          // back to the configured premium, and then the builders resolve the flags FRESH, so the transaction
-          // is priced from a different snapshot than the one the user was shown. That is the two-snapshot
-          // disagreement round-3 P1 existed to close, reopened in more states than before (every wallet
-          // switch, plus any window where the flags read is failing while `keepPreviousData` serves the old
-          // wallet's).
-          //
-          // My first fix blocked submit whenever the snapshot was not this wallet's, for BOTH modes. The
-          // second review measured what that costs: one failing `getMultipleAccountsInfo` (and the runbook
-          // itself warns the public RPC will rate-limit you) disabled mint AND redeem for every visitor,
-          // including the overwhelming majority who hold no exemption and were being quoted correctly.
-          //
-          // So block only where the unknown can actually change the outcome, which is ONE case:
-          //
-          //   MINT: an unknown exemption makes the quote charge the full premium while the chain charges 0,
-          //   so the user receives MORE SILV than `minSilvOut`. Succeeds. Never needs blocking.
-          //
-          //   REDEEM, fee routing ON: outflow is the gross either way, so neither the route nor the budget
-          //   check depends on the premium, and an unknown exemption only means the user is paid more than
-          //   quoted. Succeeds.
-          //
-          //   REDEEM, fee routing OFF: outflow is `gross - fee`, so the exemption CHANGES it. Quote says
-          //   98.50 and classifies "instant"; the chain computes 100.00 and reverts RedeemLimitExceeded,
-          //   after the Lazer fee has been paid. THIS is the case, and it is the launch configuration.
-          //
-          // KYC being armed is already covered: `kycAttested === undefined` routes to "kyc", which is in the
-          // list above.
+          // Submit is blocked for an unknown exemption in exactly ONE combination, deliberately narrow.
+          // MINT, and REDEEM with routing ON: the outflow does not depend on the premium, so an unknown
+          // exemption only means the user gets MORE than quoted, and the transaction succeeds. Blocking
+          // those would disable the card for every visitor on one failing getMultipleAccountsInfo.
+          // REDEEM with routing OFF: outflow is `gross - fee`, so the exemption CHANGES the figure the
+          // window check uses. The quote classifies 98.50 as "instant", the chain computes 100.00 and
+          // reverts RedeemLimitExceeded after the Lazer fee. That is the launch configuration.
+          // An armed KYC gate is already covered: `kycAttested === undefined` routes to "kyc" above.
           (mode === "redeem" && cfg?.feeRoutingDisabled === true && wallet.connected && !flagsAreForThisWallet) ||
-          // No config means no premium, no route and no min_out. Quoting would be inventing numbers, and
-          // `preview` is already null so the button would say "0.00" with nothing behind it.
+          // No config means no premium, no route and no min_out, so there is nothing to submit.
           !!cfgError ||
           submitting ||
           insufficientSol
@@ -888,14 +791,8 @@ export function MintRedeemCard() {
                           : "Redeem SILV"}
       </button>
 
-      {/* The queued-redemption UI (pending table, Claim, settled table, reclaim-rent) was
-          REMOVED on 2026-08-05 with the queue itself. Redemption is one instant transaction:
-          it settles or it reverts, so there is no request state for a user to track.
-
-          It was already unreachable, because the request fetch returned an empty list, but
-          unreachable is not the same as harmless: it kept two calls to instructions that no
-          longer exist in the IDL alive in shipped code, where they would have failed with a
-          bare TypeError rather than an explained error. */}
+      {/* There is no queued-redemption UI: redemption settles or reverts in one transaction, so there is
+          no request state for a user to track. */}
     </div>
   );
 }

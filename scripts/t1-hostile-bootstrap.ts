@@ -1,35 +1,14 @@
 /**
- * T1: hostile bootstrap. Proves audit finding DOM-001 (P0) is actually closed.
+ * T1: hostile bootstrap. Proves DOM-001 (P0) is closed: `initialize` used to accept ANY signer, so on a
+ * fresh program id an attacker could call it first, seize the single [CONFIG_SEED] PDA, make itself
+ * config.admin, unpause, redirect the inventory and pre-mint the entire supply cap.
  *
- * The defect: `initialize` accepted ANY signer, so on a freshly deployed program
- * id an attacker could call it first, seize the single [CONFIG_SEED] PDA, set
- * itself as config.admin, then unpause, redirect the inventory and pre-mint the
- * entire supply cap.
- *
- * Run this against a FRESHLY DEPLOYED, NOT YET INITIALIZED program. It must be run
- * BEFORE scripts/initialize-devnet.ts, because once the config PDA exists every
- * initialize fails with AccountAlreadyInitialized and the test proves nothing.
- *
- *   DOMINION_PROGRAM_ID=<fresh id> \
- *   DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json \
- *   npx tsx scripts/t1-hostile-bootstrap.ts
- *
- * Cases (from the master audit doc, section 10, T1):
- *   1. attacker signs, real SILV mint            -> must FAIL (DeployerNotUpgradeAuthority)
- *   2. attacker signs, its own compliant mint    -> must FAIL
- *   3. attacker supplies a foreign ProgramData   -> must FAIL (constraint)
- *   4. attacker supplies a Buffer as ProgramData -> must FAIL (not ProgramData)
- *  4b. attacker points dominion_program elsewhere -> must FAIL (InvalidProgramId)
- *   5. genuine upgrade authority signs           -> must SUCCEED
- *   8. post-init on-chain verification            -> matches the intended manifest
- *   9. initialize cannot be replayed             -> must FAIL
- *
- * Every mustFail regex requires the SPECIFIC error for that case. They used to also
- * accept a generic Unauthorized, which meant cases 3, 4 and 4b could not tell their
- * own failure mode from any constraint failure (audit review of daac4ac, P2).
- *
- * Case 6 (a pre-created treasury ATA is tolerated, DOM-002) is exercised by
- * pre-creating that ATA before case 5.
+ * Run against a FRESHLY DEPLOYED, NOT YET INITIALIZED program, and BEFORE scripts/initialize-devnet.ts:
+ * `initialize` fires ONCE per program id, so once the config PDA exists every attempt fails with
+ * AccountAlreadyInitialized and this proves nothing. Case 5 below IS that initialisation. Case numbers
+ * are the master audit doc's (section 10, T1), and each mustFail regex demands its case's SPECIFIC error.
+ *   DOMINION_PROGRAM_ID=<fresh id> DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json \
+ *     npx tsx scripts/t1-hostile-bootstrap.ts
  */
 import * as anchor from "@coral-xyz/anchor";
 import { AnchorProvider, Program, Wallet, Idl, BN } from "@coral-xyz/anchor";
@@ -61,25 +40,12 @@ import {
   type ClusterContext,
 } from "./_cluster";
 
-// EXTERNAL AUDIT 2026-08-06, FINDING S-01 (the P0). This block used to read:
-//
-//   const RPC = "https://api.devnet.solana.com";
-//   const DEVNET_USDC = new PublicKey("4zMM...");
-//
-// and then `requireDevnet(RPC, ...)`. The guard was handed a constant containing "devnet", so it
-// returned on its first line and the DOMINION_ALLOW_MAINNET branch could never run. The mainnet
-// runbook tells the operator to invoke this script with a mainnet program id; it would have looked
-// for that program's ProgramData ON DEVNET, funded a devnet attacker, and failed with nothing
-// initialised, AFTER the mainnet deploy was paid for. `initialize` fires once per program id and
-// case 5 below IS that initialisation, so there is no second attempt.
-//
-// The cluster now comes from the environment via scripts/_cluster.ts, which THROWS rather than
-// falling back to a devnet address when a mainnet constant is unknown.
+// NEVER a hardcoded RPC or USDC constant here: a literal containing "devnet" satisfies the guard on its
+// first line, making the mainnet branch dead code, and _cluster.ts THROWS on an unknown mainnet address
+// instead of falling back to the devnet one (audit S-01, P0).
 const CLUSTER: ClusterContext = resolveCluster();
 const RPC = CLUSTER.rpc;
-// Validated BEFORE constructing, so a missing id produces this sentence instead of web3.js's bare
-// "Invalid public key input" thrown at module scope. The check inside main() was unreachable: this
-// line ran first and crashed the import, so the helpful message could never print.
+// Module scope, not main(): the `new PublicKey` below runs first and would crash the import instead.
 if (!process.env.DOMINION_PROGRAM_ID) {
   throw new Error(
     "set DOMINION_PROGRAM_ID to the freshly deployed program id.\n" +
@@ -107,20 +73,11 @@ function programData(id: PublicKey): PublicKey {
 }
 
 async function main() {
-  // RULE 1 (scripts/_guard.ts): refuse any cluster but devnet unless
-  // DOMINION_ALLOW_MAINNET is explicitly set.
+  // RULE 1 (scripts/_guard.ts): devnet consent plus the genesis-hash cross-check.
   await requireSanctionedCluster(RPC, "T1 hostile bootstrap");
-  // RULE 2, checked HERE and not at case 5.
-  //
-  // The first version of this call sat immediately before case 5, which is after the attacker has been
-  // funded and after the REAL SILV mint has been created. So an operator following the runbook (which did
-  // not set DOMINION_INTENT) would have created the mainnet mint, run cases 1 to 4, and then thrown
-  // `REFUSING "initialize"` with the mint keypair never persisted and never printed, because the pubkey is
-  // only logged after case 5 succeeds. That is the round-3 P0's outcome exactly (rent spent, config
-  // uninitialised, mint lost), reintroduced by the fix for a P2 about this very gate.
-  //
-  // A gate on an irreversible action has to fire before the first lamport moves, or it is not a gate, it is
-  // a way to lose the thing it was protecting.
+  // RULE 2, checked HERE and never moved down to case 5: a gate on an irreversible action must fire before
+  // the first lamport moves. Gated at case 5 it throws after the attacker is funded and the REAL SILV mint
+  // created, and that keypair is only printed once case 5 succeeds: rent spent, config bare, mint lost.
   const INTENT = intentFromEnv();
   assertReversible("initialize", INTENT);
   const conn = new Connection(RPC, "confirmed");
@@ -155,9 +112,7 @@ async function main() {
   );
 
   console.log("T1 hostile bootstrap");
-  // Printed FIRST, and printed at all, because S-01 was invisible: nothing in the output said which
-  // cluster the script was on, so a devnet run under a mainnet invocation looked identical to a
-  // mainnet run right up to the failure.
+  // Printed FIRST: otherwise a devnet run under a mainnet invocation looks identical to a mainnet run.
   console.log("  " + describeCluster(CLUSTER));
   console.log("  program:", PROGRAM_ID.toBase58());
   console.log("  config PDA:", configPda.toBase58());
@@ -172,21 +127,10 @@ async function main() {
   }
   console.log("  config PDA does not exist yet: the bootstrap window is open.\n");
 
-  // REVIEW-OF-FIXES P1: the ceremony config is resolved and VALIDATED here, before a single lamport
-  // moves. It used to be read after the attacker was funded and after the real SILV mint was created, so
-  // a missing `authorities.compliance.pubkey` (a live possibility: this file is edited during the
-  // ceremony, and it records the deployer as not existing on mainnet yet) threw AFTER abandoning 0.06 SOL
-  // on a key held only in this process's memory, and every retry repeated it. S-04's remediation was
-  // conditional on nothing going wrong, which is the opposite of what the finding was about.
-  // AUDIT FINDING D-01. These were LITERALS, and they disagreed with everything else: the source of
-  // truth says 100/150 bps, this script said 150/200, and the runbook told the operator to hand-edit
-  // it to 150/500 on one page while stating 100/150 on another. Three values, one launch. Following
-  // the runbook would have opened mainnet at 1.5%/5% instead of 1%/1.5%, and correcting either
-  // premium afterwards costs a 24h timelocked proposal each.
-  //
-  // So they are READ from config/mainnet-authorities.json now. The runbook's "edit its args()"
-  // instruction is deleted with them: a ceremony value that has to be retyped into TypeScript is a
-  // ceremony value that will be retyped wrong.
+  // Resolved and VALIDATED here, before a single lamport moves: this file is hand-edited during the
+  // ceremony, so a missing field must throw before the attacker is funded and the real SILV mint created,
+  // or the retry repeats the loss. The args are READ, never retyped as literals: the literals here once
+  // said 150/200 bps against a source of truth of 100/150, and a premium fix costs a 24h proposal each.
   const posture = (mainnetConfig().launch_posture ?? {}) as Record<string, number>;
   function required(field: string): number {
     const v = posture[field];
@@ -229,32 +173,19 @@ async function main() {
     return new PublicKey(pk);
   }
   const COMPLIANCE = ceremonyAuthority("compliance", authority.publicKey);
-  // RE-AUDIT P0. `args.admin` used to be the SIGNER, and I had written a runbook note asserting that was
-  // "by design: initialize binds them to the deploying upgrade authority (audit DOM-001)". That is false.
-  // DOM-001 binds the SIGNER to the current BPF upgrade authority (initialize.rs:162); it says nothing
-  // about `args.admin`, which `initialize` writes VERBATIM (initialize.rs:387) with only a non-zero check.
-  //
-  // So the mainnet ceremony would have written the deployer `2Lp...` into `config.admin` instead of the
-  // Ops Squads vault `65g...`. Step 7 then asks the Ops vault to propose opening the public mint, which
-  // fails `has_one = admin`, and the deployer keeps unilateral admin authority over the whole protocol
-  // with no admin-transfer step anywhere in the recommended path. I invented a constraint to justify not
-  // changing this, which is the same failure mode as the C-01 migration comment.
+  // NOT the signer. `initialize` writes `args.admin` VERBATIM (initialize.rs:387) with only a non-zero
+  // check, and DOM-001 binds the SIGNER to the BPF upgrade authority (initialize.rs:162), not this field.
+  // The signer here leaves the deployer unilateral admin with no transfer step, and breaks step 7, where
+  // the Ops vault proposes opening the public mint under `has_one = admin`.
   const CEREMONY_ADMIN = ceremonyAuthority("ops_admin", authority.publicKey);
 
 
   // ---- the attacker ----
   const attacker = Keypair.generate();
-  // Funded by transfer, not requestAirdrop: the devnet faucet rate-limits and
-  // returns -32603 "Internal error", which would make T1 flaky for a reason
-  // that has nothing to do with what it is testing.
-  //
-  // AUDIT FINDING S-04: this was 500_000_000 lamports (0.5 SOL) sent to a `Keypair.generate()` that
-  // exists only in this process's memory, never persisted and never refunded. On devnet that is
-  // nobody's problem. Once S-01 made the mainnet path actually reachable it became 0.5 real SOL
-  // burned per attempt, and a retry after a configuration error burns it again.
-  //
-  // Two changes: fund what the hostile cases actually need (a Token-2022 mint with extensions, an
-  // ATA, and a handful of failing transactions), and sweep the remainder back at the end.
+  // Funded by transfer, not requestAirdrop: the devnet faucet rate-limits with -32603 "Internal error" and
+  // would make T1 flaky for a reason unrelated to what it tests. Keep the amount at what the hostile cases
+  // need (a Token-2022 mint with extensions, an ATA, a few failing transactions) and sweep the remainder:
+  // the key lives only in this process's memory, so on a real cluster anything left is burned every retry.
   const ATTACKER_FUNDING = 60_000_000; // 0.06 SOL
   await sendAndConfirmTransaction(
     conn,
@@ -272,10 +203,8 @@ async function main() {
     `  attacker funded: ${attacker.publicKey.toBase58()} (${ATTACKER_FUNDING / 1e9} SOL, swept back at the end)\n`,
   );
 
-  /** Return whatever the hostile key still holds. Best effort: a failure here must never turn a
-   *  passing T1 into a failing one, so it reports and moves on.
-   *
-   *  Published to module scope so the `finally` at the bottom can run it on EVERY exit path. */
+  /** Return whatever the hostile key still holds. Best effort: a failure here must never turn a passing T1
+   *  into a failing one. Published to module scope so the `finally` at the bottom runs it on EVERY exit. */
   sweep = async function sweepAttacker(): Promise<void> {
     try {
       const bal = await conn.getBalance(attacker.publicKey);
@@ -311,8 +240,7 @@ async function main() {
       new AnchorProvider(conn, new Wallet(kp), { commitment: "confirmed" }),
     );
 
-  // The SILV mint the legitimate deploy will use. Created by the AUTHORITY here so
-  // that case 1 is the worst case: the attacker points at the real, valid mint.
+  // Created by the AUTHORITY so case 1 is the worst case: the attacker points at the real, valid mint.
   const silvMint = Keypair.generate();
   console.log("  creating the real SILV mint (Token-2022 + extensions)...");
   await createSilvMintForTest(
@@ -327,10 +255,8 @@ async function main() {
 
   const args = (admin: PublicKey) => ({
     admin,
-    // ROUND 3 P3: this was `admin`, so after the P0 fix passed the Ops vault it recorded OPS as the upgrade
-    // authority. The field is informational, so nothing is bypassed, but it becomes an immutable launch
-    // record that misidentifies the protocol's upgrade trust root. It is the SIGNER that initialises, and
-    // the real BPF upgrade authority moves to the upgrade vault at step 12.
+    // The SIGNER, not `admin`: informational, but it is an immutable launch record of the upgrade trust
+    // root. The real BPF upgrade authority moves to the upgrade vault at step 12.
     upgradeAuthorityInfo: authority.publicKey,
     permanentDelegateExpected: COMPLIANCE,
     freezeAuthorityExpected: COMPLIANCE,
@@ -375,19 +301,12 @@ async function main() {
         .rpc(),
   );
 
-  // --- case 2: attacker signs with a mint IT created, correctly shaped, whose
-  // authorities it controls. Listed in this file's header since the first version
-  // but never actually implemented (audit review of daac4ac, P2). It matters because
-  // it is the realistic attack: the attacker does not need the real mint at all, it
-  // needs the config PDA. The authentication check runs BEFORE any mint validation,
-  // so the expected failure is still DeployerNotUpgradeAuthority, which also proves
-  // the check is not accidentally dependent on mint shape.
+  // --- case 2: attacker signs with a correctly shaped mint IT created and controls. The realistic attack:
+  // it needs the config PDA, not the real mint. Authentication runs BEFORE any mint validation, so the
+  // expected failure is still DeployerNotUpgradeAuthority and the check cannot depend on mint shape.
   {
     const attackerMint = Keypair.generate();
-    // ROUND 3 P0: this call was left at FIVE arguments when the helper gained a sixth (the compliance
-    // authority), so T1 could not compile and the ceremony could not complete. It is the hostile mint, so
-    // the attacker is deliberately its own compliance authority: case 2 must fail on AUTHENTICATION, not on
-    // mint shape, which is the whole point of giving the attacker a well-formed mint of its own.
+    // The attacker is deliberately its own compliance authority, so this fails on AUTHENTICATION.
     await createSilvMintForTest(
       conn,
       attacker,
@@ -411,13 +330,9 @@ async function main() {
     );
   }
 
-  // --- case 3: attacker supplies a FOREIGN ProgramData (of a program it controls).
-  // Use the ProgramData address of an unrelated deployed program.
-  // AUDIT review of daac4ac (P2): this used to be the previous Dominion devnet
-  // deploy. That program is ours, we retire ids routinely, and `solana program
-  // close` would turn this case into a false FAIL (AccountNotInitialized matches
-  // none of the expected codes). Pyth Lazer is a third-party, upgradeable, live
-  // devnet program we will never close. Asserted below rather than assumed.
+  // --- case 3: attacker supplies a FOREIGN ProgramData. It must be a third-party live upgradeable
+  // program, never a Dominion id: we retire ids routinely, and a closed program turns this case into a
+  // false FAIL (AccountNotInitialized matches none of the expected codes). Asserted below, not assumed.
   const foreignProgram = CLUSTER.foreignUpgradeableProgram;
   {
     const pdInfo = await conn.getAccountInfo(programData(foreignProgram));
@@ -431,10 +346,8 @@ async function main() {
   }
   await mustFail(
     "case 3: attacker supplies a foreign ProgramData",
-    // Tightened after the review: this used to also accept ConstraintRaw,
-    // AccountNotProgramData and InvalidProgramId, so it could not tell its own
-    // failure mode from a generic constraint failure. The programdata_address()
-    // constraint raises Unauthorized specifically.
+    // The programdata_address() constraint raises Unauthorized specifically. Do not widen this to
+    // ConstraintRaw or InvalidProgramId: it would stop distinguishing its own failure mode.
     /Unauthorized/,
     () =>
       mkProgram(attacker)
@@ -445,8 +358,7 @@ async function main() {
         .rpc(),
   );
 
-  // --- case 4: attacker supplies a non-ProgramData account (the config PDA seed
-  // address is unallocated, so use the SILV mint: a real account, wrong type).
+  // --- case 4: a non-ProgramData account. The SILV mint: a real account of the wrong type.
   await mustFail(
     "case 4: attacker supplies a non-ProgramData account",
     // Anchor's Owner impl for ProgramData rejects a non-loader-owned account.
@@ -472,7 +384,7 @@ async function main() {
         .rpc(),
   );
 
-  // --- DOM-002: pre-create the treasury ATA, which used to brick initialize.
+  // --- case 6 / DOM-002: a pre-created treasury ATA must not brick initialize.
   console.log("\n  pre-creating the treasury USDC ATA (DOM-002 regression)...");
   // The instruction form, not the helper: the helper re-derives the address with
   // allowOwnerOffCurve=false and throws TokenOwnerOffCurveError on a PDA owner.
@@ -512,9 +424,8 @@ async function main() {
     const program = mkProgram(authority);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const cfg = await (program.account as any).configAccount.fetch(configPda);
-    // Was `equals(authority.publicKey)`, i.e. "the admin is whoever signed", which is true by
-    // construction and therefore proved nothing. It now compares against the SOURCE OF TRUTH, so on
-    // mainnet it fails loudly if the ceremony admin is not the Ops vault.
+    // Against the SOURCE OF TRUTH, never against the signer: "the admin is whoever signed" is true by
+    // construction and proves nothing. On mainnet this fails loudly if the admin is not the Ops vault.
     ok(
       "case 8: config.admin is the intended ceremony admin",
       new PublicKey(cfg.admin).equals(CEREMONY_ADMIN),
@@ -534,21 +445,12 @@ async function main() {
     ok("case 8: guardian floor field present", typeof cfg.guardianCount === "number");
     ok(
       "case 8: the instant redeem WINDOW respects its floor",
-      // RE-AUDIT P3: the CHECK was corrected to read `instantRedeemWindowSeconds` but its LABEL still said
-      // "queue delay respects the new floor", so T1's green output recorded that a removed control had been
-      // verified. The ceremony evidence and the checked property have to name the same thing.
-      //
-      // Was `redeemQueueDelaySeconds >= 3600`. That passed, which is exactly why it was worse
-      // than useless: the field is DEAD on chain since 2026-08-05, so a green check here was a
-      // false assurance about a throttle nothing reads. The live throttle is the rolling window.
+      // The label above and the field below must name the same thing: this is ceremony evidence. The live
+      // throttle is the rolling window; `redeemQueueDelaySeconds` is DEAD on chain since 2026-08-05.
       cfg.instantRedeemWindowSeconds >= 60,
       String(cfg.instantRedeemWindowSeconds),
     );
-    // AUDIT review of daac4ac (P1): this line used to read
-    //   ok("case 8: supply is zero", new BN(0).eq(new BN(0)))
-    // which is a tautology. It asserted nothing, never touched the mint, and was
-    // counted in the headline "15/15". The thing it claims to check is the CODEX
-    // C-01 rug-by-init defence, so it now reads the real mint.
+    // Reads the REAL mint, never a self-comparison of constants: the claim is the C-01 rug-by-init defence.
     const mintAfter = await getMint(
       conn,
       silvMint.publicKey,
@@ -569,7 +471,7 @@ async function main() {
     // --- case 9: a second initialize (even by the authority) cannot re-seize
     await mustFail(
       "case 9: initialize cannot be replayed once the config exists",
-      // "0x0" was removed: it matches a broad class of unrelated messages.
+      // Not "0x0": it matches a broad class of unrelated messages.
       /already in use|AccountAlreadyInitialized/,
       () =>
         mkProgram(authority)
@@ -591,9 +493,8 @@ async function main() {
   // key's remaining SOL on the success path too.
   process.exitCode = fail === 0 ? 0 : 1;
 }
-// The sweep runs in a `finally`, not at the end of main(). REVIEW-OF-FIXES P1: S-04's stated loss case is
-// "a retry after a configuration error repeats the loss", i.e. the THROWING path, which is precisely the
-// one path a sweep placed at the end of the happy flow could never reach.
+// The sweep runs in a `finally`, not at the end of main(): the loss case is a retry after a configuration
+// error, i.e. the THROWING path, which is the one path a sweep at the end of the happy flow cannot reach.
 main()
   .catch((e) => {
     console.error("T1 crashed:", e);

@@ -34,12 +34,10 @@ function fromHex(h: string): Uint8Array {
 }
 
 /**
- * Ownership-proof gate. A connected wallet only means the extension is
- * linked; it does NOT prove the user controls the key. This forces an
- * explicit ed25519 message signature (no transaction, no fee, nothing
- * on-chain) and verifies it locally before granting access. The proof is
- * cached in sessionStorage (per pubkey, short TTL) so a refresh inside the
- * session does not re-prompt, but closing the tab clears it.
+ * Two fail-closed gates. First OWNERSHIP: a connected wallet only means the extension is linked, so an
+ * explicit ed25519 message signature (no transaction, no fee, nothing on-chain) is verified locally and
+ * cached per-pubkey in sessionStorage under a TTL. Then IDENTITY: config.admin, an ACTIVE guardian, or
+ * an active member of the configured Ops Squads. A wallet that only proved ownership is NOT allowed.
  */
 
 const TTL_MS = 12 * 60 * 60 * 1000; // 12h
@@ -83,22 +81,15 @@ export function WalletAuthGate({ children }: { children: ReactNode }) {
   const [verifiedPk, setVerifiedPk] = useState<string | null>(null);
   const [signing, setSigning] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  // Authorization (identity), separate from ownership proof: is THIS wallet
-  // allowed to see the console at all? Fail-closed. Allowed = the on-chain
-  // config.admin, OR a registered guardian, OR (if an Ops Squads is configured)
-  // an active member of it. A random wallet that merely proved ownership is NOT
-  // allowed to view the console.
+  // Identity authorization, separate from the ownership proof. See the gate note above.
   const [authz, setAuthz] = useState<"checking" | "ok" | "denied">("checking");
 
   const pk = publicKey?.toBase58() ?? null;
-  // Gate on the pubkey the verification belongs to, not a bare boolean, so a
-  // wallet SWITCH (A -> B) never flashes B's content as verified for one frame
-  // before the [pk] effect re-checks (Fable audit P3-i). First load is already
-  // fail-closed (verifiedPk starts null).
+  // Keyed on the pubkey the proof belongs to, not a bare boolean, so a wallet SWITCH (A -> B) cannot
+  // flash B's content as verified for one frame before the [pk] effect re-checks.
   const verified = pk !== null && verifiedPk === pk;
 
-  // Re-evaluate when the connected key changes. Honour a cached, still-valid,
-  // still-cryptographically-correct proof for this exact pubkey.
+  // Honour a cached proof only when it is for this exact pubkey, inside the TTL, and still verifies.
   useEffect(() => {
     setErr(null);
     if (!pk) {
@@ -157,8 +148,7 @@ export function WalletAuthGate({ children }: { children: ReactNode }) {
     }
   }, [pk, signMessage]);
 
-  // Identity authorization: only after ownership is proven, and re-run per pk.
-  // Fail-closed: any error or non-match => denied.
+  // Runs only after ownership is proven, and re-runs per pk. Any error or non-match denies.
   useEffect(() => {
     if (!verified || !pk) {
       setAuthz("checking");
@@ -175,30 +165,12 @@ export function WalletAuthGate({ children }: { children: ReactNode }) {
           if (alive) setAuthz("ok");
           return;
         }
-        // 2) an ACTIVE registered guardian.
-        //
-        // AUDIT finding L-01: this used to accept any wallet whose guardian PDA
-        // merely EXISTED. Removal does not close that account, it stamps
-        // `cooldown_until`, so a removed guardian kept console access (it could
-        // no longer act on-chain, but it could still read the panel). Decode the
-        // account and require an active guardian, matching what the program
-        // itself enforces (`g.cooldown_until == 0`).
-        //
-        // GuardianAccount layout, offsets used here:
-        //   0..8    discriminator
-        //   8..40   guardian: Pubkey
-        //   40..48  added_at: i64
-        //   48..56  cooldown_until: i64   <- read below
-        //   56..64  pending_removal_at: i64
-        //   64      self_cancel_used: bool
-        //   65      version: u8
-        //   66..98  reserved
-        // The account has grown twice (56 -> 64 -> 98). Both growths APPENDED, so
-        // these offsets held, but that was luck rather than design: inserting a field
-        // before cooldown_until would have silently mis-authorized wallets. The
-        // minimum length asserted below is therefore the offset this code actually
-        // depends on, not the current total size, so a future append cannot make the
-        // guard wrong in either direction.
+        // 2) an ACTIVE registered guardian. Removal stamps `cooldown_until` instead of closing the
+        // account, so accepting mere PDA existence kept console access for removed guardians. Require
+        // what the program requires: `cooldown_until == 0`.
+        // GuardianAccount prefix: 0..8 discriminator, 8..40 guardian, 40..48 added_at, 48..56
+        // cooldown_until. COOLDOWN_END is the offset this code depends on, NOT the current account
+        // size, so appending a field cannot make the length guard wrong in either direction.
         const COOLDOWN_END = 56;
         const gInfo = await connection.getAccountInfo(guardianPda(key));
         if (gInfo && gInfo.data.length >= COOLDOWN_END) {

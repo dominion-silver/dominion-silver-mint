@@ -1,20 +1,10 @@
-// DEV-MODE ADMIN INSTRUCTIONS.
-//
-// REMOVE OR FEATURE-GATE BEFORE MAINNET. These bypass the 24h timelock
-// that normally protects security-sensitive parameters. They exist to
-// make devnet/testnet UX testing tractable (e.g. browser-flow staleness
-// budget vs. the 15s default).
-//
-// Mainnet path: use propose_set_oracle_guards + execute_set_oracle_guards
-// (24h timelock, see admin/propose.rs).
-//
-// SAFETY: even though these are dev-only, we enforce the SAME PRODUCTION
-// BOUNDS that the timelocked path enforces (PREMIUM_BPS_MINT_CEILING /
-// PREMIUM_BPS_REDEEM_CEILING, PREMIUM_BPS_COMBINED_FLOOR, sane staleness
-// floor/ceiling). This way a
-// fat-fingered devnet call cannot push the contract into a state that
-// would never be reachable via mainnet governance. (REVIEW_REPORT.md
-// SC-C1, SC-H4, SC-M1, SC-M7.)
+// DEV-MODE ADMIN INSTRUCTIONS. These bypass the 24h timelock that normally protects these
+// parameters, and exist to make devnet UX testing tractable (e.g. a browser-flow staleness budget
+// larger than the 15s default). Compiled ONLY under the non-default `dev-hatch` feature (see lib.rs),
+// so they are absent from release builds and from the IDL. The mainnet path is
+// propose_set_oracle_guards + execute_set_oracle_guards. They still enforce the SAME PRODUCTION
+// BOUNDS as the timelocked path, so a fat-fingered devnet call cannot reach a state mainnet
+// governance could not.
 
 use anchor_lang::prelude::*;
 
@@ -30,12 +20,8 @@ pub struct DevSetOracleParam<'info> {
     pub admin: Signer<'info>,
 }
 
-/// Bumps `max_staleness_seconds` instantly (no timelock).
-/// Bound: 30..=120 sec.
-///   - Floor 30s: anything lower would brick the protocol (every Pyth
-///     update arrives stale, all mints/redeems revert). SC-H4.
-///   - Ceiling 120s: anything higher defeats the oracle-freshness
-///     threat-model assumption. SC-M1.
+/// Bumps `max_staleness_seconds` instantly (no timelock). Bound 30..=120s: below 30 every update
+/// arrives stale and all mints/redeems revert, above 120 the threat model's freshness assumption goes.
 pub fn dev_set_max_staleness_handler(ctx: Context<DevSetOracleParam>, secs: u32) -> Result<()> {
     require!(secs >= 30, DominionError::BelowMinimum);
     require!(secs <= 120, DominionError::AboveMaximum);
@@ -52,15 +38,8 @@ pub fn dev_set_max_staleness_handler(ctx: Context<DevSetOracleParam>, secs: u32)
     Ok(())
 }
 
-/// Sets mint and redeem premiums instantly (no timelock).
-///
-/// Same bounds as the timelocked path's `assert_premium_within_bounds`:
-///   - mint <= PREMIUM_BPS_MINT_CEILING (2000 bps), redeem <= PREMIUM_BPS_REDEEM_CEILING (1000 bps)
-///   - sum >= PREMIUM_BPS_COMBINED_FLOOR (500 bps = 5%)
-///
-/// Without these bounds (SC-C1) a single fat-finger could:
-///   - set 100% mint premium -> users mint 0 SILV per 100 USDC (loss),
-///   - set 0/0 premiums -> zero-cost arbitrage between mint + redeem.
+/// Sets both premiums instantly (no timelock), under the same bounds as the timelocked path. Without
+/// them one fat-finger could set a 100% mint premium (users mint 0 SILV) or 0/0 (free arbitrage).
 pub fn dev_set_premiums_handler(
     ctx: Context<DevSetOracleParam>,
     mint_bps: u16,
@@ -81,13 +60,7 @@ pub fn dev_set_premiums_handler(
     let config = &mut ctx.accounts.config;
     config.premium_bps_mint = mint_bps;
     config.premium_bps_redeem = redeem_bps;
-    // REVIEW-OF-FIXES P1: `ConfigAccount::assert_premium_within_bounds` was declared and called by NOTHING.
-    // The ceilings and the combined floor are re-expressed inline at each of the four mutation sites, so
-    // there was no live gap, but the orphan is the exact class section 4c exists to catch: a rule that is
-    // written, unit-tested, and never runs. Called here as a POST-WRITE invariant, which is a different and
-    // strictly complementary statement to the inline pre-write checks: the inline ones validate a CANDIDATE
-    // value, this one validates the STORED pair, so a future setter that forgets its inline check still
-    // cannot leave the config out of bounds.
+    // POST-WRITE invariant: the checks above validate the CANDIDATE, this the STORED pair.
     config.assert_premium_within_bounds()?;
     let now = Clock::get()?.unix_timestamp;
     emit!(DevParamSet {

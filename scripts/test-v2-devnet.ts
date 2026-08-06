@@ -1,18 +1,14 @@
 /**
- * SUPERSEDED. Do not use.
- *
- * AUDIT review of daac4ac (P2): this script calls instructions that no longer exist
- * in the program ABI:
- *   the four individual redeem-throttle setters (replaced by FIX A: emergency_tighten_redeem_limits + propose/execute_set_redeem_limits)
- * It also held a program id retired one or two generations ago. It cannot work, and
- * it fails deep inside with an opaque error that reads like a protocol fault rather
- * than a stale script. Kept for its historical assertions only.
+ * SUPERSEDED. Do not use. It calls the four individual redeem-throttle setters, which FIX A
+ * replaced with emergency_tighten_redeem_limits + propose/execute_set_redeem_limits, so it
+ * cannot work: it fails deep inside with an opaque error that reads like a protocol fault
+ * rather than a stale script. Kept for its historical assertions only.
  *
  * Current equivalents:
-  scripts/e2e-fixa-devnet.ts        launch posture + FIX A, on the live program
-  scripts/e2e-guardian-devnet.ts    the guardian removal lifecycle (DOM-007)
-  scripts/t1-hostile-bootstrap.ts   the initialize authentication (DOM-001, P0)
-  scripts/read-config.ts            dump the live config
+ *   scripts/e2e-fixa-devnet.ts        launch posture + FIX A, on the live program
+ *   scripts/e2e-guardian-devnet.ts    the guardian removal lifecycle (DOM-007)
+ *   scripts/t1-hostile-bootstrap.ts   the initialize authentication (DOM-001, P0)
+ *   scripts/read-config.ts            dump the live config
  */
 if (!process.env.DOMINION_RUN_SUPERSEDED) {
   console.error(
@@ -24,22 +20,13 @@ if (!process.env.DOMINION_RUN_SUPERSEDED) {
 }
 
 /**
- * Live on-chain verification of the V2 (Option B) program on devnet.
- * Uses the deployer keypair (= the on-chain `admin` + PermanentDelegate for
- * this devnet test config). Exercises exactly the codex-flagged/fixed surface
- * that does NOT need devnet USDC:
- *   - SILV mint shape (P1-03 allowlist, freeze=None, decimals 6, authorities)
- *   - ConfigAccount = Option B §6 defaults
- *   - P1-01 instant-setter bounds (in-range OK + verify, out-of-range revert)
- *   - D11 redemptions_enabled toggle
- *   - P1-01 per-side premium ceilings (propose reverts)
- *   - P1-01a propose-side oracle-guard pre-validation reverts
- *   - P1-02 Pyth-receiver pin (propose reverts on non-official receiver)
- *   - pause / unpause
- * Restores every mutated value at the end (leaves the devnet instance at §6).
- *
- * NOT covered (blocked: deployer has 0 devnet USDC, Circle faucet is web-only):
- *   full mint -> instant redeem -> forced queue -> claim user lifecycle.
+ * Live on-chain verification of the V2 program on devnet. It sends transactions, so it must
+ * pass requireSanctionedCluster. Signs as the deployer keypair, which is the on-chain admin
+ * and PermanentDelegate of this devnet config. Covers the SILV mint shape, the config
+ * defaults, the instant-setter and premium bounds, the propose-side oracle-guard
+ * pre-validation, the Pyth-receiver pin and pause/unpause, and restores every value it
+ * mutates. The mint -> redeem -> claim user lifecycle is NOT covered: the deployer holds no
+ * devnet USDC and the Circle faucet is web-only.
  *
  * Run: DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json npx tsx scripts/test-v2-devnet.ts
  */
@@ -63,12 +50,8 @@ import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 import { requireSanctionedCluster } from "./_guard";
 import { resolveCluster, describeCluster } from "./_cluster";
 
-// RE-AUDIT P0 (the CLASS, not the instance). This script sends transactions and had NO cluster guard:
-// it hardcoded the devnet RPC, so `DOMINION_RPC` was ignored and nothing confirmed the chain matched.
-// The re-audit named `create-fee-vault.ts` as "the missing fourth"; the structural assertion in
-// scripts/verify-cluster-resolution.ts then found NINE more, of which this is one. Every sending script
-// now resolves its cluster from the environment and passes through the one guard, which does the consent
-// check AND the genesis-hash cross-check.
+// This script sends, so the cluster must come from the environment and pass the one guard.
+// See the note on CLUSTER in scripts/initialize-devnet.ts.
 const CLUSTER = resolveCluster();
 const RPC = CLUSTER.rpc;
 const PROGRAM_ID = SHARED_PROGRAM_ID;
@@ -230,9 +213,8 @@ async function main() {
   await m.setRedeemQueueDelay(0).accounts(A).rpc();
   ok(
     "set_redeem_queue_delay(0) applied (0 valid)",
-    // 2026-08-05: `redeemQueueDelaySeconds` is DEAD on chain (the queue is gone) and the ceilings
-    // validator refuses 0 anyway (REDEEM_QUEUE_DELAY_MIN_SECONDS), so this assertion could never
-    // pass. Asserting on the field that IS live instead.
+    // `redeemQueueDelaySeconds` is DEAD on chain (the queue is gone) and the ceilings validator
+    // refuses 0 anyway, so this asserts on the field that IS live.
     (await cfgAcc()).instantRedeemWindowSeconds > 0,
   );
   await m.setRedeemQueueDelay(259_200).accounts(A).rpc(); // restore
@@ -338,9 +320,8 @@ async function main() {
   );
 
   // --- H. pause / unpause ---
-  // pause: accounts = {config, signer, guardian: Option}. Admin-signed => guardian
-  // must be the program ID (Anchor's None sentinel); otherwise the resolver
-  // derives the [GUARDIAN_SEED, signer] PDA which is uninitialized on devnet.
+  // On an admin-signed pause, `guardian` must be the program id (Anchor's None sentinel),
+  // or the resolver derives [GUARDIAN_SEED, signer], which is uninitialized on devnet.
   console.log("[H] pause / unpause");
   await m
     .pause()

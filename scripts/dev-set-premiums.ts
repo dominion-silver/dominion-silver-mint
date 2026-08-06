@@ -1,8 +1,6 @@
 /**
- * Dev-only: set premium_bps_mint + premium_bps_redeem without timelock.
- *
- * Run: npx tsx scripts/dev-set-premiums.ts <mint_bps> <redeem_bps>
- *   e.g.  npx tsx scripts/dev-set-premiums.ts 50 50    (0.5% each)
+ * Dev-only: set premium_bps_mint + premium_bps_redeem without the timelock.
+ * Run: npx tsx scripts/dev-set-premiums.ts <mint_bps> <redeem_bps>   e.g. 50 50 for 0.5% each
  */
 import { Connection, Keypair, PublicKey, Transaction, TransactionInstruction, sendAndConfirmTransaction } from "@solana/web3.js";
 import { createHash } from "crypto";
@@ -10,12 +8,8 @@ import fs from "fs"; import os from "os";
 import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 import { requireSanctionedCluster } from "./_guard";
 import { resolveCluster, describeCluster } from "./_cluster";
-// RE-AUDIT P0 (the CLASS, not the instance). This script sends transactions and had NO cluster guard:
-// it hardcoded the devnet RPC, so `DOMINION_RPC` was ignored and nothing confirmed the chain matched.
-// The re-audit named `create-fee-vault.ts` as "the missing fourth"; the structural assertion in
-// scripts/verify-cluster-resolution.ts then found NINE more, of which this is one. Every sending script
-// now resolves its cluster from the environment and passes through the one guard, which does the consent
-// check AND the genesis-hash cross-check.
+// Every sending script resolves its cluster from the environment and passes through the one guard,
+// which does the consent check AND the genesis-hash cross-check.
 const CLUSTER = resolveCluster();
 const RPC = CLUSTER.rpc;
 

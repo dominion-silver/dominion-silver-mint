@@ -1,14 +1,7 @@
-// Pyth Lazer transaction builders for the dominion oracle-consuming
-// instructions (mint / instant-redeem / claim). Each builds the dominion ix
-// with the 5 Lazer verify accounts + the inner-payload-free envelope as
-// `message_data`, prepends the ed25519 precompile instruction whose offsets the
-// on-chain Lazer verify_message cross-checks (lazer-assembly.ts), and assembles
-// `[ed25519, ...preIxs, dominionIx]`.
-//
-// STATUS: the instruction ASSEMBLY (account set, args, ed25519 offset
-// cross-referencing) is pure + unit-tested. The end-to-end flow (a real signed
-// envelope from /api/lazer + landing the tx) is gated on the Pyth Starter API
-// key; the compute-unit budget is an estimate pending a live measurement.
+// Pyth Lazer transaction builders for the oracle-consuming dominion instructions. Each builds the dominion
+// ix with the 5 Lazer verify accounts plus the envelope as `message_data`, prepends the ed25519 precompile
+// instruction whose offsets the on-chain `verify_message` cross-checks (lazer-assembly.ts), and assembles
+// `[cb_limit, cb_price, ed25519, ...ataIxs, dominionIx]`. The compute-unit budget is still an estimate.
 import {
   ComputeBudgetProgram,
   Connection,
@@ -49,21 +42,15 @@ import {
 import idl from "./idl/dominion_silver_mint.json";
 import { assembleLazerTx, lazerMessageData } from "./lazer-assembly";
 
-// CRITICAL ix ORDERING (the ed25519 precompile uses ABSOLUTE instruction-index
-// offsets, so the tx layout must be stable end-to-end):
-//   [cb_limit, cb_price, ed25519, ...ataIxs, dominionIx]
-// The 2 compute-budget ixs go FIRST and we set the priority fee OURSELVES.
-// Wallets (Phantom) otherwise PREPEND their own setComputeUnitPrice ix at index
-// 0, which shifts every instruction by 1 -> the ed25519 offsets (pinned to the
-// dominion ix's absolute index) then point one slot short, at an ATA ix ->
-// the precompile fails `InvalidDataOffsets` (Custom 3) and the mint reverts in
-// the wallet's pre-sign simulation. Setting the price ourselves makes the wallet
-// leave the tx untouched. The ed25519 ix therefore sits at index 2.
+// CRITICAL ix ORDERING: the ed25519 precompile uses ABSOLUTE instruction-index offsets, so the tx layout
+// must be stable end to end. The 2 compute-budget ixs go FIRST and we set the priority fee OURSELVES,
+// because Phantom otherwise PREPENDS its own setComputeUnitPrice at index 0, shifting every ix by one, so
+// the ed25519 offsets point one slot short at an ATA ix, the precompile fails InvalidDataOffsets (Custom 3),
+// and the mint reverts inside the wallet's pre-sign simulation.
 const COMPUTE_BUDGET_IX_COUNT = 2;
 /** The ed25519 ix's tx position (= the dominion ix's `ed25519_instruction_index` arg). */
 export const ED25519_IX_INDEX = COMPUTE_BUDGET_IX_COUNT;
-// Modest devnet priority fee; its presence (not its size) is what stops the
-// wallet from prepending its own and breaking the offsets.
+// Modest devnet priority fee. Its PRESENCE, not its size, is what stops the wallet prepending its own.
 const PRIORITY_FEE_MICROLAMPORTS = 1000;
 
 /** The 5 Lazer verify accounts every dominion oracle ix needs. */
@@ -84,13 +71,8 @@ function computeBudgetIxs(): TransactionInstruction[] {
   ];
 }
 
-/**
- * Pure: order the instructions for a Lazer oracle tx as
- * `[cb_limit, cb_price, ed25519, ...ataIxs, dominionIx]`. The compute-budget ixs
- * lead so a wallet won't prepend its own and shift the ed25519 ix's absolute
- * instruction-index offsets; the ed25519 ix sits at `COMPUTE_BUDGET_IX_COUNT`
- * and its offsets reference the dominion ix at the tail. Unit-tested offline.
- */
+/** Pure: order the instructions as `[cb_limit, cb_price, ed25519, ...ataIxs, dominionIx]`. The ed25519 ix
+ *  sits at `COMPUTE_BUDGET_IX_COUNT` and its offsets reference the dominion ix at the tail. */
 export function assembleLazerOracleIxs(
   dominionIx: TransactionInstruction,
   envelope: Uint8Array,
@@ -119,11 +101,9 @@ async function finalize(
   return tx;
 }
 
-/** The premium fee vault: the USDC ATA of the fee_vault PDA.
- *
- * allowOwnerOffCurve = true is MANDATORY (the owner is a PDA); omitting it throws
- * TokenOwnerOffCurveError. mint_silv and redeem_silv both REQUIRE this account to exist, so if
- * it was never created every mint and every redeem reverts. */
+/** The premium fee vault: the USDC ATA of the fee_vault PDA. `allowOwnerOffCurve = true` is MANDATORY (the
+ *  owner is a PDA) or this throws TokenOwnerOffCurveError. mint_silv and redeem_silv both REQUIRE the
+ *  account to exist, so if it was never created every mint and every redeem reverts. */
 export function feeVaultUsdcAta(): PublicKey {
   return getAssociatedTokenAddressSync(
     USDC_MINT,
@@ -133,30 +113,13 @@ export function feeVaultUsdcAta(): PublicKey {
   );
 }
 
-/** Resolve the caller's OPTIONAL per-wallet accounts (fee exemption, KYC attestation).
+/** Resolve the caller's OPTIONAL per-wallet accounts (fee exemption, KYC attestation) in ONE batched RPC
+ *  call. Anchor optional accounts must be `null` when absent, and passing the address of an account the
+ *  program cannot deserialize is worse than passing null, so this validates with `usable`, not existence.
  *
- * Anchor optional accounts must be `null` when absent. Passing the PDA address of an account the
- * program cannot deserialize is worse than passing null: the program reverts. So this validates
- * OWNER and DISCRIMINATOR, not merely existence, in ONE batched RPC call.
- *
- * An earlier version checked existence only, and said so in this docstring as though that were the
- * guard. It was not: anyone can create an account at a PDA address with a dust transfer, which
- * bricked the victim's mint and redeem permanently. See `usable` below.
- *
- * Resolving from chain rather than from a caller-supplied flag makes the client self-healing: a
- * wallet that gets whitelisted or approved starts benefiting on its next transaction with no
- * front-end change and no cache to invalidate.
- *
- * THROWS on RPC failure. It used to swallow the error and return `{null, null}`, which looked like
- * the safe choice and defeated the tri-state `classifyRedeem` was given: SWR recorded a SUCCESS,
- * never retried with backoff, and `kycAttested` became a definite `false` rather than `undefined`.
- * With `keepPreviousData` an ATTESTED user was told "Redemption requires identity verification on
- * this wallet" for 30 seconds on any RPC blip. The `undefined` branch was only reachable before the
- * first fetch, never after a failure.
- *
- * The transaction builders below catch and fall back to null themselves, where that IS the safe
- * direction: full fee rather than a wrong discount, and a clear KycRequired rather than mispricing.
- * The decision belongs at each call site, not buried here. */
+ *  THROWS on RPC failure, so the consumer sees an error rather than "no accounts" and `kycAttested` stays
+ *  `undefined` (NOT KNOWN) instead of hardening into a definite `false`. The builders below fall back to
+ *  null themselves, where that IS the safe direction; the decision belongs at each call site. */
 export async function resolveWalletFlags(
   connection: Connection,
   user: PublicKey,
@@ -170,8 +133,7 @@ export async function resolveWalletFlags(
       owner: user,
       feeExempt: feeOk ? fe : null,
       kyc: usable(infos[1], KYC_DISCRIMINATOR) ? ky : null,
-      // AUDIT P-07: the account was located and never READ, so the UI could not tell WHICH side was
-      // waived or whether the term was still live, and every quote used the global premium.
+      // P-07: READ the account, do not merely locate it, or every quote uses the global premium.
       feeExemptFlags: feeOk ? decodeFeeExemptFlags(infos[0]!.data) : null,
       feeExemptExpiresAt: feeOk ? decodeFeeExemptExpiry(infos[0]!.data) : null,
     };
@@ -183,23 +145,11 @@ export async function resolveWalletFlags(
   }
 }
 
-/** The builders' fallback: full fee, no exemption, no attestation.
- *
- * Safe HERE in a way it is not for display, because the program re-checks everything: an omitted
- * exemption charges the full premium and an omitted attestation reverts KycRequired with a mapped
- * message. Building nothing at all would be worse than building a correctly-priced transaction.
- *
- * But "safe" is not "free", and the review-of-fixes was too quick to call it safe and stop. Safe
- * means the PROTOCOL cannot be cheated. The USER can still lose: if this wallet really does hold a
- * `FeeExemptAccount` and the read blips, we omit the account, the program cannot see the exemption,
- * and it charges the full premium on a transaction the user already signed. Nothing reverts, so
- * there is no second chance. That is a real (if small) cost imposed by our RPC flake, not theirs.
- *
- * So retry once before conceding. One extra `getMultipleAccountsInfo` covers the transient blip
- * that motivates the fallback in the first place, and costs one round trip on the rare failure path
- * only. It cannot fix a sustained outage: if the wallet is exempt and both reads fail, they overpay.
- * Closing THAT would mean refusing to build the transaction, which penalises every non-exempt
- * wallet (nearly all of them) for a fault that affects one, so it is the wrong trade. */
+/** The builders' fallback: full fee, no exemption, no attestation. Safe for the PROTOCOL (the program
+ *  re-checks everything) but not free for the USER: an exempt wallet whose read blips is charged the full
+ *  premium on a transaction that does NOT revert, so there is no second chance. Hence one retry before
+ *  conceding. A sustained outage still makes that wallet overpay; refusing to build instead would penalise
+ *  every non-exempt wallet for a fault affecting one. */
 async function resolveWalletFlagsOrDefault(
   connection: Connection,
   user: PublicKey,
@@ -215,9 +165,7 @@ async function resolveWalletFlagsOrDefault(
   }
 }
 
-/** Anchor account discriminators: the first 8 bytes of sha256("account:<StructName>").
- *
- *  Read from the IDL rather than hardcoded, so they cannot drift from the program. */
+/** Anchor account discriminators, read from the IDL rather than hardcoded so they cannot drift. */
 function discriminatorFromIdl(name: string): Uint8Array {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const acc = (idl as any).accounts?.find((a: any) => a.name === name);
@@ -229,37 +177,12 @@ function discriminatorFromIdl(name: string): Uint8Array {
 const FEE_EXEMPT_DISCRIMINATOR = discriminatorFromIdl("FeeExemptAccount");
 const KYC_DISCRIMINATOR = discriminatorFromIdl("KycAccount");
 
-/** Whether an account is genuinely one of OUR accounts of the expected type.
- *
- * EXISTENCE IS NOT ENOUGH, and assuming it was is a P0 this code shipped with. Creating an account
- * at a PDA address is PERMISSIONLESS for anybody: a bare `SystemProgram.transfer` of one lamport to
- * `feeExemptPda(victim)` produces a System-owned, zero-data account there. The previous version saw
- * a non-null AccountInfo, reported the exemption as present, and the builder passed the real PDA.
- * Anchor treats any key that is not the program id as "optional account SUPPLIED", so
- * `Option<Account<'info, FeeExemptAccount>>` then failed its owner check and the program reverted.
- *
- * Result: every mint and every redeem from that wallet reverted, permanently, for the price of a
- * dust transfer, with no self-service remedy, because nobody can sign for a PDA to close it. A
- * griefing attack on any address an attacker can name.
- *
- * So: owner must be THIS program, and the first 8 bytes must be the expected Anchor discriminator.
- * Both are needed. The owner check alone would still accept a different account type of ours at a
- * colliding address, and the discriminator alone would accept a spoofed account owned by someone
- * else. Together they match exactly what `Account<'info, T>::try_from` enforces on chain, which is
- * the property this function has to mirror.
- */
+/** A wallet's on-chain entitlements: which optional accounts it has, and what they say. */
 export interface WalletFlags {
-  /** WHOSE flags these are.
-   *
-   *  ROUND 3 P1. `WalletFlags` carried no identity, and the SWR request uses `keepPreviousData: true`, which
-   *  deliberately serves the PREVIOUS key's data until the new fetch settles. Both builders then trusted that
-   *  snapshot. Switch from wallet A to wallet B and submit before B's fetch lands: A's `feeExempt: null` is
-   *  passed for B, so the program is never shown B's live exemption and charges the full premium. In the
-   *  other direction A's exemption PDA is passed for B and the transaction reverts after the Lazer fee.
-   *
-   *  The builders now REJECT a snapshot whose owner is not the signer, and resolve fresh instead. A snapshot
-   *  that cannot say who it belongs to cannot be checked, which is why this field exists rather than a
-   *  comment telling callers to be careful. */
+  /** WHOSE flags these are. A snapshot is only usable for the wallet it describes, and `keepPreviousData`
+   *  deliberately serves the PREVIOUS wallet's until the new fetch settles: pricing B from A's snapshot
+   *  either omits B's live exemption (full premium, nothing reverts) or passes A's exemption PDA for B (a
+   *  revert after the Lazer fee). Checkable only because the snapshot carries its owner. */
   owner: PublicKey;
   feeExempt: PublicKey | null;
   kyc: PublicKey | null;
@@ -271,22 +194,11 @@ export interface WalletFlags {
 
 // FeeExemptAccount layout, from state/fee_exempt.rs::SIZE:
 //   8 discriminator | 32 wallet | 1 flags | 8 added_at | 32 added_by | 1 version | 8 expires_at | 24 reserved
-// Hand-decoded rather than via Anchor's coder because this runs inside `getMultipleAccountsInfo`, where
-// we already hold the raw bytes and want no second RPC. The offsets are asserted in
-// contract-parity.test.ts against the IDL so they cannot drift from the struct.
-/**
- * Offsets DERIVED from the IDL's field types, not hardcoded.
- *
- * RE-AUDIT P2, and it was the fourth remediation test that could not fail for the class its comment
- * claimed to guard. The offsets were literals, the parity test asserted only field NAMES and ORDER, and
- * the round-trip test rebuilt its buffer from the same literals, so it was circular. Widen `added_at` from
- * i64 to i128 without renaming or reordering anything and both tests stay green while `expires_at` moves
- * eight bytes: the app then reads `added_by`/`version` as the expiry and shows an active waiver as expired
- * or the reverse. That directly changes the quoted fee and `min_out`.
- *
- * Computing from the IDL removes the class: a widened field changes the offset automatically, and a type
- * this table does not know throws at module load rather than silently returning a wrong number.
- */
+// Hand-decoded rather than through Anchor's coder: this runs inside `getMultipleAccountsInfo`, so the raw
+// bytes are already in hand. Offsets are DERIVED from the IDL field types, never hardcoded: widening a field
+// without renaming it moves `expires_at`, and a literal offset would then read `added_by` as the expiry and
+// show an active waiver as expired or the reverse, changing the quoted fee and `min_out`. An unknown type
+// throws at module load rather than returning a wrong number.
 const BORSH_WIDTH: Record<string, number> = {
   u8: 1,
   i8: 1,
@@ -345,8 +257,8 @@ export function decodeFeeExemptFlags(data: Uint8Array | Buffer): number | null {
 
 export function decodeFeeExemptExpiry(data: Uint8Array | Buffer): number | null {
   if (data.length < FEE_EXEMPT_EXPIRES_AT_OFFSET + 8) return null;
-  // i64 LE. Read as BigInt then narrow: an expiry is seconds, so it fits a Number comfortably, and
-  // going through BigInt avoids the 32-bit truncation a DataView getInt32 pair would risk.
+  // i64 LE via BigInt, then narrowed: an expiry in seconds fits a Number, and BigInt avoids the 32-bit
+  // truncation a DataView getInt32 pair would risk.
   let v = 0n;
   for (let i = 7; i >= 0; i--) v = (v << 8n) | BigInt(data[FEE_EXEMPT_EXPIRES_AT_OFFSET + i]);
   // Interpret as signed.
@@ -354,20 +266,10 @@ export function decodeFeeExemptExpiry(data: Uint8Array | Buffer): number | null 
   return Number(v);
 }
 
-/**
- * The premium a GIVEN wallet actually pays on a GIVEN side, mirroring
- * `state/fee_exempt.rs::effective_premium_bps`.
- *
- * AUDIT FINDING P-07. The resolver loaded the exemption PDA, but the preview, the effective price, the
- * fee label and `min_out` all kept using the global bps. A wallet whitelisted on mint saw "1% fee" and
- * an understated output while the program would charge 0%, so the user could not see the commercial
- * terms they had been granted before signing. Distinct from the deliberate RPC fallback: this happened
- * even when the read SUCCEEDED.
- *
- * `expiresAt` of 0 counts as EXPIRED here, matching `FeeExemptAccount::is_expired` after C-01. Failing
- * open would quote 0% and then charge the premium, which is the worse direction: the user would sign
- * expecting a discount and receive less SILV than the quote promised.
- */
+/** The premium a GIVEN wallet pays on a GIVEN side, mirroring `state/fee_exempt.rs::effective_premium_bps`.
+ *  Audit P-07: the preview, the price, the fee label and `min_out` must all use THIS number, not the global
+ *  bps. `expiresAt` of 0 counts as EXPIRED, matching `FeeExemptAccount::is_expired`: failing open would
+ *  quote 0% and then charge the premium, minting less SILV than the quote promised. */
 export function effectivePremiumBps(
   configuredBps: number,
   flags: number | null,
@@ -381,6 +283,11 @@ export function effectivePremiumBps(
   return (flags & bit) !== 0 ? 0 : configuredBps;
 }
 
+/** Whether an account is genuinely one of OUR accounts of the expected type. EXISTENCE IS NOT ENOUGH:
+ *  creating an account at a PDA address is permissionless (one lamport to `feeExemptPda(victim)` makes a
+ *  System-owned account there), Anchor treats any supplied non-program-id key as "optional account
+ *  SUPPLIED", and the owner check then reverts every mint and redeem from that wallet, permanently. Owner
+ *  AND discriminator: together they mirror what `Account<'info, T>::try_from` enforces on chain. */
 export function usable(
   info: { owner: PublicKey; data: Uint8Array | Buffer } | null,
   discriminator: Uint8Array,
@@ -395,34 +302,22 @@ export function usable(
 }
 
 
-/** A wallet-entitlement snapshot the CALLER already resolved.
- *
- *  RE-AUDIT P2: the builders used to re-read these accounts themselves, so the transaction was built from
- *  a different snapshot than the one the quote and `min_out` were derived from. Two snapshots, one
- *  transaction, and the disagreement surfaces as an unexplainable SlippageExceeded. Pass the quote's
- *  snapshot; omit it and the builder resolves its own, which is the correct behaviour for a non-UI caller
- *  (a script) that has no quote to be consistent with. */
 export interface BuildLazerMintTxArgs {
   amountUsdc: BN;
   minSilvOut: BN;
   envelope: Uint8Array;
-  /** The snapshot the QUOTE used. See the note above. */
+  /** The snapshot the QUOTE used, so the quote, `min_out` and the transaction rest on the SAME facts: two
+   *  snapshots for one transaction disagree as an unexplainable SlippageExceeded. Omit it and the builder
+   *  resolves its own, which is right for a non-UI caller with no quote to be consistent with. */
   walletFlags?: WalletFlags;
 }
 
-/** The mint_silv account set, as a pure function of the caller and their optional per-wallet
- *  accounts.
+/** The mint_silv account set, as a pure function of the caller and their optional per-wallet accounts.
  *
- *  EXPORTED SO IT CAN BE TESTED. The previous unit test hand-wrote its own 17-key account object
- *  and never called the real builder, so `buildLazerMintTx` could lose `feeVault` tomorrow and
- *  every test would still pass. That is not a theoretical risk: `.accounts()` is NOT strict in
- *  Anchor 0.31.1 (it delegates to `accountsPartial`), so a missing key is silently derived from
- *  the IDL seeds rather than rejected, and for the OPTIONAL accounts that derivation produces a
- *  real PDA address for an account that does not exist, which the program then fails to
- *  deserialize. There is no compiler and no runtime check on this list: a test is the only guard.
- *
- *  `opt` comes from `resolveWalletFlags`, which must have already checked EXISTENCE. Passing a
- *  PDA address for a non-existent optional account is worse than passing null. */
+ *  EXPORTED SO IT CAN BE TESTED, and a test is the ONLY guard on this list: `.accounts()` is not strict in
+ *  Anchor 0.31.1 (it delegates to `accountsPartial`), so a missing key is silently derived from the IDL seeds,
+ *  and for an OPTIONAL account that derivation yields a real address for an account that does not exist,
+ *  which the program then fails to deserialize. `opt` must come from a resolver that used `usable`. */
 export function mintSilvAccounts(
   user: PublicKey,
   opt: { feeExempt: PublicKey | null; kyc: PublicKey | null },
@@ -487,10 +382,8 @@ export async function buildLazerMintTx(
   const messageData = Buffer.from(lazerMessageData(args.envelope));
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  // The caller's snapshot if it has one, so the transaction is priced by the same facts the user saw.
-  // Trust the caller's snapshot ONLY if it belongs to this signer (round 3 P1). A mismatch means the UI is
-  // showing another wallet's entitlements, so resolving fresh is both correct and the only safe option; the
-  // quote will be re-derived on the next render anyway.
+  // Trust the caller's snapshot ONLY if it belongs to this signer: a mismatch means the UI is showing
+  // another wallet's entitlements, so resolve fresh rather than price this transaction from them.
   const opt = flagsMatchOwner(args.walletFlags, user)
     ? args.walletFlags
     : await resolveWalletFlagsOrDefault(connection, user);
@@ -507,18 +400,12 @@ export async function buildLazerMintTx(
 }
 
 /**
- * Whether a wallet-flags snapshot describes THIS signer.
- *
- * ROUND 3 P1 was that `keepPreviousData` serves the previous wallet's entitlements until the new fetch
- * settles, so a snapshot has to be checked against the signer before anything is priced from it.
- *
- * REVIEW-OF-FIXES P2: the check existed in three places as three copies of the same expression, and had
- * zero test coverage. Reverting it in both builders and in the card left 60/60 and 25/25 green. One
- * exported predicate, tested here, used everywhere.
+ * Whether a wallet-flags snapshot describes THIS signer. `keepPreviousData` serves the previous wallet's
+ * entitlements until the new fetch settles, so a snapshot must be checked against the signer before anything
+ * is priced from it. ONE exported predicate, used by both builders and by the card: three copies of this
+ * comparison is how one of them drifts. A type predicate rather than a `boolean`, so the compiler carries
+ * the non-null narrowing instead of a hand-written `!` at each call site.
  */
-// A type predicate, not a `boolean`. REVIEW-OF-FIXES P2: returning `boolean` forced `args.walletFlags!` at
-// both call sites, so the non-null was ASSERTED by hand where it can be DERIVED. Narrowing means the compiler
-// carries the guarantee instead of the author.
 export function flagsMatchOwner(
   flags: WalletFlags | undefined | null,
   owner: PublicKey,
@@ -548,9 +435,8 @@ export async function buildLazerRedeemTx(
   const messageData = Buffer.from(lazerMessageData(args.envelope));
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  // Trust the caller's snapshot ONLY if it belongs to this signer (round 3 P1). A mismatch means the UI is
-  // showing another wallet's entitlements, so resolving fresh is both correct and the only safe option; the
-  // quote will be re-derived on the next render anyway.
+  // Trust the caller's snapshot ONLY if it belongs to this signer: a mismatch means the UI is showing
+  // another wallet's entitlements, so resolve fresh rather than price this transaction from them.
   const opt = flagsMatchOwner(args.walletFlags, user)
     ? args.walletFlags
     : await resolveWalletFlagsOrDefault(connection, user);
@@ -565,10 +451,5 @@ export async function buildLazerRedeemTx(
   return finalize(connection, user, assembleLazerOracleIxs(dominionIx, args.envelope, ataIxs));
 }
 
-// The claim-redemption builder and its args type were REMOVED on 2026-08-05 with the whole queued
-// redemption path. `claim_redemption` no longer exists in the program or the IDL, so calling it
-// threw at runtime rather than failing at build time -- the exact stale-client failure mode the
-// constants gate guards against elsewhere.
-//
-// Redemption is now one instant transaction: buildLazerRedeemTx above burns the SILV and pays
-// the USDC in the same transaction, or the whole thing reverts.
+// There is no claim-redemption builder: `claim_redemption` no longer exists in the program or the IDL.
+// Redemption is one transaction, `buildLazerRedeemTx` above, which settles or reverts as a whole.

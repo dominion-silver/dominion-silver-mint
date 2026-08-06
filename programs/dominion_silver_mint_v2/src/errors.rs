@@ -112,14 +112,9 @@ pub enum DominionError {
     // CODEX C-02: bootstrap authority validation.
     #[msg("SILV mint authority must be the silv_mint_authority PDA")]
     SilvMintAuthorityMismatch,
-    // SolidProof INFORMATIONAL #1: this message is actively misleading and was
-    // flagged as such. The code no longer requires freeze_authority to be None: the
-    // launch design REQUIRES it to be present and to equal
-    // config.freeze_authority_expected (see SilvFreezeAuthorityMismatch, which is
-    // what is actually raised). The variant is retained, NOT deleted, because error
-    // discriminants are append-only here and external clients decode them by number;
-    // removing it would silently renumber every later variant. Kept as a reserved
-    // hole with a message that says so.
+    // RETIRED, never raised: the launch design REQUIRES a freeze authority to be present and to match
+    // config.freeze_authority_expected (see SilvFreezeAuthorityMismatch). Kept as a reserved hole
+    // because discriminants are positional, so deleting it would renumber every later variant.
     #[msg("RETIRED: no longer raised. The SILV mint freeze_authority is REQUIRED to be present and to match config.freeze_authority_expected; see SilvFreezeAuthorityMismatch")]
     SilvFreezeAuthorityMustBeNone,
     // CODEX M-02: external dependency hard-pin.
@@ -149,13 +144,10 @@ pub enum DominionError {
     RequestNotPending,
     #[msg("Redemption request owner does not match signer")]
     RedeemRequestOwnerMismatch,
-    // CODEX P1-03: SILV mint carries a Token-2022 extension outside the strict
-    // allowlist {MetadataPointer, TokenMetadata, PermanentDelegate}.
+    // P1-03: an extension outside the allowlist (MetadataPointer, TokenMetadata, PermanentDelegate).
     #[msg("SILV mint has a disallowed Token-2022 extension")]
     DisallowedMintExtension,
-    // Codex deferred batch (2026-05-19). APPEND ONLY - never reorder:
-    // discriminants are positional and external clients read the numeric code.
-    // P2-03: close_settled_redemption rent-reclaim guard.
+    // Codex deferred batch (2026-05-19). APPEND ONLY.
     #[msg("Redemption request is not in SettledOffchain status")]
     RequestNotSettled,
     // P2-05: per-field metadata bounds (Option<String> + size caps).
@@ -165,8 +157,7 @@ pub enum DominionError {
     MetadataFieldEmpty,
     #[msg("Metadata field exceeds its maximum length")]
     MetadataFieldTooLong,
-    // Pyth Lazer (Pyth Pro) oracle migration (2026-06-09). APPEND ONLY.
-    // Section 5.2 / 5.2.1 of private/PYTH_PRO_MIGRATION_PLAN.md.
+    // Pyth Lazer oracle migration (2026-06-09). APPEND ONLY.
     #[msg("A pinned Lazer account (program/storage/treasury/sysvar/system) did not match")]
     LazerWrongAccount,
     #[msg("The Lazer program account is not executable")]
@@ -193,8 +184,7 @@ pub enum DominionError {
     LazerCarriedForward,
     #[msg("Lazer payload channel does not match the configured channel")]
     LazerWrongChannel,
-    // Launch spec 2026-07 (lean launch: pre-mint + hard cap, KYC/PoR deferred).
-    // APPEND ONLY - never reorder.
+    // Launch spec 2026-07 (pre-mint + hard cap, KYC/PoR deferred). APPEND ONLY.
     #[msg("Supply cap can only be lowered instantly; raising it is not available at launch")]
     SupplyCapRaiseBlocked,
     #[msg("Public direct mint is disabled (closed at launch; opens with KYC in Phase 1)")]
@@ -209,8 +199,7 @@ pub enum DominionError {
     RedemptionsEnableBlocked,
     #[msg("SILV mint freeze_authority does not match config.freeze_authority_expected")]
     SilvFreezeAuthorityMismatch,
-    // FIX A (launch spec 2026-07): loosen-slow / tighten-fast on the redeem
-    // throttles. APPEND ONLY - never reorder.
+    // FIX A: loosen-slow / tighten-fast on the redeem throttles. APPEND ONLY.
     #[msg("Loosening a redeem throttle requires the 24h timelock (propose_set_redeem_limits); only tightening is instant")]
     LooseningRequiresTimelock,
     #[msg("At least one redeem-limit field must be provided")]
@@ -220,12 +209,9 @@ pub enum DominionError {
     DeployerNotUpgradeAuthority,
     #[msg("initialize requires an upgradeable program: initialize before revoking the upgrade authority")]
     ProgramNotUpgradeable,
-    // NOTE: a TreasuryAtaMismatch variant was added and then REMOVED before the
-    // IDL was regenerated. Anchor's own init_if_needed codegen already validates
-    // the existing ATA (mint, owner, token program, derived address) and raises
-    // ConstraintTokenMint / ConstraintTokenOwner / AccountNotAssociatedTokenAccount,
-    // so the variant was unreachable and would have permanently occupied a
-    // discriminant. Removed while it was still safe to remove.
+    // A TreasuryAtaMismatch variant was removed here before the IDL was regenerated: Anchor's own
+    // init_if_needed codegen already validates the existing ATA and raises its own constraint errors,
+    // so the variant was unreachable.
     #[msg("Queue delay below the hard floor (loosening the queue below it would remove the only throttle on the queued path)")]
     QueueDelayTooShort,
     #[msg("Removing this guardian would take the active set below the floor; add a replacement guardian first")]
@@ -237,12 +223,10 @@ pub enum DominionError {
 
     #[msg("Supply cap cannot be set below the SILV already minted (it would permanently brick minting, since raising the cap is blocked)")]
     SupplyCapBelowSupply,
-    // AUDIT review of daac4ac (P1): a scheduled removal used to stay armed forever
-    // once matured, which turned it into a stored instant-removal coupon.
+    // A matured removal must expire, or it becomes a stored instant-removal coupon.
     #[msg("Guardian removal notice has expired; schedule a new one")]
     GuardianRemovalExpired,
-    // AUDIT review of daac4ac (P0): the targeted guardian's self-veto is capped at
-    // one use, otherwise a rogue guardian is permanently unremovable.
+    // The targeted guardian's self-veto is capped at one use, or a rogue guardian is unremovable.
     #[msg("This guardian has already used its one self-cancel")]
     GuardianSelfCancelExhausted,
     // "Mint at launch" phase (Thomas, 2026-07-26).
@@ -250,18 +234,16 @@ pub enum DominionError {
     PublicMintUnchanged,
     #[msg("Opening the public mint requires the 24h timelock; only CLOSING it is instant")]
     PublicMintOpenRequiresTimelock,
-    // Pre-mainnet upgrade (2026-08-05): instant-only redeem, fee routing, fee-exempt
-    // whitelist, dormant KYC. APPEND ONLY - never reorder.
+    // Pre-mainnet upgrade (2026-08-05): instant redeem, fee routing, whitelist, KYC. APPEND ONLY.
     #[msg("This redemption would exceed the global rolling redeem budget for the current window; retry after the window rolls or ask the admin to raise it")]
     RedeemLimitExceeded,
     #[msg("This wallet has no KYC attestation and KYC is currently required for this action")]
     KycRequired,
     #[msg("KYC cannot be enabled while config.kyc_operator is unset: enabling it with no attestor would lock out every holder with no way to approve anyone")]
     KycAttestorNotSet,
-    // NOTE for whoever writes the next variant: these messages go through a FORMAT string
-    // inside Anchor's #[error_code] expansion, so a literal brace is parsed as a
-    // placeholder and fails the build with "invalid format string". Write "mint and redeem",
-    // never "{mint, redeem}". Escaping as {{ }} also works but reads badly in logs.
+    // GOTCHA for the next variant: these messages go through a FORMAT string in Anchor's
+    // #[error_code] expansion, so a literal brace is read as a placeholder and fails the build with
+    // "invalid format string". Write "mint and redeem", never braces (escaping as {{ }} reads badly).
     #[msg("KYC scope value is unchanged, or sets bits other than mint and redeem")]
     KycScopeInvalid,
     #[msg("Fee-exemption flags are unchanged, zero, or set bits other than mint and redeem; use remove_fee_exempt to revoke an exemption entirely")]
@@ -276,55 +258,40 @@ pub enum DominionError {
     #[msg("withdraw_fees destination must not be owned by the fee-vault PDA: funds sent there could never be moved again")]
     FeeWithdrawDestinationStranded,
 
-    /// C-02: the KYC gate cannot be armed while the attestation roster is EMPTY.
-    ///
-    /// Arming with nothing on the roster locks every holder out of the gated side, and no on-chain check
-    /// can tell an empty roster from a deliberately empty one, so the roster itself is the check. Write at
-    /// least one attestation first (`attest_kyc`), then arm.
+    /// C-02: arming with an empty roster locks every holder out of the gated side, so the roster
+    /// itself is the check. Write at least one attestation (`attest_kyc`) first, then arm.
     #[msg("KYC cannot be armed with zero attestations: attest at least one wallet first")]
     KycNoAttestationsYet,
 
-    /// C-02: the attestor may not be decommissioned while the gate is armed.
-    ///
-    /// Setting `kyc_operator` to the zero pubkey while a side is gated means no NEW attestation can ever
-    /// be written, so every holder not already attested is shut out with no path in. Disarm first, then
-    /// decommission. Both are instant.
+    /// C-02: clearing `kyc_operator` while a side is gated means no NEW attestation can ever be
+    /// written, shutting out every holder not already attested. Disarm first, then decommission.
     #[msg("cannot clear the KYC operator while the gate is armed: disarm the scope first")]
     KycOperatorRequiredWhileArmed,
 
-    /// C-02, round 3: the roster may not be emptied while the KYC gate is armed.
-    ///
-    /// Arming requires a non-empty roster; this is the same invariant from the other side. Revoking the
-    /// last attestation while a side is gated leaves an armed gate nobody can pass, which is the total
-    /// lockout the counter exists to prevent. Disarm first, then revoke.
-    #[msg("cannot revoke the last KYC attestation while the gate is armed: disarm the scope first")]
+    /// C-02, the arming invariant from the other side: revoking the last attestation while a side is
+    /// gated leaves an armed gate nobody can pass. Disarm first, then revoke.
+    #[msg(
+        "cannot revoke the last KYC attestation while the gate is armed: disarm the scope first"
+    )]
     KycLastAttestationWhileArmed,
 
-    /// C-02, round 3: the attested wallet is provably unusable as a signer.
-    ///
-    /// `Pubkey::default()` (the system program) can never present itself as a holder, so attesting it fills
-    /// the roster without admitting anybody. Narrower than "prove the holder is real", which is the
-    /// off-chain provider pipeline.
+    /// C-02: `Pubkey::default()` (the system program) can never present itself as a holder, so
+    /// attesting it would fill the roster without admitting anybody. Narrower than proving the holder
+    /// is real, which is the off-chain provider pipeline.
     #[msg("that wallet cannot be attested: it can never sign as a holder")]
     KycSubjectInvalid,
 
-    /// Review-of-fixes: revoking this attestation would EMPTY the roster while the gate is armed, which
-    /// drops the gate. The admin must ask for that explicitly by passing `allow_disarm = true`.
-    ///
-    /// The refusal exists because the disarm is reachable by ORDERING rather than by authority. The attestor
-    /// can revoke wallets down to a roster of exactly one without triggering anything, and then the admin's
-    /// next revocation, whatever it was actually for, empties the roster and un-gates both sides. Revocation
-    /// runs through the Squads panel, so the admin approves when the roster holds fifty and the transaction
-    /// executes later. Putting the consent in the signed message is what separates "I am removing a holder"
-    /// from "I am loosening compliance for everybody".
+    /// Revoking this attestation would EMPTY the roster while the gate is armed, which DROPS the gate,
+    /// so the admin has to ask for that explicitly with `allow_disarm = true`. The disarm is otherwise
+    /// reachable by ORDERING rather than by authority: the attestor can revoke down to a roster of one,
+    /// and the admin's next revocation, whatever it was for, un-gates both sides. Squads transactions
+    /// execute later than they are approved, so the consent has to sit in the signed message.
     #[msg("this revocation would empty the roster and DISARM the KYC gate: pass allow_disarm to confirm")]
     KycRevokeWouldDisarm,
 
-    /// Review-of-fixes: the KYC attestor may not be the admin key.
-    ///
-    /// The entire admin/attestor asymmetry rests on the two being different: the attestor is a hot server
-    /// key that signs every approval, the admin is the Squads vault. If they are ever set equal, "admin only"
-    /// stops meaning anything and a leaked attestor key silently becomes an admin key for this instruction.
+    /// The attestor is a hot server key that signs every approval; the admin is the Squads vault. If
+    /// the two are ever equal, "admin only" stops meaning anything and a leaked attestor key silently
+    /// becomes an admin key for this instruction.
     #[msg("the KYC attestor may not be the admin key: the whole hot/cold split depends on them differing")]
     KycOperatorMayNotBeAdmin,
 }

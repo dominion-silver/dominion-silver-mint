@@ -1,22 +1,14 @@
 /**
- * Convert a DOLLAR pre-mint budget into the exact ounce figure `admin_premint` takes,
- * at the live oracle price, and check it against the live cap.
+ * Convert a DOLLAR pre-mint budget into the exact ounce figure `admin_premint` takes, at the
+ * live oracle price, and check it against the live cap. Read-only: it sends no transaction.
  *
- * Why a script and not a calculator: the budget is denominated in DOLLARS but the cap and
- * `admin_premint` are denominated in OUNCES, so the ounce figure moves with the silver
- * price. Computing it days in advance and typing it at ceremony time is how you end up
- * either short of the target or over the cap. Run this immediately before pre-minting.
+ * The budget is denominated in DOLLARS while the cap and `admin_premint` are denominated in
+ * OUNCES, so the ounce figure moves with the silver price. Decide it days in advance and you
+ * end up either short of the target or over the cap: run this immediately before pre-minting.
+ * It prints the atomic figure too, because `admin_premint` takes oz * 1e6 and an off-by-1e6
+ * there is a 1,000,000x error that only surfaces as a failed transaction.
  *
- * It also prints the atomic value, because `admin_premint` takes atomic units (oz * 1e6)
- * and an off-by-1e6 there is a 1,000,000x error that the cap will catch loudly but only
- * after a failed transaction.
- *
- * Launch plan (Thomas 2026-07-29): cap 150,000 oz, pre-mint $6.75M worth.
- *
- * Run:
- *   npx tsx scripts/premint-sizing.ts                       # $6.75M against the live cap
- *   PREMINT_USD=2000000 npx tsx scripts/premint-sizing.ts   # a tranche
- *   DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/premint-sizing.ts
+ * Run: npx tsx scripts/premint-sizing.ts   (PREMINT_USD and DOMINION_RPC override the defaults)
  */
 import { AnchorProvider, Program, Wallet, Idl } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
@@ -26,7 +18,9 @@ import path from "path";
 import { PROGRAM_ID } from "./_program-id";
 
 const RPC = process.env.DOMINION_RPC || "https://api.devnet.solana.com";
+// USD. The default is the launch plan: $6.75M pre-minted against a 150,000 oz cap.
 const BUDGET_USD = Number(process.env.PREMINT_USD || 6_750_000);
+// Metal.Index.SILVER/USD. Used only if the live config carries no feed id.
 const FEED_FALLBACK = 3154;
 
 function readApiKey(): string | null {

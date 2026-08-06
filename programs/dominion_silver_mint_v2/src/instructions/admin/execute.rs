@@ -1,14 +1,11 @@
 // Timelock execute instructions.
 // Common rules:
-//   - Reverts if now < executable_at (TimelockNotElapsed).
-//   - Reverts if cancelled or already executed.
+//   - Reverts if now < executable_at, if cancelled, or if already executed.
 //   - Re-validates args at execute (state may have shifted during the window).
-//   - Clears pending_*_nonce, decrements active_proposal_count.
-//   - For premium_mint: clears mint_paused_until.
-//   - For withdraw: also reverts if paused at execute (D31). Bounded by the
-//     treasury minimum FLOAT (Option B D7 option a) - NOT the old reserve
-//     invariant (removed in the Option A teardown).
-//   - For pyth_feed: atomically sets paused=true (admin must verify + unpause manually).
+//   - Requires config.pending_<kind>_nonce == nonce, so clearing that slot cancels the proposal.
+//   - Clears pending_*_nonce, decrements active_proposal_count; premium_mint clears mint_paused_until.
+//   - withdraw also reverts if paused (D31), bounded by the treasury minimum FLOAT (D7).
+//   - pyth_feed, oracle_guards and compliance_mode atomically set paused = true.
 
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint as ClassicMint, Token, TokenAccount};
@@ -18,10 +15,8 @@ use crate::cpi::usdc_transfer_treasury_to_user;
 use crate::errors::DominionError;
 use crate::events::*;
 use crate::state::*;
-// Option B: withdraw no longer reads the oracle or a reserve invariant. The
-// float check (D7 option a) is a price-independent USDC floor, so the Pyth
-// account + reserve math are removed from the withdraw path entirely (this
-// also removes the CODEX M-01 reserve-price-manipulation attack surface).
+// Withdraw reads no oracle: the float check (D7) is a price-independent USDC floor, which keeps the
+// reserve-price-manipulation surface out of the withdraw path entirely.
 
 // === Execute SetPremium (mint or redeem) ===
 
@@ -58,10 +53,8 @@ pub fn execute_set_premium_mint_handler(ctx: Context<ExecutePremium>, nonce: u64
         tl.action_disc == TimelockAction::SetPremiumMint as u8,
         DominionError::NonceMismatch
     );
-    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_premium_mint_nonce`
-    // does not stop the proposal: this handler only ever WROTE that field (to None at the
-    // end) and never read it, so a cleared slot still executed. That made every
-    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    // A7: bind to the config's ACTIVE slot: clearing `pending_premium_mint_nonce`
+    // must actually stop the proposal, and this handler only wrote that field, never read it.
     require!(
         config.pending_premium_mint_nonce == Some(nonce),
         DominionError::NonceMismatch
@@ -79,13 +72,9 @@ pub fn execute_set_premium_mint_handler(ctx: Context<ExecutePremium>, nonce: u64
     );
 
     config.premium_bps_mint = new_bps;
-    // REVIEW-OF-FIXES P1: `ConfigAccount::assert_premium_within_bounds` was declared and called by NOTHING.
-    // The ceilings and the combined floor are re-expressed inline at each of the four mutation sites, so
-    // there was no live gap, but the orphan is the exact class section 4c exists to catch: a rule that is
-    // written, unit-tested, and never runs. Called here as a POST-WRITE invariant, which is a different and
-    // strictly complementary statement to the inline pre-write checks: the inline ones validate a CANDIDATE
-    // value, this one validates the STORED pair, so a future setter that forgets its inline check still
-    // cannot leave the config out of bounds.
+    // POST-WRITE invariant, complementary to the inline checks above: those validate a CANDIDATE
+    // value, this validates the STORED pair, so a setter that forgets its inline check still cannot
+    // leave the config out of bounds.
     config.assert_premium_within_bounds()?;
     config.pending_premium_mint_nonce = None;
     config.active_proposal_count = config.active_proposal_count.saturating_sub(1);
@@ -110,10 +99,8 @@ pub fn execute_set_premium_redeem_handler(ctx: Context<ExecutePremium>, nonce: u
         tl.action_disc == TimelockAction::SetPremiumRedeem as u8,
         DominionError::NonceMismatch
     );
-    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_premium_redeem_nonce`
-    // does not stop the proposal: this handler only ever WROTE that field (to None at the
-    // end) and never read it, so a cleared slot still executed. That made every
-    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    // A7: bind to the config's ACTIVE slot: clearing `pending_premium_redeem_nonce`
+    // must actually stop the proposal, and this handler only wrote that field, never read it.
     require!(
         config.pending_premium_redeem_nonce == Some(nonce),
         DominionError::NonceMismatch
@@ -145,10 +132,9 @@ pub fn execute_set_premium_redeem_handler(ctx: Context<ExecutePremium>, nonce: u
     Ok(())
 }
 
-// === Execute Withdraw (Option B: float check, D7 option a) ===
-// BPF 4 KB stack frame: Box every sizable account (ConfigAccount ~669 B +
-// TimelockQueueAccount + 3 token accounts overflowed try_accounts by 144 B
-// un-boxed). Same pattern as mint_silv/redeem_silv.
+// === Execute Withdraw (float check, D7) ===
+// BPF 4 KB stack frame: Box every sizable account. Un-boxed, ConfigAccount + TimelockQueueAccount +
+// 3 token accounts overflow try_accounts by 144 B. Same pattern as mint_silv/redeem_silv.
 
 #[derive(Accounts)]
 #[instruction(nonce: u64)]
@@ -206,10 +192,8 @@ pub fn execute_withdraw_usdc_handler(ctx: Context<ExecuteWithdraw>, nonce: u64) 
         tl.action_disc == TimelockAction::WithdrawUsdc as u8,
         DominionError::NonceMismatch
     );
-    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_withdraw_nonce`
-    // does not stop the proposal: this handler only ever WROTE that field (to None at the
-    // end) and never read it, so a cleared slot still executed. That made every
-    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    // A7: bind to the config's ACTIVE slot: clearing `pending_withdraw_nonce`
+    // must actually stop the proposal, and this handler only wrote that field, never read it.
     require!(
         config.pending_withdraw_nonce == Some(nonce),
         DominionError::NonceMismatch
@@ -234,12 +218,9 @@ pub fn execute_withdraw_usdc_handler(ctx: Context<ExecuteWithdraw>, nonce: u64) 
         DominionError::WithdrawRecipientMismatch
     );
 
-    // Option B (D7 option a): the admin withdraw is bounded by the treasury
-    // minimum FLOAT, not a reserve invariant. The float is a price-independent
-    // USDC amount, so NO oracle read / reserve math is needed (this also kills
-    // the CODEX M-01 reserve-price-manipulation surface entirely). The float
-    // blocks ADMIN withdraw only; redemptions can still draw the treasury
-    // below it (then route OTC) - they do NOT subtract the float.
+    // D7: the admin withdraw is bounded by the treasury minimum FLOAT, a price-independent USDC
+    // amount, so no oracle read is needed. The float blocks ADMIN withdraw only: redemptions may draw
+    // the treasury below it (then route OTC) and do NOT subtract it.
     let treasury_pre = ctx.accounts.usdc_treasury.amount;
     require!(treasury_pre >= amount, DominionError::InsufficientTreasury);
     let treasury_post = treasury_pre
@@ -320,10 +301,8 @@ pub fn execute_set_compliance_mode_handler(
         tl.action_disc == TimelockAction::SetComplianceMode as u8,
         DominionError::NonceMismatch
     );
-    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_compliance_nonce`
-    // does not stop the proposal: this handler only ever WROTE that field (to None at the
-    // end) and never read it, so a cleared slot still executed. That made every
-    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    // A7: bind to the config's ACTIVE slot: clearing `pending_compliance_nonce`
+    // must actually stop the proposal, and this handler only wrote that field, never read it.
     require!(
         config.pending_compliance_nonce == Some(nonce),
         DominionError::NonceMismatch
@@ -340,9 +319,8 @@ pub fn execute_set_compliance_mode_handler(
     config.active_proposal_count = config.active_proposal_count.saturating_sub(1);
     tl.executed_at = Some(now);
 
-    // M4: Auto-pause on compliance flip (analogous to execute_set_pyth_feed).
-    // Admin must verify off-chain governance is ready (Squads vault holds delegate authority,
-    // freeze procedures documented) and explicitly unpause.
+    // M4: auto-pause on a compliance flip. The admin confirms off-chain governance is ready (Squads
+    // vault holds the delegate authority, freeze procedures documented) and then unpauses.
     if !config.paused {
         config.paused = true;
         emit!(crate::events::Paused {
@@ -393,10 +371,8 @@ pub fn execute_set_oracle_guards_handler(
         tl.action_disc == TimelockAction::SetOracleGuards as u8,
         DominionError::NonceMismatch
     );
-    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_oracle_guards_nonce`
-    // does not stop the proposal: this handler only ever WROTE that field (to None at the
-    // end) and never read it, so a cleared slot still executed. That made every
-    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    // A7: bind to the config's ACTIVE slot: clearing `pending_oracle_guards_nonce`
+    // must actually stop the proposal, and this handler only wrote that field, never read it.
     require!(
         config.pending_oracle_guards_nonce == Some(nonce),
         DominionError::NonceMismatch
@@ -406,16 +382,11 @@ pub fn execute_set_oracle_guards_handler(
     let g = OracleGuardsArgs::try_from_slice(&tl.action_data)
         .map_err(|_| error!(DominionError::SerializationFailure))?;
 
-    // Defense-in-depth bounds at execute time (re-validates propose), so a
-    // 24h-window attacker cannot disable the oracle guards. Lazer migration 5.5
-    // Tier A: these are the TIGHTENED structural ceilings (staleness <=30,
-    // conf_bps <=500, max_delta_bps <=1000, price band within the fat-finger
-    // rails), replacing the Core-era ranges (was 5..300 / 1..1000 / 1..5000).
-    // The min on conf_bps / max_delta_bps prevents a 0 from bricking the oracle
-    // (conf_bps=0 => only exactly-zero confidence passes; max_delta_bps=0 =>
-    // any price move reverts). Keep in lockstep with propose_set_oracle_guards.
+    // Binding re-validation of the structural ceilings at execute, so a 24h-window attacker cannot
+    // disable the oracle guards. The MINIMUMS matter as much as the ceilings: conf_bps = 0 would pass
+    // only an exactly-zero confidence, and max_delta_bps = 0 would revert on any price move, so both
+    // are bricks. Keep in lockstep with propose_set_oracle_guards.
     if let Some(v) = g.staleness {
-        // Lazer 5.5 Tier A: hard-capped well below the Core-era 60/300.
         require!(
             v >= 5 && v <= MAX_STALENESS_CEILING_SECONDS,
             DominionError::AboveMaximum
@@ -440,13 +411,9 @@ pub fn execute_set_oracle_guards_handler(
     if let Some(v) = g.max_price_scaled {
         config.max_price_usd_scaled = v;
     }
-    // A zero UPPER price bound bricks every oracle read (lazer_price's policy
-    // requires `normalized <= max_price_usd_scaled`; any positive price then
-    // reverts). It is NOT a valid "off" sentinel - unlike `min_price == 0`,
-    // which legitimately disables the lower bound since `normalized` is
-    // u128 >= 0. Forbid max == 0 outright.
-    // Lazer 5.5 Tier A fat-finger rail: 0 < max <= ceiling (no looser than the
-    // prior Core $200). A zero upper bound bricks every read.
+    // A zero UPPER bound bricks every oracle read (lazer_price requires
+    // `normalized <= max_price_usd_scaled`), so it is NOT a valid "off" sentinel, unlike
+    // `min_price == 0` which legitimately disables the lower bound. Forbid max == 0 outright.
     require!(
         config.max_price_usd_scaled != 0
             && config.max_price_usd_scaled <= PRICE_FATFINGER_MAX_SCALED,
@@ -486,14 +453,9 @@ pub fn execute_set_oracle_guards_handler(
         );
         config.min_publishers = v;
     }
-    // Option B: reserve_price_ramp_bps removed (no reserve-check price).
-
-    // Atomic auto-pause on ANY oracle-guard change (Fable audit P2-A). Mirrors
-    // execute_set_pyth_feed + execute_set_compliance_mode: an oracle-config
-    // change (incl. WEAKENING staleness/conf/delta/price-band or LOWERING
-    // min_publishers) must never go live silently after the 24h window. The
-    // admin re-validates against live data, then unpauses. Idempotent if the
-    // contract is already paused (e.g. the pre-unpause launch sequence).
+    // Atomic auto-pause on ANY oracle-guard change: a weakened staleness / confidence / delta /
+    // price band, or a lowered min_publishers, must never go live silently after the 24h window. The
+    // admin re-validates against live data, then unpauses. Idempotent if already paused.
     if !config.paused {
         config.paused = true;
         emit!(crate::events::Paused {
@@ -527,70 +489,42 @@ pub struct OracleGuardsArgs {
     pub min_publishers: Option<u16>,
 }
 
-// === FIX A (launch spec 2026-07): loosen-slow / tighten-fast redeem throttles ===
-// The head-dev threat-model fix for the "one-block drain": a compromised admin
-// could strip every redemption rate-limit in a single instant tx, then redeem
-// pre-held SILV at the honest price and empty the treasury before a guardian
-// reacts. The fix (CORRECTION-2 clean shape):
-//   - TIGHTENING (making a throttle safer) stays INSTANT, via ONE entrypoint
-//     `emergency_tighten_redeem_limits` (caps.rs). One place for all direction
-//     logic, so the counter-intuitive window direction can't be gotten wrong in
-//     scattered setters.
-//   - LOOSENING (any direction, in practice raising the drain capacity) goes
-//     through this 24h-timelocked `SetRedeemLimits` action (guardian-cancellable).
-// The four throttles here are the ONLY ones in scope. max_silv_supply
-// (raise-blocked) and redemptions_enabled (enable-blocked at launch) keep their
-// stricter dedicated instant setters and are intentionally NOT loosenable here.
+// === FIX A: loosen-slow / tighten-fast redeem throttles ===
+// Closes the "one-block drain": a compromised admin stripping every redemption rate-limit in one
+// instant tx, then redeeming pre-held SILV at the honest price before a guardian reacts.
+//   - TIGHTENING stays INSTANT, through the single entrypoint `emergency_tighten_redeem_limits`
+//     (caps.rs), so the counter-intuitive window direction lives in one place.
+//   - LOOSENING goes through this 24h-timelocked, guardian-cancellable `SetRedeemLimits` action.
+// max_silv_supply is NOT in scope: it keeps its dedicated setter, where raising is blocked outright.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
 pub struct RedeemLimitsArgs {
     pub instant_redeem_budget_usdc: Option<u64>,
     pub instant_redeem_window_seconds: Option<u32>,
-    /// DEAD since 2026-08-05 (the per-size tier was removed with the queue). Still accepted
-    /// and still applied to the now-unread config field, because removing it would change
-    /// this struct's borsh layout. See the note on `redemptions_enabled` below.
+    /// DEAD since 2026-08-05 (removed with the queue). Still accepted and still written to the
+    /// now-unread config field, because removing it would change this struct's borsh layout.
     pub large_redeem_threshold_usdc: Option<u64>,
     /// DEAD since 2026-08-05 (there is no queue). Same reasoning.
     pub redeem_queue_delay_seconds: Option<u32>,
-    /// THE REDEEM SWITCH (Thomas, 2026-08-05). Appended, deliberately, to this action rather
-    /// than given its own timelocked instruction and its own `pending_*_nonce`.
-    ///
-    /// Why it belongs here: enabling redemptions IS loosening a redeem throttle, which is
-    /// precisely what this action exists for. It gets the 24h delay, the guardian-cancel
-    /// window, the single-active-nonce guard and the ceiling re-validation for free, and it
-    /// adds no bytes to ConfigAccount, whose `reserved` is down to 53.
-    ///
-    /// `Some(false)` counts as a TIGHTEN, so it is also available on the instant
-    /// `emergency_tighten_redeem_limits` path, alongside the dedicated
-    /// `set_redemptions_enabled(false)`. `Some(true)` is a LOOSEN and is refused there.
-    ///
-    /// BORSH CAVEAT, worth knowing before appending anything else here: this struct is
-    /// serialized into `TimelockQueueAccount.action_data`, so appending a field makes any
-    /// proposal that was queued under the OLD layout fail to deserialize at execute
-    /// (`SerializationFailure`), because the stored bytes are one short. Cancelling such a
-    /// proposal still works, since `cancel_timelocked_action` never decodes `action_data`.
-    /// Before deploying this upgrade, check for a live SetRedeemLimits proposal and cancel it
-    /// rather than leaving it stuck.
+    /// THE REDEEM SWITCH. Enabling redemptions is a LOOSENING, so it rides this timelocked action;
+    /// `Some(false)` is a tighten and is also accepted by `emergency_tighten_redeem_limits`.
+    // It rides this action rather than having its own instruction so that it inherits the 24h delay,
+    // the guardian-cancel window, the single-active-nonce guard and the ceiling re-validation, at no
+    // cost in ConfigAccount bytes.
+    //
+    // BORSH CAVEAT before appending anything else here: this struct is serialized into
+    // `TimelockQueueAccount.action_data`, so appending a field makes any proposal queued under the OLD
+    // layout fail to deserialize at execute (`SerializationFailure`). Cancelling still works
+    // (`cancel_timelocked_action` never decodes `action_data`), so check for a live SetRedeemLimits
+    // proposal and cancel it before deploying such an upgrade.
     pub redemptions_enabled: Option<bool>,
 }
 
 /// True if at least one field with a LIVE EFFECT is provided (else the call is a pure no-op).
 ///
-/// EXTERNAL AUDIT FINDING C-03. `large_redeem_threshold_usdc` and `redeem_queue_delay_seconds` used to
-/// count here. They are dead on chain: no instruction reads either one since the queue was deleted.
-/// They are still declared, and must stay declared, because removing a field would shift every borsh
-/// offset after it in a live `ConfigAccount`. But keeping the LAYOUT does not oblige us to keep
-/// accepting mutations.
-///
-/// What accepting them cost: proposing only a new `redeem_queue_delay_seconds` passed both no-op
-/// gates, reserved `pending_redeem_limits_nonce` for 24 hours (blocking any real redeem-limit change
-/// behind it), raised `active_proposal_count`, then emitted an event and wrote a value that changes no
-/// behaviour whatsoever. An operator watching the log would read "the redemption throttle was
-/// changed" during an incident when nothing had been.
-///
-/// So a proposal touching ONLY dead fields is now `RedeemLimitsAllNone`, the same answer as an empty
-/// one, which is what it effectively is. A proposal that sets a dead field ALONGSIDE a live one still
-/// works and still writes it, deliberately: refusing that would break `RedeemLimitsArgs`'s borsh shape
-/// for no gain, and the live field makes the proposal meaningful on its own.
+/// C-03: the two DEAD fields do not count. A proposal touching only them is `RedeemLimitsAllNone`,
+/// the same answer as an empty one, because accepting it held `pending_redeem_limits_nonce` for 24h
+/// and announced a throttle change that changed nothing. A dead field ALONGSIDE a live one is still
+/// accepted and still written: the live field makes the proposal meaningful on its own.
 pub fn redeem_limits_any_set(args: &RedeemLimitsArgs) -> bool {
     args.instant_redeem_budget_usdc.is_some()
         || args.instant_redeem_window_seconds.is_some()
@@ -599,16 +533,10 @@ pub fn redeem_limits_any_set(args: &RedeemLimitsArgs) -> bool {
 
 /// The SECOND no-op gate: does any PROVIDED field actually differ from the current config?
 ///
-/// `redeem_limits_any_set` above answers a different question ("did the caller provide anything
-/// at all"), and the two are independent. That independence caused a P0: `redemptions_enabled`
-/// was added to `any_set` and NOT to this comparison, so a switch-only proposal passed the first
-/// gate and died on `ProposalNoOp` in the second, leaving no path in the deployed program to open
-/// redemptions at all.
-///
-/// Extracted out of `propose_set_redeem_limits`, where it lived inline, for two reasons: it is now
-/// unit-testable (the version that shipped was covered by a test asserting the WRONG function
-/// while claiming to protect this one), and both gates now sit in the same file so the next person
-/// adding a field cannot see one without the other.
+/// `redeem_limits_any_set` answers a different question ("did the caller provide anything at all"),
+/// and the two are independent. They must agree on which fields are LIVE: when they disagreed about
+/// `redemptions_enabled`, a switch-only proposal passed one gate and died on `ProposalNoOp` in the
+/// other, so nothing in the deployed program could open redemptions.
 ///
 /// IF YOU ADD A FIELD TO `RedeemLimitsArgs`, IT MUST BE ADDED HERE AND TO `redeem_limits_any_set`.
 pub fn redeem_limits_effective_change(
@@ -631,19 +559,10 @@ pub fn redeem_limits_effective_change(
     {
         return true;
     }
-    // REVIEW-OF-FIXES: `large_redeem_threshold_usdc` and `redeem_queue_delay_seconds` used to be
-    // compared here too, and that left C-03's abuse reachable with ONE EXTRA NO-OP FIELD. The audit fix
-    // narrowed `redeem_limits_any_set` only, so:
-    //
-    //     { instant_redeem_budget_usdc: Some(<current value>), redeem_queue_delay_seconds: Some(<new>) }
-    //
-    // passed `any_set` (a live field is Some) AND passed this gate (the dead field differs), held
-    // `pending_redeem_limits_nonce` for 24 hours, bumped `active_proposal_count`, and wrote only a value
-    // no instruction reads. That is the C-03 failure verbatim, one field wider.
-    //
-    // Both gates now agree on the same definition of "live", which is the property the test below pins.
-    // The parameters stay in the signature: removing them would change every call site for no gain, and
-    // the execute handler still WRITES a dead field when it is provided alongside a live one.
+    // The DEAD fields are deliberately NOT compared: comparing them kept C-03's abuse reachable by
+    // pairing a live field at its current value with a dead field that differs. Both gates now agree
+    // on the same definition of "live". The parameters stay in the signature because the execute
+    // handler still WRITES a dead field when it is provided alongside a live one.
     if args.redemptions_enabled.is_some_and(|v| v != cur_enabled) {
         return true;
     }
@@ -651,16 +570,14 @@ pub fn redeem_limits_effective_change(
     false
 }
 
-/// Pure directional check for the INSTANT tighten path. Every PROVIDED field must
-/// move its throttle in the SAFE (tighten) direction vs the current config. The
-/// safety metric is max sustained drain: budget / window. Tighten = shrink it.
+/// Pure directional check for the INSTANT tighten path. Every PROVIDED field must move its throttle
+/// in the SAFE direction. The safety metric is max sustained drain, budget / window: tighten = shrink.
 ///   - budget:      new <= cur   (smaller instant budget = less drainable)
-///   - window:      new >= cur   (LONGER window lowers budget/window drain rate;
-///                                shortening it can also early-reset a near-
-///                                exhausted budget, so shrink = LOOSEN)
-///   - threshold:   new <= cur   (lower = MORE redemptions forced to the T+3 queue)
-///   - queue_delay: new >= cur   (longer T+N wait before a queued claim pays out)
-/// A field left None is unchanged (trivially safe). Unit-tested below.
+///   - window:      new >= cur   (a LONGER window lowers budget/window; shortening can also
+///                                early-reset a near-exhausted budget, so shrink = LOOSEN)
+///   - threshold:   new <= cur   (dead field: lower used to force more redemptions to the queue)
+///   - queue_delay: new >= cur   (dead field: longer wait before a queued claim paid out)
+/// A field left None is unchanged and trivially safe.
 pub fn redeem_limits_all_tighten(
     args: &RedeemLimitsArgs,
     cur_budget: u64,
@@ -688,26 +605,20 @@ pub fn redeem_limits_all_tighten(
             return false;
         }
     }
-    // The redeem switch. Turning redemptions OFF is the safe direction and stays available
-    // instantly; turning them ON is the single largest loosening this program has, because it
-    // opens the only user-facing path that pays out treasury cash. It must cost the 24h delay
-    // and the guardian-cancel window.
-    //
-    // Note the asymmetry with the current value: this is a PURE directional check and does
-    // not compare against `config.redemptions_enabled`. Proposing Some(false) while already
-    // disabled is a harmless no-op tighten, which is the same tolerance the numeric fields
-    // above have.
+    // Turning redemptions OFF is the safe direction and stays instant. Turning them ON is the single
+    // largest loosening this program has, since it opens the only user-facing path that pays out
+    // treasury cash, so it must cost the 24h delay and the guardian-cancel window. This is a PURE
+    // directional check and does not compare against `config.redemptions_enabled`, so Some(false)
+    // while already disabled is a harmless no-op tighten, as with the numeric fields above.
     if args.redemptions_enabled == Some(true) {
         return false;
     }
     true
 }
 
-/// Fat-finger CEILINGS for the redeem throttles, mirroring the bounds the
-/// (removed) individual instant setters enforced. Applied on the instant tighten
-/// path AND on both sides of the timelocked path (propose pre-validates, execute
-/// binds). `large_redeem_threshold_usdc` has no ceiling (0 = force ALL to the
-/// queue; the rolling-window budget is the real protection regardless).
+/// Fat-finger CEILINGS for the redeem throttles. Applied on the instant tighten path AND on both
+/// sides of the timelocked path (propose pre-validates, execute binds).
+/// `large_redeem_threshold_usdc` has no ceiling: the rolling-window budget is the real protection.
 pub fn validate_redeem_limits_ceilings(args: &RedeemLimitsArgs) -> Result<()> {
     if let Some(v) = args.instant_redeem_budget_usdc {
         require!(
@@ -722,10 +633,8 @@ pub fn validate_redeem_limits_ceilings(args: &RedeemLimitsArgs) -> Result<()> {
         );
     }
     if let Some(v) = args.redeem_queue_delay_seconds {
-        // DOM-006 (P1): both bounds, mirroring instant_redeem_window_seconds
-        // above. The missing floor let the timelocked loosen path set 0, making a
-        // queued request claimable in the same slot, and the queued path has no
-        // volume accounting to fall back on. See REDEEM_QUEUE_DELAY_MIN_SECONDS.
+        // Both bounds, mirroring instant_redeem_window_seconds above: a missing floor let the
+        // timelocked loosen path set 0. See REDEEM_QUEUE_DELAY_MIN_SECONDS.
         require!(
             v >= REDEEM_QUEUE_DELAY_MIN_SECONDS,
             DominionError::QueueDelayTooShort
@@ -771,68 +680,34 @@ pub fn execute_set_redeem_limits_handler(
         tl.action_disc == TimelockAction::SetRedeemLimits as u8,
         DominionError::NonceMismatch
     );
-    // BIND TO THE CONFIG'S ACTIVE SLOT. Without this, clearing `pending_redeem_limits_nonce`
-    // does not actually stop the proposal: this handler only ever WROTE that field (to None at
-    // the end) and never read it, so a cleared slot still executed.
+    // BIND TO THE CONFIG'S ACTIVE SLOT: clearing `pending_redeem_limits_nonce` must actually stop the
+    // proposal, and this handler only wrote that field, never read it. Without the bind, an operator
+    // who reaches for the instant `set_redemptions_enabled(false)` during an incident believes
+    // redemptions are shut while a pending OPEN proposal is still armed and lands hours later.
     //
-    // That made the emergency lever cosmetic. An operator responding to a bad oracle print
-    // reaches for the instant `set_redemptions_enabled(false)`, not for
-    // `cancel_timelocked_action` on a nonce they have to look up. They then believe redemptions
-    // are shut while a pending OPEN proposal is still armed and lands hours later, signed by
-    // Squads members who never heard about the incident.
-    //
-    // With this check, clearing the config slot IS a cancellation, which is what the instant
-    // closes below now do. It also means a proposal cancelled via `cancel_timelocked_action`
-    // fails here for a second, independent reason (that path clears the slot too), so the two
-    // guards are belt and braces rather than one point of failure.
-    //
-    // VERIFIED DURING THE REVIEW-OF-FIXES that this bind cannot create an inescapable state, which
-    // is the obvious hazard of adding a precondition to an execute path:
-    //   - `cancel_timelocked_action` does NOT read any pending_*_nonce as a precondition, and it
-    //     clears the matching one via a match on the action discriminant, so a proposal is ALWAYS
-    //     cancellable and cancelling always frees the single-active slot.
-    //   - CORRECTION, from the review-of-fixes: an earlier version of this note claimed
-    //     "`close_timelock_account` then reclaims the rent, so an orphaned account left behind by an
-    //     instant close is cleanable rather than permanent dust." THAT IS FALSE.
-    //     `CloseTimelockAccount` requires `cancelled || executed_at.is_some()`, and an orphan is
-    //     neither, so it cannot be closed directly. The only exit is `cancel_timelocked_action`,
-    //     which marks it cancelled, decrements `active_proposal_count` and THEN permits the close.
-    //     That path is safe now that cancel only disarms its own nonce (see timelock.rs); before
-    //     that fix it was the very instruction that could wipe a live proposal.
-    //     Operational consequence, so nobody discovers it at ten: an orphan still counts toward
-    //     MAX_ACTIVE_PROPOSALS, so disarm-then-re-propose cycles must be cleaned up with cancel or
-    //     every propose_* eventually reverts TooManyActiveProposals.
-    //   - nonces come from a monotonically increasing `next_timelock_nonce` and are never reused,
-    //     so a disarmed proposal cannot become executable again by coincidence.
-    // The failure mode is therefore "cannot execute, must be cancelled", which is exactly the
-    // intent, and never "cannot execute and cannot cancel".
-    //
-    // The SAME GAP EXISTS on `execute_set_public_mint` and every other execute_* in this file:
-    // none of them reads its `pending_*_nonce`, and `set_public_mint_enabled(false)` clears
-    // `pending_public_mint_nonce` believing that disarms the open. It does not. Tracked as A7 in
-    // docs/REVIEW_PUNCHLIST_2026_08_05.md; fixed here first because redeem is the path that pays
-    // out treasury cash.
+    // This cannot create an inescapable state: `cancel_timelocked_action` reads no pending_*_nonce as
+    // a precondition and clears the matching one, so a proposal is ALWAYS cancellable. Note though
+    // that `close_timelock_account` requires `cancelled || executed_at.is_some()`, so an orphan left
+    // by an instant close must be cancelled before it can be closed, and it counts toward
+    // MAX_ACTIVE_PROPOSALS until then. Nonces come from a monotonic counter and are never reused, so a
+    // disarmed proposal cannot become executable again.
     require!(
         config.pending_redeem_limits_nonce == Some(nonce),
         DominionError::NonceMismatch
     );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
-    // A loosening must not land while the protocol is paused. `execute_withdraw_usdc` has had
-    // this rule since D31 and this action needs it more: it can re-open the redemption path,
-    // and without the check the open would apply mid-pause and take effect the instant somebody
-    // unpauses, which is exactly when nobody is re-evaluating it.
+    // A loosening must not land while the protocol is paused: it can re-open the redemption path, and
+    // the open would otherwise take effect the instant somebody unpauses, which is exactly when nobody
+    // is re-evaluating it.
     require!(!config.paused, DominionError::Paused);
 
     let args = RedeemLimitsArgs::try_from_slice(&tl.action_data)
         .map_err(|_| error!(DominionError::SerializationFailure))?;
 
-    // Binding re-validation of the fat-finger CEILINGS at execute (defense in
-    // depth vs propose). Direction is intentionally NOT re-checked here: a value
-    // that was a loosen at propose may be a no-op or even a tighten by execute if
-    // an instant `emergency_tighten_redeem_limits` ran during the 24h window;
-    // re-checking direction would then spuriously fail a legitimately queued
-    // loosen. The whole point of this path is that a loosen is allowed - after
-    // the 24h delay + guardian-cancel window. (CORRECTION-2.)
+    // Binding re-validation of the fat-finger CEILINGS at execute. Direction is intentionally NOT
+    // re-checked: a value that was a loosen at propose may be a no-op or a tighten by execute if an
+    // instant tighten ran during the window, and re-checking would spuriously fail a legitimately
+    // queued loosen. A loosen IS allowed here, after the delay and the guardian-cancel window.
     validate_redeem_limits_ceilings(&args)?;
 
     if let Some(v) = args.instant_redeem_budget_usdc {
@@ -850,9 +725,8 @@ pub fn execute_set_redeem_limits_handler(
     if let Some(v) = args.redemptions_enabled {
         let old_enabled = config.redemptions_enabled;
         config.redemptions_enabled = v;
-        // Same event the instant FALSE-only setter emits (SolidProof LOW #3), so a monitor
-        // watching for the redeem switch changing state sees BOTH paths and does not have to
-        // know which instruction moved it.
+        // Same event the instant FALSE-only setter emits, so a monitor watching the redeem switch
+        // sees BOTH paths without having to know which instruction moved it.
         emit!(crate::events::RedemptionsEnabledChanged {
             old_enabled,
             new_enabled: v,
@@ -860,10 +734,9 @@ pub fn execute_set_redeem_limits_handler(
         });
     }
 
-    // NO auto-pause (unlike oracle-guards / pyth-feed / compliance). Those affect
-    // the PRICE and must never go live silently after the window; the redeem
-    // throttles are rate-limits, and a deliberate loosen already paid the 24h
-    // delay + guardian-cancel cost. (Head-dev FIX A: "recommend NO here".)
+    // NO auto-pause here, unlike oracle-guards / pyth-feed / compliance: those affect the PRICE and
+    // must never go live silently after the window, whereas these are rate limits and a deliberate
+    // loosen already paid the 24h delay plus the guardian-cancel window.
 
     config.pending_redeem_limits_nonce = None;
     config.active_proposal_count = config.active_proposal_count.saturating_sub(1);
@@ -877,12 +750,10 @@ pub fn execute_set_redeem_limits_handler(
     Ok(())
 }
 
-// === P2-05: per-field metadata args (Option<String> + bounds) ===
-// `None` for a field means "leave it unchanged" (the execute path skips the
-// CPI for that field, so it cannot be blanked). A provided field must be
-// non-empty (blanking is rejected outright) and within its size cap. Shared
-// by propose (pre-validate, fail fast) and execute (binding re-validate,
-// defense in depth - mirrors every other timelocked action).
+// === Per-field metadata args (Option<String> + bounds) ===
+// `None` means "leave unchanged": execute skips the CPI for that field, so it cannot be blanked. A
+// provided field must be non-empty and within its size cap. Validated by propose (fail fast) and
+// again by execute (binding).
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Default)]
 pub struct MetadataArgs {
     pub name: Option<String>,
@@ -952,10 +823,8 @@ pub fn execute_set_treasury_min_float_handler(
         tl.action_disc == TimelockAction::SetTreasuryFloat as u8,
         DominionError::NonceMismatch
     );
-    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_treasury_float_nonce`
-    // does not stop the proposal: this handler only ever WROTE that field (to None at the
-    // end) and never read it, so a cleared slot still executed. That made every
-    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    // A7: bind to the config's ACTIVE slot: clearing `pending_treasury_float_nonce`
+    // must actually stop the proposal, and this handler only wrote that field, never read it.
     require!(
         config.pending_treasury_float_nonce == Some(nonce),
         DominionError::NonceMismatch
@@ -963,9 +832,8 @@ pub fn execute_set_treasury_min_float_handler(
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
 
     let new_float_usdc = decode_u64(&tl.action_data)?;
-    // Defense in depth: re-validate the fat-finger ceiling at execute too
-    // (covers stale proposals + any future propose-side relaxation). No lower
-    // bound: 0 is valid per D7 (Mark sets the float from the panel).
+    // Binding re-validation of the fat-finger ceiling (covers stale proposals and any future
+    // propose-side relaxation). No lower bound: 0 is valid per D7.
     require!(
         new_float_usdc <= TREASURY_FLOAT_CEILING_USDC,
         DominionError::AboveMaximum
@@ -1016,22 +884,16 @@ pub fn execute_set_admin_timelock_handler(
         tl.action_disc == TimelockAction::SetAdminTimelock as u8,
         DominionError::NonceMismatch
     );
-    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_admin_timelock_nonce`
-    // does not stop the proposal: this handler only ever WROTE that field (to None at the
-    // end) and never read it, so a cleared slot still executed. That made every
-    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    // A7: bind to the config's ACTIVE slot: clearing `pending_admin_timelock_nonce`
+    // must actually stop the proposal, and this handler only wrote that field, never read it.
     require!(
         config.pending_admin_timelock_nonce == Some(nonce),
         DominionError::NonceMismatch
     );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
 
-    // SolidProof INFORMATIONAL #9: this sliced action_data[..4] with no prior length
-    // check, unlike every sibling execute handler. Not reachable today (the propose
-    // path always writes exactly 4 bytes, the account is program-owned and its type
-    // is bound by the discriminant plus the nonce check), but an unchecked slice
-    // PANICS rather than returning the mapped error below, so the map_err was
-    // unreachable defence. Made uniform with the other handlers.
+    // Length-checked like every sibling handler: an unchecked slice PANICS instead of returning the
+    // mapped error below, which would make that map_err unreachable.
     require!(
         tl.action_data.len() >= 4,
         DominionError::MalformedActionData
@@ -1094,23 +956,17 @@ pub fn execute_set_public_mint_handler(ctx: Context<ExecutePublicMint>, nonce: u
         tl.action_disc == TimelockAction::SetPublicMint as u8,
         DominionError::NonceMismatch
     );
-    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_public_mint_nonce`
-    // does not stop the proposal: this handler only ever WROTE that field (to None at the
-    // end) and never read it, so a cleared slot still executed. That made every
-    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    // A7: bind to the config's ACTIVE slot: clearing `pending_public_mint_nonce`
+    // must actually stop the proposal, and this handler only wrote that field, never read it.
     require!(
         config.pending_public_mint_nonce == Some(nonce),
         DominionError::NonceMismatch
     );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
-    // Same rule as execute_set_redeem_limits, and for the same reason: A2's argument applies
-    // identically here and this was the one remaining gap the review-of-fixes found.
-    //
-    // Opening the public mint WAKES THE ORACLE PATH, which is dormant while mint and redeem are both
-    // closed, and lets the public consume cap headroom. Without this check the open would apply
-    // mid-pause and take effect the instant somebody unpauses, which is exactly when nobody is
-    // re-evaluating whether it should. The oracle-guard, pyth-feed and compliance actions auto-pause
-    // so they are covered; premium, float and metadata are inert while paused. Public mint was not.
+    // Same paused rule as execute_set_redeem_limits. Opening the public mint WAKES THE ORACLE PATH,
+    // dormant while mint and redeem are both closed, and lets the public consume cap headroom. The
+    // oracle-guard, pyth-feed and compliance actions auto-pause, and premium, float and metadata are
+    // inert while paused; public mint is neither.
     require!(!config.paused, DominionError::Paused);
 
     require!(
@@ -1118,9 +974,8 @@ pub fn execute_set_public_mint_handler(ctx: Context<ExecutePublicMint>, nonce: u
         DominionError::MalformedActionData
     );
     let new_value = tl.action_data[0] != 0;
-    // Re-validated at execute, not only at propose (defence in depth, and the same
-    // shape as every other execute handler here): only OPENING is reachable through
-    // the timelock, and it must still be a real change.
+    // Re-validated at execute, not only at propose: only OPENING is reachable through the timelock,
+    // and it must still be a real change.
     require!(new_value, DominionError::PublicMintOpenRequiresTimelock);
     require!(
         new_value != config.public_mint_enabled,
@@ -1176,10 +1031,8 @@ pub fn execute_set_pyth_feed_handler(ctx: Context<ExecutePythFeed>, nonce: u64) 
         tl.action_disc == TimelockAction::SetPythFeed as u8,
         DominionError::NonceMismatch
     );
-    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_pyth_feed_nonce`
-    // does not stop the proposal: this handler only ever WROTE that field (to None at the
-    // end) and never read it, so a cleared slot still executed. That made every
-    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    // A7: bind to the config's ACTIVE slot: clearing `pending_pyth_feed_nonce`
+    // must actually stop the proposal, and this handler only wrote that field, never read it.
     require!(
         config.pending_pyth_feed_nonce == Some(nonce),
         DominionError::NonceMismatch
@@ -1195,8 +1048,8 @@ pub fn execute_set_pyth_feed_handler(ctx: Context<ExecutePythFeed>, nonce: u64) 
             .try_into()
             .map_err(|_| error!(DominionError::MalformedActionData))?,
     );
-    // Binding re-validation at execute (defense in depth vs propose). The Lazer
-    // program is a compile-time constant, so only the numeric feed id moves.
+    // Binding re-validation at execute. The Lazer program is a compile-time constant, so only the
+    // numeric feed id moves.
     require!(new_feed_id != 0, DominionError::InvalidFeedId);
 
     config.pyth_lazer_feed_id = new_feed_id;
@@ -1223,8 +1076,8 @@ pub fn execute_set_pyth_feed_handler(ctx: Context<ExecutePythFeed>, nonce: u64) 
 }
 
 // === Execute UpdateMetadata ===
-// Updates the on-chain TokenMetadata extension on the SILV mint via Token-2022 metadata-interface CPI.
-// The program PDA `silv_metadata_authority` signs.
+// Updates the TokenMetadata extension on the SILV mint via a Token-2022 metadata-interface CPI,
+// signed by the program PDA `silv_metadata_authority`.
 
 #[derive(Accounts)]
 #[instruction(nonce: u64)]
@@ -1267,20 +1120,16 @@ pub fn execute_update_metadata_handler(
         tl.action_disc == TimelockAction::UpdateMetadata as u8,
         DominionError::NonceMismatch
     );
-    // A7: bind to the config's ACTIVE slot. Without this, clearing `pending_metadata_nonce`
-    // does not stop the proposal: this handler only ever WROTE that field (to None at the
-    // end) and never read it, so a cleared slot still executed. That made every
-    // "clear the pending nonce on an emergency close" protection in this program cosmetic.
+    // A7: bind to the config's ACTIVE slot: clearing `pending_metadata_nonce`
+    // must actually stop the proposal, and this handler only wrote that field, never read it.
     require!(
         config.pending_metadata_nonce == Some(nonce),
         DominionError::NonceMismatch
     );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
 
-    // P2-05: decode the per-field args. `None` = leave unchanged (no CPI for
-    // that field, so it CANNOT be blanked). Re-validate the bounds at execute
-    // (binding; mirrors every other timelocked action - a stale over-long or
-    // now-empty proposal must still be rejected here, not just at propose).
+    // `None` = leave unchanged (no CPI for that field, so it cannot be blanked). The bounds are
+    // re-validated here so a stale over-long or now-empty proposal is still rejected.
     let args = MetadataArgs::try_from_slice(&tl.action_data)
         .map_err(|_| error!(DominionError::SerializationFailure))?;
     validate_metadata_args(&args)?;
@@ -1382,11 +1231,9 @@ fn decode_u64(data: &[u8]) -> Result<u64> {
 
 #[cfg(test)]
 mod fix_a_tests {
-    // Pure directional logic for the instant tighten path (FIX A). The
-    // integration behavior (propose->wait->execute, guardian-cancel, single-active
-    // nonce) is covered by the litesvm + TS e2e in the off-chain batch; these host
-    // tests pin the direction rules, which are the error-prone core (esp. the
-    // counter-intuitive window direction).
+    // Pure directional logic for the instant tighten path. The integration behaviour
+    // (propose -> wait -> execute, guardian-cancel, single-active nonce) is covered by the litesvm and
+    // TS e2e suites; these host tests pin the direction rules.
     use super::{
         redeem_limits_all_tighten, redeem_limits_any_set, redeem_limits_effective_change,
         validate_redeem_limits_ceilings, RedeemLimitsArgs,
@@ -1500,8 +1347,7 @@ mod fix_a_tests {
 
     #[test]
     fn queue_delay_zero_is_rejected() {
-        // The exact case the audit found: delay 0 makes a queued request
-        // claimable in the same slot, and the queued path has no volume budget.
+        // Delay 0 made a queued request claimable in the same slot.
         assert!(validate_redeem_limits_ceilings(&delay(0)).is_err());
     }
 
@@ -1549,16 +1395,13 @@ mod fix_a_tests {
         assert!(tighten(&all));
     }
 
-    // -----------------------------------------------------------------
-    // The redeem switch (Thomas, 2026-08-05). Enabling redemptions rides this action so it
-    // inherits the 24h delay, the guardian-cancel window and the single-active-nonce guard.
-    // -----------------------------------------------------------------
+    // The redeem switch: enabling redemptions rides this action, so it inherits the 24h delay, the
+    // guardian-cancel window and the single-active-nonce guard.
 
     #[test]
     fn enabling_redemptions_is_a_loosening_and_is_refused_instantly() {
-        // THE test for this feature. If it ever passes, `emergency_tighten_redeem_limits`
-        // becomes a one-transaction way to open the only path that pays out treasury cash,
-        // defeating the entire reason the switch was blocked in the bytecode until now.
+        // If this ever passes, `emergency_tighten_redeem_limits` becomes a one-transaction way to
+        // open the only path that pays out treasury cash.
         let open = RedeemLimitsArgs {
             redemptions_enabled: Some(true),
             ..Default::default()
@@ -1590,12 +1433,8 @@ mod fix_a_tests {
 
     #[test]
     fn any_set_counts_the_redeem_switch_as_a_provided_field() {
-        // RENAMED. The version that shipped was called
-        // `the_redeem_switch_alone_is_not_a_no_op_proposal` and its comment claimed it protected
-        // `propose_set_redeem_limits`. It did not: it asserts `redeem_limits_any_set`, which is a
-        // DIFFERENT gate. The propose path has its own comparison, that one was missing the
-        // switch, and opening redemptions was therefore unreachable in the deployed program while
-        // this test passed. A test whose name overstates its reach is worse than no test.
+        // This pins `redeem_limits_any_set` ONLY. The propose path has its own comparison, tested
+        // separately below; do not read this as covering both gates.
         let only_switch = RedeemLimitsArgs {
             redemptions_enabled: Some(true),
             ..Default::default()
@@ -1606,10 +1445,7 @@ mod fix_a_tests {
         assert!(!redeem_limits_any_set(&nothing));
     }
 
-    // -----------------------------------------------------------------
     // The SECOND gate: redeem_limits_effective_change, which is what propose actually calls.
-    // These are the tests that were missing.
-    // -----------------------------------------------------------------
 
     fn changed(args: &RedeemLimitsArgs, cur_enabled: bool) -> bool {
         redeem_limits_effective_change(
@@ -1624,9 +1460,8 @@ mod fix_a_tests {
 
     #[test]
     fn opening_redemptions_from_closed_IS_an_effective_change() {
-        // THE regression test for the P0. If this fails, `propose_set_redeem_limits` rejects the
-        // only proposal shape that can open redemptions, and there is no other path: the instant
-        // setter refuses `true` in bytecode and the emergency tighten path refuses Some(true).
+        // If this fails, `propose_set_redeem_limits` rejects the only proposal shape that can open
+        // redemptions: the instant setter refuses `true` and the tighten path refuses Some(true).
         let open = RedeemLimitsArgs {
             redemptions_enabled: Some(true),
             ..Default::default()
@@ -1666,14 +1501,9 @@ mod fix_a_tests {
 
     #[test]
     fn the_two_no_op_gates_agree_on_what_counts_as_LIVE() {
-        // REVIEW-OF-FIXES. `redeem_limits_any_set` and `redeem_limits_effective_change` are independent,
-        // and that independence has now caused a bug TWICE: once when `redemptions_enabled` was added to
-        // the first and not the second (a P0: no path could open redemptions), and once when C-03
-        // narrowed the first and not the second (the abuse survived by pairing a dead field with a
-        // no-op live one). Nothing pinned the intended relationship, so nothing noticed either time.
-        //
-        // The relationship: if `any_set` is FALSE, `effective_change` must also be false. A proposal
-        // that is indistinguishable from empty cannot be an effective change.
+        // The relationship the two independent gates must keep: if `any_set` is FALSE,
+        // `effective_change` must also be false. A proposal indistinguishable from an empty one
+        // cannot be an effective change.
         for args in [
             RedeemLimitsArgs {
                 large_redeem_threshold_usdc: Some(CUR_THRESHOLD + 1),
@@ -1683,8 +1513,7 @@ mod fix_a_tests {
                 redeem_queue_delay_seconds: Some(CUR_DELAY + 1),
                 ..Default::default()
             },
-            // The exact pairing the review found: a live field at its CURRENT value plus a dead field
-            // that differs.
+            // A live field at its CURRENT value plus a dead field that differs.
             RedeemLimitsArgs {
                 instant_redeem_budget_usdc: Some(CUR_BUDGET),
                 redeem_queue_delay_seconds: Some(CUR_DELAY + 1),
@@ -1729,10 +1558,9 @@ mod fix_a_tests {
 
     #[test]
     fn a_proposal_touching_only_DEAD_fields_is_refused() {
-        // AUDIT C-03. `large_redeem_threshold_usdc` and `redeem_queue_delay_seconds` are read by no
-        // instruction since the queue was deleted. Proposing one alone used to pass the no-op gates,
-        // hold the single redeem-limits slot for 24h, bump active_proposal_count, and emit an event
-        // announcing a throttle change that changed nothing.
+        // C-03: `large_redeem_threshold_usdc` and `redeem_queue_delay_seconds` are read by no
+        // instruction since the queue was deleted, so proposing one alone must not hold the single
+        // redeem-limits slot for 24h and announce a throttle change that changed nothing.
         for dead in [
             RedeemLimitsArgs {
                 large_redeem_threshold_usdc: Some(CUR_THRESHOLD + 1),
@@ -1755,8 +1583,7 @@ mod fix_a_tests {
             );
         }
 
-        // But a dead field alongside a LIVE one is still a valid proposal. Refusing that would break
-        // the borsh shape of RedeemLimitsArgs for no benefit, and the live field carries it.
+        // A dead field alongside a LIVE one is still a valid proposal: the live field carries it.
         for mixed in [
             RedeemLimitsArgs {
                 redeem_queue_delay_seconds: Some(CUR_DELAY + 1),
@@ -1772,8 +1599,8 @@ mod fix_a_tests {
             assert!(redeem_limits_any_set(&mixed));
         }
 
-        // The three LIVE fields each carry a proposal on their own. If a future edit drops one of
-        // these from `any_set`, that capability disappears silently; this is the test that notices.
+        // The three LIVE fields each carry a proposal on their own. If an edit drops one from
+        // `any_set`, that capability disappears silently; this is the test that notices.
         for live in [
             RedeemLimitsArgs {
                 instant_redeem_budget_usdc: Some(CUR_BUDGET + 1),
@@ -1794,14 +1621,8 @@ mod fix_a_tests {
 
     #[test]
     fn an_empty_proposal_is_a_no_op_and_every_LIVE_field_is_still_compared() {
-        // Renamed from "...every_numeric_field_is_still_compared", and the body changed with it. The old
-        // version asserted that a change to `large_redeem_threshold_usdc` or `redeem_queue_delay_seconds`
-        // counted as an effective change, which is what let C-03's abuse survive the first fix. Those two
-        // are read by no instruction; a gate that treats them as meaningful is the bug, so the test that
-        // demanded it had to change too.
-        //
-        // Kept deliberately as a RENAME rather than a deletion: the old name is what a future reader would
-        // otherwise cite as evidence the dead fields are governed.
+        // A gate that treats the two dead fields as meaningful is the bug, so this asserts the
+        // opposite of what the earlier version of this test did.
         assert!(!changed(&RedeemLimitsArgs::default(), false));
 
         // Every LIVE field must still be compared, in both directions.
@@ -1830,8 +1651,7 @@ mod fix_a_tests {
             assert!(!changed(&args, false));
         }
 
-        // And the DEAD fields must NOT be, whichever value they carry. This is the assertion that
-        // replaces the old one, stated as the property rather than its negation.
+        // And the DEAD fields must NOT be, whichever value they carry.
         for args in [
             RedeemLimitsArgs {
                 large_redeem_threshold_usdc: Some(CUR_THRESHOLD + 1),
@@ -1859,8 +1679,7 @@ mod fix_a_tests {
 
     #[test]
     fn the_two_gates_agree_on_the_switch() {
-        // The P0 was the two gates DISAGREEING about a field. Assert they now agree, which is the
-        // property that was violated, rather than only asserting each one separately.
+        // The two gates must AGREE about the switch, which is the property that was once violated.
         let open = RedeemLimitsArgs {
             redemptions_enabled: Some(true),
             ..Default::default()

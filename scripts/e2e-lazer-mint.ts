@@ -1,6 +1,5 @@
-// Live devnet E2E: unpause the Lazer dominion program, then mint SILV with a
-// REAL Pyth Lazer signed envelope (the real verify_message + signature + fee on
-// chain). The definitive proof the migration works end-to-end.
+// Live devnet E2E: unpause the Lazer dominion program, then mint and redeem SILV with a REAL Pyth
+// Lazer signed envelope (the real verify_message + signature + fee on chain).
 //
 // Run: PYTH_LAZER_KEY=... npx tsx scripts/e2e-lazer-mint.ts
 import {
@@ -22,14 +21,10 @@ import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 import { requireSanctionedCluster, assertReversible, intentFromEnv } from "./_guard";
 import { resolveCluster, describeCluster } from "./_cluster";
 
-// AUDIT S-02: RPC, USDC_MINT and LAZER_TREASURY were all hardcoded to devnet, and the runbook
-// presents this script as the proof that the PRICED MINT PATH works after a mainnet init. It could
-// never have proven that. Worse, it sends transactions, so run with a mainnet operator key it would
-// have signed devnet transactions with that key while appearing to test mainnet.
+// RPC, program id, USDC mint and Lazer treasury are RESOLVED, never hardcoded: this script sends, so
+// a devnet literal would sign devnet transactions with a mainnet key while looking like a mainnet test.
 const CLUSTER = resolveCluster();
 const RPC = CLUSTER.rpc;
-// Resolved, never hardcoded: this line held 2ujQg, the ORIGINAL retired program, and
-// no gate caught it because 2ujQg was missing from the retired list too.
 const PROGRAM_ID = SHARED_PROGRAM_ID;
 const USDC_MINT = CLUSTER.usdcMint;
 // Read from the live config in main(): only the chain knows which mint a given
@@ -37,8 +32,6 @@ const USDC_MINT = CLUSTER.usdcMint;
 let SILV_MINT: PublicKey;
 const LAZER_PROGRAM = new PublicKey("pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt");
 const LAZER_STORAGE = new PublicKey("3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpPuSCQVyQL");
-// Was a devnet literal with "(mainnet: Gx4MBPb1...)" in a trailing comment: the gap was known
-// and written down rather than closed. Now resolved per cluster.
 const LAZER_TREASURY = CLUSTER.lazerTreasury;
 const TOKEN_PROGRAM = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
 const TOKEN_2022 = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
@@ -69,18 +62,11 @@ async function fetchSilvEnvelope(): Promise<{ envelope: Uint8Array; priceUsd: nu
   return { envelope: new Uint8Array(Buffer.from(j.solana.data, "base64")), priceUsd };
 }
 
-// The four accounts added on 2026-08-05, resolved the SAME way the app resolves them.
-//
-// D1: this script omitted all four, and because `.accounts()` is NOT strict in Anchor 0.31.1 (it
-// delegates to `accountsPartial`) the resolver silently DERIVED `fee_exempt` and `kyc` from the IDL
-// seeds and passed those real PDA addresses instead of the program id. The program then ran
-// `Account::try_from` on uninitialised accounts and reverted AccountNotInitialized, so the script
-// that the deploy checklist treats as PROOF THAT THE PRICED MINT WORKS could not pass on any wallet
-// without both a fee exemption and a KYC attestation. Omission is invisible to the client-vs-IDL
-// gate, which can only validate the keys that ARE present, so it has to be right here.
-//
-// Optional accounts MUST be null when absent. Passing the address of a non-existent account is
-// strictly worse than passing null, which is the whole failure above.
+// The four fee/KYC accounts, resolved the SAME way the app resolves them. Optional accounts MUST be
+// explicit null when absent: `.accounts()` is not strict in Anchor 0.31.1 (it delegates to
+// accountsPartial), so omitting one makes the resolver DERIVE the PDA from the IDL seeds and pass a
+// real address for an uninitialised account, which reverts AccountNotInitialized. Omission is also
+// invisible to verify-client-idl-parity.ts, which can only validate the keys that ARE present.
 const feeVaultPda = pda("fee_vault");
 const feeVaultAta = getAssociatedTokenAddressSync(USDC_MINT, feeVaultPda, true, TOKEN_PROGRAM);
 async function walletFlagAccounts(conn: anchor.web3.Connection, wallet: PublicKey) {
@@ -90,9 +76,8 @@ async function walletFlagAccounts(conn: anchor.web3.Connection, wallet: PublicKe
     [Buffer.from("kyc"), wallet.toBuffer()], PROGRAM_ID)[0];
   const infos = await conn.getMultipleAccountsInfo([fe, ky]);
   // OWNER + DISCRIMINATOR, not mere existence. Creating an account at a PDA address is
-  // permissionless: a one-lamport SystemProgram.transfer to `feeExemptPda(wallet)` makes a
-  // System-owned account there, and passing that address makes the program revert on the owner
-  // check. Existence-only was a P0 in the app client; the same shape lived here.
+  // permissionless (a one-lamport transfer to feeExemptPda(wallet) leaves a System-owned account
+  // there), and passing that address makes the program revert on the owner check.
   const disc = (name: string) =>
     Uint8Array.from(
       ((idl as any).accounts.find((a: any) => a.name === name)).discriminator as number[],
@@ -109,8 +94,7 @@ async function walletFlagAccounts(conn: anchor.web3.Connection, wallet: PublicKe
 }
 
 async function main() {
-  // RULE 1 (scripts/_guard.ts): refuse any cluster but devnet unless
-  // DOMINION_ALLOW_MAINNET is explicitly set.
+  // RULE 1 (_guard.ts): refuse any cluster but devnet unless DOMINION_ALLOW_MAINNET is set.
   await requireSanctionedCluster(RPC, "priced mint E2E");
   console.log("  " + describeCluster(CLUSTER));
   const INTENT = intentFromEnv();
@@ -151,20 +135,12 @@ async function main() {
   // 4. Real SILV envelope.
   const { envelope, priceUsd } = await fetchSilvEnvelope();
   console.log("  envelope len:", envelope.length);
-  // min_out from the envelope's OWN price, the CONFIGURED premium, and 0.5% slippage.
-  //
-  // RE-AUDIT P2. This computed `10 / (priceUsd * 1.1) * 0.995`, i.e. it assumed a 10% premium while the
-  // configured mint premium is 1%. The floor was therefore 8.63% BELOW the correct output despite being
-  // labelled "0.5% slippage", so a deployed pricing regression charging a 9% mint fee would have returned
-  // 9.1/price, cleared the floor, and printed MINT OK. An economic E2E whose tolerance is an order of
-  // magnitude wider than the thing it measures is not a check.
-  //
-  // The premium is READ from the live config rather than hardcoded, so the floor tracks a timelocked
-  // premium change instead of going stale the first time one lands.
-  // ROUND 3 P2: the transaction passes the wallet's OWN optional exemption account, so a test wallet with a
-  // live mint exemption is charged 0 bps by the program while this script compared against the global rate
-  // and aborted the ceremony proof with "MINT ECONOMICS WRONG" for CORRECT behaviour. Read the exemption the
-  // same way the transaction does.
+  // min_out from the envelope's OWN price, 0.5% slippage, and the premium READ FROM THE LIVE CONFIG,
+  // so the floor tracks a timelocked premium change instead of widening past what it measures. The
+  // wallet's own exemption is read the way the transaction passes it: an exempted wallet is charged
+  // 0 bps on chain, so comparing against the global rate would abort a CORRECT run.
+  // FeeExemptAccount layout: 8 disc | 32 wallet | 1 flags | 8 added_at | 32 added_by | 1 version |
+  // 8 expires_at (i64 LE) | 24 reserved. flags bit 0 = mint side, bit 1 = redeem side.
   const feeExemptInfo = await conn.getAccountInfo(pda2("fee_exempt", user.toBytes()));
   const mintSideExempt = (() => {
     if (!feeExemptInfo || feeExemptInfo.data.length < 90) return false;
@@ -210,10 +186,9 @@ async function main() {
   ];
   // Same assembly as the frontend: [cb_limit, cb_price, ed25519, ...ataIxs, dominion].
   const tx = new Transaction().add(...assembleLazerOracleIxs(dominionIx, envelope, ataIxs));
-  // Simulate first. A priced mint touches the ed25519 pre-instruction, the Lazer verify
-  // CPI, the payload parse, the feed-id match and six policy guards before it moves a
-  // single token, and a send-only failure surfaces as an opaque revert. Simulating first
-  // prints the program logs, which name the guard that rejected it.
+  // Simulate first. A priced mint clears the ed25519 pre-instruction, the Lazer verify CPI, the
+  // payload parse, the feed-id match and six policy guards before it moves a token, and a send-only
+  // failure is an opaque revert. The simulation logs name the guard that rejected it.
   tx.feePayer = user;
   tx.recentBlockhash = (await conn.getLatestBlockhash()).blockhash;
   const presim = await conn.simulateTransaction(tx, [kp]);
@@ -235,8 +210,8 @@ async function main() {
   console.log("after:  USDC", usdcAfter / 1e6, "| SILV", silvAfter / 1e6, "| total supply", supply / 1e6);
   console.log("\n  USDC spent:", (usdcBefore - usdcAfter) / 1e6, "| SILV minted:", (silvAfter - silvBefore) / 1e6);
 
-  // RE-AUDIT P2: the post-check only asserted that SILV increased, which any premium from 0% to 99%
-  // satisfies. Assert the ACTUAL premium the chain charged, to the tolerance the slippage allows.
+  // Assert the ACTUAL premium the chain charged. "SILV increased" is satisfied by any premium from
+  // 0% to 99%, so on its own it is a liveness check, not an economic one.
   const usdcSpent = (usdcBefore - usdcAfter) / 1e6;
   const silvMinted = (silvAfter - silvBefore) / 1e6;
   const impliedPricePerOz = usdcSpent / silvMinted;
@@ -245,11 +220,9 @@ async function main() {
     `  implied price: $${impliedPricePerOz.toFixed(4)}/oz vs spot $${priceUsd.toFixed(4)} ` +
       `=> premium ${impliedPremiumBps} bps (configured ${premiumBpsMint})`,
   );
-  // ROUND 3 P2: the tolerance was 25 bps, which ACCEPTED a 125 bps charge against a configured 100, i.e. a
-  // 25% increase in the very fee this check claims to verify. The two integer floors contribute far less
-  // than that: at a 10 USDC size and ~$58/oz, one SILV atomic unit is about 0.06 bps and one USDC atomic unit
-  // about 0.001 bps. 2 bps is still an order of magnitude above the floors and an order of magnitude below
-  // anything a pricing regression would produce.
+  // 2 bps, not more. The two integer floors are far smaller (at a 10 USDC size and ~$58/oz one SILV
+  // atomic unit is ~0.06 bps, one USDC atomic unit ~0.001 bps), and a wider tolerance accepts a real
+  // pricing regression: 25 bps would pass a 125 bps charge against a configured 100.
   if (Math.abs(impliedPremiumBps - premiumBpsMint) > 2) {
     throw new Error(
       `MINT ECONOMICS WRONG: the chain charged ${impliedPremiumBps} bps, config says ${premiumBpsMint}. ` +
@@ -262,10 +235,7 @@ async function main() {
   // === REDEEM (instant) - validates the redeem account set on-chain too ===
   console.log("\n== Redeem 0.05 SILV (instant, fresh envelope) ==");
   const { envelope: redeemEnv, priceUsd: redeemPrice } = await fetchSilvEnvelope();
-  // ROUND 3 P2: this hardcoded 200 bps while the mainnet source of truth is 150, so the floor was
-  // 100 * 0.98 * 0.995 = 97.51 instead of 98.0075. A regression charging up to ~249 bps cleared it and the
-  // script still printed LAZER FULL-CYCLE E2E PASSED, about 99 bps above the configured fee. The mint half
-  // was fixed to read the live premium in the previous round and this half was left behind.
+  // Live config premium and live exemption on this side too, for the same reason as the mint half.
   const redeemSideExempt = (() => {
     if (!feeExemptInfo || feeExemptInfo.data.length < 90) return false;
     const flags = feeExemptInfo.data[8 + 32];
@@ -283,20 +253,11 @@ async function main() {
     `  min_usdc_out (0.5% slip @ envelope price, ${premiumBpsRedeem}bps premium):`,
     minUsdcOut / 1e6,
   );
-  // Redemptions are CLOSED at launch, so the redeem half is unreachable until an admin opens them.
-  //
-  // REVIEW-OF-FIXES P2, two things wrong with how this used to be handled. First the comment was STALE: it
-  // said `set_redemptions_enabled` "refuses to enable them in the deployed bytecode until the Phase 1
-  // upgrade", which stopped being true when instant redeem shipped. Enabling is an ordinary admin call now.
-  //
-  // Second, and worse, it `return`ed with exit 0 and the line "MINT PROVEN END TO END". Half a proof
-  // recorded as a pass. This script is the functional gate for a devnet upgrade, so a run that never
-  // executed `redeem_silv` must not be indistinguishable from one that did, or the whole redeem path
-  // (budget accounting, fee routing, the 2 bps premium check) ships unexercised behind a green line.
-  //
-  // So: loud, and exit 2 unless the operator says mint-only is what they wanted. Enabling redemptions on
-  // devnet is one admin transaction, and if this is the pre-upgrade smoke test then passing the variable is
-  // one word. Neither is a reason to let a partial run read as complete.
+  // Redemptions are CLOSED at launch, so the redeem half is unreachable until an admin opens them
+  // (an ordinary admin call). Exit 2, never 0: half a proof must not read as a pass. This script is
+  // the functional gate for a devnet upgrade, so a run that never executed `redeem_silv` would ship
+  // the budget accounting, the fee routing and the premium check unexercised behind a green line.
+  // E2E_ALLOW_MINT_ONLY=1 is the operator saying a mint-only smoke test is what they wanted.
   if (!cfg.redemptionsEnabled) {
     console.log("\n  SKIP redeem half: redemptions_enabled = false on this program.");
     console.log("  The MINT half passed, with a real signed Lazer envelope.");
@@ -342,17 +303,14 @@ async function main() {
   console.log("  SILV burned:", silvBurned, "| USDC received:", usdcReceived);
   if (usdcFinal <= usdcAfter) throw new Error("USDC did not increase on redeem");
 
-  // ROUND 3 P2: the redeem half asserted ONLY that USDC increased, which any premium from 0% to 99%
-  // satisfies. The mint half got an economic postcondition in the previous round and this one was left with
-  // a liveness check masquerading as a proof. Assert the premium the chain actually charged.
+  // Economic postcondition on this side too: assert the premium the chain actually charged.
   const impliedRedeemPricePerOz = usdcReceived / silvBurned;
   const impliedRedeemBps = Math.round((1 - impliedRedeemPricePerOz / redeemPrice) * 10_000);
   console.log(
     `  implied redeem: $${impliedRedeemPricePerOz.toFixed(4)}/oz vs spot $${redeemPrice.toFixed(4)} ` +
       `=> premium ${impliedRedeemBps} bps (expected ${premiumBpsRedeem})`,
   );
-  // Same 2 bps as the mint side, and for the same reason: the integer floors contribute far less, so
-  // anything wider would accept a real pricing regression.
+  // Same 2 bps as the mint side, and for the same reason.
   if (Math.abs(impliedRedeemBps - premiumBpsRedeem) > 2) {
     throw new Error(
       `REDEEM ECONOMICS WRONG: the chain charged ${impliedRedeemBps} bps, expected ${premiumBpsRedeem}. ` +

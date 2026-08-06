@@ -7,35 +7,22 @@ pub enum TimelockAction {
     SetPremiumMint = 1,
     SetPremiumRedeem = 2,
     WithdrawUsdc = 3,
-    // Option B: discriminant 4 reused (Option A SetTreasuryMinReserve -> the
-    // 24h-timelocked treasury minimum FLOAT setter, D7 option a). The payload
-    // also changed (Option A: u16 bps; Option B: u64 USDC). This reuse is
-    // SAFE ONLY because V2 is a MANDATORY fresh deploy + fresh init: a NEW
-    // program ID, no V1 on-chain state, no pre-existing TimelockQueueAccount.
-    // In-place upgrade over V1 is UNSUPPORTED and is independently broken at a
-    // more fundamental level (the ConfigAccount layout fully changed, so V2
-    // code cannot deserialize a V1 config). The fresh-deploy-only requirement
-    // is the actual safety boundary - it is NOT enforced on-chain (config.version
-    // is a reserved forward-compat field, intentionally not asserted, because
-    // no V1 config can ever deserialize into V2 to reach such a check). See the
-    // codex audit-aid doc + CONFIRMED_SPEC redeploy section.
+    // Discriminant 4 was reused with a changed payload, which is safe ONLY because V2
+    // is a mandatory fresh deploy under a new program id, so no pre-existing
+    // TimelockQueueAccount exists. That requirement is the real safety boundary and it
+    // is NOT enforced on chain: no V1 config can deserialize into V2 to be checked.
     SetTreasuryFloat = 4,
     SetOracleGuards = 5,
     UpdateMetadata = 6,
     SetComplianceMode = 7,
     SetPythFeed = 8,
     SetAdminTimelock = 9,
-    // FIX A (launch spec 2026-07): the timelocked loosen path for the four redeem
-    // throttles (instant_redeem_budget, instant_redeem_window, large_redeem_threshold,
-    // redeem_queue_delay). Instant TIGHTENING is the separate, un-timelocked
-    // `emergency_tighten_redeem_limits`. APPEND ONLY - never reorder.
+    // The timelocked LOOSEN path for the four redeem throttles; instant tightening is
+    // the separate `emergency_tighten_redeem_limits`. Discriminants are APPEND ONLY.
     SetRedeemLimits = 10,
-    // "Mint at launch" phase: opening the public mint path is a LOOSENING, so it goes
-    // through the 24h timelock and is guardian-cancellable. CLOSING it is instant
-    // (set_public_mint_enabled(false)), the same tighten-fast/loosen-slow asymmetry
-    // FIX A applies to the redeem throttles. Opening the mint wakes the oracle path,
-    // which is dormant while it is closed, so a 24h announced window is exactly when
-    // a misconfigured oracle guard should be caught.
+    // Opening the public mint is a LOOSENING: 24h timelock, guardian-cancellable.
+    // Closing is instant. Opening also wakes the oracle path, dormant while the mint is
+    // closed, so the announced window is when a bad oracle guard should surface.
     SetPublicMint = 11,
 }
 
@@ -53,7 +40,7 @@ pub struct TimelockQueueAccount {
 }
 
 impl TimelockQueueAccount {
-    // Variable size; max action_data ≈ 256 bytes for any current action.
+    // Variable size. No current action serializes more than 256 bytes of args.
     pub const MAX_ACTION_DATA_BYTES: usize = 256;
     pub const SIZE: usize = 8
         + 8                                 // nonce

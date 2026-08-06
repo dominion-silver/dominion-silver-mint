@@ -1,24 +1,9 @@
 /**
- * THE single place a script learns which cluster it is talking to, and which cluster-specific
- * addresses go with it.
- *
- * WHY THIS FILE EXISTS: external audit 2026-08-06, finding S-01, the only P0 of that pass.
- *
- * `scripts/t1-hostile-bootstrap.ts` opened with `const RPC = "https://api.devnet.solana.com"` and
- * then called `requireDevnet(RPC, ...)`. That guard is not wrong, it was simply handed a constant:
- * `isDevnet("...devnet...")` is true, so it returned immediately and the `DOMINION_ALLOW_MAINNET`
- * branch was DEAD CODE. The mainnet runbook tells the operator to run T1 with
- * `DOMINION_ALLOW_MAINNET=i-understand` and a mainnet program id. The script would have looked for
- * that program's ProgramData ON DEVNET, funded a devnet attacker, created a devnet mint, and failed,
- * having initialised nothing. `initialize` succeeds exactly once per program id, and T1's case 5 IS
- * the real initialisation, so the ceremony would have been stranded AFTER paying for the mainnet
- * deploy. Same shape in `read-config.ts` and `e2e-lazer-mint.ts` (S-02), which ignored the
- * `DOMINION_RPC` the runbook told the operator to set.
- *
- * THE RULE THIS FILE ENFORCES: a cluster-specific value that we do not have a VERIFIED address for
- * must THROW, never silently fall back to the devnet one. Falling back is precisely what turned a
- * hardcoded constant into a P0. A loud failure before the first transaction costs a minute; a quiet
- * devnet fallback during a mainnet ceremony costs the deploy.
+ * THE single place a script learns which cluster it is on, and which cluster-specific addresses go with it.
+ * No script may hardcode an RPC or a cluster constant: a literal containing "devnet" satisfies the guard on
+ * its first line, making the mainnet consent branch dead code. And a cluster-specific value we have no
+ * VERIFIED address for must THROW, never fall back to the devnet one: `initialize` succeeds once per
+ * program id, so a quiet devnet fallback mid-ceremony costs the deploy.
  */
 import { Connection, PublicKey } from "@solana/web3.js";
 import fs from "fs";
@@ -33,11 +18,8 @@ export interface ClusterContext {
   usdcMint: PublicKey;
   /** Pyth Lazer's fee treasury. The Lazer verify CPI pays into this. */
   lazerTreasury: PublicKey;
-  /**
-   * A third-party, live, UPGRADEABLE program used as the "foreign ProgramData" in T1's case 3.
-   * Deliberately not a Dominion id: we retire ours, and a closed program would make case 3 pass
-   * for the wrong reason.
-   */
+  /** A third-party, live, UPGRADEABLE program: the "foreign ProgramData" in T1's case 3. Never a Dominion
+   *  id, since we retire ours and a closed program makes case 3 pass for the wrong reason. */
   foreignUpgradeableProgram: PublicKey;
 }
 
@@ -54,29 +36,9 @@ const DEVNET = {
   foreignUpgradeableProgram: "pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt", // Pyth Lazer
 };
 
-/**
- * Classify from the HOST ONLY, never the whole URL.
- *
- * REVIEW-OF-FIXES P0. The first version of this function tested `/devnet/i` against the entire URL,
- * which the security review broke in three ways, all measured:
- *
- *   https://api.mainnet-beta.solana.com/?tag=devnet-mirror       -> "devnet"
- *   https://mainnet.helius-rpc.com/?api-key=7fdevnet91-aaaa      -> "devnet"
- *   https://rpc.internal/devnet-proxy-to-mainnet                 -> "devnet"
- *
- * A query parameter, a path segment, or six characters appearing by chance inside an API key was
- * enough. And because `_guard.ts::isDevnet` uses the same test, `requireDevnet` returned early, so the
- * DOMINION_ALLOW_MAINNET consent gate never fired: `upgrade-program.ts --execute` would have run
- * `solana program extend` and `solana program deploy` against MAINNET while printing `cluster=devnet`.
- *
- * That is strictly worse than the S-01 it replaced. S-01 could only ever reach devnet; this could reach
- * mainnet while claiming devnet. `verify-cluster-resolution.ts` pinned "unknown host must be mainnet"
- * and never "known mainnet host containing the substring devnet", so the new gate could not fail on it.
- *
- * Host-only matching fixes the class rather than the three examples. The genesis-hash cross-check in
- * `assertClusterMatchesChain` is the belt to this braces: a hostname is a claim, the genesis hash is
- * what the chain actually is.
- */
+/** Classify from the HOST ONLY, never the whole URL: a query parameter, a path segment or six characters
+ *  inside an API key make a mainnet endpoint match /devnet/i, and `_guard.ts::isDevnet` turns on this
+ *  result, so a substring match here silently disables the mainnet consent gate. */
 export function classifyCluster(rpc: string): Cluster {
   let host: string;
   try {
@@ -87,8 +49,7 @@ export function classifyCluster(rpc: string): Cluster {
         `Refusing to guess a cluster from an unparseable endpoint.`,
     );
   }
-  // Exact host or dotted-suffix match, so "devnet.example.com" counts and
-  // "mainnet.helius-rpc.com/?k=devnet" does not.
+  // Exact host or dotted-suffix match: "devnet.example.com" counts, "mainnet.helius-rpc.com/?k=devnet" does not.
   const hostIs = (needle: string) => host === needle || host.endsWith("." + needle);
   if (host === "127.0.0.1" || host === "localhost" || hostIs("localhost")) return "localnet";
   if (host === "api.devnet.solana.com" || host.startsWith("devnet.") || hostIs("devnet.solana.com")) {
@@ -99,13 +60,8 @@ export function classifyCluster(rpc: string): Cluster {
       "testnet is not a supported cluster for these scripts. Use devnet or mainnet-beta.",
     );
   }
-  // Anything else is mainnet. Deliberately the CONSERVATIVE default: an unrecognised RPC is far more
-  // likely to be a mainnet provider (Helius, Triton, QuickNode) than a devnet one, and misclassifying
-  // mainnet as devnet is the failure this file exists to prevent.
-  //
-  // A private devnet endpoint therefore needs DOMINION_ALLOW_MAINNET, which is friction in the safe
-  // direction: the cost is one env var on an unusual setup, versus a real mainnet deploy believing it
-  // is a test.
+  // Anything else is mainnet, the CONSERVATIVE default: misclassifying mainnet as devnet is the failure this
+  // file prevents. A private devnet endpoint therefore needs DOMINION_ALLOW_MAINNET, friction the safe way.
   return "mainnet-beta";
 }
 
@@ -116,13 +72,9 @@ const GENESIS: Record<Cluster, string | null> = {
   localnet: null, // a fresh validator has a random genesis hash; nothing to pin.
 };
 
-/**
- * Confirm the CHAIN agrees with the hostname before anything irreversible happens.
- *
- * A hostname is a claim made by whoever set the env var. The genesis hash is what the cluster is. Any
- * proxy, tunnel, typo or copy-paste that points a devnet-looking URL at mainnet is caught here and
- * nowhere else. Cheap: one RPC call, once, before the first transaction.
- */
+/** Confirm the CHAIN agrees with the hostname before anything irreversible happens. A hostname is a claim
+ *  by whoever set the env var; the genesis hash is what the cluster IS. Any proxy, tunnel or typo pointing
+ *  a devnet-looking URL at mainnet is caught here and nowhere else, for one RPC call. */
 export async function assertClusterMatchesChain(ctx: ClusterContext): Promise<void> {
   const expected = GENESIS[ctx.cluster];
   if (expected === null) return; // localnet
@@ -140,16 +92,10 @@ export async function assertClusterMatchesChain(ctx: ClusterContext): Promise<vo
   }
 }
 
-/**
- * Read a ceremony value out of `config/mainnet-authorities.json`, the source of truth.
- *
- * Audit finding D-01: the runbook printed premium values that disagreed with this file AND with the
- * script's own literals, three ways, on the same page. Ceremony values must be READ, not retyped,
- * so there is exactly one place to be wrong.
- */
+/** Read a ceremony value out of `config/mainnet-authorities.json`, the source of truth. Ceremony values are
+ *  READ, never retyped into a script, so there is exactly one place to be wrong (audit D-01). */
 export function mainnetConfig(): Record<string, unknown> {
-  // `DOMINION_MAINNET_CONFIG` exists so the cluster gate can mutation-test against a TEMP COPY instead
-  // of writing over the real ceremony file (review-of-fixes P2). Nothing else sets it.
+  // `DOMINION_MAINNET_CONFIG` lets the cluster gate test against a TEMP COPY. Nothing else sets it.
   const p =
     process.env.DOMINION_MAINNET_CONFIG ||
     path.join(__dirname, "..", "config", "mainnet-authorities.json");
@@ -175,23 +121,12 @@ function requiredMainnetAddress(field: string): PublicKey {
   return new PublicKey(raw);
 }
 
-/**
- * Resolve the cluster from the environment. `DOMINION_RPC` wins; otherwise devnet.
- *
- * Devnet stays the default so that running a script with no environment set is still the safe,
- * boring thing it always was. What changed is that setting `DOMINION_RPC` now actually works.
- */
+/** Resolve the cluster from the environment: `DOMINION_RPC` wins, otherwise devnet, so a bare run is safe. */
 export function resolveCluster(): ClusterContext {
   const explicit = process.env.DOMINION_RPC?.trim();
-  // REVIEW-OF-FIXES P0. Two env vars that contradict each other must not both be honoured silently.
-  // `DOMINION_ALLOW_MAINNET` says "I intend to touch a real cluster"; an unset `DOMINION_RPC` says
-  // "devnet". The runbook's own T1 invocation set the first and omitted the second (every OTHER mainnet
-  // command in that file sets it), so the S-01 scenario reproduced verbatim from the exact command the
-  // audit cited: default to devnet, `requireDevnet` returns on its first line, and the mainnet ceremony
-  // runs entirely on devnet.
-  //
-  // Refusing the contradiction is better than picking a winner. Guessing mainnet would deploy somewhere
-  // the operator did not name; guessing devnet is the bug. So: say which.
+  // Two env vars that contradict each other must not both be honoured silently. Refusing beats picking a
+  // winner: guessing mainnet deploys somewhere the operator did not name, and guessing devnet runs the
+  // whole mainnet ceremony on devnet.
   if (!explicit && process.env.DOMINION_ALLOW_MAINNET) {
     throw new Error(
       "DOMINION_ALLOW_MAINNET is set but DOMINION_RPC is not.\n" +
@@ -224,14 +159,8 @@ export function resolveCluster(): ClusterContext {
   };
 }
 
-/**
- * The context for an ARBITRARY rpc, not the one in the environment.
- *
- * `resolveCluster()` reads DOMINION_RPC; the guard is handed a URL by its caller and must validate THAT
- * one. Sharing the classification and the address table between the two is what keeps the guard and the
- * address resolution from disagreeing about which cluster this is, which was the underlying defect behind
- * the first cluster P0.
- */
+/** The context for an ARBITRARY rpc: `resolveCluster()` reads DOMINION_RPC, while the guard validates a URL
+ *  handed to it. Both share this classifier and address table, so they cannot disagree about the cluster. */
 export function resolveClusterFor(rpc: string): ClusterContext {
   const cluster = classifyCluster(rpc);
   if (cluster === "devnet" || cluster === "localnet") {
@@ -252,7 +181,6 @@ export function resolveClusterFor(rpc: string): ClusterContext {
   };
 }
 
-/** Convenience: a Connection plus the resolved context, since every caller wants both. */
 export function connect(): { conn: Connection; ctx: ClusterContext } {
   const ctx = resolveCluster();
   return { conn: new Connection(ctx.rpc, "confirmed"), ctx };

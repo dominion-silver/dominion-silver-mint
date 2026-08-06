@@ -1,12 +1,8 @@
 /**
- * One command that answers "can we launch on mainnet?" against the six requirements
- * Thomas confirmed on 2026-07-29, checking everything that is mechanically checkable and
- * naming, precisely, what is left for a human.
- *
- * This is deliberately separate from verify-mainnet-authorities.ts, which only checks the
- * authority assignment. This one checks the whole launch: the build, the constants, the
- * oracle on MAINNET data, the app configuration, and the requirement-by-requirement
- * verdict including the things that CANNOT be done without a program upgrade.
+ * One command that answers "can we launch on mainnet?": everything mechanically checkable across the
+ * build, the constants, the authorities, the oracle on MAINNET feed data and the app configuration,
+ * plus a named list of what only a human can clear. Separate from verify-mainnet-authorities.ts,
+ * which checks only the authority assignment.
  *
  * Read-only. Sends nothing. Safe to run any time.
  *
@@ -36,17 +32,9 @@ let human = 0;
 let scheduled = 0;
 
 /**
- * Which runbook step the operator is ABOUT to perform, from `--stage=N`.
- *
- * RE-AUDIT P1. `atStep` never affected the exit code and the gate had no notion of where the ceremony
- * was, so an item "satisfied by step 2" stayed non-blocking forever. Fund the deployer, skip T1, skip the
- * constants swap, skip the fee vault, and the gate could exit 0 saying "Nothing mechanically blocking"
- * while the token did not exist, the apps still pointed at devnet, and every mint and redeem would revert
- * for the missing vault.
- *
- * With `--stage=N`, anything whose step is BEHIND N is overdue and blocks. Without it the gate behaves as
- * before, which is correct for the pre-ceremony read, and the summary says so instead of implying the
- * checks are complete.
+ * Which runbook step the operator is ABOUT to perform, from `--stage=N`. Anything whose step is BEHIND
+ * N is overdue and BLOCKS. Without it the gate has no notion of where the ceremony is, so an item
+ * "satisfied by step 2" stays non-blocking forever and a mid-ceremony run reads falsely reassuring.
  */
 const STAGE: number | null = (() => {
   const a = process.argv.find((x) => x.startsWith("--stage="));
@@ -66,27 +54,15 @@ function no(msg: string, detail = "") {
   console.log(`  BLOCKED  ${msg}${detail ? ` -> ${detail}` : ""}`);
   blocked++;
 }
-/** Will be satisfied BY A STEP OF THE CEREMONY THIS GATE GATES, so it must not block starting it.
- *
- * The gate used to exit 1 on any BLOCKED item with "Do NOT start the ceremony", and at least four of
- * its blocked items can ONLY be resolved during that ceremony: the mainnet fee vault cannot exist
- * before the mainnet deploy, and the apps' USDC/Lazer constants are devnet values until runbook step
- * 2 swaps them. So the exit code was permanently non-zero and an operator told "the gate must be
- * green" would be trained to override it. That is D2's failure mode, the item this pass just fixed,
- * reproduced in the gate itself. */
+/** Will be satisfied BY A STEP OF THE CEREMONY THIS GATE GATES, so it must NOT block starting it and
+ * must NOT print READY. Several blocked items can only be resolved during the ceremony (the mainnet fee
+ * vault cannot exist before the mainnet deploy; the apps' USDC/Lazer constants are devnet values until
+ * step 2), so exiting 1 on them would train the operator to override the gate. */
 function atStep(step: string, msg: string, detail = "", dueStep?: number) {
-  // `dueStep` is EXPLICIT and numeric. `step` is the label an operator reads.
-  //
-  // This used to derive the deadline from the label by regex, and both attempts were wrong in opposite
-  // directions. Taking the FIRST integer made "runbook steps 3-6" due at 3, so `--stage=4` blocked because
-  // the mint does not exist before T1, which IS steps 4+5+6. Taking the LAST made "9/10" due at 10, and the
-  // test is `due < STAGE`, so the MANDATORY fee vault was silently not reported at `--stage=10` -- the exact
-  // stage the runbook step added in the same commit tells the operator to check it at, with the comment
-  // "must not report the vault as OVERDUE". It could not: the check was vacuous.
-  //
-  // A deadline is data, not prose. Parsing it out of a human-readable string is a class of bug, not an
-  // instance, so the parameter deletes the class. `dueStep` omitted means "no deadline", which is honest for
-  // an item whose step is genuinely a range the operator judges.
+  // `dueStep` is EXPLICIT and numeric; `step` is only the label an operator reads. A deadline is data,
+  // not prose: deriving it from the label by regex was wrong in both directions (the FIRST integer made
+  // "runbook steps 3-6" due at 3, the LAST made "9/10" due at 10, and since the test is `due < STAGE`
+  // the mandatory fee vault was never reported at --stage=10). Omitting `dueStep` means "no deadline".
   if (STAGE !== null && dueStep !== undefined && dueStep < STAGE) {
     console.log(
       `  OVERDUE  ${msg} -> was due at step ${dueStep}, you are at step ${STAGE}${detail ? `. ${detail}` : ""}`,
@@ -101,13 +77,10 @@ function byHand(msg: string, detail = "") {
   console.log(`  BY HAND  ${msg}${detail ? ` -> ${detail}` : ""}`);
   human++;
 }
-// OFF-CURVE IS NECESSARY, NOT SUFFICIENT, and this gate is what stands in for verifying the trust
-// model. `PublicKey.isOnCurve` failing proves only that 32 bytes are not a valid ed25519 point, which
-// ANY PDA of ANY program satisfies, including one an attacker controls. Nothing here checks that the
-// account is a Squads vault, that its multisig exists, or what its threshold is. The stated model is
-// a 3-of-5 Squads vault; treat the "off-curve" lines as a shape check and verify the multisig itself
-// by hand in the Squads UI. Recorded rather than fixed because reading a Squads multisig account
-// properly is a real integration, not a one-line assertion.
+// OFF-CURVE IS NECESSARY, NOT SUFFICIENT. `PublicKey.isOnCurve` failing proves only that 32 bytes are
+// not a valid ed25519 point, which ANY PDA of ANY program satisfies, including one an attacker owns.
+// Nothing here checks that the account is a Squads vault, that its multisig exists, or its threshold:
+// the stated 3-of-5 model must be verified by hand in the Squads UI.
 function section(t: string) {
   console.log(`\n${t}`);
 }
@@ -250,14 +223,9 @@ async function main() {
 
   // ------------------------------------------------------ the six requirements
   section("E. Your six launch requirements");
-  // REVIEW-OF-FIXES P1. These two printed READY unconditionally, on the promise of future steps, which is
-  // the second half of the audit's own P0: "le readiness gate ne lance ni n'analyse T1 et imprime READY
-  // pour le token deploye/live sur la seule promesse de futures etapes". A gate that reports READY for
-  // something that has not happened is worse than no line at all, because a checklist reads it as done.
-  //
   // Neither can be PROVEN from here: the token does not exist until the ceremony creates it, and the
-  // premint has not happened. So they are AT STEP, the classification introduced for exactly this: red
-  // before the ceremony, expected to be red, and re-run afterwards. `atStep` does not exit 1.
+  // premint has not happened. So they are AT STEP, never READY. Reporting READY for something that has
+  // not happened is worse than printing no line, because a checklist reads it as done.
   atStep(
     "runbook steps 3-6",
     "1. SILV token deployed and live",
@@ -276,23 +244,16 @@ async function main() {
     "3. public mint with no KYC",
     "works, but opening it costs a 24h timelock (propose at step 7, execute at step 10)",
   );
-  // 2026-08-05: this was recorded as BLOCKED, and any blocked item exits 1 with "Do NOT start the
-  // ceremony". It is now satisfied: `kyc_scope_flags` IS read, by mint_silv and redeem_silv, and
-  // `set_kyc_scope` arms it instantly. Leaving the stale `no()` here would have hard-failed the
-  // launch gate on a requirement the batch delivered.
   ok(
     "3b. enable KYC LATER",
     "the gate SHIPPED DORMANT (kyc_scope_flags = 0, read by mint_silv + redeem_silv). Arming it " +
       "is a config change, not an upgrade: set_kyc_operator then attest wallets then " +
       "set_kyc_scope. ORDER MATTERS - attest BEFORE arming or every holder is locked out",
   );
-  // P1 from the runbook prerequisites, checked mechanically rather than left as prose. The fee
-  // vault is the one setup step whose absence turns the whole product off: mint_silv and
-  // redeem_silv both take it as a REQUIRED account, so a missing vault means every mint and every
-  // redeem reverts AccountNotInitialized the moment the mint is opened.
-  //
-  // Checked against the CLUSTER THIS SCRIPT IS POINTED AT, so a green here on devnet says nothing
-  // about mainnet. That is the honest behaviour: the detail line names the cluster.
+  // The fee vault is the one setup step whose absence turns the product off: mint_silv and redeem_silv
+  // both take it as a REQUIRED account, so a missing vault reverts every mint and every redeem with
+  // AccountNotInitialized. Checked against the CLUSTER THIS SCRIPT POINTS AT, so a green here on devnet
+  // says nothing about mainnet; the detail line names the cluster.
   {
     const feeVaultAuthority = PublicKey.findProgramAddressSync(
       [Buffer.from("fee_vault")],
@@ -304,9 +265,9 @@ async function main() {
       true, // allowOwnerOffCurve: the owner is a PDA
       TOKEN_PROGRAM_ID,
     );
-    // RE-AUDIT P1: this was `.catch(() => null)`, so an RPC FAILURE was reported as "the vault does not
-    // exist yet", which is a different fact and the reassuring one. Same class as P-04 and A-01: a helper
-    // that cannot tell "no" from "do not know" must not answer.
+    // Not `.catch(() => null)`: an RPC FAILURE is not "the vault does not exist yet", which is a
+    // different fact and the reassuring one. A helper that cannot tell "no" from "do not know" must
+    // not answer.
     let info: Awaited<ReturnType<typeof conn.getAccountInfo>> | null = null;
     let vaultReadFailed = false;
     try {
@@ -328,9 +289,7 @@ async function main() {
         "3c. the MAINNET fee vault does not exist yet",
         `${vault.toBase58()} -- run scripts/create-fee-vault.ts AFTER the deploy and BEFORE opening ` +
           `mint or redeem, or every mint and every redeem reverts AccountNotInitialized`,
-        // Due at 9b, i.e. it MUST exist before step 10 opens the public mint. The label used to be "9/10",
-        // which the last-number heuristic read as due at 10, so `--stage=10` never reported it: the one
-        // prerequisite whose absence makes every mint and every redeem revert was the one the check missed.
+        // Due at 9b: it MUST exist before step 10 opens the public mint.
         9,
       );
     }

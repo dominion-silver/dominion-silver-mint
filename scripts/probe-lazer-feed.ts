@@ -1,28 +1,14 @@
 /**
- * Probe a live Pyth Lazer feed and evaluate it against the EXACT guards the program
- * applies, without touching the chain.
+ * Probe a live Pyth Lazer feed against the EXACT guards the program applies. Read-only: it
+ * sends no transaction, and it never prints the API key.
  *
- * Why this exists: the oracle path is dormant while public mint and redemptions are
- * both closed, so there is no on-chain way to find out whether the live feed would
- * actually satisfy the policy. That question has to be answered BEFORE opening the
- * mint, not after, because the guards fail CLOSED: a feed that does not satisfy them
- * makes every priced operation revert.
+ * The oracle path is dormant while public mint and redemptions are closed, so there is no
+ * on-chain way to learn whether the live feed satisfies the policy, and the guards fail
+ * CLOSED: a feed that misses one makes every priced operation revert. Answer that BEFORE
+ * opening the mint. Guard values come from the DEPLOYED config, not from defaults.
  *
- * It answers, with real data:
- *   - what is the price, and is it inside the configured band
- *   - HOW MANY PUBLISHERS is the aggregate actually backed by (the operational
- *     question, since MIN_PUBLISHERS_FLOOR_HARD = 2 is enforced in code and cannot
- *     be configured below 2)
- *   - is the confidence interval tight enough
- *   - is the print fresh, non-carried-forward, and not future-dated
- *
- * Run:
- *   npx tsx scripts/probe-lazer-feed.ts               # the live config's feed + its guards
- *   LAZER_FEED_ID=3154 npx tsx scripts/probe-lazer-feed.ts
- *
- * Reads PYTH_LAZER_API_KEY from apps/public/.env.local (server-only key, never
- * printed). Reads the live guard values from the deployed config so the verdict is
- * against what is actually deployed, not against defaults.
+ * Run: npx tsx scripts/probe-lazer-feed.ts    (LAZER_FEED_ID overrides the config's feed)
+ * Needs PYTH_LAZER_API_KEY, from the environment or apps/public/.env.local.
  */
 import { AnchorProvider, Program, Wallet, Idl } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
@@ -159,8 +145,8 @@ async function main() {
   console.log("  POLICY EVALUATION (the exact guards in lazer_price.rs)");
   ok("price is positive", price > 0n);
 
-  // THE question: the code enforces max(config.min_publishers, HARD_FLOOR), so the
-  // effective requirement can never drop below 2 without a program upgrade.
+  // The operational question. Because the code enforces the max of the two, the effective
+  // requirement can never drop below the hard floor without a program upgrade.
   const effectiveMin = Math.max(Number(cfg.minPublishers), MIN_PUBLISHERS_FLOOR_HARD);
   ok(
     `publisherCount >= the EFFECTIVE floor (${effectiveMin})`,

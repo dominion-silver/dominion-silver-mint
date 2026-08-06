@@ -1,25 +1,10 @@
 #!/usr/bin/env bash
-# Assert that every hand-copied address in this repo agrees with declare_id!.
-#
-# WHY THIS EXISTS. The program id and the SILV mint are duplicated across six places
-# that no compiler, type-checker or test connects:
-#
-#   programs/dominion_silver_mint_v2/src/lib.rs   declare_id!            (the truth)
-#   Anchor.toml                                    [programs.localnet], [programs.devnet]
-#   target/idl/dominion_silver_mint.json           address
-#   apps/admin/src/lib/constants.ts                PROGRAM_ID, SILV_MINT
-#   apps/public/src/lib/constants.ts               PROGRAM_ID, SILV_MINT
-#   apps/{admin,public}/src/lib/idl/*.json         address  (bundled copies)
-#
-# This drift has already bitten this project three times: Anchor.toml pointed at a
-# retired id (audit DOM-014), all three IDLs went stale at once, and the Lazer harness
-# silently held a dead id and reported the oracle CPI as broken. The audit review of
-# daac4ac noted that after all those fixes there was STILL nothing asserting the six
-# sources agree, so a commit repointing an app at the wrong program (or an attacker's)
-# passed the entire blocking gate green.
-#
-# Deliberately anchor-free and network-free, so it can be the gate's hard floor even
-# when `anchor idl build` is unavailable or flaky in CI.
+# ASSERTS: 1-3 the program id and the IDL copies agree with `declare_id!`, 4 the app constants do too,
+# 4a every account a handler writes is declared mut, 4b scripts/ typechecks with no suppression
+# directives, 4c every rule in state/ is called where it must be, 5 no retired program id sits on a
+# live path. Nothing else connects those copies: no compiler, no type-checker, no test.
+# Deliberately anchor-free and network-free, so it stays the hard floor when `anchor idl build` is
+# unavailable or flaky in CI. History: private/trimmed-notes/gates.md
 #
 # Usage: scripts/verify-constants-consistency.sh
 set -euo pipefail
@@ -34,14 +19,8 @@ import subprocess, re, sys, hashlib, pathlib
 
 fail = []
 def _json_or_die(raw, path):
-    """REVIEW-OF-FIXES P0: this was a bare json.loads, and a malformed target/idl artifact made the whole
-    gate die with an uncaught JSONDecodeError. That is exactly what happened on CI: the workflow
-    redirected `anchor idl build` STDOUT into the file, cargo's "Downloaded <crate>" lines landed at the
-    top on a cache miss, and this line raised `Expecting value: line 1 column 3 (char 2)`. The gate has
-    never passed on CI, so nothing after it ever ran.
-
-    The redirect is fixed at the source (the workflow uses `-o` now), but a gate must not report an
-    infrastructure fault as a constants inconsistency, and must not report it as a traceback."""
+    """Parse an IDL, or FAIL with the regeneration command. A malformed target/idl artifact is a BUILD
+    fault, not an address inconsistency, and a bare json.loads kills the gate with a traceback."""
     import json as _json
     try:
         return _json.loads(raw)
@@ -60,7 +39,6 @@ def check(ok, msg):
 
 B58 = r'[1-9A-HJ-NP-Za-km-z]{32,44}'
 
-# ---- the source of truth ----
 lib = pathlib.Path("programs/dominion_silver_mint_v2/src/lib.rs").read_text()
 m = re.search(r'declare_id!\("(' + B58 + r')"\)', lib)
 if not m:
@@ -69,23 +47,16 @@ if not m:
 DECLARED = m.group(1)
 print(f"1. declare_id! = {DECLARED}")
 
-# A second declare_id! would make the harness's include_str! parse ambiguous
-# (it takes the first match).
+# A second declare_id! would make the harness's include_str! parse ambiguous: it takes the first.
 n_declare = len(re.findall(r'^\s*declare_id!\("', lib, re.M))
 check(n_declare == 1, f"exactly one declare_id! in the program source (found {n_declare})")
 
-# ---- Anchor.toml ----
 print("2. Anchor.toml")
 toml = pathlib.Path("Anchor.toml").read_text()
 # Only UNCOMMENTED entries count; a commented mainnet entry is the documented state.
 def section_entry(cluster):
-    """The active dominion_silver_mint value inside [programs.<cluster>], or None.
-
-    Review-of-fixes F10: the previous regex required dominion_silver_mint to be the
-    section's FIRST non-comment line, so adding any sibling key (mock_lazer, say)
-    made the gate report "no active entry" while the entry was present and correct.
-    Now the section body is isolated first and searched anywhere within it.
-    """
+    """The active dominion_silver_mint value inside [programs.<cluster>], or None. The section body is
+    isolated first, then searched anywhere within it, so a sibling key does not hide the entry."""
     m = re.search(r'^\[programs\.' + cluster + r'\]\s*$(.*?)(?=^\[|\Z)',
                   toml, re.M | re.S)
     if not m:
@@ -112,7 +83,6 @@ if active_mainnet:
 else:
     print("   ok: [programs.mainnet] intentionally absent (DOM-014)")
 
-# ---- IDLs ----
 print("3. IDL copies")
 idls = {
     "target/idl/dominion_silver_mint.json": None,
@@ -123,11 +93,7 @@ digests = {}
 for path in list(idls):
     p = pathlib.Path(path)
     if not p.exists():
-        # Review-of-fixes F8: a missing generated IDL used to FAIL here, which made
-        # this script strictly downstream of `anchor idl build` while its own header
-        # claimed to be the anchor-free hard floor. target/idl is gitignored and only
-        # exists after a build, so on a fresh checkout the honest answer is "not
-        # built yet", not "inconsistent". The COMMITTED app copies are still checked.
+        # target/idl is GENERATED and gitignored, so "not built yet" is honest, not "inconsistent".
         print(f"   skip: {path} not built yet (gitignored; run anchor idl build)")
         continue
     raw = p.read_bytes()
@@ -139,21 +105,14 @@ if len(digests) < 2:
           f"only {len(digests)} IDL copy present, so NOTHING was compared: the byte-identity "
           "check needs at least the two committed app copies")
 if len(digests) >= 2:
-    # WAS `== 3`. target/idl is GENERATED and gitignored, so on a fresh checkout only the two
-    # committed app copies exist, and the check silently did not run at all. Since it is the ONLY
-    # comparison between apps/admin and apps/public (each is otherwise checked for its `address`
-    # field alone), skipping it meant the two app IDLs were compared to nothing.
+    # `>= 2`, never `== 3`: with target/idl absent this is the ONLY comparison between the app copies.
     uniq = set(digests.values())
-    # Report the ACTUAL count, not a hardcoded "three". With target/idl absent this printed
-    # "all three IDL copies are byte-identical" after comparing two, which is the kind of
-    # overclaim in a green check that stops anyone looking.
     check(len(uniq) == 1,
           f"all {len(digests)} present IDL copies are byte-identical"
           + ("" if len(uniq) == 1 else f" (got {len(uniq)} distinct digests)"))
     if len(uniq) == 1:
         print(f"        sha256 {next(iter(uniq))}")
 
-# ---- app constants ----
 print("4. App constants")
 consts = {}
 for app in ("admin", "public"):
@@ -176,11 +135,7 @@ a, p_ = consts.get("admin", {}), consts.get("public", {})
 if "SILV_MINT" in a and "SILV_MINT" in p_:
     check(a["SILV_MINT"] == p_["SILV_MINT"],
           f"both apps agree on SILV_MINT ({a['SILV_MINT']})")
-    # SILV_MINT cannot be derived from anything: it is created by `initialize` and
-    # only the live config knows it. The most this offline gate can prove is that the
-    # two apps agree and that the value is not a known-retired mint.
-    # Review-of-fixes F2: same staleness. SILV_MINT cannot be derived from anything,
-    # so this list is the ONLY check on it, and it was one generation behind.
+    # `initialize` creates SILV_MINT, so agreement plus this list is all an offline gate can prove.
     RETIRED_MINTS = {
         "9jM14E8kV6asGw2FwNhKk3gXQNzGhoLrJGyFZ8U7gMoF",  # gc5TW era, program closed
         "5i13gz6vGKTYhpWbMuQfiBAApfNHCxxJu2GtDGM1A2Li",  # AX7se era, program closed
@@ -188,41 +143,20 @@ if "SILV_MINT" in a and "SILV_MINT" in p_:
     check(a["SILV_MINT"] not in RETIRED_MINTS,
           "SILV_MINT is not a known-retired mint")
 
-# ---- retired program ids must not appear on any live path ----
 print("4a. Anchor account mutability")
-# ROUND 3 P0-2, and this is the CLASS check, not the instance.
-#
-# `attest_kyc` incremented `config.kyc_attestation_count` while its `config` account was declared WITHOUT
-# `mut`. Anchor only serialises `mut` accounts back to the chain, so the increment was computed and silently
-# discarded: the counter stayed at 0 forever and the KYC gate could never be armed. The mechanism was not
-# weakened, it was inert.
-#
-# Nothing caught it. `cargo build` is happy, `cargo test` is happy (the six tests I wrote exercise the pure
-# RULE, never the handler), and no gate looked at the relationship between an Accounts struct and the
-# handler that writes through it. A pure-function test proves an implication; it never proves its premise
-# is reachable.
-#
-# So: for every `#[derive(Accounts)]` struct, any field the matching handler writes must be declared
-# `mut`, or `init`/`init_if_needed`/`close`/`realloc`, all of which imply writability.
-#
-# REVIEW-OF-FIXES P2. The reviewer lifted this scan out and ran it against synthetic cases. It catches the
-# baseline shape and MISSED the same bug in six others, each closed below and named where it is closed. None
-# of the six is present in the tree today (measured: 0 compound writes, 0 two-level writes, 0
-# `&mut ...to_account_info()`, 49/49 handlers in the same file as their struct), so these are LATENT holes.
-# They are worth closing anyway, for the same reason the section exists: the P0 it was built for was a
-# handler and a struct disagreeing, and a scan that only sees one spelling of "writes" will be believed.
+# CLASS check: for every `#[derive(Accounts)]` struct, any field the matching handler writes must be
+# declared `mut` (or init / init_if_needed / close / realloc / zero, which imply writability). Anchor
+# only serialises `mut` accounts, so a write through a non-mut account is computed and then silently
+# discarded: not weakened, inert, and both `cargo build` and `cargo test` stay green. Six ways to fool
+# this scan, each closed below: private/trimmed-notes/gates.md
 _MUT_IMPLIED = ("mut", "init", "init_if_needed", "close", "realloc", "zero")
-# HOLE 1: `_MUT_IMPLIED` was matched against the RAW attribute text, so the word `mut` in a comment INSIDE
-# `#[account(...)]` satisfied it. A gate satisfiable by prose is the exact failure the sibling gate in the
-# same commit had just fixed, so it is stripped here too.
+# Comments are stripped from the attribute text, or `mut` in a comment inside `#[account(...)]` counts.
 _decomment = lambda t: re.sub(r"//[^\n]*", " ", re.sub(r"/\*.*?\*/", " ", t, flags=re.S))
 _bad = []
 _structs = 0
 _orphan_structs = []
 _instr_files = sorted(pathlib.Path("programs/dominion_silver_mint_v2/src/instructions").rglob("*.rs"))
-# HOLE 2: the handler was looked for in the SAME FILE as the struct, and `if not _hm: continue` skipped
-# silently when it was elsewhere. Every source is concatenated so a handler can be found wherever it lives,
-# and a struct whose handler cannot be found anywhere is now a FAILURE rather than a silent skip.
+# Concatenated so a handler is found wherever it lives; a struct with no handler anywhere is a FAILURE.
 _all_instr = "\n".join(_f.read_text() for _f in _instr_files)
 for _path in _instr_files:
     _src = _path.read_text()
@@ -230,11 +164,7 @@ for _path in _instr_files:
         _structs += 1
         _name, _body = _m.group(1), _decomment(_m.group(2))
         _nonmut = set()
-        # HOLE 3: `\s*` between the attribute and `pub field:` failed when a DOC COMMENT sat between them,
-        # and the field was then skipped as if it had no attribute at all. Comments are stripped above, which
-        # closes it; the pattern also tolerates the residual whitespace either way.
-        # HOLE 4: the attribute pattern handled ONE level of nested parens, so a constraint like
-        # `constraint = check(f(x))` made the field invisible. Two levels now.
+        # Two levels of nested parens, so `constraint = check(f(x))` does not hide the field.
         _attr = r"(?:\s*#\[account\((?:[^()]|\((?:[^()]|\([^()]*\))*\))*\)\]\s*)?"
         for _fm in re.finditer(_attr + r"pub (\w+):", _body):
             _attrs, _field = _fm.group(0), _fm.group(1)
@@ -250,15 +180,11 @@ for _path in _instr_files:
             _orphan_structs.append(f"{_path.name}: {_name}")
             continue
         _hb = _decomment(_hm.group(0))
-        # HOLE 5: `&mut ctx.accounts.X.to_account_info()` is NOT a write to X, it is a borrow of a freshly
-        # built AccountInfo. Reporting it demanded `#[account(mut)]`, which is an IDL/ABI change that marks
-        # the account writable for every client and widens write locks. A gate that pressures an ABI change
-        # to satisfy a regex is a gate that gets allowlisted, so that shape is excluded before matching.
+        # `&mut ctx.accounts.X.to_account_info()` is a borrow of a fresh AccountInfo, NOT a write to X.
+        # Demanding `mut` for it would be an IDL/ABI change that widens write locks for every client.
         _hb = re.sub(r"&mut ctx\.accounts\.\w+\.to_account_info\(\)", " ", _hb)
         for _field in sorted(_nonmut):
-            # HOLE 6: the member name was `[a-z_]+`, which cannot match a digit (`token_2022_program`
-            # exists in this tree), the assignment had to be a bare `=` so `+=` / `|=` / `-=` were
-            # invisible, and only ONE level of member access was considered so `x.a.b = v` was missed.
+            # Names may contain digits, the assignment may be `+=`, and `x.a.b = v` is a write to x.
             if re.search(r"&mut ctx\.accounts\." + _field + r"\b", _hb) or \
                re.search(r"ctx\.accounts\." + _field + r"(?:\.\w+)+\s*[-+|&^*/]?=[^=]", _hb):
                 _bad.append(f"{_path.name}: {_name}.{_field} is written but not declared mut")
@@ -267,9 +193,7 @@ if _bad:
         print(f"   FAIL: {_b}")
     check(False, f"every written account is declared mut ({len(_bad)} violation(s))")
 elif _structs == 0 or _orphan_structs:
-    # SELF-CHECK, and it is count-free on purpose: no floor to maintain, just "the scan found structs, and
-    # every struct it found has a handler it could read". Without this, a struct pattern that stopped
-    # matching printed "ok" over an empty set, which is the class this whole section exists to catch.
+    # SELF-CHECK: a struct pattern that stopped matching would otherwise print "ok" over an empty set.
     if _structs == 0:
         print("   FAIL: the Accounts-struct pattern matched NOTHING. The scan checked an empty set.")
     for _o in _orphan_structs:
@@ -279,30 +203,16 @@ else:
     print(f"   ok: every account a handler writes is declared mut ({_structs} Accounts structs scanned)")
 
 print("4b. scripts/ typecheck")
-# ROUND 3 P0-1 shipped because NOTHING typechecked scripts/. A five-argument call to a six-argument
-# function sat in T1's hostile-mint case, so the ceremony could not compile, and `npx tsx script.ts`
-# does not typecheck: it transpiles and runs, and the error was on a line the run never reached.
-#
-# My own attempts reported zero diagnostics and exit 0. They were checking nothing: tsc aborts on PARSE
-# errors inside a nested node_modules .d.ts before it reaches this directory, and skipLibCheck does not
-# suppress parse errors. tsconfig.scripts.json stubs that ONE package so the run gets that far.
+# Nothing else typechecks scripts/: `npx tsx script.ts` transpiles and runs, so an error on a line the
+# run never reaches is invisible. tsconfig.scripts.json stubs the ONE package whose .d.ts aborts tsc on
+# a parse error before it reaches this directory, which skipLibCheck does not suppress.
 _tc = subprocess.run(
     ["npx", "tsc", "-p", "tsconfig.scripts.json"],
     capture_output=True, text=True,
 )
 _diags = [l for l in _tc.stdout.splitlines() if l.startswith("scripts/") and "error" in l]
-# REVIEW-OF-FIXES P0. `_tc.returncode` was never read, so this gate reproduced the EXACT false green it was
-# installed to close. When tsc aborts on a parse error inside node_modules there are no lines beginning with
-# "scripts/", `_diags` is empty, and the gate printed "ok: scripts/ typechecks clean" over a run that checked
-# nothing. Measured by the reviewer: returncode 2, 160 tsc error lines, 0 of them matching, gate green.
-#
-# The trigger is routine rather than exotic: the ROOT package.json pins typescript ^4.3.5 and resolves 4.9.5
-# while both apps pin ^5.5.0, and 4.9.5 cannot parse `<const T>`. Any dependency bump that lands another
-# modern .d.ts aborts the run again.
-#
-# The commit that added this said "Mutation-verified: reverting the sixth argument produces TS2554". That
-# proved the POSITIVE branch only, which is the same error the same commit message spends six lines
-# diagnosing: proving an implication without proving its premise is reachable.
+# The RETURN CODE is read, not only the diagnostic lines: when tsc aborts inside node_modules nothing
+# begins with "scripts/", so a lines-only check prints "ok" over a run that checked nothing.
 if _tc.returncode != 0 or _diags:
     for _d in _diags[:10]:
         print(f"   FAIL: {_d}")
@@ -313,14 +223,8 @@ if _tc.returncode != 0 or _diags:
 else:
     print("   ok: scripts/ typechecks clean")
 
-# REVIEW-OF-FIXES, second round: the typecheck is silenced by ONE line. The reviewer added `// @ts-nocheck`
-# plus an undeclared call and a type error to `t1-hostile-bootstrap.ts` (the exact file whose 5-arg call to a
-# 6-arg function WAS round 3 P0-1) and the gate printed "ok: scripts/ typechecks clean". The commit closed
-# "tsc aborted before it got here" and left "tsc was told not to look" wide open.
-#
-# None of these directives exists in scripts/ today, which is why banning them costs nothing. If one is ever
-# genuinely needed, the right move is to fix the type or narrow the suppression to a single expression, not to
-# blind the only gate that reads this directory.
+# The typecheck above is silenced by ONE suppression directive, so all three are banned in scripts/.
+# None exists there today. If one is ever needed, fix the type instead of blinding the gate.
 _suppressors = []
 for _f in sorted(pathlib.Path("scripts").rglob("*.ts")):
     for _n, _line in enumerate(_f.read_text().splitlines(), 1):
@@ -334,31 +238,11 @@ if _suppressors:
 check(not _suppressors, "no @ts-nocheck / @ts-ignore / @ts-expect-error anywhere in scripts/")
 
 print("4c. Every state rule is called, in the right place, outside test code")
-# REVIEW-OF-FIXES P1, measured by the reviewer and reproduced here: the five WIRING-level mutations of the
-# round-3 contract fixes each left all 153 Rust tests green.
-#
-#   delete `validate_kyc_revocation(...)` from the handler   -> 153 passed
-#   delete `validate_kyc_subject(wallet)` from the handler   -> 153 passed
-#   `next_attestation_count(.., is_new)` -> `(.., true)`     -> 153 passed
-#
-# The rules are pure functions in `state/`, unit-tested to death, and the tests prove the RULE. Nothing
-# proved the HANDLER still calls it. That is the same shape as the P0 in section 4a (a mechanism present in
-# the source and absent from the executed path), so it gets the same treatment: a class check.
-#
-# REVIEW-OF-FIXES, SECOND ROUND. My first version of this section asserted only that each name appeared in a
-# call position SOMEWHERE under instructions/, and the reviewer defeated it three ways:
-#
-#   1. `enforce_kyc` has TWO call sites. Deleting the REDEEM-side gate (the side C-02 is armed for first)
-#      left 4c green because mint_silv.rs still calls it.
-#   2. Moving `validate_kyc_subject(wallet)?` out of the handler into a `#[cfg(test)] mod` in the same file
-#      left 4c green. Those mods already exist in three instruction files.
-#   3. The list named 8 of ~16 rule-shaped functions. Deleting `validate_fee_exempt_expiry` from
-#      fee_whitelist.rs left 4c green, and `assert_premium_within_bounds` was declared and called by
-#      NOTHING, which is precisely the orphan this section is for.
-#
-# So: each rule declares WHICH files must call it, `#[cfg(test)]` mods are stripped before looking, and the
-# manifest is checked for COMPLETENESS against what `state/` actually declares. That last part is what stops
-# the list from silently shrinking, which is how section 5 failed twice.
+# The rules are pure functions in `state/`, so the unit tests prove the RULE and nothing proved the
+# HANDLER still calls it: deleting a call site left every Rust test green. Three properties make this
+# fail rather than reassure: each rule declares WHICH files must call it (two call sites means both are
+# named, so deleting either fails), `#[cfg(test)]` mods are stripped before looking, and the manifest
+# is checked for COMPLETENESS against what `state/` declares.
 _pdir = pathlib.Path("programs/dominion_silver_mint_v2/src")
 
 
@@ -371,11 +255,8 @@ def _strip_code(text):
 
 
 def _strip_test_mods(text):
-    """Remove every `#[cfg(test)] mod ... { ... }` block, brace-matched.
-
-    Hole 2 above: a call that has been MOVED INTO test code is not a call the program makes, and three
-    instruction files already carry such mods, so this is a live shape rather than a contrived one.
-    """
+    """Remove every `#[cfg(test)] mod ... { ... }` block, brace-matched. A call MOVED INTO test code is
+    not a call the program makes, and three instruction files already carry such mods."""
     out, i = [], 0
     while True:
         m = re.search(r"#\[cfg\(test\)\]\s*mod\s+\w+\s*\{", text[i:])
@@ -398,8 +279,7 @@ def _prog(rel):
     return _strip_test_mods(_strip_code((_pdir / rel).read_text()))
 
 
-# THE MANIFEST. rule -> every file that must call it. A rule with two call sites names both, so deleting
-# either one fails. Paths are relative to programs/dominion_silver_mint_v2/src/.
+# THE MANIFEST. rule -> every file that must call it, relative to programs/dominion_silver_mint_v2/src/.
 _RULES = {
     # ---- KYC (C-02 and round 3) ----
     "validate_kyc_scope": ["instructions/admin/kyc_admin.rs"],
@@ -408,10 +288,9 @@ _RULES = {
     "next_attestation_count": ["instructions/admin/kyc_admin.rs"],
     "resolve_revocation": ["instructions/admin/kyc_admin.rs"],
     "validate_kyc_operator_assignment": ["instructions/admin/kyc_admin.rs"],
-    # BOTH sides. The redeem side is the one the gate is armed for first, and it was the deletable one.
+    # BOTH sides. The redeem side is the one the gate is armed for first.
     "enforce_kyc": ["instructions/mint_silv.rs", "instructions/redeem_silv.rs"],
-    # Called by validate_kyc_operator_assignment, not by a handler. Declared here so the completeness sweep
-    # below does not report it, and so moving it into a handler is a deliberate edit to this line.
+    # Called by validate_kyc_operator_assignment, not a handler. Declared for the completeness sweep.
     "kyc_operator_may_be_cleared": ["state/kyc.rs"],
     # ---- fee exemptions (C-01 and the whitelist) ----
     "validate_fee_exempt_expiry": ["instructions/admin/fee_whitelist.rs"],
@@ -426,10 +305,8 @@ _RULES = {
     "may_schedule_removal": ["instructions/admin/guardian.rs"],
     "removal_schedule_expired": ["instructions/admin/guardian.rs"],
     "active_not_pending": ["state/guardian.rs"],
-    # ---- redeem budget ----
     "roll_window": ["instructions/redeem_silv.rs"],
-    # ---- premiums ----
-    # Was ORPHANED. Now a post-write invariant at all four premium mutation sites.
+    # A post-write invariant at every premium mutation site.
     "assert_premium_within_bounds": [
         "instructions/initialize.rs",
         "instructions/admin/execute.rs",
@@ -452,17 +329,14 @@ for _rule, _wheres in sorted(_RULES.items()):
         if re.search(r"\bpub fn " + _rule + r"\s*\(", _strip_test_mods(_strip_code(_f.read_text())))
     ]
     if not _decl:
-        # Renamed or retired without updating this list. A FAILURE, not a skip: silently dropping unknown
-        # names is exactly how a gate shrinks to checking nothing.
+        # Renamed or retired without updating this list. A FAILURE, not a skip.
         _absent.append(_rule)
         continue
     for _where in _wheres:
         if not re.search(r"\b" + _rule + r"\s*\(", _prog(_where)):
             _missing.append(f"{_rule} is not called in {_where}")
 
-# COMPLETENESS: every public function declared in state/ must appear in the manifest. This is what catches a
-# newly added rule that nothing wires up, and it is the check whose absence let `assert_premium_within_bounds`
-# sit orphaned. `_NOT_RULES` is for genuine non-rules (constructors, size helpers); keep it short and justified.
+# COMPLETENESS: every public function in state/ must be in the manifest, which catches an unwired rule.
 _NOT_RULES = {
     "space",  # size helpers
     "size",
@@ -489,15 +363,9 @@ check(
 )
 
 print("5. Retired program ids")
-# Review-of-fixes F1: this list was STALE ON THE COMMIT THAT INTRODUCED IT. gc5TW,
-# the id that commit retired, was missing, so a wholesale self-consistent regression
-# to the only realistically reachable dead id passed with "CONSTANTS OK". Section 5
-# exists precisely to catch that. WHEN YOU RETIRE AN ID, ADD IT HERE IN THE SAME
-# COMMIT: the check is worthless one generation behind.
+# WHEN YOU RETIRE A PROGRAM ID, ADD IT HERE IN THE SAME COMMIT. The gate cannot catch what it does not
+# know, and this list has shipped one generation behind twice, each time missing the id just retired.
 RETIRED = {
-    # Review-of-fixes F1 again, and the lesson did not stick the first time: this list
-    # was missing 2ujQg, and scripts/e2e-lazer-mint.ts still pointed at it. The gate
-    # cannot catch what it does not know. ADD THE ID IN THE SAME COMMIT THAT RETIRES IT.
     "2ujQgKtxvaU9Ax3jL22374SypSyTR9J4yztqYkX23oMT": "devnet, the original Lazer deploy",
     "gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc": "devnet 2026-07-26, CLOSED on-chain",
     "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W": "devnet 2026-07-25, CLOSED on-chain",
@@ -510,28 +378,16 @@ LIVE_PATHS = [
     "apps/public/src/lib/constants.ts",
     "programs/dominion_silver_mint_v2/src/lib.rs",
 ]
-# Review-of-fixes F6: scripts/ was outside this check, so the three E2E scripts that
-# actually get run kept a hardcoded id fallback and no gate could see it. This repo
-# has rotated ids four times in two weeks and every rotation left stale hardcodes.
+# scripts/ is in scope: the E2E scripts that actually get run kept hardcoded id fallbacks.
 LIVE_PATHS += sorted(str(q) for q in pathlib.Path("scripts").rglob("*.ts"))
-# AUDIT FINDING P-06: `apps/public/scripts/` was outside this check, and EIGHT of the ten scripts in it
-# hardcoded the retired program id J9cw. The id was already in RETIRED above, so the gate KNEW it and
-# simply never opened the files. `npm run test:auto` ran one of them. That whole directory is deleted
-# now, but the blind spot is what needs closing, not the instance: any per-app scripts directory added
-# later must be scanned from the day it appears, not after the next rotation leaves stale hardcodes in
-# it. Globbed rather than listed for exactly that reason.
-# rglob, not glob: both were one directory deep, so a re-introduced apps/public/scripts/lib/foo.ts
-# or scripts/e2e/foo.ts stayed invisible. Same blind spot as P-06, one level down.
+# Per-app scripts dirs are GLOBBED and rglob'd, so a new or nested one is scanned the day it appears.
 for _app_scripts in sorted(pathlib.Path(".").glob("apps/*/scripts")):
     LIVE_PATHS += sorted(str(q) for q in _app_scripts.rglob("*.ts"))
 found_retired = False
 for path in LIVE_PATHS:
     src = pathlib.Path(path).read_text()
     for rid, why in RETIRED.items():
-        # A retired id inside a comment is a historical note and is fine.
-        # "*" catches block-comment continuation lines (/** ... */), which are
-        # historical notes, not live code. Without it the gate cries wolf and gets
-        # ignored, which is worse than not having it.
+        # A retired id in a comment is a historical note; "*" catches block-comment continuation lines.
         offenders = [ln for ln in src.splitlines()
                      if rid in ln and not ln.strip().startswith(("//", "#", "*", "/*"))]
         if offenders:

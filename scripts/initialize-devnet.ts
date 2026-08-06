@@ -1,41 +1,14 @@
 /**
- * One-time DEVNET initialization for the V2 (Option B) program.
+ * One-time DEVNET initialization for the V2 program: creates the SILV Token-2022 mint,
+ * then calls initialize(). It sends transactions, so it must pass requireSanctionedCluster.
  *
- * PREREQUISITES (CODEX P0-03 / deploy-prep):
- *   - The program is FRESH-DEPLOYED under the CURRENT id, which this script resolves
- *     from scripts/_program-id.ts (the generated IDL's address, or
- *     DOMINION_PROGRAM_ID). This header used to name a specific id; it named one
- *     retired two generations ago, which is exactly the hazard SolidProof LOW #2
- *     flagged. Never hardcode it here again.
- *   - NEVER an in-place upgrade over a program whose ConfigAccount layout differs.
- *   - Run scripts/t1-hostile-bootstrap.ts BEFORE this script: `initialize` succeeds
- *     once per program id, so that is the only window in which the DOM-001
- *     authentication can be tested, and T1's case 5 performs the real init.
- *   - `target/idl/dominion_silver_mint.json` MUST be the regenerated V2 IDL
- *     (from the default-features build, dev-hatch EXCLUDED). The bundled IDLs
- *     are still stale V1 until regenerated.
- *   - IDL generation + `anchor`/`solana program deploy` MUST use the toolchain
- *     pinned in Anchor.toml (anchor 0.31.1 / solana 3.x). A mismatched local
- *     anchor-cli (e.g. 0.30.1) breaks IDL/deploy reproducibility.
+ * `initialize` succeeds ONCE per program id. Run scripts/t1-hostile-bootstrap.ts first:
+ * that is the only window in which the DOM-001 authentication can be tested, and its
+ * case 5 performs the real init. Requires a fresh deploy (never an in-place upgrade over
+ * a program whose ConfigAccount layout differs) and a regenerated V2 IDL at
+ * target/idl/dominion_silver_mint.json, built with the toolchain pinned in Anchor.toml.
  *
- * What it does (matches programs/dominion_silver_mint_v2/src/instructions/initialize.rs):
- *   1. Create the SILV Token-2022 mint with EXACTLY these extensions
- *      (V2 strict allowlist, CODEX P1-03): PermanentDelegate + MetadataPointer
- *      + TokenMetadata. Nothing else.
- *        - decimals            = 6           (V2 hard-pins 6)
- *        - mint_authority      = silv_mint_authority PDA   (set in phase 2)
- *        - freeze_authority    = admin / Ops Squads vault  (== freeze_authority_expected; compliance freeze lever)
- *        - PermanentDelegate   = admin / Ops Squads vault  (== permanent_delegate_expected; seize/clawback lever)
- *        - MetadataPointer.authority        = silv_metadata_authority PDA
- *        - MetadataPointer.metadata_address = the mint itself (in-mint metadata)
- *        - TokenMetadata.update_authority   = silv_metadata_authority PDA
- *        - TokenMetadata.mint               = the mint itself
- *   2. Call initialize() with the V2 InitializeArgs (Option A cap/reserve args
- *      removed; all Option B economic params default on-chain).
- *
- * Run:
- *   DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json \
- *   npx tsx scripts/initialize-devnet.ts --admin <ops_vault_pk> --upgrade-squads <upgrade_vault_pk>
+ * Run: npx tsx scripts/initialize-devnet.ts --admin <ops_vault> --upgrade-squads <upgrade_vault>
  */
 import {
   Connection,
@@ -73,25 +46,19 @@ import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 import { requireSanctionedCluster } from "./_guard";
 import { resolveCluster, describeCluster } from "./_cluster";
 
-// RE-AUDIT P0 (the CLASS). This was a hardcoded devnet RPC on a script that PERFORMS `initialize`, the
-// one-shot action of the whole ceremony. It ignored DOMINION_RPC and nothing confirmed the chain matched
-// the hostname. Found by the structural assertion in scripts/verify-cluster-resolution.ts, which was
-// added precisely because the re-audit's "missing fourth script" turned out to be a missing ten.
+// The cluster must come from the environment and pass the one guard, which does the
+// consent check AND the genesis-hash cross-check. Never hardcode an RPC in a script that
+// sends. scripts/verify-cluster-resolution.ts asserts this structurally.
 const CLUSTER = resolveCluster();
 const DEVNET_RPC = CLUSTER.rpc;
-// CODEX P0-01: V2 program id (NOT the V1 id J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5).
-// DOMINION_PROGRAM_ID override exists ONLY for the isolated Squads E2E
-// (scripts/test-dominion-squads-e2e.ts) which deploys a throwaway instance
-// under a fresh id. Unset in all real deploys -> the canonical V2 id.
-// Review-of-fixes F6: this was a hardcoded fallback, the exact pattern
-// scripts/_program-id.ts exists to forbid. 16 of 18 scripts were converted; the
-// three that actually get run were not.
+// Never hardcode a program id, not even as a fallback: scripts/_program-id.ts owns it.
+// Its DOMINION_PROGRAM_ID override exists ONLY for the isolated Squads E2E
+// (scripts/test-dominion-squads-e2e.ts), which deploys a throwaway instance under a fresh
+// id. Unset in every real deploy, which yields the canonical id.
 const PROGRAM_ID = SHARED_PROGRAM_ID;
-// AUDIT DOM-001: `initialize` now requires the signer to BE the program's
-// upgrade authority, proven through the loader's ProgramData account. That
-// account is NOT a PDA of this program, so Anchor cannot resolve it: it must be
-// passed explicitly (verified against Anchor 0.31.1's resolver, which throws
-// "Account `programData` not provided" otherwise).
+// DOM-001: `initialize` requires the signer to BE the program's upgrade authority, proven
+// through the loader's ProgramData account. That account is not a PDA of this program, so
+// Anchor cannot resolve it and it must be passed explicitly.
 const BPF_LOADER_UPGRADEABLE = new PublicKey(
   "BPFLoaderUpgradeab1e11111111111111111111111",
 );
@@ -104,10 +71,6 @@ function programDataAddress(programId: PublicKey): PublicKey {
 }
 // Circle devnet USDC (in the V2 initialize allowlist).
 const DEVNET_USDC = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
-// AUDIT P-06: a Pyth Core receiver address and the retired XAG/USD feed id used to be declared here.
-// Both were unused: this script passes `pythLazerFeedId: 3154` and `initialize` no longer takes a Pyth
-// receiver account at all. The comment claimed "V2 hard-pins exactly this", which stopped being true
-// when the oracle moved to Lazer.
 
 function parseArgs(): { admin: PublicKey; upgradeSquads: PublicKey } {
   const argv = process.argv.slice(2);
@@ -131,21 +94,16 @@ function loadKeypair(p: string): Keypair {
 }
 
 /**
- * Create the SILV Token-2022 mint exactly as V2 initialize.rs expects.
+ * Create the SILV Token-2022 mint exactly as V2 initialize.rs expects: decimals 6 and
+ * EXACTLY the extensions {PermanentDelegate, MetadataPointer, in-mint TokenMetadata}.
  *
- * Two phases because InitializeMetadata must be signed by the mint authority:
- *   Phase 1 (payer + mint keypair sign): create account, init the 3 extensions
- *     and the mint with mint_authority = payer TEMP and freeze_authority = the
- *     compliance multisig (launch spec 2026-07: Mark confirmed the freeze lever;
- *     V2 requires freeze_authority == freeze_authority_expected, NOT None), then
- *     InitializeMetadata (payer signs as mint auth). MetadataPointer.authority and
- *     TokenMetadata.update_authority are set DIRECTLY to the silv_metadata_authority
- *     PDA here - the MetadataPointer authority is NOT rotatable in Token-2022 (only
- *     its address is), so it must be correct at init.
- *   Phase 2 (payer signs): rotate ONLY the mint authority to the
- *     silv_mint_authority PDA. Freeze authority is already the compliance multisig
- *     (set at creation, nothing to rotate). Metadata authorities are already the
- *     metadata PDA.
+ * Two phases, because InitializeMetadata must be signed by the mint authority. Phase 1
+ * creates the mint with mint_authority = payer and freeze_authority = the compliance
+ * multisig (V2 requires freeze_authority == freeze_authority_expected, NOT None), then
+ * initializes the metadata. MetadataPointer.authority and TokenMetadata.update_authority
+ * go straight to silv_metadata_authority: in Token-2022 the MetadataPointer authority is
+ * not rotatable (only its address is), so it must be right at init. Phase 2 rotates the
+ * mint authority to silv_mint_authority.
  */
 async function createSilvMint(
   connection: Connection,
@@ -164,7 +122,6 @@ async function createSilvMint(
     uri: "https://dominion.market/silv-metadata.json",
     additionalMetadata: [],
   };
-  // EXACTLY the V2-allowlisted extensions, nothing else.
   const extensions = [
     ExtensionType.PermanentDelegate,
     ExtensionType.MetadataPointer,
@@ -189,23 +146,20 @@ async function createSilvMint(
       lamports: rent,
       programId: TOKEN_2022_PROGRAM_ID,
     }),
-    // PermanentDelegate = Ops Squads vault (== initialize args.permanent_delegate_expected).
+    // PERMANENT. Must equal initialize's args.permanent_delegate_expected.
     createInitializePermanentDelegateInstruction(
       silvMintKeypair.publicKey,
       permanentDelegate,
       TOKEN_2022_PROGRAM_ID,
     ),
-    // MetadataPointer: authority = silv_metadata_authority PDA (NOT rotatable
-    // post-init), metadata_address = the mint itself (in-mint metadata).
     createInitializeMetadataPointerInstruction(
       silvMintKeypair.publicKey,
       silvMetadataAuthorityPda,
       silvMintKeypair.publicKey,
       TOKEN_2022_PROGRAM_ID,
     ),
-    // Mint: decimals 6, mint_authority = payer TEMP (rotated in phase 2),
-    // freeze_authority = the compliance multisig (launch spec 2026-07: Mark confirmed
-    // the freeze lever; must equal freezeAuthorityExpected passed to initialize()).
+    // mint_authority = payer, rotated in phase 2. freeze_authority is PERMANENT and must
+    // equal the freezeAuthorityExpected passed to initialize().
     createInitializeMintInstruction(
       silvMintKeypair.publicKey,
       decimals,
@@ -213,8 +167,6 @@ async function createSilvMint(
       freezeAuthority,
       TOKEN_2022_PROGRAM_ID,
     ),
-    // TokenMetadata: update_authority = silv_metadata_authority PDA, mint =
-    // the mint itself. mintAuthority (payer here) must sign this ix.
     createInitializeInstruction({
       programId: TOKEN_2022_PROGRAM_ID,
       metadata: silvMintKeypair.publicKey,
@@ -235,8 +187,7 @@ async function createSilvMint(
   );
   console.log(`  ✅ Phase 1 (mint + 3 extensions + metadata): ${sig1}`);
 
-  // Phase 2: rotate ONLY the mint authority to the program PDA. Freeze is
-  // already None; metadata authorities are already the metadata PDA.
+  // Phase 2 rotates ONLY the mint authority; the others are already final.
   const tx2 = new Transaction().add(
     createSetAuthorityInstruction(
       silvMintKeypair.publicKey,
@@ -309,10 +260,8 @@ async function main() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const idlAddr = (idl as any).address || (idl as any).metadata?.address;
   if (process.env.DOMINION_PROGRAM_ID) {
-    // Isolated Squads E2E: the throwaway program id differs from the IDL's
-    // baked canonical id. Point Anchor at the override (Program() derives the
-    // program id from idl.address in Anchor 0.31). Safe: this branch is only
-    // reachable when the env override is explicitly set by the E2E harness.
+    // Isolated Squads E2E: the throwaway id differs from the IDL's baked canonical id, and
+    // Anchor 0.31 derives the program id from idl.address.
     (idl as any).address = PROGRAM_ID.toBase58();
   } else if (idlAddr && idlAddr !== PROGRAM_ID.toBase58()) {
     throw new Error(
@@ -334,7 +283,7 @@ async function main() {
     [Buffer.from("silv_mint_authority")],
     PROGRAM_ID,
   );
-  // CODEX M-01: V2 requires the metadata authorities to be THIS distinct PDA.
+  // V2 requires the metadata authorities to be this distinct PDA, not the mint authority.
   const [silvMetadataAuthorityPda] = PublicKey.findProgramAddressSync(
     [Buffer.from("silv_metadata_authority")],
     PROGRAM_ID,
@@ -367,11 +316,8 @@ async function main() {
 
   console.log("\n== Step 2: Call program.initialize() (Lazer args) ==");
 
-  // Pyth Lazer InitializeArgs: the Core pyth_feed_id[32] + pyth_receiver_program
-  // were replaced by a single numeric pyth_lazer_feed_id (SILV = 3154); the
-  // program/storage/treasury are compile-time constants in the contract. All
-  // Option B economic params default on-chain + are admin-tunable post-deploy.
-  // launch spec 2026-07: premium 1.5%/2% within ceilings (300/500); admin timelock 24h in [86400, 604800].
+  // Lazer InitializeArgs: one numeric pyth_lazer_feed_id replaces the Core feed id plus
+  // receiver account. Every economic param below is admin-tunable after deploy.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ix = await (program.methods as any)
     .initialize({
@@ -382,21 +328,17 @@ async function main() {
       complianceMode: false,
       premiumBpsMint: 150, // 1.5% (launch spec 2026-07; ceiling 300)
       premiumBpsRedeem: 200, // 2% (ceiling 500)
-      // Metal.Index.SILVER/USD, pure spot. CONFIRMED 2026-07-26. The old 3304
-      // (Crypto.Index.SILV/USD) was measured to be 3154 x 1.05: a hidden 5%
-      // premium. Margin now lives entirely in premium_bps_*, visible on-chain.
+      // 3154 = Metal.Index.SILVER/USD, pure spot. Not 3304, which carried a hidden 5%
+      // premium: all margin must live in premium_bps_*, where it is visible on-chain.
       pythLazerFeedId: 3154,
       adminTimelockSeconds: 24 * 3600, // 24h
       maxGuardianCount: 5,
     })
     .accounts({
       deployer: deployer.publicKey,
-      // DOM-001: the upgrade-authority proof chain. `dominionProgram` carries an
-      // `address` literal in the IDL so Anchor WOULD auto-resolve it, but it is
-      // passed explicitly on purpose: the DOMINION_PROGRAM_ID override below
-      // only rewrites `idl.address`, not the per-account address literal, so the
-      // throwaway-id path (scripts/test-dominion-squads-e2e.ts) would otherwise
-      // silently supply the canonical program instead of the throwaway one.
+      // Passed explicitly despite the IDL's `address` literal: the DOMINION_PROGRAM_ID
+      // override rewrites only idl.address, so the throwaway-id path would send the
+      // canonical program here instead.
       dominionProgram: PROGRAM_ID,
       programData: programDataAddress(PROGRAM_ID),
       config: configPda,
@@ -411,17 +353,11 @@ async function main() {
     })
     .instruction();
 
-  // AUDIT DOM-001 pre-flight. `initialize` now requires the signer to BE the
-  // program's upgrade authority. Without this check a wrong signer produces an
-  // opaque DeployerNotUpgradeAuthority after the mint has already been created in
-  // step 1, which on mainnet means a burned deploy. Read the loader's ProgramData
-  // and fail early with a readable message.
-  //
-  // Operational note for mainnet: if the upgrade authority has already been moved
-  // to an Upgrade Squads vault, this instruction must be executed AS that vault
-  // (the vault PDA is both the signer and the rent payer, so it must hold SOL).
-  // Initialize BEFORE transferring the upgrade authority, or route this through
-  // the vault. See private/DEPLOY_CHECKLIST.md.
+  // Pre-flight, because step 1 already created the mint: a wrong signer would otherwise
+  // fail with an opaque DeployerNotUpgradeAuthority after the SOL is spent. On mainnet, if
+  // the upgrade authority is already an Upgrade Squads vault, initialize must run AS that
+  // vault (it signs and pays rent, so it must hold SOL): initialize before transferring the
+  // authority, or route this through the vault. See private/DEPLOY_CHECKLIST.md.
   {
     const pdAddr = programDataAddress(PROGRAM_ID);
     const pd = await connection.getAccountInfo(pdAddr);

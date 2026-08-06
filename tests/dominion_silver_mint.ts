@@ -1,28 +1,10 @@
-// Dominion Silver Mint/Redeem - Attack test suite.
+// Dominion Silver Mint/Redeem attack suite: the 55-attack matrix from PLAN.md §11.4, plus
+// invariants and happy paths. Every `it` number below is that matrix's attack number.
 //
-// Covers the 55-attack matrix from PLAN.md §11.4, plus invariants and happy paths.
-// Runs against a local validator with mock Pyth + mock USDC (classic SPL) + SILV Token-2022.
-//
-// Structure:
-//   - Section 1: Setup helpers (mint mock USDC, mint mock Pyth update, deploy program, initialize config)
-//   - Section 2: Happy path (mint + redeem + deposit)
-//   - Section 3: Oracle attacks (#1-9)
-//   - Section 4: Account confusion (#10-14)
-//   - Section 5: Timelock + propose semantics (#15, 51-52)
-//   - Section 6: Auth (#16-17)
-//   - Section 7: Bounds + overflow (#18-20)
-//   - Section 8: Rounding (#21)
-//   - Section 9: Treasury invariants (#22-23)
-//   - Section 10: Pause (#24-27)
-//   - Section 11: Day/hour (#28-31, 54)
-//   - Section 12: Admin transfer (#32-34)
-//   - Section 13: Premium bounds (#35-36)
-//   - Section 14: Timelock bounds (#37-38)
-//   - Section 15: Slippage (#39-40)
-//   - Section 16: Token-2022 extensions (#41, 45, 55)
-//   - Section 17: Flash-loan-ish scenarios (#42)
-//   - Section 18: Brick reversibility (#43-44)
-//   - Section 19: New v0.4 attacks (#51-55)
+// SKELETON, not a running suite. setupTestCtx throws and every case is `it.skip`, because the
+// harness needs a mock Pyth receiver account and a movable clock. See the note at the bottom of
+// the file before implementing. Target: a local validator with mock Pyth, mock classic-SPL USDC
+// and a Token-2022 SILV mint.
 
 import * as anchor from "@coral-xyz/anchor";
 import { Program, AnchorError, BN } from "@coral-xyz/anchor";
@@ -44,12 +26,7 @@ import {
   LENGTH_SIZE,
 } from "@solana/spl-token";
 import { assert, expect } from "chai";
-// Note: DominionSilverMint types will come from target/types after `anchor build`.
-// For now this file uses `any` types as placeholders.
-
-// ============================================================================
-// Setup helpers
-// ============================================================================
+// The `any` types are placeholders: DominionSilverMint comes from target/types after a build.
 
 const SEEDS = {
   config: Buffer.from("config"),
@@ -89,7 +66,6 @@ interface TestCtx {
 }
 
 async function setupTestCtx(): Promise<TestCtx> {
-  // TODO: implement once IDL is available.
   throw new Error("setup not yet implemented; requires anchor build + mock Pyth");
 }
 
@@ -151,10 +127,6 @@ async function expectAnchorError(promise: Promise<any>, errorName: string) {
   }
 }
 
-// ============================================================================
-// Tests
-// ============================================================================
-
 describe("dominion_silver_mint", () => {
   anchor.setProvider(anchor.AnchorProvider.env());
   const program = anchor.workspace.DominionSilverMint as Program<any>;
@@ -162,40 +134,25 @@ describe("dominion_silver_mint", () => {
   let ctx: TestCtx;
 
   before(async () => {
-    // ctx = await setupTestCtx();
-    // Commented until IDL is available.
+    // ctx = await setupTestCtx(); once the IDL exists.
   });
-
-  // ==========================================================================
-  // Section 2: Happy path
-  // ==========================================================================
 
   describe("happy path", () => {
     it.skip("initialize sets config fields + creates treasury ATA", async () => {
-      // TODO
     });
 
     it.skip("mint_silv 100 USDC gets ~3.03 SILV at oracle $30 + 10% premium", async () => {
-      // TODO
     });
 
     it.skip("redeem_silv 3 SILV gets ~$87.30 USDC at oracle $30 - 2% redeem fee", async () => {
-      // TODO
     });
 
     it.skip("deposit_usdc refills treasury + emits TreasuryDeposit with actual delta", async () => {
-      // TODO
     });
   });
 
-  // ==========================================================================
-  // Section 3: Oracle attacks (#1-9)
-  // ==========================================================================
-
   describe("oracle attacks", () => {
     it.skip("#1 stale Pyth price (t-600s) reverts with StaleOracle", async () => {
-      // Craft mock Pyth update with publish_time = now - 600s.
-      // Expected: mint_silv reverts with StaleOracle.
     });
 
     it.skip("#2 Pyth confidence > max_confidence_bps reverts with OracleLowConfidence", async () => {
@@ -223,10 +180,6 @@ describe("dominion_silver_mint", () => {
     it.skip("#9 Pyth exponent = -25 (combined_exp = -16) exceeds bound, reverts with OracleScalingOutOfBounds", async () => {});
   });
 
-  // ==========================================================================
-  // Section 4: Account confusion (#10-14)
-  // ==========================================================================
-
   describe("account confusion", () => {
     it.skip("#10 wrong USDC mint reverts with WrongMint", async () => {});
     it.skip("#11 attacker's fake SILV mint reverts with WrongMint", async () => {});
@@ -234,10 +187,6 @@ describe("dominion_silver_mint", () => {
     it.skip("#13 Token-2022 program passed as classic reverts with WrongTokenProgram", async () => {});
     it.skip("#14 classic Token program passed as Token-2022 reverts with WrongTokenProgram", async () => {});
   });
-
-  // ==========================================================================
-  // Section 5: Timelock + propose semantics (#15, 51-52)
-  // ==========================================================================
 
   describe("timelock + propose", () => {
     it.skip("#15 execute_set_premium_mint before timelock elapsed reverts with TimelockNotElapsed", async () => {});
@@ -261,18 +210,10 @@ describe("dominion_silver_mint", () => {
     it.skip("cancel closes TimelockQueueAccount + returns rent to proposer", async () => {});
   });
 
-  // ==========================================================================
-  // Section 6: Auth (#16-17)
-  // ==========================================================================
-
   describe("auth", () => {
     it.skip("#16 admin-only ix called by guardian reverts with Unauthorized", async () => {});
     it.skip("#17 unpause called by guardian reverts with Unauthorized", async () => {});
   });
-
-  // ==========================================================================
-  // Section 7: Bounds + overflow (#18-20)
-  // ==========================================================================
 
   describe("bounds + overflow", () => {
     it.skip("#18 mint amount = 0 reverts with ZeroAmount or BelowMinimum", async () => {});
@@ -280,33 +221,20 @@ describe("dominion_silver_mint", () => {
     it.skip("#20 mint amount × price overflowing u64 reverts with ArithmeticOverflow", async () => {});
   });
 
-  // ==========================================================================
-  // Section 8: Rounding (#21)
-  // ==========================================================================
-
   describe("rounding", () => {
     it.skip("#21 rounding loop: 10^6 mint-redeem cycles preserves invariant 5 (treasury >= reserve)", async () => {
       // Tight loop at min tx size. Assert final treasury - initial_deposit >= 0.
     });
 
     it.skip("mint-then-redeem roundtrip at same price: protocol gains spread, user loses spread", async () => {
-      // Verify math ceiling direction.
     });
   });
-
-  // ==========================================================================
-  // Section 9: Treasury invariants (#22-23)
-  // ==========================================================================
 
   describe("treasury invariants", () => {
     it.skip("#22 redeem > treasury reverts with InsufficientTreasury", async () => {});
     it.skip("#23 redeem that would breach min-reserve reverts with TreasuryBelowReserve", async () => {});
     it.skip("execute_withdraw_usdc that would breach min-reserve reverts", async () => {});
   });
-
-  // ==========================================================================
-  // Section 10: Pause (#24-27)
-  // ==========================================================================
 
   describe("pause", () => {
     it.skip("#24 mint while paused reverts with Paused", async () => {});
@@ -317,10 +245,6 @@ describe("dominion_silver_mint", () => {
     it.skip("mint while now < mint_paused_until reverts with MintPaused", async () => {});
     it.skip("deposit_usdc while paused reverts with Paused", async () => {});
   });
-
-  // ==========================================================================
-  // Section 11: Day/hour (#28-31, 54)
-  // ==========================================================================
 
   describe("day/hour", () => {
     it.skip("#28 cross-day cap boundary: first succeeds, over-cap fails", async () => {});
@@ -336,10 +260,6 @@ describe("dominion_silver_mint", () => {
     });
   });
 
-  // ==========================================================================
-  // Section 12: Admin transfer (#32-34)
-  // ==========================================================================
-
   describe("admin transfer", () => {
     it.skip("#32 double-accept admin transfer reverts with InvalidPendingAdmin", async () => {});
     it.skip("#33 expired pending_admin reverts with PendingAdminExpired", async () => {});
@@ -348,36 +268,20 @@ describe("dominion_silver_mint", () => {
     it.skip("propose_admin_transfer to current admin reverts with ProposalNoOp", async () => {});
   });
 
-  // ==========================================================================
-  // Section 13: Premium bounds (#35-36)
-  // ==========================================================================
-
   describe("premium bounds", () => {
     it.skip("#35 set premium combined < 500 bps reverts with PremiumSpreadTooLow", async () => {});
     it.skip("#36 set premium > 3000 bps reverts with PremiumTooHigh", async () => {});
   });
-
-  // ==========================================================================
-  // Section 14: Timelock bounds (#37-38)
-  // ==========================================================================
 
   describe("timelock bounds", () => {
     it.skip("#37 set_admin_timelock < 3600s reverts with TimelockTooShort", async () => {});
     it.skip("#38 set_admin_timelock > 30d reverts with TimelockTooLong", async () => {});
   });
 
-  // ==========================================================================
-  // Section 15: Slippage (#39-40)
-  // ==========================================================================
-
   describe("slippage", () => {
     it.skip("#39 mint with min_silv_out > actual reverts with SlippageExceeded", async () => {});
     it.skip("#40 redeem with min_usdc_out > actual reverts with SlippageExceeded", async () => {});
   });
-
-  // ==========================================================================
-  // Section 16: Token-2022 extensions (#41, 45, 55)
-  // ==========================================================================
 
   describe("token-2022 extensions", () => {
     it.skip("#41 burn SILV user doesn't have reverts (Token-2022 native)", async () => {});
@@ -390,28 +294,16 @@ describe("dominion_silver_mint", () => {
     it.skip("SILV mint with TransferFee enabled reverts with TransferFeeUnexpected", async () => {});
   });
 
-  // ==========================================================================
-  // Section 17: Economic scenarios (#42)
-  // ==========================================================================
-
   describe("economic scenarios", () => {
     it.skip("#42 simulate flash-loan-mint-dump-redeem: individually reverts as expected", async () => {
       // Orchestrate: borrow USDC (mock), mint SILV, redeem SILV; verify net loss to attacker > 0.
     });
   });
 
-  // ==========================================================================
-  // Section 18: Brick reversibility (#43-44)
-  // ==========================================================================
-
   describe("brick reversibility", () => {
     it.skip("#43 set_daily_cap(0) bricks but is reversible by admin", async () => {});
     it.skip("#44 metadata URI change without timelock reverts with TimelockNotElapsed", async () => {});
   });
-
-  // ==========================================================================
-  // Section 19: v0.4 additions
-  // ==========================================================================
 
   describe("v0.4 additions", () => {
     it.skip("price-delta circuit breaker rejects mint if current price differs > 500 bps from last", async () => {});
@@ -427,32 +319,19 @@ describe("dominion_silver_mint", () => {
     it.skip("close_timelock_account after execute/cancel returns rent", async () => {});
   });
 
-  // ==========================================================================
-  // Helpers
-  // ==========================================================================
-
   it("placeholder: program loads", async () => {
     assert.isDefined(program.programId);
   });
 });
 
-// ============================================================================
-// Notes for implementation
-// ============================================================================
+// What the skipped cases still need:
+// 1. `anchor build`, then import DominionSilverMint from ../target/types and drop the `any`.
+// 2. A mock Pyth update writer: PriceUpdateV2-compatible account data owned by
+//    MOCK_PYTH_RECEIVER. Every oracle attack depends on it.
+// 3. Mock classic-SPL USDC, plus a Token-2022 SILV mint carrying PermanentDelegate,
+//    MetadataPointer and TokenMetadata.
+// 4. A movable clock for the timelock, day and hour cases. `anchor test` drives ts-mocha
+//    against a local validator, whose clock only goes forward; LiteSVM's set_sysvar can move
+//    it freely and iterates faster.
 //
-// Before filling in the TODOs, need:
-// 1. `anchor build` to succeed (unblocks IDL generation at target/idl/ + target/types/).
-// 2. Import `DominionSilverMint` type from `../target/types/dominion_silver_mint`.
-// 3. Replace `any` with typed Program<DominionSilverMint>.
-// 4. Mock Pyth update account creator: writes PriceUpdateV2-compatible account data
-//    owned by MOCK_PYTH_RECEIVER program. Needed for oracle attacks.
-// 5. Mock classic USDC mint creator: pick a test authority, mint to users for setup.
-// 6. Mock SILV Token-2022 mint creator with PermanentDelegate + MetadataPointer + TokenMetadata.
-// 7. Time-warp utility: push local validator clock forward (for timelock/day/hour tests).
-//    Alternative: use LiteSVM with `set_sysvar` capability.
-//
-// Suggested test runner: `anchor test` uses mocha via ts-mocha. For faster iteration
-// during development, use `LiteSVM` (from anchor-litesvm).
-//
-// Target: all skipped tests (it.skip → it) once env is ready.
-// Coverage target: 55+ tests per PLAN.md §11.4 table.
+// Coverage target: 55+ cases, one per row of the PLAN.md §11.4 table.

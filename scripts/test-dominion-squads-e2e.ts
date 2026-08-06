@@ -1,27 +1,14 @@
 /**
- * Protocole A - ISOLATED dominion-admin-vault E2E on REAL devnet.
+ * ISOLATED dominion-admin-vault E2E on REAL devnet. Sends transactions, so it must pass
+ * requireSanctionedCluster.
  *
- * Closes the one gap the generic Squads E2E (scripts/test-squads-e2e.ts,
- * 7/7) and the 68/68 dominion-with-dev-keypair-admin tests left open:
- *   "does a REAL dominion admin instruction execute correctly when it is
- *    wrapped in a Squads v4 vaultTransaction whose vault PDA IS the
- *    dominion config.admin?"
+ * The gap it closes: does a REAL dominion admin instruction execute correctly when wrapped in
+ * a Squads v4 vaultTransaction whose vault PDA IS the dominion config.admin? It drives the exact
+ * create -> approve(threshold) -> execute pipeline squads.ts and admin-actions.ts use, then
+ * asserts on-chain that ConfigAccount.redemptions_enabled flipped. Isolated: a THROWAWAY program
+ * (the shell builds and deploys it, exporting DOMINION_E2E_PROGRAM_ID) and a throwaway multisig.
  *
- * Fully isolated + autonomous: deploys a THROWAWAY dominion program under a
- * fresh id (the orchestrating shell does the build+deploy and exports
- * DOMINION_E2E_PROGRAM_ID), creates a throwaway 2-of-3 test Squads multisig,
- * inits the throwaway dominion instance with config.admin = the test vault
- * (re-using the proven scripts/initialize-devnet.ts via DOMINION_PROGRAM_ID),
- * then drives the EXACT pipeline squads.ts / admin-actions.ts use:
- *   build set_redemptions_enabled(false) [admin = vault PDA]
- *   -> vaultTransactionCreate -> proposalCreate -> proposalApprove x2
- *   -> vaultTransactionExecute
- * and asserts ON-CHAIN that the dominion ConfigAccount actually flipped
- * redemptions_enabled true -> false. Never touches the live devnet instance.
- *
- * Env:
- *   DOMINION_E2E_PROGRAM_ID   (required) throwaway program id (shell-deployed)
- *   SQUADS_E2E_KEYPAIR        funder, default ~/.config/solana/dominion-test-user.json (>= ~8 SOL)
+ * Env: DOMINION_E2E_PROGRAM_ID (required), SQUADS_E2E_KEYPAIR (funder, >= ~8 SOL).
  */
 import { createRequire } from "module";
 import { execFileSync } from "child_process";
@@ -48,12 +35,8 @@ const {
 const multisig = r("@sqds/multisig");
 const anchor = r("@coral-xyz/anchor");
 
-// RE-AUDIT P0 (the CLASS, not the instance). This script sends transactions and had NO cluster guard:
-// it hardcoded the devnet RPC, so `DOMINION_RPC` was ignored and nothing confirmed the chain matched.
-// The re-audit named `create-fee-vault.ts` as "the missing fourth"; the structural assertion in
-// scripts/verify-cluster-resolution.ts then found NINE more, of which this is one. Every sending script
-// now resolves its cluster from the environment and passes through the one guard, which does the consent
-// check AND the genesis-hash cross-check.
+// This script sends, so the cluster must come from the environment and pass the one guard.
+// See the note on CLUSTER in scripts/initialize-devnet.ts.
 const CLUSTER = resolveCluster();
 const RPC = CLUSTER.rpc;
 
@@ -198,9 +181,8 @@ async function main() {
   check("squads multisig created", true);
 
   // --- Phase 2: init the throwaway dominion instance, admin = vault PDA ---
-  // Re-use the PROVEN scripts/initialize-devnet.ts (creates the SILV mint +
-  // calls initialize() with args.admin = vault). DOMINION_PROGRAM_ID points
-  // it at the throwaway program; DOMINION_KEYPAIR is the funder/deployer.
+  // Re-uses scripts/initialize-devnet.ts, pointed at the throwaway program by
+  // DOMINION_PROGRAM_ID, with DOMINION_KEYPAIR as the deployer.
   const funderPath = (
     process.env.SQUADS_E2E_KEYPAIR ||
     os.homedir() + "/.config/solana/dominion-test-user.json"
@@ -287,6 +269,8 @@ async function main() {
       transactionIndex,
       creator: memberA.publicKey,
       vaultIndex: 0,
+      // The inner ix needs no extra signer, so the execute path compiles exactly ONE
+      // signer, the vault PDA. Raise this only for an inner ix that creates a keypair account.
       ephemeralSigners: 0,
       transactionMessage: innerMessage,
     }),

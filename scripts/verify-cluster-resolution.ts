@@ -1,26 +1,11 @@
 /**
- * GATE: prove that cluster selection is driven by the ENVIRONMENT and never falls back to devnet.
+ * GATE: cluster selection is driven by the ENVIRONMENT and never falls back to devnet (audit S-01).
  *
- * Exists because of external audit finding S-01, the P0 of the 2026-08-06 pass. Three scripts had
- * `const RPC = "https://api.devnet.solana.com"` hardcoded and then called `requireDevnet(RPC)`,
- * which trivially passed. The mainnet runbook's invocation would have run the entire hostile
- * bootstrap on devnet and initialised nothing, after the mainnet deploy was paid for.
- *
- * A fix to that class is worth nothing without a check that can FAIL, so this asserts the
- * properties rather than the implementation:
- *
- *   1. An unset DOMINION_RPC still means devnet. Running a script with no environment must stay the
- *      safe, boring thing it always was.
- *   2. An explicit mainnet RPC resolves to mainnet-beta AND to mainnet addresses. If this ever
- *      returns the devnet USDC mint, S-01 is back.
- *   3. An UNRECOGNISED RPC (a private Helius/Triton/QuickNode endpoint, which is what a real mainnet
- *      operator actually uses) resolves to mainnet-beta, not devnet. Defaulting an unknown host to
- *      devnet is the same bug wearing a different hat.
- *   4. Removing a mainnet constant from the source of truth makes resolution THROW rather than
- *      silently substituting the devnet value. Verified by mutation, below: the check is not
- *      trusted, it is broken on purpose and required to fail.
- *
- * Run: npx tsx scripts/verify-cluster-resolution.ts
+ * ASSERTS the properties, not the implementation: an unset DOMINION_RPC still resolves to devnet; an
+ * explicit OR UNRECOGNISED mainnet RPC resolves to mainnet-beta and to mainnet ADDRESSES, never the
+ * devnet USDC mint; a URL merely containing "devnet" is classified by HOST; the transaction guard
+ * agrees with the classifier; every script in scripts/ is classified and every sender calls the
+ * guard; a missing mainnet constant THROWS. Run: npx tsx scripts/verify-cluster-resolution.ts
  */
 import fs from "fs";
 import os from "os";
@@ -75,15 +60,9 @@ withRpc("https://api.mainnet-beta.solana.com", () => {
   );
 });
 
-// 2b. REVIEW-OF-FIXES P0: a MAINNET host whose URL merely CONTAINS "devnet" must classify as mainnet.
-//     The first version of `classify()` tested /devnet/i against the whole URL, so a query parameter, a
-//     path segment, or six characters landing by chance inside an API key made it "devnet". Because
-//     `_guard.ts::isDevnet` used the same test, `requireDevnet` returned early and the
-//     DOMINION_ALLOW_MAINNET consent gate never fired: an --execute run would have extended and deployed
-//     on MAINNET while printing cluster=devnet.
-//
-//     This gate existed and could not fail on it, because it only pinned "unknown host -> mainnet".
-//     These are the exact strings from the security review.
+// 2b. A MAINNET host whose URL merely CONTAINS "devnet" (query parameter, path segment, six bytes of an
+//     API key) must classify as mainnet. Testing /devnet/i against the whole URL made `requireDevnet`
+//     return early, so DOMINION_ALLOW_MAINNET never fired and --execute would deploy on MAINNET.
 for (const rpc of [
   "https://api.mainnet-beta.solana.com/?tag=devnet-mirror",
   "https://mainnet.helius-rpc.com/?api-key=7fdevnet91-aaaa",
@@ -116,11 +95,11 @@ for (const rpc of [
   });
 }
 
-// 2d. And the guard that actually gates transactions must agree with the classifier. Two
-//     implementations of "is this devnet" was the underlying defect; the regex was only the symptom.
+// 2d. The guard that gates transactions must agree with the classifier: two implementations of
+//     "is this devnet" was the defect, and the regex was only the symptom.
 for (const [rpc, shouldNeedConsent] of [
   ["https://api.devnet.solana.com", false],
-  ["http://127.0.0.1:8899", false], // P2-6: localnet is the mandated rehearsal cluster
+  ["http://127.0.0.1:8899", false], // localnet is the mandated rehearsal cluster
   ["https://api.mainnet-beta.solana.com", true],
   ["https://api.mainnet-beta.solana.com/?tag=devnet-mirror", true],
 ] as const) {
@@ -128,9 +107,7 @@ for (const [rpc, shouldNeedConsent] of [
   delete process.env.DOMINION_ALLOW_MAINNET;
   let refused = false;
   try {
-    // The guard reaches the network for the genesis check, so this asserts only the CONSENT half: a
-    // refusal for the right reason happens before any RPC call. `guardConsentOnly` is the same predicate
-    // the guard uses, exposed so this gate does not have to make 4 network calls to test 4 URLs.
+    // Only the CONSENT half: the full guard reaches the network for the genesis check.
     guardConsentOnly(rpc);
   } catch {
     refused = true;
@@ -155,54 +132,20 @@ for (const rpc of [
   });
 }
 
-// 3b. STRUCTURAL: every script that SENDS a transaction must go through the one guard.
-//
-//     RE-AUDIT P0. The genesis-hash check was wired into three scripts and missing from thirteen,
-//     including `create-fee-vault.ts`, a mandatory mainnet step. Point `https://devnet.proxy.example` at
-//     mainnet, run it without consent, and it created the irreversible ATA with real SOL while printing
-//     "devnet". I had fixed instances and left the class, for the fourth time in this batch.
-//
-//     So the check moved INSIDE `requireSanctionedCluster` and the old synchronous `requireDevnet` was
-//     deleted rather than aliased, making every call site a compile error until updated. This assertion
-//     is what stops the class from reopening: a NEW sending script that forgets the guard fails here, not
-//     in production.
+// 3b. STRUCTURAL: every script that SENDS a transaction must go through the one guard. The genesis-hash
+//     check lives INSIDE `requireSanctionedCluster`, and `requireDevnet` was deleted, not aliased.
 {
-  // ROUND 3 P2. The first version of this check recognised only `sendAndConfirmTransaction`, an exact
-  // `.rpc()`, and one textual `solana program deploy`. Codex broke it three ways: `ui-scenario.ts` has a
-  // real `conn.sendRawTransaction(...)` and no guard yet the gate printed 30/30; `e2e-lazer-mint.ts` sends
-  // via `provider.sendAndConfirm(...)`, also invisible; and a guard call sitting only in a COMMENT satisfied
-  // the textual property without executing anything.
-  //
-  // REVIEW-OF-FIXES P2, and this is the third shape of this check. Both reviewers measured the same three
-  // holes in my widened version:
-  //
-  //   1. `detected.length >= 12` was the self-check. 16 match today, so REVERTING the primitive list to the
-  //      exact pre-fix set still printed 31/31, and so did deleting `sendRawTransaction` alone, which is
-  //      the precise primitive whose absence WAS the round-3 finding. It fired only on a near-total gutting.
-  //      Worse, a magic floor on the number of dangerous scripts is a floor on how safe the repo may
-  //      become: deleting five devnet-only one-shots would drop it to 11 and FAIL the launch gate.
-  //   2. `upgrade-program.ts`, the script that writes mainnet bytecode, matches ZERO primitives. It shells
-  //      out through `sh(cmd, args)` with a variable first argument. It calls the guard today; deleting
-  //      that call would have kept the gate at 31/31.
-  //   3. The comment said "strip comments and strings"; only comments were stripped. So a read-only probe
-  //      whose log line mentions a primitive was reported as an unguarded sender, and a gate with false
-  //      positives gets allowlisted into uselessness.
-  //
-  // So the floor is now a NAMED MANIFEST rather than a count. Three explicit lists, and every one of them
-  // is load-bearing in a different direction:
-  //
+  // The MANIFEST is the floor; regex detection is only a HINT. A count-based self-check ("at least 12
+  // detected") let the primitive list be reverted to its pre-fix state without failing. Three lists:
   //   SENDERS   must call the guard, whether or not a regex can see how they send.
-  //   INDIRECT  senders the pattern list is NOT expected to match (they shell out through a helper), so
-  //             their absence from `detected` is not treated as a detector regression.
-  //   READ_ONLY scripts that invoke the solana CLI to READ. They must NOT be forced to guard: making a
-  //             read demand DOMINION_ALLOW_MAINNET trains the operator to keep the mainnet write-consent
-  //             variable exported, which is itself one of the findings in round 3.
-  //
-  // Adding a sending script means adding a line here, in the same commit. That is the point: the gate can
-  // no longer drift to "checking nothing" by arithmetic, only by someone editing a list on purpose.
+  //   INDIRECT  senders no primitive is expected to match (they shell out through a helper), so their
+  //             absence from `detected` is not a detector regression.
+  //   READ_ONLY invoke the solana CLI to READ, and must NOT be forced to guard: making a read demand
+  //             DOMINION_ALLOW_MAINNET trains the operator to keep write consent permanently exported.
+  // Adding a sending script means adding a line here, in the SAME commit.
 
-  // Two strippings, because the two families of pattern need opposite treatment. A JS primitive named
-  // inside a string is prose; the `solana` CLI literal is ONLY ever found inside a string.
+  // Two strippings, because the two families of pattern need opposite treatment: a JS primitive named
+  // inside a string is prose, but the `solana` CLI literal is ONLY ever found inside a string.
   const stripComments = (src: string) =>
     src
       .replace(/\/\*[\s\S]*?\*\//g, " ")
@@ -227,12 +170,9 @@ for (const rpc of [
     /\.\s*sendAll\s*\(/,                    // AnchorProvider.sendAll
     /\.\s*rpc\s*\(/,                        // Anchor methods().rpc(), tolerating whitespace
   ];
-  // Matched against code with comments stripped and strings KEPT, since the command name is a literal.
-  // Paired with a write verb: a bare /solana/ matched read-only preflights, and forcing those to guard is
-  // how the consent variable ends up permanently exported.
-  // Two shapes, because requiring `"solana"` as the FIRST argument only covers execFile style. The reviewer
-  // got an unguarded `execSync("solana program deploy … --url mainnet-beta")` past the gate: the single
-  // command string form is far more common and was invisible.
+  // Matched against code with comments stripped and strings KEPT, since the command name is a literal,
+  // and paired with a write verb because a bare /solana/ matched read-only preflights. Two shapes:
+  // `"solana"` as the FIRST argument is execFile style; `execSync("solana program deploy ...")` is not.
   const CLI_INVOCATION = [
     /(?:exec(?:File)?Sync|spawn(?:Sync)?)\s*\(\s*["'`]solana["'`]/,
     /(?:exec(?:File)?Sync|execSync|spawn(?:Sync)?)\s*\(\s*["'`][^"'`]*\bsolana\s+\w/,
@@ -269,22 +209,13 @@ for (const rpc of [
     "test-squads-e2e.ts",
     "test-v2-devnet.ts",
     "ui-scenario.ts",
-    // Not matched by any primitive: it shells out through `sh(cmd, args)`. Listed anyway BECAUSE it is the
-    // one script that writes mainnet bytecode. This entry is the fix for hole 2 above.
+    // No primitive matches it (it shells out via `sh(cmd, args)`), and it writes mainnet bytecode.
     "upgrade-program.ts",
   ]);
   const INDIRECT = new Set(["upgrade-program.ts"]);
-  // Shell out to READ, or to run other scripts. Must not be required to consent to a mainnet WRITE in order
-  // to look: making a read demand DOMINION_ALLOW_MAINNET trains the operator to keep the write-consent
-  // variable exported, which is itself one of round 3's findings.
-  //
-  // This list is a CLAIM, and the claim is checked below: a member that matches any send primitive fails.
-  // It was a silencer before. The reviewer appended a real `conn.sendRawTransaction(raw)` to
-  // verify-mainnet-readiness.ts, with no guard, and the gate printed 33/33 with "17 detected, 17 in the
-  // manifest" while one of the seventeen was an unguarded sender.
+  // Shell out to READ, so not required to guard. A CLAIM, checked below against the send primitives.
   const READ_ONLY_CLI = new Set(["verify-mainnet-authorities.ts", "verify-mainnet-readiness.ts"]);
-  // Everything else: probes, decoders, gates. No transaction, no CLI write. Listed by name so that ADDING a
-  // script is a decision someone records rather than something the regexes silently bless.
+  // Everything else. Listed by name so ADDING a script is recorded, not silently blessed by a regex.
   const NON_SENDERS = new Set([
     "check-onchain.ts",
     "check-onchain2.ts",
@@ -315,19 +246,13 @@ for (const rpc of [
 
     // A script the manifest names must guard, even if no pattern can see how it sends.
     if (!SENDERS.has(f)) {
-      // EVERY script must be triaged, not just the ones a regex happens to recognise. `unlisted` used to be
-      // fed from `sends`, so what the detector could not see was never demanded into the manifest: the
-      // reviewer added a whole new unguarded mainnet deployer and the gate stayed at 33/33 while cheerfully
-      // reporting "no sending script is missing from the manifest". The detector is a HINT now; the manifest
-      // is the floor, and an unclassified file fails whether or not anything matched it.
+      // Fed from the manifest, NOT from `sends`: an unclassified file fails whether or not it matched.
       if (!READ_ONLY_CLI.has(f) && !NON_SENDERS.has(f)) unlisted.push(f + (sends ? " (detected as a sender)" : ""));
       continue;
     }
     if (!/requireSanctionedCluster\s*\(/.test(code)) {
-      // Distinguish "no guard at all" from "a guard mentioned only in a comment", because the second is
-      // the one that fooled the first version of this check. Imports are stripped from BOTH sides, so
-      // deleting the call while leaving `import { requireSanctionedCluster }` reads as unguarded, not as
-      // prose. It reported prose before, which told the operator to move a comment when the call was gone.
+      // Distinguish "no guard at all" from "a guard mentioned only in a comment". Imports are stripped
+      // from BOTH sides, so deleting the call but keeping the import reads as unguarded, not as prose.
       if (/requireSanctionedCluster/.test(stripImports(noComments))) prose.push(f);
       else unguarded.push(f);
     }
@@ -352,8 +277,7 @@ for (const rpc of [
       : `${SENDERS.size} senders, ${READ_ONLY_CLI.size} read-only, ${NON_SENDERS.size} non-senders, ${files.length} files`,
   );
 
-  // The read-only and non-sender CLAIMS, checked rather than trusted. This is what turns both lists from
-  // exemptions into assertions: a member that matches a send primitive fails here by name.
+  // The two CLAIMS, checked rather than trusted: this is what makes them assertions, not exemptions.
   const liars = [...READ_ONLY_CLI, ...NON_SENDERS].filter((f) => detected.includes(f)).sort();
   ok(
     "nothing claiming not to send actually sends",
@@ -378,9 +302,8 @@ for (const rpc of [
     skirters.length ? skirters.join(", ") : "none",
   );
 
-  // SELF-CHECK ON THE DETECTOR, and this is what `detected.length >= 12` was trying and failing to be.
-  // Every manifest sender that is not declared INDIRECT must be matched by the primitive list. Narrowing
-  // the list now names the script it stopped seeing instead of quietly staying above a threshold.
+  // SELF-CHECK ON THE DETECTOR. Every manifest sender not declared INDIRECT must be matched by the
+  // primitive list, so narrowing a pattern names the script it stopped seeing.
   const undetectable = [...SENDERS].filter((f) => !INDIRECT.has(f) && !detected.includes(f)).sort();
   ok(
     "the send detector still matches every direct sender it is supposed to match",
@@ -401,14 +324,10 @@ for (const rpc of [
   );
 }
 
-// 4. MUTATION: drop a mainnet constant and require a throw, not a devnet fallback.
-//    Without this the gate could pass while `_cluster.ts` quietly defaulted.
-// REVIEW-OF-FIXES P2: this used to write the mutated JSON over `config/mainnet-authorities.json` itself
-// and restore it in a `finally`. `finally` does not run on SIGINT, SIGKILL or a CI step timeout, so a
-// Ctrl-C mid-run left the file that supplies the mainnet USDC mint, the premiums, the timelock and the
-// compliance authority to `initialize` mutated and reformatted in the working tree. It was also a
-// concurrency hazard with anything else calling `mainnetConfig()`. A gate must not write to the file the
-// ceremony reads: the mutation goes to a temp copy and `DOMINION_MAINNET_CONFIG` points resolution at it.
+// 4. MUTATION: drop a mainnet constant and require a throw, not a devnet fallback. Without this the
+//    gate could pass while `_cluster.ts` quietly defaulted. The mutation goes to a TEMP COPY and
+//    `DOMINION_MAINNET_CONFIG` points resolution at it: a gate must never write to
+//    config/mainnet-authorities.json and restore it in a `finally`, which does not run on SIGINT.
 const original = fs.readFileSync(SOT, "utf8");
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dominion-sot-"));
 const tmpSot = path.join(tmpDir, "mainnet-authorities.json");
@@ -437,9 +356,7 @@ try {
   delete process.env.DOMINION_MAINNET_CONFIG;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 }
-// Restoration is itself load-bearing: a gate that corrupts the source of truth on failure would be
-// worse than no gate. Assert the file is byte-identical to what we read.
-// The strongest form of the property: the file was never written at all, so there is nothing to restore.
+// The strongest form of the property: the file was never written, so there is nothing to restore.
 ok(
   "the source of truth was NEVER MUTATED (the test used a temp copy)",
   fs.readFileSync(SOT, "utf8") === original,

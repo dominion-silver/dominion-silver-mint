@@ -1,29 +1,14 @@
 /**
- * Assert that the DEPLOYED frontend, the LOCAL source and the ON-CHAIN config all
- * agree on which Pyth Lazer feed to price from.
+ * Assert that the DEPLOYED frontend, the LOCAL source and the ON-CHAIN config all agree on
+ * which Pyth Lazer feed to price from. Read-only: it sends no transaction.
  *
- * WHY THIS EXISTS. `oracle.rs` calls `extract_feed_price(payload,
- * config.pyth_lazer_feed_id, LAZER_CHANNEL_ID)`, which SEARCHES the signed envelope
- * for that exact feed id. If the frontend fetches an envelope for feed A while the
- * config expects feed B, the feed is simply not found in the payload and EVERY priced
- * operation reverts. Mint and redeem both die, and the error says nothing about a feed
- * mismatch.
+ * `oracle.rs` SEARCHES the signed envelope for config.pyth_lazer_feed_id, so a frontend serving
+ * any other feed makes EVERY priced operation revert, with an error that says nothing about
+ * feeds. The on-chain switch is 24h-timelocked while a Vercel deploy is instant, so a migration
+ * breaks mint whichever side ships first. Safe order, which `execute_set_pyth_feed`'s auto-pause
+ * exists for: execute the switch, verify with read-config.ts, deploy, run THIS, then unpause.
  *
- * That makes a feed migration a two-sided change with an ordering hazard: the on-chain
- * switch is 24h-timelocked, but a Vercel deploy is instant. Ship the frontend early and
- * you break mint for the whole timelock window; ship it late and you break mint from the
- * moment the switch executes until you deploy.
- *
- * The safe sequence, which `execute_set_pyth_feed`'s auto-pause is designed for:
- *   1. execute_set_pyth_feed  (the program AUTO-PAUSES, so nothing can mint in the gap)
- *   2. verify the config with scripts/read-config.ts
- *   3. deploy the frontend
- *   4. run THIS script: all three sources must agree
- *   5. unpause
- *
- * Run:
- *   npx tsx scripts/verify-oracle-sync.ts
- *   FRONTEND_URL=http://localhost:3101 npx tsx scripts/verify-oracle-sync.ts
+ * Run: npx tsx scripts/verify-oracle-sync.ts    (FRONTEND_URL overrides the target)
  */
 import { AnchorProvider, Program, Wallet, Idl } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
@@ -33,10 +18,9 @@ import { PROGRAM_ID } from "./_program-id";
 
 const RPC = process.env.DOMINION_RPC || "https://api.devnet.solana.com";
 const FRONTEND = process.env.FRONTEND_URL || "https://dominion-silver.vercel.app";
-// Mirrors lazer.rs. The envelope framing is documented in lazer-assembly.ts:
+// Mirrors lazer.rs, framing documented in lazer-assembly.ts. Envelope:
 //   magic u32 (SOLANA_FORMAT_MAGIC) | signature 64 | pubkey 32 | payload_len u16 | payload
-// and the payload itself is:
-//   magic u32 (PAYLOAD_FORMAT_MAGIC) | timestamp u64 | channel u8 | num_feeds u8 | feed_id u32
+// Payload: magic u32 (PAYLOAD_FORMAT_MAGIC) | timestamp u64 | channel u8 | num_feeds u8 | feed_id u32
 const SOLANA_FORMAT_MAGIC = 2_182_742_457;
 const PAYLOAD_FORMAT_MAGIC = 2_479_346_549;
 const PAYLOAD_OFFSET = 4 + 64 + 32 + 2;
@@ -48,21 +32,16 @@ function ok(cond: boolean, msg: string, detail = "") {
 }
 
 /**
- * Recover the feed id from a signed Lazer envelope by locating the payload magic and
- * reading the first feed id after it.
- *
- * Done by scanning for the magic rather than assuming a fixed signature/pubkey prefix
- * length, so this keeps working if Lazer changes the envelope framing. Returns null if
- * the magic is absent, in which case the caller falls back to price comparison.
+ * Recover the feed id from a signed Lazer envelope: the first feed id after the payload magic.
+ * Walks the documented framing, then falls back to scanning for the magic so that a framing
+ * change does not break it. Returns null if the magic is absent.
  */
 function feedIdFromEnvelope(b64: string): number | null {
   const buf = Buffer.from(b64, "base64");
 
-  // Preferred: walk the documented framing exactly.
   if (buf.length >= PAYLOAD_OFFSET + 18 && buf.readUInt32LE(0) === SOLANA_FORMAT_MAGIC) {
     const p = PAYLOAD_OFFSET;
     if (buf.readUInt32LE(p) === PAYLOAD_FORMAT_MAGIC) {
-      // magic u32 | timestamp u64 | channel u8 | num_feeds u8 | feed_id u32
       return buf.readUInt32LE(p + 4 + 8 + 1 + 1);
     }
   }
@@ -76,14 +55,10 @@ function feedIdFromEnvelope(b64: string): number | null {
 }
 
 /**
- * Last-resort identification: compare the served price against each candidate feed's
- * live price and pick the closest.
- *
- * This exists because the FIRST version of this script skipped its own most important
- * check when the envelope parse failed, which is precisely the fail-open class this
- * repo has been stamping out. The deployed-vs-chain comparison must always produce a
- * verdict, so if the bytes cannot be parsed the price is used instead. The two silver
- * feeds differ by a structural 5%, so at that spread this is unambiguous.
+ * Last-resort identification: compare the served price against each candidate feed's live price
+ * and pick the closest. The deployed-vs-chain comparison must ALWAYS reach a verdict, so an
+ * unparseable envelope must not make it fail open. The two silver feeds differ by a structural
+ * 5%, which at that spread is unambiguous. Returns null when no API key is available.
  */
 async function feedIdFromPrice(
   servedUsd: number,
@@ -204,8 +179,7 @@ async function main() {
   }
 
   console.log("\n  VERDICT");
-  // The check that matters: the DEPLOYED frontend must match the CHAIN. A mismatch
-  // means every priced operation reverts, with an error that does not mention feeds.
+  // The check that matters: the DEPLOYED frontend must match the CHAIN.
   let identifiedBy = "envelope bytes";
   if (deployed === null && deployedPrice !== null) {
     // Never skip this check. See feedIdFromPrice.

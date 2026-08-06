@@ -1,68 +1,25 @@
-// Pyth Lazer (Pyth Pro) message + payload parsing - dependency-free.
+// Pyth Lazer (Pyth Pro) payload parsing, dependency-free: the official
+// `pyth-lazer-protocol` crate pulls an off-chain dependency tree that does not
+// build under `cargo-build-sbf`. Transcribed field-by-field from that crate at
+// 0.34.0, the version the deployed `pyth-lazer-solana-contract` 0.8.0 locks. A
+// host-only differential test pins `=0.34.0` and diffs this parser against the
+// upstream deserializer.
 //
-// WHY hand-rolled instead of the official `pyth-lazer-protocol` crate:
-// that crate pulls a heavy OFF-CHAIN dependency tree (chrono -> time-core,
-// protobuf, serde_json, humantime) that does NOT build under our
-// `cargo-build-sbf` platform-tools (confirmed 2026-06-08: SBF build fails
-// parsing `time-core 0.1.8`'s edition2024-class manifest). The on-chain need
-// is narrow: parse the VERIFIED payload bytes that the Lazer `verify_message`
-// CPI returns, and extract one feed's price + quality + freshness. That is a
-// small, fully-specified binary format; re-implementing it here with zero
-// dependencies is both buildable AND maximally auditable for the
-// price-verification core. See private/PYTH_PRO_MIGRATION_PLAN.md Section 5.3.
-//
-// NORMATIVE wire-format source: `pyth-lazer-protocol` 0.34.0, the crate version
-// the deployed `pyth-lazer-solana-contract` 0.8.0 locks (`^0.34.0`; the crate
-// is on crates.io even though no `v0.34.0` git tag is published). This module
-// was transcribed field-by-field from the protocol `message.rs` + `payload.rs`
-// + `lib.rs` (PriceFeedProperty repr); the wire format is identical between
-// 0.34.0 and `main` (0.42.0) for every property we use (verified in review).
-// The host-only differential test (separate crate, excluded from the SBF build)
-// pins exactly `=0.34.0` from crates.io and diffs this parser against the
-// upstream deserializer; see the testing spec.
-//
-// Wire format (Little Endian for the Solana variant):
-//
-//   SolanaMessage envelope (handed to the Lazer CPI, NOT parsed for price here):
-//     magic:      u32  == SOLANA_FORMAT_MAGIC (2182742457)
-//     signature:  [u8; 64]
-//     public_key: [u8; 32]
-//     payload_len: u16
-//     payload:    [u8; payload_len]
-//
-//   PayloadData (the inner, signed payload - this is what verify_message RETURNS):
-//     magic:        u32 == PAYLOAD_FORMAT_MAGIC (2479346549)
-//     timestamp_us: u64   (payload-level aggregate time)
-//     channel_id:   u8
-//     num_feeds:    u8
-//     per feed:
-//       feed_id:        u32
-//       num_properties: u8
-//       per property:
-//         tag: u8 (PriceFeedProperty repr)
-//         value: depends on tag (see PROP_* below)
-//
-//   Property value encodings:
-//     Price/BestBid/BestAsk/Confidence/EmaPrice/EmaConfidence: i64
-//        (0 == None sentinel, any nonzero == Some(mantissa))
-//     PublisherCount: u16
-//     Exponent / MarketSession: i16
-//     FundingRate:              u8 present-flag + (if 1) i64
-//     FundingTimestamp / FundingRateInterval / FeedUpdateTimestamp:
-//                               u8 present-flag + (if 1) u64
-//
-// SECURITY: trust (the signer is a Lazer trusted signer) is enforced by the
-// Lazer program's `verify_message` CPI, NOT here. This module only parses the
-// already-verified payload. It still bounds-checks every read, asserts the
-// magic, rejects duplicate feeds/properties, requires the whole payload be
-// consumed (no trailing bytes), and fails closed on any malformed shape.
-//
-// POLICY SPLIT (parser vs oracle): the parser RETURNS the raw extracted values
-// (incl. both `feed_update_timestamp_us` and the payload `timestamp_us`). It
-// does NOT editorialize: it does not reject a negative price, does not enforce
-// `feedUpdateTimestamp == timestamp_us` (carried-forward), does not enforce
-// confidence positivity or the publisher floor. Those are the ORACLE's gates
-// (oracle.rs / Sections 5.4-5.6) so the security policy lives in one place.
+// Wire format is LITTLE ENDIAN. Price-like i64 properties use 0 as the None
+// sentinel. FundingRate, FundingTimestamp, FundingRateInterval and
+// FeedUpdateTimestamp carry a u8 present flag before their value. The full
+// field-by-field layout is in private/trimmed-notes2/program-rest.md.
+
+// Trust (the signer is a Lazer trusted signer) is enforced by the Lazer
+// `verify_message` CPI, never here: this module only parses an already-verified
+// payload. It still bounds-checks every read, asserts the magic, rejects
+// duplicate feeds and properties, requires the whole payload be consumed, and
+// fails closed on any malformed shape.
+
+// Policy split: the parser returns raw values and does not editorialize. Price
+// sign, carried-forward detection (feed_update_timestamp_us vs timestamp_us),
+// confidence positivity, the publisher floor and staleness are all oracle.rs
+// gates, so the security policy lives in one place.
 
 // Magic constants (LE), mirrored from the protocol crate.
 pub const SOLANA_FORMAT_MAGIC: u32 = 2_182_742_457;
@@ -116,34 +73,30 @@ pub enum LazerError {
     PayloadTooLarge,
 }
 
-/// Defensive cap on the inner payload size. The real ceiling is far lower (the
-/// SILV payload is ~50 B; Solana return-data is capped at 1024 B), so this is a
-/// loose belt-and-suspenders bound, not the active limit (Fable audit P3-b). It
-/// is `pub` to bound the parser independently of its caller + for the host-only
-/// differential test.
+/// Defensive cap on the inner payload size, in bytes. Loose: the real ceiling
+/// is Solana's 1024 B return-data limit and the SILV payload is ~50 B. `pub` so
+/// the parser is bounded independently of its caller.
 pub const MAX_PAYLOAD: usize = 4096;
 
-/// One feed's verified, extracted data. Raw values: the ORACLE applies the
-/// security policy (price > 0, confidence Some+positive+in-bounds,
-/// publisherCount >= floor, feedUpdateTimestamp == timestamp_us, staleness).
+/// One feed's verified, extracted data. Raw values: oracle.rs applies the
+/// security policy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LazerPrice {
-    /// Price mantissa (value = price * 10^exponent). Guaranteed != 0 here
-    /// (0 is the None sentinel -> MissingPrice). May be negative; the oracle
-    /// rejects price <= 0.
+    /// Price mantissa (value = price * 10^exponent). Never 0 here (0 is the
+    /// None sentinel). May be negative; the oracle rejects price <= 0.
     pub price: i64,
     /// Per-feed exponent (typically negative, e.g. -5 for SILV).
     pub exponent: i16,
-    /// Confidence mantissa if the feed emitted a nonzero value, else None
-    /// (the Confidence PROPERTY is required to be present; a 0 value -> None).
+    /// Confidence mantissa, None when the feed emitted 0. The property itself
+    /// is required to be present.
     pub confidence: Option<i64>,
-    /// Number of publishers in THIS aggregate. Meaningful only on a fresh
-    /// (non-carried) print; the oracle rejects carried-forward (Section 5.4).
+    /// Publishers in THIS aggregate. Meaningful only on a fresh (non-carried)
+    /// print.
     pub publisher_count: u16,
     /// Per-feed update time in MICROSECONDS. The oracle requires this to equal
-    /// `timestamp_us` (reject carried-forward) and applies staleness to it.
+    /// `timestamp_us` (rejecting a carried-forward print) and ages it.
     pub feed_update_timestamp_us: u64,
-    /// Channel id from the payload (already checked == expected by the parser).
+    /// Channel id from the payload (already checked == expected).
     pub channel_id: u8,
     /// Payload-level aggregate timestamp in MICROSECONDS.
     pub timestamp_us: u64,
@@ -271,10 +224,9 @@ fn consume_property(
                 t.feed_update_us = v;
             }
         }
-        // Unknown tag: unknown length, cannot skip safely. Fail closed. We
-        // control the subscribed property set, so this never happens in
-        // production; if Pyth adds a property we request, update this module
-        // in lockstep (and the pinned subscription test catches the drift).
+        // Unknown tag means unknown length, so the cursor cannot skip it
+        // safely: fail closed. If the subscribed property set gains a property,
+        // this module must be updated in lockstep.
         _ => return Err(LazerError::UnknownProperty),
     }
     Ok(())
@@ -282,9 +234,9 @@ fn consume_property(
 
 /// Parse a VERIFIED Lazer payload and extract `target_feed_id`'s data.
 ///
-/// `payload` is the inner payload (`VerifiedMessage.payload` from the Lazer
-/// `verify_message` CPI), NOT the SolanaMessage envelope. `expected_channel`
-/// is the subscribed channel (fixed_rate@1000ms == 4).
+/// `payload` must be the inner payload (`VerifiedMessage.payload` returned by
+/// the Lazer `verify_message` CPI), NOT the SolanaMessage envelope.
+/// `expected_channel` is the subscribed channel (fixed_rate@1000ms == 4).
 pub fn extract_feed_price(
     payload: &[u8],
     target_feed_id: u32,
@@ -333,19 +285,17 @@ pub fn extract_feed_price(
         }
     }
 
-    // The whole payload MUST be consumed: a truncated suffix or trailing bytes
-    // is rejected (this is what makes "fail-closed on truncation" actually true
-    // even for a cut AFTER the target feed).
+    // The whole payload MUST be consumed. This is what makes truncation fail
+    // closed even when the cut lands AFTER the target feed.
     if !r.at_end() {
         return Err(LazerError::TrailingBytes);
     }
 
     let t = found.ok_or(LazerError::FeedNotFound)?;
 
-    // Required properties for the target (all 5 subscribed). Absent -> reject.
+    // All 5 subscribed properties are required for the target.
     let raw_price = t.price.ok_or(LazerError::MissingPrice)?;
-    // 0 is the None sentinel -> no usable price. (Negative passes here; the
-    // oracle rejects price <= 0.)
+    // 0 is the None sentinel. A negative price passes here; the oracle rejects it.
     if raw_price == 0 {
         return Err(LazerError::MissingPrice);
     }
@@ -370,10 +320,9 @@ pub fn extract_feed_price(
 }
 
 /// Unwrap a SolanaMessage envelope, returning the inner signed payload slice.
-/// TEST/CLIENT ONLY: on-chain we hand the WHOLE envelope to the Lazer
-/// `verify_message` CPI and parse the payload it RETURNS, so this must NEVER be
-/// called on the on-chain price path (it does not verify the signature). Gated
-/// out of the program build to kill that footgun.
+/// This does NOT verify the signature, so it must never run on the price path;
+/// on chain the whole envelope goes to `verify_message` and only the payload it
+/// returns is parsed. `cfg(test)` keeps the footgun out of the program build.
 #[cfg(test)]
 pub fn unwrap_solana_payload(message: &[u8]) -> Result<&[u8], LazerError> {
     let mut r = Reader::new(message);
@@ -391,7 +340,7 @@ mod tests {
     use super::*;
 
     const CH: u8 = 4; // fixed_rate@1000ms, our subscribed channel
-    const SILV: u32 = 3154; // Metal.Index.SILVER/USD (confirmed 2026-07-26)
+    const SILV: u32 = 3154; // Metal.Index.SILVER/USD, the only allowed feed id
 
     fn le16(v: u16) -> [u8; 2] {
         v.to_le_bytes()
@@ -533,8 +482,8 @@ mod tests {
 
     #[test]
     fn carried_forward_values_are_returned_not_rejected_by_parser() {
-        // feedUpdateTimestamp < payload timestamp_us. The PARSER returns both;
-        // the ORACLE rejects the mismatch (Section 5.4).
+        // feedUpdateTimestamp < timestamp_us: the parser returns both, the
+        // oracle rejects the mismatch.
         let f = feed_bytes(
             SILV,
             &[

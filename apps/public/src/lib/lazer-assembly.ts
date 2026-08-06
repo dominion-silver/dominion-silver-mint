@@ -1,26 +1,14 @@
-// Pyth Lazer (Pyth Pro) Solana message + ed25519 instruction assembly.
+// Pyth Lazer (Pyth Pro) Solana message + ed25519 instruction assembly: the client-side counterpart of
+// the on-chain `verify_message` (pyth-lazer-solana-contract 0.8.0 signature.rs) and of dominion's
+// verify_and_get_payload (lazer_cpi.rs), replicated to the byte so the on-chain cross-check passes.
 //
-// Client-side counterpart of the on-chain Lazer `verify_message`
-// (pyth-lazer-solana-contract 0.8.0 `signature.rs`) and the dominion
-// verify_and_get_payload (lazer_cpi.rs). Replicated to the byte so the on-chain
-// ed25519 cross-check passes.
-//
-// THE PATTERN (verified against signature.rs::verify_message + the SDK's own
-// integration test test1.rs):
-//   - The full SolanaMessage ENVELOPE is the dominion instruction's
-//     `message_data: Vec<u8>` argument. verify_message reads message_data[0..4]
-//     as SOLANA_FORMAT_MAGIC and slice_eq's it against the bytes the ed25519
-//     instruction verified, so `message_data` MUST be the whole envelope, NOT
-//     the inner payload.
-//   - The ed25519 precompile instruction carries ONLY [num_sigs, pad, offsets]
-//     (no envelope copy). Its offsets point into the DOMINION instruction
-//     (instruction_index = the dominion ix's tx position) at the envelope's
-//     byte offset within that ix's data.
-//   - The tx is [ed25519 ix, dominion ix]; the ed25519 ix MUST precede.
-//
-// NOTE: pure + unit-tested with synthetic messages. The live flow (real signed
-// messages from the Pyth service via /api/lazer + landing real txs) is gated on
-// the Pyth Starter API key.
+// THE CONVENTION:
+//   - The dominion ix's `message_data` is the WHOLE envelope, never the inner payload: verify_message
+//     reads message_data[0..4] as SOLANA_FORMAT_MAGIC and slice_eq's it against the bytes the ed25519
+//     instruction verified.
+//   - The ed25519 precompile ix carries only [num_sigs, pad, offsets], no envelope copy; its offsets
+//     point into the DOMINION ix, so every instruction_index it holds is that ix's position in the tx.
+//   - The tx is [ed25519 ix, dominion ix]: the ed25519 ix MUST precede.
 import { PublicKey, TransactionInstruction } from "@solana/web3.js";
 
 // First 4 bytes (LE) of a Solana-targeted Lazer update (ed25519-signed).
@@ -39,8 +27,8 @@ const PUBKEY_LEN = 32;
 const MESSAGE_SIZE_LEN = 2;
 const ENVELOPE_HEADER_LEN = MAGIC_LEN + SIGNATURE_LEN + PUBKEY_LEN + MESSAGE_SIZE_LEN; // 102
 
-// Ed25519SignatureOffsets: 7 x u16, #[repr(C, packed)] = 14 bytes; preceded by a
-// 2-byte header (num_signatures, padding) in the ed25519 instruction data.
+// Ed25519SignatureOffsets: 7 x u16, #[repr(C, packed)] = 14 bytes, preceded in the ed25519 instruction
+// data by a 2-byte header (num_signatures, padding).
 const OFFSETS_LEN = 14;
 const ED25519_HEADER_LEN = 2;
 
@@ -94,11 +82,9 @@ function indexOfSubarray(haystack: Uint8Array, needle: Uint8Array): number {
 }
 
 /**
- * The dominion instruction's `message_data` argument: the WHOLE envelope (NOT
- * the inner payload). Validates it parses. Pass exactly the bytes the Pyth proxy
- * returned, with NO trailing bytes beyond `102 + payload_len`: the on-chain
- * `slice_eq(envelope, message_data)` compares lengths, so any trailing slack
- * would revert (InvalidMessageData). Fail-closed, never a silent bad price.
+ * The dominion ix's `message_data` argument: the WHOLE envelope, validated. Pass exactly the bytes the
+ * Pyth proxy returned, with NO trailing slack beyond `102 + payload_len`: the on-chain
+ * `slice_eq(envelope, message_data)` compares lengths, so extra bytes revert InvalidMessageData.
  */
 export function lazerMessageData(envelope: Uint8Array): Uint8Array {
   parseSolanaMessage(envelope);
@@ -106,9 +92,8 @@ export function lazerMessageData(envelope: Uint8Array): Uint8Array {
 }
 
 /**
- * Build the ed25519 precompile instruction for a Lazer signature. Its offsets
- * point at the envelope WITHIN `dominionIxData` (the serialized data of the
- * dominion instruction that carries the envelope as its `message_data` arg).
+ * Build the ed25519 precompile instruction for a Lazer signature. Its offsets point at the envelope
+ * WITHIN `dominionIxData`.
  *
  * @param dominionIxData serialized data of the dominion ix (must contain the envelope)
  * @param envelope the SolanaMessage envelope (== the dominion ix's message_data arg)
@@ -166,13 +151,11 @@ export interface LazerOracleTx {
 /**
  * Assemble the ed25519 instruction for an already-built dominion oracle ix.
  *
- * Caller contract: build the dominion ix (mint_silv / redeem_silv /
- * claim_redemption) with `message_data = lazerMessageData(envelope)` (the WHOLE
- * envelope), `ed25519_instruction_index = ed25519InstructionIndex` (default 0),
- * `signature_index = 0`, AND its 5 Lazer accounts (lazer_program, lazer_storage,
- * lazer_treasury, lazer_fee_payer PDA, instructions_sysvar). Then call this with
- * that ix's `.data` and its tx position, and send
- * `[result.ed25519Ix, dominionIx]`.
+ * Caller contract: build the dominion ix (mint_silv / redeem_silv / claim_redemption) with
+ * `message_data = lazerMessageData(envelope)`, `ed25519_instruction_index = ed25519InstructionIndex`,
+ * `signature_index = 0`, and its 5 Lazer accounts (lazer_program, lazer_storage, lazer_treasury,
+ * lazer_fee_payer PDA, instructions_sysvar). Then call this with that ix's `.data` and its tx position,
+ * and send `[result.ed25519Ix, dominionIx]`.
  */
 export function assembleLazerTx(
   dominionIxData: Uint8Array,

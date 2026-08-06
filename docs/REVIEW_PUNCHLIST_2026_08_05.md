@@ -29,7 +29,7 @@ renaming it, so it became a real sliding-window counter).
 
 ## A. Program (Rust)
 
-### [x] A1. `events.rs` — my own comment is FALSE and actively dangerous
+### [x] A1. `events.rs` . my own comment is FALSE and actively dangerous
 `fee_usdc` is documented as "appended, so older decoders that stop after `timestamp` still
 parse the prefix". It is inserted at index 4 of 6, BEFORE `timestamp`. A decoder on the
 pre-upgrade IDL reads the 8 bytes of `fee_usdc` as `timestamp`: a $100 mint yields
@@ -108,7 +108,7 @@ Dominion itself. Fix: wire the expiry, or accept and document with a monitoring 
 ## B. Public app
 
 ### [x] B1. Every redemption at or above $5,000 is impossible from the UI
-`anchor-client.ts:249` — `classifyRedeem` still returns `"queue"` on the dead
+`anchor-client.ts:249` . `classifyRedeem` still returns `"queue"` on the dead
 `largeRedeemThresholdUsdc` (still $5,000) and on budget exhaustion, and `MintRedeemCard.tsx:325`
 then calls `buildRedeemQueuedTx`, which throws. The program would have settled instantly. The
 "unreachable" claim in commit `5eb3d5f` is true of the Claim button and FALSE of the submit
@@ -180,7 +180,7 @@ No balance metric, no "vault missing" banner, no way for an operator to check th
 before executing the redemptions open. The only trace is prose in a tooltip.
 
 ### [x] C2. Dead config fields displayed as live metrics with false tips
-`Dashboard.tsx:293-297,325-329` — "Any single redemption worth this much or more is
+`Dashboard.tsx:293-297,325-329` . "Any single redemption worth this much or more is
 automatically sent to the delayed queue" and "How long a queued redemption must wait". Both
 false, and they sit immediately above the panel that correctly says the queue was deleted. Two
 contradictory answers on one screen, and the wrong one renders as live state.

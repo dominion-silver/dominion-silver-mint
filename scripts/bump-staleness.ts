@@ -1,7 +1,6 @@
 /**
- * Bumps max_staleness_seconds via the new dev-only ix dev_set_max_staleness.
- * Devnet testing only. Mainnet path: propose + execute (24h timelock).
- *
+ * Bumps max_staleness_seconds via the dev-only ix dev_set_max_staleness. Devnet testing only, the
+ * mainnet path is propose + execute (24h timelock).
  * Run: cd /Users/thomasblanc/1_app/dominion && npx tsx scripts/bump-staleness.ts [secs]
  */
 import {
@@ -18,12 +17,9 @@ import os from "os";
 import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 import { requireSanctionedCluster } from "./_guard";
 import { resolveCluster, describeCluster } from "./_cluster";
-// RE-AUDIT P0 (the CLASS, not the instance). This script sends transactions and had NO cluster guard:
-// it hardcoded the devnet RPC, so `DOMINION_RPC` was ignored and nothing confirmed the chain matched.
-// The re-audit named `create-fee-vault.ts` as "the missing fourth"; the structural assertion in
-// scripts/verify-cluster-resolution.ts then found NINE more, of which this is one. Every sending script
-// now resolves its cluster from the environment and passes through the one guard, which does the consent
-// check AND the genesis-hash cross-check.
+// Every sending script resolves its cluster from the environment and passes through the one guard,
+// which does the consent check AND the genesis-hash cross-check. A hardcoded RPC here would ignore
+// DOMINION_RPC and leave nothing confirming the chain matches.
 const CLUSTER = resolveCluster();
 const RPC = CLUSTER.rpc;
 
@@ -72,12 +68,10 @@ async function main() {
   const sig = await sendAndConfirmTransaction(c, tx, [admin], { commitment: "confirmed" });
   console.log("Confirmed:", sig);
 
-  // Verify by reading config raw bytes.
+  // Existence check only. This does not walk the ConfigAccount layout to max_staleness_seconds:
+  // read the value back with scripts/read-config.ts.
   const ai = await c.getAccountInfo(cfgPda);
   if (!ai) { console.error("Config PDA missing"); process.exit(1); }
-  // ConfigAccount layout: 8 disc + 32 admin + ... + max_staleness_seconds: u32
-  // Easier path: just print the on-chain value via fetching the offset.
-  // For now, show that the tx confirmed; full verification via UI test.
   console.log(`OK: max_staleness_seconds set to ${secs}s.`);
 }
 main().catch(e => { console.error("FAIL:", e.message ?? e); process.exit(1); });

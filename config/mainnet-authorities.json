@@ -192,7 +192,7 @@
       "the local build: it rebuilds and compares rather than reading this line. The runbook carried a",
       "stale hash for two rebuilds before this file existed."
     ],
-    "sha256": "f073ca91e8c273cba3c4c2d329f779cd5c92639c2515d85610a19ff142efeb11",
+    "sha256": "0181fddc43c0f7ad59fb6cd9fc21f69d69023eeb2930c441f16354f788ad9e41",
     "bytes": 1193560,
     "toolchain": "solana-cli/SBF 3.0.0, platform-tools v1.51, SBF rustc 1.84.1, anchor-cli 0.31.1"
   }

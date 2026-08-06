@@ -1,8 +1,5 @@
-// Fee-exemption whitelist management + the fee-vault sweep (Thomas, 2026-08-05).
-//
-// Three instructions, all admin-only and all INSTANT. The instant-ness is a deliberate
-// departure from how this program treats other admin powers, and the reasoning differs per
-// instruction, so it is stated at each one rather than once here.
+// Fee-exemption whitelist plus the fee-vault sweep. Four admin-only instructions, all INSTANT, which
+// departs from the rule that loosenings are 24h-timelocked. Each states why instant is acceptable.
 
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint as ClassicMint, Token, TokenAccount};
@@ -11,10 +8,6 @@ use crate::cpi::usdc_transfer_fee_vault_to_destination;
 use crate::errors::DominionError;
 use crate::events::{FeeExemptRemoved, FeeExemptSet, FeeRoutingChanged, FeesWithdrawn};
 use crate::state::*;
-
-// ===========================================================================
-// set_fee_exempt: grant or update an exemption
-// ===========================================================================
 
 #[derive(Accounts)]
 #[instruction(wallet: Pubkey, flags: u8, expires_at: i64)]
@@ -25,10 +18,9 @@ pub struct SetFeeExempt<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
 
-    // `init_if_needed` so grant and update are one instruction and the panel needs one
-    // button. The usual re-initialization hazard does not apply: the instruction is
-    // admin-gated, the seeds are fixed by `wallet`, and the handler rewrites every field
-    // unconditionally, so there is no partially-stale state either path can leave behind.
+    // `init_if_needed` so grant and update are one instruction. The re-initialization hazard does not
+    // apply: admin-gated, seeds fixed by `wallet`, and the handler rewrites every field.
+    // See the note on `FeeExemptAccount` in state/fee_exempt.rs for what an exemption actually costs.
     #[account(
         init_if_needed,
         payer = admin,
@@ -41,23 +33,9 @@ pub struct SetFeeExempt<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Grant or update a per-wallet fee exemption. INSTANT, no timelock.
-///
-/// Why instant, when opening the mint or raising the redeem budget both cost 24 hours: onboarding a
-/// market maker should not be a day-long ceremony, and a wallet with only the MINT side waived still
-/// pays the redeem premium to close any loop.
-///
-/// Do NOT read this as "the exposure is nil". An earlier version of this note said the worst case was
-/// merely FOREGONE REVENUE; state/fee_exempt.rs now corrects that, because a BOTH-SIDES exemption
-/// hands its holder a free option on oracle movement paid by the treasury, which is a transfer of
-/// value. The instant-ness rests on the per-side flags being used properly, not on there being
-/// nothing at stake.
-///
-/// Residual risk, stated so it is not discovered later: a compromised admin can exempt itself and
-/// trade fee-free until someone notices, and the expiry does NOT bound that (the admin picks it).
-/// `FeeExemptSet` is the event to alert on. It used to say "a grant with `expires_at == 0` is the
-/// shape to flag"; zero is refused outright now (audit C-01), so the shape to flag is instead a grant
-/// with BOTH side bits set, or a term near the two-year cap, or a grant whose wallet is the admin.
+/// Grant or update a per-wallet fee exemption. INSTANT, no timelock: onboarding a market maker should
+/// not take a day. Prefer a MINT-only exemption, which leaves the redeem premium as the cost of
+/// closing a loop; the exposure of a both-sides grant is not nil.
 pub fn set_fee_exempt_handler(
     ctx: Context<SetFeeExempt>,
     wallet: Pubkey,
@@ -66,49 +44,14 @@ pub fn set_fee_exempt_handler(
 ) -> Result<()> {
     validate_fee_exempt_flags(flags)?;
     let now = Clock::get()?.unix_timestamp;
-    // An expiry is MANDATORY: strictly in the future, at most MAX_FEE_EXEMPT_TERM_SECONDS out.
-    //
-    // EXTERNAL AUDIT FINDING C-01. `expires_at == 0` used to mean "never" and was accepted. Three
-    // things made that worse than it looks:
-    //
-    //   1. The audit brief I wrote for the reviewer asserted the expiry was "mandatory and capped at
-    //      two years". It was not, and the auditor caught the code contradicting its own brief.
-    //   2. The admin panel's field label was literally "type 0 for never", so the permanent case was
-    //      not a theoretical hole, it was the documented shortcut sitting on the form.
-    //   3. The usual reason to keep a zero case, migrating accounts written by an older layout, does
-    //      not apply: `FeeExemptAccount` is introduced by THIS upgrade, so no account with
-    //      `expires_at == 0` exists anywhere to be preserved.
-    //
-    // What zero actually cost, with numbers. At 1% mint and 1.5% redeem a normal round trip of 100
-    // USDC returns 100 * 0.99 * 0.985 = 97.515, so the pair of fees is a 2.485% band the price must
-    // move through before a round trip profits. A both-sides exemption removes the band entirely and
-    // returns 100.000, which converts every favourable oracle tick into free extractable value paid
-    // out of the treasury. With `expires_at == 0` that lasts until a human notices.
-    //
-    // A term does NOT defend against a compromised admin, and state/fee_exempt.rs is careful to say
-    // so: the admin picks the number. What it defends against is FORGETTING, which is the failure
-    // that actually happens: a market-making arrangement that ends, a launch-window favour nobody
-    // revisits. Making it mandatory means the forgetting has a deadline.
-    //
-    // A PAST term is refused too. It would create an account granting nothing while appearing in
-    // every roster as an active exemption: the same trap as zero flags, refused for the same reason.
-    //
-    // The UPPER rail catches the realistic operator error the review-of-fixes named: pasting a
-    // 13-digit JavaScript millisecond timestamp instead of seconds yields a year-57000 expiry that
-    // LOOKS like a term while behaving like "never", which is exactly the trap this field exists to
-    // avoid. Every other tunable in this program has a fat-finger ceiling; this one did not.
-    //
-    // The rule itself lives in `state/fee_exempt.rs::validate_fee_exempt_expiry`, as a pure function,
-    // so it is unit-tested and so this handler and the reader cannot drift apart. It raises a
-    // DEDICATED error rather than FeeExemptFlagsInvalid: reporting a flags problem for a bad DATE sent
-    // the operator to debug the scope field, which is the wrong half of the form.
+    // MANDATORY, strictly future, capped. The upper rail catches the fat finger that matters: a
+    // 13-digit millisecond timestamp pasted where seconds go, which LOOKS like a term and behaves like
+    // "never". A pure function so it stays unit-tested, with a DEDICATED error for a bad DATE.
     validate_fee_exempt_expiry(expires_at, now)?;
     let admin_key = ctx.accounts.admin.key();
     let acc = &mut ctx.accounts.fee_exempt;
 
-    // `added_at` records the FIRST grant and is not overwritten on update, because "how long
-    // has this wallet been exempt" is the forensically useful question. A fresh account is
-    // zeroed by init_if_needed, which is what makes the test reliable.
+    // The FIRST grant, never overwritten on update. init_if_needed zeroes a fresh account.
     if acc.added_at == 0 {
         acc.added_at = now;
     }
@@ -118,6 +61,8 @@ pub fn set_fee_exempt_handler(
     acc.version = FEE_EXEMPT_ACCOUNT_VERSION;
     acc.expires_at = expires_at;
 
+    // Alert on this event: both side bits set, a term near the cap, or a self-grant by the admin. A
+    // compromised admin can exempt itself and the term does not bound that, since the admin picks it.
     emit!(FeeExemptSet {
         wallet,
         flags,
@@ -127,10 +72,6 @@ pub fn set_fee_exempt_handler(
     });
     Ok(())
 }
-
-// ===========================================================================
-// remove_fee_exempt: revoke an exemption and reclaim its rent
-// ===========================================================================
 
 #[derive(Accounts)]
 #[instruction(wallet: Pubkey)]
@@ -151,13 +92,9 @@ pub struct RemoveFeeExempt<'info> {
     pub fee_exempt: Account<'info, FeeExemptAccount>,
 }
 
-/// Revoke an exemption entirely. INSTANT, and this direction needs no justification at all:
-/// it is a tightening, and every tightening in this program is instant.
-///
-/// Closing the account rather than zeroing its flags is the point. It reclaims the rent, and
-/// it means "exempt" is expressed by the account EXISTING, so a roster listing cannot show a
-/// revoked wallet as still whitelisted. A zero-flag account would be exactly that trap,
-/// which is why `validate_fee_exempt_flags` rejects zero.
+/// Revoke an exemption entirely. INSTANT, like every tightening here. Closing the account rather than
+/// zeroing its flags reclaims the rent and makes "exempt" mean the account EXISTS, so a roster cannot
+/// show a revoked wallet as whitelisted. Same reason `validate_fee_exempt_flags` rejects zero.
 pub fn remove_fee_exempt_handler(ctx: Context<RemoveFeeExempt>, wallet: Pubkey) -> Result<()> {
     emit!(FeeExemptRemoved {
         wallet,
@@ -167,10 +104,6 @@ pub fn remove_fee_exempt_handler(ctx: Context<RemoveFeeExempt>, wallet: Pubkey) 
     });
     Ok(())
 }
-
-// ===========================================================================
-// withdraw_fees: sweep accrued premium to an admin-chosen destination
-// ===========================================================================
 
 #[derive(Accounts)]
 #[instruction(amount: u64)]
@@ -183,8 +116,7 @@ pub struct WithdrawFees<'info> {
     #[account(address = config.usdc_mint)]
     pub usdc_mint: Box<Account<'info, ClassicMint>>,
 
-    /// CHECK: PDA authority of the fee vault. Signs the sweep via seeds. This is the ONLY
-    /// instruction in which it signs.
+    /// CHECK: PDA authority of the fee vault. Signs the sweep via seeds; the ONLY place it signs.
     #[account(seeds = [FEE_VAULT_SEED], bump)]
     pub fee_vault_pda: AccountInfo<'info>,
 
@@ -196,11 +128,9 @@ pub struct WithdrawFees<'info> {
     )]
     pub fee_vault: Box<Account<'info, TokenAccount>>,
 
-    // Any USDC token account. Deliberately NOT constrained to an ATA or to a stored config
-    // value: the destination is chosen per sweep from the admin panel, which is what makes a
-    // wrong address cost one misdirected transfer instead of bricking mint and redeem. A
-    // stored fee destination whose ATA went missing would make every mint and every redeem
-    // revert, since the premium transfer happens inside those instructions.
+    // Any USDC token account, deliberately NOT an ATA nor a stored config value, so a wrong address
+    // costs one misdirected transfer. A stored destination whose ATA vanished would revert every mint
+    // and every redeem, because the premium transfer lives inside those instructions.
     #[account(
         mut,
         token::mint = usdc_mint,
@@ -208,13 +138,8 @@ pub struct WithdrawFees<'info> {
     )]
     pub destination: Box<Account<'info, TokenAccount>>,
 
-    // A4: the treasury, read-only, purely so the sweep can be gated on its float.
-    //
-    // The problem this closes: the redeem premium leg moves USDC OUT of the treasury and into the
-    // vault, and `execute_withdraw_usdc` is the only path that enforces
-    // `treasury_post >= treasury_min_float_usdc`. So 1.5% of every redemption routed AROUND that
-    // floor into an account that is withdrawable instantly, which made the float not the floor the
-    // panel and the docs present it as.
+    // A4: read-only, purely so the sweep can be gated on the treasury float. Without it the redeem
+    // premium leg routes 1.5% of every redemption around that floor into an instantly sweepable vault.
     #[account(address = config.usdc_treasury)]
     pub usdc_treasury: Box<Account<'info, TokenAccount>>,
 
@@ -222,90 +147,33 @@ pub struct WithdrawFees<'info> {
     pub classic_token_program: Program<'info, Token>,
 }
 
-/// Sweep accrued premium out of the fee vault. INSTANT, admin-only.
-///
-/// This is the one instant money movement in the program, so the reasoning matters.
-/// `withdraw_usdc` (the TREASURY) is 24h-timelocked and guardian-cancellable because that
-/// balance BACKS outstanding SILV and is what user redemptions draw on: the delay exists to
-/// protect USERS from the admin. The fee vault backs nothing. It holds Dominion's own earned
-/// revenue, and `config.admin` is already a Squads multisig, so a timelock here would be
-/// protecting Dominion from itself, which the multisig threshold already does.
-///
-/// Consequence, accepted: a compromised admin drains accrued fees immediately. The exposure
-/// is bounded by the standing vault balance, so sweep on a regular cadence rather than
-/// letting months accumulate. `FeesWithdrawn` carries the post-sweep balance so a monitor can
-/// alert on the vault growing beyond a threshold.
-///
-/// `amount` is explicit rather than "0 means everything". A magic value on an irreversible
-/// transfer is how a fat-finger becomes a full sweep; the panel prefills the balance instead.
+/// Sweep accrued premium out of the fee vault. INSTANT, and the only instant money movement here:
+/// unlike the timelocked treasury this vault backs no outstanding SILV. `amount` is explicit, because
+/// "0 means everything" on an irreversible transfer is how a fat finger sweeps the lot.
 pub fn withdraw_fees_handler(ctx: Context<WithdrawFees>, amount: u64) -> Result<()> {
-    // Refuses while paused, matching `execute_withdraw_usdc` (D31).
-    //
-    // CORRECTED CLAIM. An earlier version of this comment said the check meant "the guardians' one
-    // lever" now reached this instruction and that a compromised admin could no longer sweep the
-    // vault during a pause. That was wrong, and the review-of-fixes showed why: `unpause` is
-    // `has_one = admin`, admin-only, instant, with no timelock and no guardian involvement. A
-    // compromised admin submits `[unpause, withdraw_fees]` in ONE transaction and the gate is gone.
-    //
-    // The cited precedent is not analogous either. `execute_withdraw_usdc` has a PROPOSAL a guardian
-    // can cancel, so its pause check is belt-and-braces on top of a real veto. `withdraw_fees` has
-    // no proposal, so there is no guardian control over it at all and this check cannot create one.
-    //
-    // What the check DOES buy, which is worth keeping: it stops an ordinary sweep from landing in the
-    // middle of an incident by accident, and it makes the bypass require a deliberate, visible
-    // `unpause` in the same transaction. The underlying exposure is the one already accepted above:
-    // this vault holds earned revenue, not user backing, and `config.admin` is a multisig. Closing it
-    // properly would mean gating or delaying `unpause`, which is a governance change well outside
-    // this instruction.
+    // Refuses while paused, matching `execute_withdraw_usdc` (D31). NOT a guardian veto: `unpause` is
+    // admin-only and instant, so `[unpause, withdraw_fees]` in one transaction clears it. It only stops
+    // an ordinary sweep landing mid-incident. Accepted: a compromised admin drains the standing
+    // balance at once, so sweep on a cadence rather than letting months accrue.
     require!(!ctx.accounts.config.paused, DominionError::Paused);
     require!(amount > 0, DominionError::ZeroAmount);
 
-    // A4. Premium revenue is only Dominion's to take once the REDEMPTION BUFFER is healthy.
-    //
-    // Without this, `treasury_min_float_usdc` was not the floor it is presented as: the redeem
-    // premium leg drains the treasury with no float check, and the vault it lands in is
-    // withdrawable instantly, so the premium on every redemption routed around the floor.
-    //
-    // Gating the SWEEP rather than the redeem leg is deliberate. Blocking the premium transfer
-    // inside `redeem_silv` would make a user's redemption fail because of an ADMIN-facing
-    // threshold, which inverts the priority this program has held throughout: users come ahead of
-    // the admin's ability to move cash out. Here the cost lands on the admin instead, which is
-    // where it belongs, and the revenue is not lost, only deferred until the buffer recovers.
-    //
-    // The float is read as a raw balance, NOT balance-minus-amount: the question is whether the
-    // buffer is currently healthy, not whether it would survive this sweep.
-    //
-    // Note `>=`, so a treasury sitting EXACTLY at its floor DOES permit a sweep. An earlier version
-    // of this comment said it should not, which contradicted the line below it. `>=` is the right
-    // choice and the comment was the error: the float is a floor on the BACKING, and the vault holds
-    // no backing, so being exactly at the floor is "healthy" by definition. Anything stricter would
-    // make the common case (float set to the current balance) permanently unsweepable.
-    // CANNOT STRAND REVENUE PERMANENTLY, checked during the review-of-fixes because "gate a
-    // withdrawal on a threshold" is a classic way to build an inescapable trap. Two independent
-    // exits exist, both admin-reachable: `deposit_usdc` tops the treasury back above the floor, and
-    // `propose_set_treasury_min_float` lowers the floor itself (24h, since lowering it is a
-    // loosening). So a treasury structurally below its float DEFERS the sweep, it does not destroy
-    // the revenue: the vault keeps accruing and can never be closed.
+    // A4. Premium revenue is only Dominion's once the redemption buffer is healthy. Gating the SWEEP
+    // and not the redeem leg is deliberate: a user's redemption must not fail on an ADMIN-facing
+    // threshold. RAW balance, not balance-minus-amount, and `>=` so a treasury exactly at its floor is
+    // still sweepable. Never strands revenue: deposit_usdc and propose_set_treasury_min_float exit it.
     require!(
         ctx.accounts.usdc_treasury.amount >= ctx.accounts.config.treasury_min_float_usdc,
         DominionError::FloorBreached
     );
 
-    // A sweep to the vault itself succeeds as a token-program no-op, and the event below would
-    // then report `remaining = available - amount`, a balance that never existed. Since the
-    // design leans on `FeesWithdrawn.remaining` for the "alert if the vault grows" monitor, a
-    // self-sweep is a way to feed that monitor a fabricated figure, repeatedly, while the vault
-    // actually fills. Cheap to forbid, and there is no legitimate reason to do it.
+    // A self-sweep is a token-program no-op, so the event would report a `remaining` that never was.
     require!(
         ctx.accounts.destination.key() != ctx.accounts.fee_vault.key(),
         DominionError::WithdrawRecipientMismatch
     );
 
-    // And not any OTHER account owned by the fee-vault PDA. The source here is constrained to the
-    // PDA's ATA, so a non-ATA token account owned by the same PDA would receive the funds into an
-    // account this program can never sign for again: permanently stranded, not merely misdirected.
-    // That defeats the "a wrong address costs one misdirected sweep" framing above, because in that
-    // one case it costs the funds outright. Admin fat-finger only, and cheap to forbid.
+    // Nor a non-ATA owned by the same PDA: the source is the PDA's ATA, so those funds would strand.
     require!(
         ctx.accounts.destination.owner != ctx.accounts.fee_vault_pda.key(),
         DominionError::FeeWithdrawDestinationStranded
@@ -329,22 +197,16 @@ pub fn withdraw_fees_handler(ctx: Context<WithdrawFees>, amount: u64) -> Result<
     )?;
 
     emit!(FeesWithdrawn {
-        // The OWNER, not the token account: the owner is the wallet an operator recognises,
-        // and it is what the panel asked for.
+        // The OWNER, not the token account: that is the wallet an operator recognises.
         destination: ctx.accounts.destination.owner,
         amount,
-        // Computed rather than re-read: `fee_vault.amount` is the pre-CPI snapshot Anchor
-        // deserialized, so re-reading it here would report the stale balance.
+        // Computed, not re-read: `fee_vault.amount` is the pre-CPI snapshot Anchor deserialized.
         remaining: available.saturating_sub(amount),
         by: ctx.accounts.admin.key(),
         timestamp: Clock::get()?.unix_timestamp,
     });
     Ok(())
 }
-
-// ===========================================================================
-// set_fee_routing_enabled: the fee-vault escape hatch
-// ===========================================================================
 
 #[derive(Accounts)]
 pub struct SetFeeRouting<'info> {
@@ -353,32 +215,15 @@ pub struct SetFeeRouting<'info> {
     pub admin: Signer<'info>,
 }
 
-/// Turn premium routing on or off. INSTANT in both directions.
-///
-/// This is the remedy for a fee vault that has become unusable. USDC carries a Circle freeze
-/// authority, and the premium transfer inside mint and redeem is unconditional, so a frozen
-/// fee-vault ATA would otherwise brick mint AND redeem for every non-exempt wallet with no
-/// on-chain fix short of a program upgrade. Exempt wallets would keep working, which makes the
-/// failure asymmetric and hard to diagnose from the outside.
-///
-/// With routing OFF the premium simply stays in the treasury. That is not an untested degraded
-/// mode: it is exactly how this program behaved before 2026-08-05, for its entire prior history.
-///
-/// Instant in BOTH directions, which is unusual here and deliberate:
-///   - OFF is a safety action, and every safety action in this program is instant.
-///   - ON is normally the direction that would earn a timelock, but it cannot lose or misdirect
-///     funds. It only changes which of two PROGRAM-CONTROLLED accounts the premium accrues in,
-///     and both are reachable only by admin instructions that are themselves gated. Making the
-///     restoration slow would mean a day of forgone revenue after an incident is resolved, for
-///     no protection.
-pub fn set_fee_routing_enabled_handler(
-    ctx: Context<SetFeeRouting>,
-    enabled: bool,
-) -> Result<()> {
+/// Turn premium routing on or off. INSTANT both ways. The remedy for an unusable fee vault: USDC has a
+/// Circle freeze authority and the premium transfer inside mint and redeem is unconditional, so a
+/// frozen vault ATA would brick both for every non-exempt wallet with no fix short of an upgrade.
+pub fn set_fee_routing_enabled_handler(ctx: Context<SetFeeRouting>, enabled: bool) -> Result<()> {
     let config = &mut ctx.accounts.config;
-    // The INSTRUCTION takes `enabled` because that is what an operator thinks in; the FIELD is
-    // negated so its zero value is the correct default on an in-place upgrade. The inversion lives
-    // here, in one place, rather than at every read site.
+    // Routing OFF leaves the premium in the treasury, which is the pre-2026-08-05 behaviour; ON cannot
+    // lose funds, it only picks which program-controlled account accrues. The INSTRUCTION takes
+    // `enabled` but the FIELD is negated, so its zero value is the right default on an in-place
+    // upgrade. The inversion lives only here.
     require!(
         enabled == config.fee_routing_disabled,
         DominionError::ProposalNoOp

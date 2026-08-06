@@ -1,59 +1,15 @@
-// admin_premint + set_inventory_wallet: the launch supply model (Mark's Telegram,
-// 2026-06-30). The admin (Ops Squads) pre-mints SILV against the hard supply cap
-// into the inventory wallet, with NO USDC and NO oracle: it is a 1:1 mint against
-// the physical allocation the cap represents. The market maker seeds the DEX from
-// that inventory, and users buy on the secondary market. Public direct mint is
-// CLOSED at launch (mint_silv gates on config.public_mint_enabled), so this admin
-// pre-mint is the only mint path at launch. Public mint opens with KYC in Phase 1.
-//
-// ADMIN-TRUST NOTE (accepted launch risk, flagged in the triple-review): both
-// admin_premint and set_inventory_wallet are instant (admin-only, no timelock). A
-// compromised Ops-Squads admin can set_inventory_wallet(redirect) + admin_premint up
-// to the remaining cap headroom into a redirected wallet in one block. This is BOUNDED
-// by the 100k hard cap (SupplyCapRaiseBlocked prevents raising it). The redirected SILV
-// CANNOT drain the contract treasury: public redeem is closed and re-enabling it is
-// blocked on-chain (RedemptionsEnableBlocked, Codex P0-01 fix), so no redemption can pay
-// out treasury USDC. The residual is that the SILV could be dumped on the DEX (the MM's
-// pool), bounded by the 100k cap. Matches the launch trust model (the multisig admin is
-// trusted to seed inventory). Phase 1 hardening: timelock set_inventory_wallet.
-//
-// ===================================================================
-// SolidProof TrustNet audit (2026-07-24), MEDIUM #3:
-//   "Instant pre-mint to an admin-chosen wallet with no timelock"
-//
-// ACCEPTED, WITH ONE PART FIXED AND ONE PART DEFERRED TO A PRODUCT DECISION.
-//
-// The finding is correct and precisely stated: set_inventory_wallet and
-// admin_premint are both instant, so a compromised admin can redirect the
-// inventory to an address it controls and mint the remaining cap headroom into it
-// in ONE transaction. The auditor also correctly bounds the exposure: the cap
-// cannot be raised instantly (SupplyCapRaiseBlocked), and pre-minted SILV cannot
-// be redeemed for treasury USDC (redemptions are closed and re-enabling them is
-// blocked ON-CHAIN, not by a flag), so the worst case is unbacked SILV dumped on
-// the secondary market, NOT a direct treasury drain.
-//
-// FIXED HERE: the auditor asked for events from both the setter and the pre-mint
-// so a redirect is at least observable. set_inventory_wallet now emits
-// InventoryWalletChanged with the old and new wallet, and admin_premint already
-// emitted PremintEvent carrying the inventory destination.
-//
-// DEFERRED, DELIBERATELY, AND IT IS A PRODUCT DECISION NOT A TECHNICAL ONE:
-// putting set_inventory_wallet behind the 24h timelock. It would close the
-// one-transaction path, and it would also mean that seeding or re-pointing
-// market-maker inventory at launch takes a day. That trade-off is the owner's
-// call, not the auditor's and not mine. Recommendation on the record: adopt it
-// once the inventory wallet is stable, i.e. right after the DEX pool is seeded,
-// because from then on the setter should essentially never be used again and the
-// delay costs nothing.
-//
-// WHY THIS IS SURVIVABLE AT LAUNCH: this is exactly the launch mechanism (mint
-// the physical allocation into inventory, seed the pool), the admin is the same
-// party that would have to be trusted to seed inventory at all, and the cap is a
-// hard ceiling that cannot be lifted. It is a bounded, observable trust
-// assumption, not an unbounded one.
-// ===================================================================
-// admin_premint also does not yet gate on the reserved `mint_paused` field (dormant at
-// launch); the Phase 1 author must wire it, since pre-mint is a mint path.
+// admin_premint + set_inventory_wallet: the launch supply model. The admin mints
+// SILV against the hard supply cap into the inventory wallet with NO USDC and NO
+// oracle, a 1:1 mint against the physical allocation the cap represents. Public
+// direct mint is closed at launch, so this is the only mint path.
+
+// ACCEPTED TRUST, which is why both instructions are admin-only and instant: a
+// compromised admin can set_inventory_wallet(redirect) then admin_premint the
+// remaining cap headroom in one block. Bounded by the 100k oz hard cap, which
+// cannot be raised (SupplyCapRaiseBlocked), and unable to drain the treasury
+// because re-enabling redemptions is blocked on chain (RedemptionsEnableBlocked).
+// Phase 1 should timelock the setter. admin_premint also does not yet gate on the
+// dormant `mint_paused` field; whoever wires it must include this mint path.
 
 use crate::assertions::assert_silv_mint_invariants;
 use crate::cpi::silv_mint_to;
@@ -75,13 +31,8 @@ pub struct AdminPremint<'info> {
     #[account(mut, address = config.silv_mint)]
     pub silv_mint: Box<InterfaceAccount<'info, InterfaceMint>>,
 
-    // The inventory SILV token account. Its owner is validated == config.inventory_wallet
-    // in the handler, so the pre-mint destination is the CURRENTLY-CONFIGURED inventory
-    // wallet, not an arbitrary account. Note: the admin controls config.inventory_wallet
-    // via set_inventory_wallet (instant at launch). See the ADMIN-TRUST note in the file
-    // header: a compromised admin can pre-mint remaining cap headroom to a redirected
-    // inventory wallet. Bounded by the 100k cap + closed public paths; Phase 1 should
-    // timelock set_inventory_wallet.
+    // The handler validates this account's OWNER against config.inventory_wallet, so
+    // the destination is the configured inventory wallet, not an arbitrary account.
     #[account(
         mut,
         token::mint = silv_mint,
@@ -111,11 +62,11 @@ pub fn premint_handler(ctx: Context<AdminPremint>, amount: u64) -> Result<()> {
         DominionError::InvalidInventoryDestination
     );
 
-    // Runtime SILV mint extension + authority assertions (same guard as mint_silv).
+    // Same mint guard as mint_silv.
     assert_silv_mint_invariants(&ctx.accounts.silv_mint, config, ctx.program_id)?;
 
-    // HARD supply cap: the pre-mint counts toward total circulating supply and
-    // cannot push it above the cap (100k oz at launch = the physical allocation).
+    // The pre-mint counts toward circulating supply and may not push it above the
+    // hard cap (100k oz at launch, the size of the physical allocation).
     let supply_post = ctx
         .accounts
         .silv_mint
@@ -127,7 +78,7 @@ pub fn premint_handler(ctx: Context<AdminPremint>, amount: u64) -> Result<()> {
         DominionError::SupplyCapExceeded
     );
 
-    // Mint SILV to the inventory account (PDA-signed; no USDC, no premium, no oracle).
+    // PDA-signed mint. No USDC, no premium, no oracle.
     let bump = ctx.bumps.silv_mint_authority;
     let seeds: &[&[u8]] = &[SILV_MINT_AUTHORITY_SEED, &[bump]];
     let signer_seeds: &[&[&[u8]]] = &[seeds];
@@ -169,11 +120,8 @@ pub fn set_inventory_wallet_handler(
     );
     let old_wallet = ctx.accounts.config.inventory_wallet;
     ctx.accounts.config.inventory_wallet = wallet;
-    // SolidProof MEDIUM #3 + LOW #3. The pre-mint destination can be redirected
-    // instantly and with no timelock, which is the accepted launch trade-off (see
-    // the ADMIN-TRUST note in this file's header). The audit's point stands
-    // regardless: an instant redirect must at minimum be OBSERVABLE, so a monitor
-    // can alert on a redirect it did not authorize even though it cannot block it.
+    // The event is load-bearing, not decoration: an instant redirect cannot be
+    // blocked, so a monitor has to be able to alert on one it did not authorize.
     emit!(InventoryWalletChanged {
         old_wallet,
         new_wallet: wallet,

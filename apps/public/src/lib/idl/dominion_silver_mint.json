@@ -1920,9 +1920,6 @@
         },
         {
           "name": "fee_vault_pda",
-          "docs": [
-            "receives here); it signs only in withdraw_fees."
-          ],
           "pda": {
             "seeds": [
               {
@@ -3325,9 +3322,6 @@
         },
         {
           "name": "fee_vault_pda",
-          "docs": [
-            "this path); it signs only in withdraw_fees."
-          ],
           "pda": {
             "seeds": [
               {
@@ -3743,9 +3737,8 @@
     {
       "name": "remove_guardian",
       "docs": [
-        "AUDIT 0.12b: SCHEDULES a removal (does not apply it). The guardian keeps",
-        "full powers for admin_timelock_seconds and may cancel its own removal, so a",
-        "compromised admin can no longer clear the veto in one signature."
+        "SCHEDULES a removal, does not apply it. The guardian keeps full powers for",
+        "admin_timelock_seconds and may cancel its own removal, so one admin signature cannot clear the veto."
       ],
       "discriminator": [
         72,
@@ -3979,12 +3972,9 @@
     {
       "name": "set_fee_routing_enabled",
       "docs": [
-        "The fee-vault ESCAPE HATCH. Instant in both directions.",
-        "",
-        "With this false the premium stays in the treasury, which is how the program behaved before",
-        "2026-08-05. It exists because USDC carries a Circle freeze authority and the premium",
-        "transfer is unconditional, so a frozen fee vault would otherwise brick mint AND redeem for",
-        "every non-exempt wallet with no on-chain remedy."
+        "The fee-vault ESCAPE HATCH, instant in both directions. With routing off the premium stays in",
+        "the treasury. It exists because USDC carries a Circle freeze authority and the premium transfer",
+        "is unconditional, so a frozen vault would otherwise brick mint AND redeem for non-exempt wallets."
       ],
       "discriminator": [
         101,
@@ -4373,9 +4363,8 @@
     {
       "name": "withdraw_fees",
       "docs": [
-        "Sweep accrued premium out of the program-owned fee vault to a destination chosen per",
-        "call from the admin panel. Instant: the vault backs nothing and `config.admin` is",
-        "already a multisig. See the handler for the full argument."
+        "Sweep accrued premium out of the program-owned fee vault to a destination chosen per call.",
+        "Instant: the vault backs nothing and `config.admin` is already a multisig."
       ],
       "discriminator": [
         198,
@@ -4418,9 +4407,6 @@
         },
         {
           "name": "fee_vault_pda",
-          "docs": [
-            "instruction in which it signs."
-          ],
           "pda": {
             "seeds": [
               {
@@ -6172,22 +6158,8 @@
           {
             "name": "kyc_attestation_count",
             "docs": [
-              "How many `KycAccount`s exist right now. Incremented by `attest_kyc` when it CREATES one,",
-              "decremented by `revoke_kyc` when it closes one.",
-              "",
-              "C-02, and the mechanism BOTH audits recommended over the arming co-signature I shipped first.",
-              "",
-              "The property that matters before closing the KYC gate is not \"some key was able to sign once\", it",
-              "is \"at least one holder can get through\". A co-signature proves the former; this proves the latter.",
-              "It also removes the two-signature transaction the Squads panel cannot assemble, which made the",
-              "co-signature unusable in practice, and it survives the admin rotating the attestor to a dead key",
-              "afterwards, which the co-signature did not.",
-              "",
-              "INTENDED BEHAVIOUR AT ZERO, which is what an in-place upgrade decodes from `reserved`: zero means",
-              "\"no attestations\", and `set_kyc_scope` refuses to arm at zero. That is correct today by fact, not",
-              "just by convention: the gate is dormant and `kyc_operator` is the system program, so no",
-              "`KycAccount` can exist on any cluster. If that ever stops being true, this field has to be",
-              "backfilled BEFORE the upgrade, not after."
+              "Live count of `KycAccount`s (`attest_kyc` creates, `revoke_kyc` closes). `set_kyc_scope` refuses",
+              "to arm at zero. Zero at rest holds only while the gate is dormant: else backfill before upgrading."
             ],
             "type": "u32"
           },
@@ -6240,44 +6212,14 @@
     {
       "name": "FeeExemptAccount",
       "docs": [
-        "Waives the mint premium, the redeem premium, or both, for ONE wallet.",
+        "Waives the mint premium, the redeem premium, or both, for ONE wallet. One account per wallet,",
+        "PDA-derived FROM that wallet, so the seeds bind it and nothing can be spoofed. Mint and redeem",
+        "take it as an OPTION: omitting it pays the full fee, which is the safe default.",
         "",
-        "Requested by Mark 2026-07-30 (\"we need to be able to whitelist specific wallets to",
-        "bypass the fee\"), with the per-side split added by Thomas 2026-08-05 so the admin panel",
-        "chooses which fee is waived. Market makers seeding and rebalancing the DEX pool are the",
-        "motivating case: charging them 1% each way widens the spread they can quote for",
-        "everybody else.",
-        "",
-        "One account PER wallet, PDA-derived FROM that wallet. That shape is deliberate:",
-        "",
-        "- It scales without bound. A fixed-size array inside ConfigAccount would cap the list",
-        "and eat the `reserved` bytes Phase 2 still needs.",
-        "- The PDA seeds BIND the account to the wallet, so a caller cannot present somebody",
-        "else's exemption. There is nothing to spoof.",
-        "- Mint and redeem take it as an OPTION. A caller who omits it simply pays the fee,",
-        "which is the safe default: forgetting the account can never accidentally exempt",
-        "anyone, and the fee-paying path is the one that needs no privileges.",
-        "",
-        "Both add and remove are INSTANT admin actions, deliberately NOT timelocked, which is a",
-        "departure from how this program treats other loosenings. The stated reason is that the worst",
-        "case is FOREGONE FEE REVENUE rather than a loss of principal or backing: an exempt wallet still",
-        "pays the full oracle price for its SILV and still receives the full oracle price when redeeming.",
-        "",
-        "THAT IS NOT THE WHOLE TRUTH, and the review-of-fixes was right to call it out. The KNOWN",
-        "CONSEQUENCE paragraph below describes a both-sides exemption handing its holder a free option on",
-        "oracle movement PAID BY THE TREASURY, which is a transfer of value, not merely revenue not",
-        "collected. Both statements cannot be true, and the second is the accurate one.",
-        "",
-        "Instant is probably still the right call for onboarding a market maker, but it rests on the",
-        "per-side flags being used properly (mint-only) rather than on the exposure being nil.",
-        "",
-        "KNOWN CONSEQUENCE, flagged to Thomas 2026-08-05 and accepted: a wallet exempt on BOTH",
-        "sides can mint at exact spot and redeem at exact spot, so its round trip is free. That",
-        "hands it a free option on oracle movement, paid by the treasury: with the normal fees a",
-        "round trip must overcome ~2.5% before it profits, at 0% any favourable move is profit.",
-        "The per-side flags are the mitigation, because exempting the MINT side only leaves the",
-        "redeem fee as the cost of closing the loop. Prefer `SIDE_MINT_BIT` alone unless there is",
-        "a specific reason to waive both."
+        "Grant and revoke are both INSTANT, and the exposure is NOT nil. A wallet exempt on BOTH sides",
+        "mints and redeems at exact spot, so its round trip is free and it holds a free option on oracle",
+        "movement paid by the treasury: normally a round trip must clear the ~2.485% fee band first.",
+        "Prefer `SIDE_MINT_BIT` alone, which leaves the redeem fee as the cost of closing the loop."
       ],
       "type": {
         "kind": "struct",
@@ -6292,8 +6234,8 @@
           {
             "name": "flags",
             "docs": [
-              "Bitfield over `Side`. See state/side.rs. Never zero: a zero-flag exemption is",
-              "rejected on write, because it would be dead rent that still shows up in a roster."
+              "Bitfield over `Side` (state/side.rs): 1 = mint, 2 = redeem, 3 = both. Never zero, since a",
+              "zero-flag exemption would be dead rent that still shows up in a roster."
             ],
             "type": "u8"
           },
@@ -6304,8 +6246,7 @@
           {
             "name": "added_by",
             "docs": [
-              "Who granted it. Kept for forensics: an unexplained exemption is a red flag, and the",
-              "event alone stops being enough once RPC logs age out."
+              "Who granted it. Kept for forensics, since the event alone ages out with the RPC logs."
             ],
             "type": "pubkey"
           },
@@ -6319,41 +6260,16 @@
               "Unix timestamp after which this exemption stops applying. MANDATORY, strictly in the future,",
               "at most `MAX_FEE_EXEMPT_TERM_SECONDS` out. **0 grants NOTHING** (see `is_expired`).",
               "",
-              "A6, and the rationale has now been corrected TWICE. Worth keeping both corrections visible,",
-              "because the second one is a case of an argument surviving after its premise died.",
-              "",
-              "Correction 1 (review-of-fixes). The first note claimed the expiry bounded a COMPROMISED ADMIN:",
-              "\"until someone notices\" becoming \"until the clock runs out\". It does not. The admin CHOOSES",
-              "`expires_at`, so against a compromised admin the term adds nothing. What it genuinely bounds is",
-              "FORGETFULNESS: an arrangement that ends, a counterparty that stops providing liquidity, a",
-              "launch-window favour nobody revisits. Real, common, worth eight bytes, but an OPERATIONAL",
-              "control and not a security one, and it must not be cited as the latter.",
-              "",
-              "Correction 2 (external audit C-01, 2026-08-06). This note then argued that 0 \"stays permitted",
-              "because a genuinely indefinite exemption is a real operational choice\", and closed with: \"An",
-              "in-place upgrade over an existing exemption decodes this as 0 from the zeroed `reserved`, i.e.",
-              "never expires, which preserves the current behaviour of every live exemption.\"",
-              "",
-              "That last sentence was FALSE and it was doing the persuading. `FeeExemptAccount` is introduced",
-              "BY this upgrade. There are no existing exemptions, no live ones, and no current behaviour to",
-              "preserve. I invented a migration constraint and then deferred to it.",
-              "",
-              "With that gone, nothing was left holding zero up. Against it: the audit brief asserted the",
-              "expiry was mandatory (so the code contradicted its own documentation), the admin panel field",
-              "read \"type 0 for never\" (so it was the path of least resistance, not a corner case), and a",
-              "permanent both-sides exemption erases the 2.485% round-trip fee band that is the only thing",
-              "making oracle movement unprofitable to farm at the treasury's expense.",
-              "",
-              "So it is mandatory now. If an indefinite arrangement is ever genuinely wanted, renewing a",
-              "two-year term is one instant transaction, and the renewal is the review that never happened."
+              "The term bounds FORGETTING (an arrangement that ends, a launch-window favour nobody revisits),",
+              "not a compromised admin, who picks the number. An indefinite arrangement is renewed by one",
+              "instant transaction, and that renewal is the review the term exists to force."
             ],
             "type": "i64"
           },
           {
             "name": "reserved",
             "docs": [
-              "Room for a future per-wallet fee OVERRIDE (a reduced rate rather than zero) without",
-              "changing the account size."
+              "Room for a future per-wallet fee OVERRIDE (a reduced rate rather than zero)."
             ],
             "type": {
               "array": [
@@ -6661,56 +6577,7 @@
     {
       "name": "KycAccount",
       "docs": [
-        "A per-wallet KYC attestation. DORMANT at launch: the on-chain mechanism ships in the",
-        "pre-mainnet upgrade (2026-08-05) with `config.kyc_scope_flags == 0`, so nothing is",
-        "gated until Mark's off-chain provider exists and the admin arms it.",
-        "",
-        "# Why it ships dormant instead of later",
-        "",
-        "SolidProof audited an older version of this program. Every upgrade after launch is",
-        "either unaudited or costs another audit round. Shipping the gate now, switched off,",
-        "means arming it later is a config change rather than a new contract version. It is also",
-        "nearly free to build alongside the fee-exemption whitelist, which has the identical",
-        "shape (one PDA per wallet, admin-managed, optional account on mint and redeem).",
-        "",
-        "# THE PII RULE, and it is not negotiable",
-        "",
-        "Nothing on this account identifies a person. Not a name, not an email, not a document",
-        "number, and NOT A HASH of any of those: an email hash is trivially reversed by brute",
-        "force because the input space is small and guessable. `reference` holds a hash of the",
-        "PROVIDER'S INTERNAL RECORD ID, which is high-entropy and meaningless without the",
-        "provider's own database.",
-        "",
-        "This matters because on-chain data is permanent and world-readable. A GDPR erasure",
-        "request cannot be honoured on Solana. Of everything in this batch it is the only part",
-        "that is genuinely unfixable if it is got wrong, which is why the constraint lives here",
-        "in the type rather than in a document somebody may not read.",
-        "",
-        "# What the off-chain side must produce for this to work",
-        "",
-        "The contract deliberately depends on the SMALLEST possible fact: \"this wallet is",
-        "approved, attested by this key, referencing record H\". It never learns who the person",
-        "is, which provider was used, or which jurisdiction applies. That is what makes it",
-        "provider-agnostic: whatever Mark picks, and whatever he switches to later, plugs in",
-        "without touching this code.",
-        "",
-        "The interface Mark's flow must satisfy is three items, one of which is easy to miss:",
-        "",
-        "1. The Solana wallet address.",
-        "2. The provider's record id, hashed into `reference`.",
-        "3. **Proof that the approved person controls that wallet.** A KYC provider verifies a",
-        "PERSON, not a WALLET. Without a step where the user signs a nonce with the wallet",
-        "and the backend verifies that signature before attesting, wallet X gets approved",
-        "for person A and person B uses it. The gate is then decorative. This program cannot",
-        "check it, which is exactly why it has to be stated as a requirement on the",
-        "off-chain side.",
-        "",
-        "# Operational footgun",
-        "",
-        "Write attestations BEFORE arming `kyc_scope_flags`. Arming the gate first locks out",
-        "every existing holder instantly, because none of them has an attestation yet.",
-        "`set_kyc_scope` refuses to arm while `config.kyc_operator` is unset, which catches the",
-        "worst version of this mistake but not the general one."
+        "A per-wallet KYC attestation. The account existing IS the approval. Never holds PII."
       ],
       "type": {
         "kind": "struct",
@@ -6729,19 +6596,14 @@
           {
             "name": "attestor",
             "docs": [
-              "The attestor key that wrote this record. Kept per-record rather than trusting the",
-              "current `config.kyc_operator`, so rotating the operator does not retroactively",
-              "change who is on the hook for an approval, and a compromised-key incident can be",
-              "scoped to the records that key actually wrote."
+              "The key that wrote this record. Per record, so rotating the operator does not reassign past approvals."
             ],
             "type": "pubkey"
           },
           {
             "name": "reference",
             "docs": [
-              "Opaque 32 bytes: a hash of the PROVIDER'S RECORD ID. Never PII. See the type docs.",
-              "All-zero is permitted and means \"no reference supplied\", which a manual approval",
-              "process may legitimately have."
+              "Hash of the PROVIDER'S RECORD ID, never PII. All-zero means \"no reference supplied\"."
             ],
             "type": {
               "array": [
@@ -6757,8 +6619,7 @@
           {
             "name": "reserved",
             "docs": [
-              "Room for an expiry (periodic re-screening is normal in this domain) or a risk tier,",
-              "without changing the account size."
+              "Room for an expiry or a risk tier without changing the account size."
             ],
             "type": {
               "array": [
@@ -7248,9 +7109,8 @@
           {
             "name": "large_redeem_threshold_usdc",
             "docs": [
-              "DEAD since 2026-08-05 (the per-size tier was removed with the queue). Still accepted",
-              "and still applied to the now-unread config field, because removing it would change",
-              "this struct's borsh layout. See the note on `redemptions_enabled` below."
+              "DEAD since 2026-08-05 (removed with the queue). Still accepted and still written to the",
+              "now-unread config field, because removing it would change this struct's borsh layout."
             ],
             "type": {
               "option": "u64"
@@ -7268,25 +7128,8 @@
           {
             "name": "redemptions_enabled",
             "docs": [
-              "THE REDEEM SWITCH (Thomas, 2026-08-05). Appended, deliberately, to this action rather",
-              "than given its own timelocked instruction and its own `pending_*_nonce`.",
-              "",
-              "Why it belongs here: enabling redemptions IS loosening a redeem throttle, which is",
-              "precisely what this action exists for. It gets the 24h delay, the guardian-cancel",
-              "window, the single-active-nonce guard and the ceiling re-validation for free, and it",
-              "adds no bytes to ConfigAccount, whose `reserved` is down to 53.",
-              "",
-              "`Some(false)` counts as a TIGHTEN, so it is also available on the instant",
-              "`emergency_tighten_redeem_limits` path, alongside the dedicated",
-              "`set_redemptions_enabled(false)`. `Some(true)` is a LOOSEN and is refused there.",
-              "",
-              "BORSH CAVEAT, worth knowing before appending anything else here: this struct is",
-              "serialized into `TimelockQueueAccount.action_data`, so appending a field makes any",
-              "proposal that was queued under the OLD layout fail to deserialize at execute",
-              "(`SerializationFailure`), because the stored bytes are one short. Cancelling such a",
-              "proposal still works, since `cancel_timelocked_action` never decodes `action_data`.",
-              "Before deploying this upgrade, check for a live SetRedeemLimits proposal and cancel it",
-              "rather than leaving it stuck."
+              "THE REDEEM SWITCH. Enabling redemptions is a LOOSENING, so it rides this timelocked action;",
+              "`Some(false)` is a tighten and is also accepted by `emergency_tighten_redeem_limits`."
             ],
             "type": {
               "option": "bool"

@@ -35,9 +35,8 @@ export function Dashboard() {
   const { connection } = useConnection();
   const [tab, setTab] = useState<TabId>("overview");
 
-  // The public devnet RPC rate-limits heavy reads. Keep the lightweight
-  // snapshot resilient (retry + keep last good data) so a transient
-  // "Failed to fetch" auto-recovers instead of nuking the page.
+  // The public devnet RPC rate-limits heavy reads, so retry and keep the last good data: a transient
+  // "Failed to fetch" must auto-recover instead of blanking the page.
   const { data, error } = useSWR<DashboardSnapshot | null>(
     "dominion-dashboard",
     () => fetchDashboardSnapshot(connection),
@@ -50,15 +49,10 @@ export function Dashboard() {
       errorRetryInterval: 2_500,
     },
   );
-  // Only fire the heavy redemption-list query AFTER the snapshot loads, and
-  // refresh it slowly, so the two don't saturate the RPC together.
-  // The fetcher THROWS on failure (P2-01 review-of-fixes). With
-  // real burned-SILV IOUs with a degraded banner instead of an empty queue.
-  // AUDIT review of daac4ac (P1): `pending_removal_at` was written on-chain and
-  // read by neither app. DOM-007's security property is that the TARGETED guardian
-  // has a full timelock window to react, which requires the console to show that a
-  // removal exists and when it fires. Cheap query (a handful of small accounts),
-  // and it is the only place a guardian can see it is under notice.
+  // Gated on the snapshot and refreshed slowly so the two queries never saturate the RPC together. The
+  // fetcher THROWS on failure rather than returning [], because an unknown roster must not render as a
+  // known-empty one. This is the only surface that shows `pending_removal_at`, and DOM-007's guarantee
+  // is that a TARGETED guardian can see its own notice and react inside the timelock window.
   const { data: guardians, error: guardiansError } = useSWR<GuardianView[]>(
     data ? "dominion-guardians" : null,
     () => fetchGuardians(connection, data?.cfg.admin),
@@ -89,11 +83,9 @@ export function Dashboard() {
 
   return (
     <div className="space-y-6">
-      {/* AUDIT FINDING A-01. The snapshot used to convert a failed treasury or supply read into zero and
-          return successfully, so the operator saw Treasury $0 / supply 0 oz / 0% cap used with no
-          warning and could act on it: a withdrawal, a premint, an opening, all decided on numbers that
-          were never read. This banner sits above the tabs deliberately, because the figures it taints
-          are spread across several of them and a per-tile marker is missable. */}
+      {/* A failed read renders as zero, so it MUST be announced: an operator cannot be allowed to
+          withdraw or premint on a Treasury $0 that was never read. Above the tabs on purpose, because
+          the tainted figures are spread across several of them and a per-tile marker is missable. */}
       {data.degraded.length > 0 && (
         <div className="rounded-md border border-danger bg-danger/10 p-4 text-sm text-danger">
           <div className="font-semibold">
@@ -270,17 +262,10 @@ function OverviewTab({ data }: { data: DashboardSnapshot }) {
 /* ---------------- Premium fee vault ---------------- */
 
 /**
- * The fee vault, and specifically whether it EXISTS.
- *
- * This panel is here because `fetchFeeVaultBalance` was written to surface a deploy blocker and
- * then never called from anywhere, so the blocker stayed invisible: `mint_silv` and `redeem_silv`
- * both take the vault as a REQUIRED account, and if it does not exist every mint and every redeem
- * reverts with a constraint error that reads like a client bug. An operator had no way to check
- * the precondition before opening the mint.
- *
- * Hence the deliberate three-state render. `null` is NOT "zero": it means the account is absent
- * and the protocol is one open away from being unusable, so it gets a danger banner and the fix
- * command, not a dash.
+ * The fee vault, and specifically whether it EXISTS. Three states, and `null` is NOT zero: it means the
+ * account is absent, and since `mint_silv` and `redeem_silv` both take it as a REQUIRED account, every
+ * mint and redeem then reverts with what looks like a client bug. That state gets a danger banner and
+ * the fix command, never a dash, because it is a launch blocker an operator must check before opening.
  */
 function FeeVault() {
   const { connection } = useConnection();
@@ -358,11 +343,9 @@ function RedemptionsTab({
   return (
     <div className="space-y-6">
       <Section title="Redemption routing">
-        {/* "Large-redeem threshold" and "Queue delay" REMOVED 2026-08-05. Both fields still
-            decode and still hold their old defaults, but no on-chain instruction reads them, and
-            their tips described a queue that no longer exists. They sat immediately above the
-            panel that says the queue was deleted, so the operator got two contradictory answers
-            on one screen and the wrong one rendered as a live metric. */}
+        {/* Do not render `largeRedeemThresholdUsdc` or the queue delay here. Both still decode and still
+            hold their old defaults, but no instruction reads them, so they render as live metrics that
+            contradict the panel below saying the queue is gone. */}
         <Metric
           title="Instant budget per window"
           value={`$${formatUsdc(cfg.instantRedeemBudgetUsdc)}`}
@@ -396,14 +379,9 @@ function RedemptionsTab({
   );
 }
 
-// The QUEUED redemption path was DELETED on 2026-08-05: redemption is now a single instant
-// route, so the program has no RedemptionRequest account type left and there is nothing to
-// list here.
-//
-// This panel is KEPT rather than deleted, on purpose. An operator who remembers the queue
-// would otherwise find the tab silently missing a section and wonder whether it failed to
-// load. It also states what replaced the queue, because "the queue is gone" on its own invites
-// the wrong mental model: the limits did not disappear, they changed shape.
+// The program has no RedemptionRequest type left, so there is nothing to list. This panel is kept
+// deliberately: an operator who remembers the queue would otherwise read a missing section as a failed
+// load, and needs to be told what replaced it, since the limits changed shape rather than disappeared.
 function RedemptionQueue() {
   return (
     <div className="rounded-xl border border-border bg-card p-6">
@@ -632,13 +610,9 @@ function HelpTab() {
 }
 
 /**
- * The guardian roster, with the removal countdown.
- *
- * AUDIT review of daac4ac (P1): DOM-007 defers guardian removal so the TARGETED
- * guardian has a full timelock window to react, including cancelling its own
- * removal. That property is worthless if the guardian cannot see it is under notice,
- * and `pending_removal_at` was read nowhere in either app. This is the only surface
- * that shows it.
+ * The guardian roster, with the removal countdown. DOM-007 defers removal so the TARGETED guardian can
+ * react inside the timelock window, including cancelling its own removal once, which is worthless if it
+ * cannot see the notice. This is the only surface that reads `pending_removal_at`.
  */
 function GuardianRoster({
   guardians,
@@ -647,12 +621,8 @@ function GuardianRoster({
   guardians: GuardianView[];
   degraded: boolean;
 }) {
-  // Review-of-fixes F4: the fetch error used to be DISCARDED, so any RPC failure
-  // (devnet 429, a transient getProgramAccounts error) rendered the affirmative claim
-  // below. A guardian actually under notice would have been told, positively, that no
-  // guardians exist. That is the same failure this panel was built to fix ("a veto
-  // nobody can see is not a veto"), inverted into a veto the console denies exists.
-  // An unknown state must never be reported as a known-empty one.
+  // An unknown roster must never be reported as a known-empty one. Discarding the fetch error let any
+  // RPC failure render the affirmative "no guardians exist" claim below, at a guardian under notice.
   if (degraded && !guardians.length) {
     return (
       <Section title="Guardian roster">
@@ -700,10 +670,9 @@ function GuardianRoster({
                   </td>
                   <td className="py-2 pr-4">
                     {g.inertBecauseAdmin ? (
-                      // The state guardian_count cannot express: registered, not in
-                      // cooldown, and yet refused by every authorization site because
-                      // this key IS the admin. Called out loudly, because the count
-                      // claims a veto that no independent key can exercise.
+                      // The state guardian_count cannot express: registered and not in cooldown, yet
+                      // refused by every authorization site because this key IS the admin. Loud,
+                      // because the count claims a veto no independent key can exercise.
                       <span className="text-red-400">
                         INERT: this key is the admin
                       </span>
@@ -722,11 +691,8 @@ function GuardianRoster({
                     {untilRemoval === null ? (
                       <span className="text-muted">not scheduled</span>
                     ) : g.removalExpired ? (
-                      // Review-of-fixes: without this branch the cell said "due now,
-                      // anyone may finalize" forever, including long after the notice
-                      // died. finalize then reverts GuardianRemovalExpired, so the one
-                      // surface built to make the veto visible was misreporting the
-                      // rule shipped alongside it.
+                      // Distinct from "due now": past the expiry, finalize reverts
+                      // GuardianRemovalExpired and a new removal must be scheduled.
                       <span className="text-muted">
                         notice EXPIRED, no longer finalizable (schedule a new one)
                       </span>

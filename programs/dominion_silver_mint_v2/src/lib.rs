@@ -1,6 +1,6 @@
 // Dominion Silver mint/redeem program.
 // 1 SILV = 1 troy oz physical LBMA silver.
-// USDC in (classic SPL Token) <-> SILV out (SPL Token-2022) at Pyth XAG/USD price + premium.
+// USDC in (classic SPL Token) <-> SILV out (SPL Token-2022) at the Pyth Lazer silver price + premium.
 // See PLAN.md in repo root for design rationale.
 
 use anchor_lang::prelude::*;
@@ -10,16 +10,11 @@ pub mod cpi;
 pub mod errors;
 pub mod events;
 pub mod instructions;
-// Pyth Lazer (Pyth Pro) dependency-free payload parser, wired into the oracle
-// path via oracle.rs (the Core -> Lazer migration, private/PYTH_PRO_MIGRATION_
-// PLAN.md). The official pyth-lazer-protocol crate does not build for SBF
-// (off-chain dep tree), hence this hand-roll; it is machine-verified against
-// that crate's wire format in tools/lazer-verify.
+// Pyth Lazer: a hand-rolled payload parser (the official crate does not build for SBF; this one is
+// machine-verified against its wire format in tools/lazer-verify), the verify_message CPI wrapper
+// plus isolated fee-payer PDA, and the oracle policy. All wired by oracle.rs.
 pub mod lazer;
-// Pyth Lazer verify_message CPI wrapper + isolated fee-payer PDA (Section 5.2).
-// Runtime-verified end-to-end by the litesvm harness (tools/lazer-harness).
 pub mod lazer_cpi;
-// Pyth Lazer oracle policy + pricing (Sections 5.4-5.6), wired by oracle.rs.
 pub mod lazer_price;
 pub mod math;
 pub mod oracle;
@@ -27,15 +22,10 @@ pub mod state;
 
 use instructions::*;
 
-// CODEX P0-01: V2 is a MANDATORY fresh deploy under a NEW program ID (the
-// V1/V2 ConfigAccount layout is incompatible; the whole "no stale V1 state"
-// safety hypothesis depends on this ID NOT being the V1 ID
-// J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5).
-// 2026-06-10 PYTH LAZER: the Lazer migration changed the ConfigAccount layout
-// AGAIN (pyth_feed_id[32]+receiver -> pyth_lazer_feed_id[u32]+min_publishers),
-// so the old V2 config at GDN5ktEm88... is incompatible -> another fresh deploy
-// under a new ID. Old V2/Core devnet id (retired): GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX.
-// Keypair: target/deploy/dominion_silver_mint_v2-keypair.json (gitignored).
+// This id MUST be a fresh deploy: the ConfigAccount layout is incompatible with V1 and with the
+// pre-Lazer V2, and the "no stale state" hypothesis depends on the id being neither. Retired ids: V1
+// J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5, pre-Lazer V2
+// GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX. Keypair: target/deploy (gitignored).
 declare_id!("6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh");
 
 #[program]
@@ -63,18 +53,9 @@ pub mod dominion_silver_mint {
         )
     }
 
-    // Redeem is a SINGLE INSTANT ROUTE. Burn SILV, receive USDC, same transaction.
-    //
-    // AUDIT D-04: this comment used to end "A redeem that must queue reverts MustUseQueue; the client
-    // then calls `redeem_silv_queued`." Both halves are gone: there is no MustUseQueue and no
-    // `redeem_silv_queued`. It sat on the PUBLIC API of the program, which is the worst place for it,
-    // because an integrator reading the entrypoint would build a queue client against an instruction
-    // that does not exist.
-    //
-    // What a redeem that cannot be served does instead: it REVERTS. Over the rolling window budget it
-    // is InstantRedeemBudgetExceeded, over the treasury it is InsufficientTreasury, and the client's
-    // `classifyRedeem` predicts both before the user signs so they are not paying a Lazer fee to
-    // discover it.
+    // Redeem is a SINGLE INSTANT ROUTE: burn SILV, receive USDC, same transaction. There is no queue
+    // and no queued instruction. A redeem that cannot be served REVERTS (over the rolling-window
+    // budget, or over the treasury balance); the client's `classifyRedeem` predicts both before signing.
     pub fn redeem_silv(
         ctx: Context<RedeemSilv>,
         amount_silv: u64,
@@ -93,24 +74,12 @@ pub mod dominion_silver_mint {
         )
     }
 
-    // REMOVED 2026-08-05, with the whole queued-redemption lifecycle:
-    //   redeem_silv_queued, claim_redemption, admin_settle_redemption_offchain,
-    //   close_settled_redemption.
-    //
-    // Redemption is now a single instant route (`redeem_silv`). Removing
-    // `admin_settle_redemption_offchain` also removes SolidProof TrustNet MEDIUM #4, where the
-    // admin could mark a request settled with no on-chain proof while the user's SILV was
-    // already burned. That finding is now absent from the program rather than justified in an
-    // audit response.
-    //
-    // Removing instructions is an ABI-breaking change. It is free here because redemptions
-    // were never enabled on any cluster: `set_redemptions_enabled` has always refused `true`,
-    // so no client ever successfully called any of the four, and no RedemptionRequest account
-    // exists anywhere.
+    // REMOVED 2026-08-05 with the queued-redemption lifecycle: redeem_silv_queued, claim_redemption,
+    // admin_settle_redemption_offchain, close_settled_redemption. Removing instructions is ABI-breaking;
+    // it was free because redemptions were never enabled on any cluster, so no request account exists.
 
-    // === Fee-exemption whitelist (Mark 2026-07-30, per-side split by Thomas 2026-08-05) ===
-    // Both instant. Rationale at the handlers: the worst case is foregone revenue, not a loss
-    // of principal, which is a different risk class from the loosenings this program delays.
+    // === Fee-exemption whitelist (per-side flags) ===
+    // Both instant: the worst case is foregone revenue, not lost principal. Rationale at the handlers.
 
     /// `expires_at` is a unix timestamp, or 0 for "never expires". An expiry already in the past
     /// is rejected: it would grant nothing while appearing in every roster as active.
@@ -127,30 +96,22 @@ pub mod dominion_silver_mint {
         instructions::admin::fee_whitelist::remove_fee_exempt_handler(ctx, wallet)
     }
 
-    /// Sweep accrued premium out of the program-owned fee vault to a destination chosen per
-    /// call from the admin panel. Instant: the vault backs nothing and `config.admin` is
-    /// already a multisig. See the handler for the full argument.
+    /// Sweep accrued premium out of the program-owned fee vault to a destination chosen per call.
+    /// Instant: the vault backs nothing and `config.admin` is already a multisig.
     pub fn withdraw_fees(ctx: Context<WithdrawFees>, amount: u64) -> Result<()> {
         instructions::admin::fee_whitelist::withdraw_fees_handler(ctx, amount)
     }
 
-    /// The fee-vault ESCAPE HATCH. Instant in both directions.
-    ///
-    /// With this false the premium stays in the treasury, which is how the program behaved before
-    /// 2026-08-05. It exists because USDC carries a Circle freeze authority and the premium
-    /// transfer is unconditional, so a frozen fee vault would otherwise brick mint AND redeem for
-    /// every non-exempt wallet with no on-chain remedy.
-    pub fn set_fee_routing_enabled(
-        ctx: Context<SetFeeRouting>,
-        enabled: bool,
-    ) -> Result<()> {
+    /// The fee-vault ESCAPE HATCH, instant in both directions. With routing off the premium stays in
+    /// the treasury. It exists because USDC carries a Circle freeze authority and the premium transfer
+    /// is unconditional, so a frozen vault would otherwise brick mint AND redeem for non-exempt wallets.
+    pub fn set_fee_routing_enabled(ctx: Context<SetFeeRouting>, enabled: bool) -> Result<()> {
         instructions::admin::fee_whitelist::set_fee_routing_enabled_handler(ctx, enabled)
     }
 
-    // === KYC gate (shipped 2026-08-05, DORMANT: kyc_scope_flags == 0) ===
-    // Arming it later is a config change rather than a program upgrade and a second audit,
-    // which is the entire reason it ships now. The attestor key can ONLY write and revoke
-    // attestations: it cannot mint, pause, move funds, change a fee, or arm the gate.
+    // === KYC gate (DORMANT: kyc_scope_flags == 0) ===
+    // It ships now so arming it later is a config change, not a program upgrade plus a second audit. The
+    // attestor key can ONLY write and revoke attestations: it cannot mint, pause, move funds or arm it.
 
     pub fn set_kyc_operator(ctx: Context<SetKycOperator>, operator: Pubkey) -> Result<()> {
         instructions::admin::kyc_admin::set_kyc_operator_handler(ctx, operator)
@@ -193,8 +154,7 @@ pub mod dominion_silver_mint {
 
     // === Admin: instant ===
 
-    // Option B instant param setters (§6, no timelock, bounded by compile-time
-    // ceilings - D14). Replaces the Option A per-tx/daily/hourly cap setters.
+    // Instant param setters: no timelock, bounded by the compile-time ceilings in state/config.rs.
 
     pub fn set_max_silv_supply(ctx: Context<SetMaxSupply>, new_max: u64) -> Result<()> {
         instructions::admin::caps::set_max_silv_supply_handler(ctx, new_max)
@@ -210,12 +170,8 @@ pub mod dominion_silver_mint {
         instructions::admin::caps::set_redemptions_enabled_handler(ctx, enabled)
     }
 
-    // FIX A (launch spec 2026-07): the four redeem throttles
-    // (instant_redeem_budget, instant_redeem_window, large_redeem_threshold,
-    // redeem_queue_delay) are loosen-slow / tighten-fast. This is the ONLY instant
-    // path and it accepts safe-direction (tighten) values only; LOOSENING goes
-    // through the 24h-timelocked propose/execute_set_redeem_limits below. Replaces
-    // the four individual instant setters (which were instant loosen holes).
+    // FIX A: the redeem throttles are loosen-slow / tighten-fast. This is the ONLY instant path and it
+    // takes tighten-direction values only; LOOSENING goes through propose/execute_set_redeem_limits.
     pub fn emergency_tighten_redeem_limits(
         ctx: Context<SetParam>,
         args: instructions::admin::execute::RedeemLimitsArgs,
@@ -223,9 +179,8 @@ pub mod dominion_silver_mint {
         instructions::admin::caps::emergency_tighten_redeem_limits_handler(ctx, args)
     }
 
-    // Launch spec 2026-07: the pre-mint supply model (Mark's Telegram 2026-06-30).
-    // admin_premint mints SILV against the hard cap into the inventory wallet with
-    // no USDC and no oracle; set_inventory_wallet sets the destination (late-binding).
+    // Pre-mint supply model: admin_premint mints SILV against the hard cap into the inventory wallet
+    // with no USDC and no oracle read; set_inventory_wallet sets the destination (late-binding).
     pub fn set_inventory_wallet(ctx: Context<SetInventoryWallet>, wallet: Pubkey) -> Result<()> {
         instructions::admin::premint::set_inventory_wallet_handler(ctx, wallet)
     }
@@ -234,17 +189,15 @@ pub mod dominion_silver_mint {
         instructions::admin::premint::premint_handler(ctx, amount)
     }
 
-    /// DEV ONLY: bumps max_staleness_seconds without timelock.
-    /// CODEX P0-02: compiled ONLY under the non-default `dev-hatch` feature -
-    /// absent from release/deploy builds + the generated IDL.
+    /// DEV ONLY: bumps max_staleness_seconds without timelock. Compiled only under the non-default
+    /// `dev-hatch` feature, so it is absent from release/deploy builds and from the generated IDL.
     #[cfg(feature = "dev-hatch")]
     pub fn dev_set_max_staleness(ctx: Context<DevSetOracleParam>, secs: u32) -> Result<()> {
         instructions::admin::dev::dev_set_max_staleness_handler(ctx, secs)
     }
 
-    /// DEV ONLY: sets premium_bps_mint + premium_bps_redeem without timelock.
-    /// CODEX P0-02: compiled ONLY under the non-default `dev-hatch` feature -
-    /// absent from release/deploy builds + the generated IDL.
+    /// DEV ONLY: sets premium_bps_mint + premium_bps_redeem without timelock. Compiled only under the
+    /// non-default `dev-hatch` feature, so it is absent from release builds and from the IDL.
     #[cfg(feature = "dev-hatch")]
     pub fn dev_set_premiums(
         ctx: Context<DevSetOracleParam>,
@@ -254,9 +207,8 @@ pub mod dominion_silver_mint {
         instructions::admin::dev::dev_set_premiums_handler(ctx, mint_bps, redeem_bps)
     }
 
-    /// TEST-HARNESS ONLY (feature `test-harness`). Read-only: drives the Lazer
-    /// oracle read path in isolation + returns the price via return-data.
-    /// Absent from release/deploy builds + the generated IDL.
+    /// TEST-HARNESS ONLY (feature `test-harness`), absent from release builds and the IDL. Read-only:
+    /// drives the Lazer oracle read path in isolation and returns the price via return-data.
     #[cfg(feature = "test-harness")]
     pub fn probe_oracle_price(
         ctx: Context<ProbeOraclePrice>,
@@ -276,9 +228,8 @@ pub mod dominion_silver_mint {
         instructions::admin::guardian::add_handler(ctx, guardian_pubkey)
     }
 
-    /// AUDIT 0.12b: SCHEDULES a removal (does not apply it). The guardian keeps
-    /// full powers for admin_timelock_seconds and may cancel its own removal, so a
-    /// compromised admin can no longer clear the veto in one signature.
+    /// SCHEDULES a removal, does not apply it. The guardian keeps full powers for
+    /// admin_timelock_seconds and may cancel its own removal, so one admin signature cannot clear the veto.
     pub fn remove_guardian(ctx: Context<RemoveGuardian>, guardian_pubkey: Pubkey) -> Result<()> {
         instructions::admin::guardian::remove_handler(ctx, guardian_pubkey)
     }
@@ -318,15 +269,10 @@ pub mod dominion_silver_mint {
         instructions::admin::timelock::cancel_handler(ctx, nonce)
     }
 
-    // Freeze / thaw are NOT Dominion-program instructions. The SILV mint carries a
-    // freeze_authority = the compliance multisig (launch spec 2026-07: Mark confirmed
-    // the freeze lever), so freezing/thawing a specific token account is done directly
-    // via the SPL Token-2022 FreezeAccount / ThawAccount instructions signed by that
-    // multisig (e.g. a Squads tx), exactly as the seize/clawback is done directly via
-    // the PermanentDelegate (D12). Neither lever needs a wrapper instruction here, and
-    // neither changes the mint-level authorities that assertions.rs pins every call.
-    // (The old instructions/admin/thaw.rs dead-code file was removed in the Option B
-    // teardown; it is intentionally not reintroduced.)
+    // Freeze / thaw are NOT Dominion instructions, deliberately. The SILV mint's freeze_authority is
+    // the compliance multisig, so freezing or thawing an account is done with direct Token-2022
+    // FreezeAccount / ThawAccount transactions signed by that multisig, exactly as seize/clawback goes
+    // directly through the PermanentDelegate (D12). Neither changes the authorities assertions.rs pins.
 
     // === Admin: timelocked propose/execute ===
 
@@ -385,8 +331,7 @@ pub mod dominion_silver_mint {
         instructions::admin::execute::execute_set_oracle_guards_handler(ctx, nonce)
     }
 
-    // FIX A (launch spec 2026-07): the 24h-timelocked loosen path for the four
-    // redeem throttles. The instant tighten fast-lane is emergency_tighten_redeem_limits.
+    // FIX A: the 24h-timelocked loosen path. The instant tighten lane is emergency_tighten_redeem_limits.
     pub fn propose_set_redeem_limits(
         ctx: Context<ProposeRedeemLimits>,
         args: instructions::admin::execute::RedeemLimitsArgs,
@@ -398,7 +343,7 @@ pub mod dominion_silver_mint {
         instructions::admin::execute::execute_set_redeem_limits_handler(ctx, nonce)
     }
 
-    // Option B D7: treasury minimum FLOAT (replaces Option A min-reserve bps).
+    // D7: treasury minimum FLOAT.
     pub fn propose_set_treasury_min_float(
         ctx: Context<ProposeTreasuryFloat>,
         new_float_usdc: u64,
@@ -442,9 +387,8 @@ pub mod dominion_silver_mint {
         instructions::admin::execute::execute_set_pyth_feed_handler(ctx, nonce)
     }
 
-    // P2-05: per-field Option<String>. None = leave that field unchanged
-    // (execute skips its CPI, so it cannot be blanked). A provided field must
-    // be non-empty and within its size cap.
+    // Per-field Option<String>. None = leave that field unchanged (execute skips its CPI, so it
+    // cannot be blanked). A provided field must be non-empty and within its size cap.
     pub fn propose_update_metadata(
         ctx: Context<ProposeUpdateMetadata>,
         name: Option<String>,
@@ -459,8 +403,6 @@ pub mod dominion_silver_mint {
     }
 
     // === Rent reclaim ===
-    // Option B: close_daily_counter / close_hourly_counter removed (the daily/
-    // hourly counter accounts no longer exist - Option A teardown).
 
     pub fn close_timelock_account(ctx: Context<CloseTimelockAccount>, nonce: u64) -> Result<()> {
         instructions::admin::close_accounts::close_timelock_account_handler(ctx, nonce)

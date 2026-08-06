@@ -1,41 +1,14 @@
 /**
- * IN-PLACE UPGRADE of a deployed Dominion Silver program, preserving its program id, its config
- * account, its authorities and any live timelock proposal.
+ * IN-PLACE UPGRADE: same program id, config account, authorities and live timelock proposal, because a
+ * fresh deploy would discard the config and burn a new id. The cluster comes from scripts/_cluster.ts,
+ * so it cannot drift from the rest of the tooling.
  *
- * WHY THIS EXISTS: external audit 2026-08-06, finding S-03.
- *
- * The only upgrade helper in the repo was `scripts/upgrade-devnet.sh`, and its first executable line
- * was `exit 1`, justified by "V2 is a MANDATORY fresh deploy under a NEW program ID (the V1/V2
- * ConfigAccount layout is incompatible)". That was true when written and is now obsolete: the live
- * devnet target is ALREADY V2, and what this batch needs is a V2 to V2 upgrade that KEEPS the
- * existing config. Fresh-deploying would discard `pendingPublicMintNonce = 8`, the treasury, and the
- * SILV mint binding, and burn a fresh program id for no reason.
- *
- * Written in TypeScript rather than bash on purpose: it reuses `scripts/_cluster.ts`, so cluster
- * selection cannot drift from the rest of the tooling. Re-implementing the devnet/mainnet regex in
- * bash is exactly the duplication that produced findings S-01, S-02 and D-01.
- *
- * WHAT IT DOES, in order, refusing to continue at the first surprise:
- *   1. Resolve the cluster from DOMINION_RPC and apply guard RULE 1 (mainnet needs explicit consent).
- *   2. Read the on-chain ProgramData allocation and compare it with the local .so.
- *   3. If the binary no longer fits, EXTEND the ProgramData account. This is the step whose absence
- *      made the upgrade impossible: 1,185,784 bytes of binary against 1,100,936 allocated is an
- *      84,848-byte shortfall (recomputed at runtime; this number is prose and goes stale on every rebuild), and `solana program deploy` simply fails until it is closed.
- *   4. Snapshot the config BEFORE, so the after-comparison is against reality and not against a
- *      remembered value.
- *   5. Deploy.
- *   6. Verify the BYTES ON CHAIN match the local artifact. Not the CLI's exit code: the bytes.
- *   7. Verify the config survived, field by field, including the live proposal nonce.
- *
- * Usage:
- *   npx tsx scripts/upgrade-program.ts                      # devnet, dry run (default)
- *   DOMINION_INTENT=extend_program_data,deploy_program \\
- *     npx tsx scripts/upgrade-program.ts --execute
- *
- * (drop extend_program_data when the dry run reports no shortfall)
- *
- * `solana program extend` is IRREVERSIBLE: the rent for the added bytes is locked for as long as the
- * program exists, and there is no shrink. Hence the intent gate.
+ * Guard the cluster, compare the ProgramData allocation against the local .so, EXTEND if the binary no
+ * longer fits, snapshot the config, deploy, verify the BYTES on chain and not the CLI exit code,
+ * republish the IDL, verify the config survived. `solana program extend` is IRREVERSIBLE (rent for the
+ * added bytes is locked for the program's life, no shrink), hence the intent gate:
+ *   npx tsx scripts/upgrade-program.ts                       # devnet, dry run, the default
+ *   DOMINION_INTENT=deploy_program[,extend_program_data] npx tsx scripts/upgrade-program.ts --execute
  */
 import { PublicKey } from "@solana/web3.js";
 import { execFileSync } from "child_process";
@@ -101,10 +74,8 @@ async function main() {
     die("this program has no upgrade authority. It is immutable and cannot be upgraded.");
   }
 
-  // REVIEW-OF-FIXES P2. The script confirmed only that an authority EXISTS, never that it is the key
-  // `solana` will actually sign with: no --keypair is passed, so it silently inherits `solana config`.
-  // An extend costs non-refundable rent; discovering the wrong signer AFTER paying it is the expensive
-  // order to find out in.
+  // An authority EXISTING is not enough: no --keypair is passed, so `solana` signs with whatever
+  // `solana config` holds. Confirm it IS the authority before the extend, whose rent is never refunded.
   const signer = sh("solana", ["address"]).trim();
   console.log(`  signer        : ${signer}`);
   if (signer !== show.authority) {
@@ -126,8 +97,8 @@ async function main() {
     console.log(`  headroom      : ${(-shortfall).toLocaleString()} bytes. No extend needed.`);
   }
 
-  // And the payer must be able to afford BOTH the extend rent and the deploy buffer, which briefly holds
-  // the program's full rent. Running out mid-write leaves the locked rent plus an orphaned buffer.
+  // The payer must afford BOTH the extend rent and the deploy buffer, which briefly holds the program's
+  // full rent. Running out mid-write leaves the locked rent plus an orphaned buffer.
   const balSol = Number(sh("solana", ["balance", "-u", CLUSTER.rpc]).trim().split(/\s+/)[0]);
   // ~0.007 SOL per KB of account data, doubled because the buffer coexists with the program.
   const needSol = ((Math.max(0, shortfall) + HEADROOM + localLen) / 1024) * 0.00696 + 0.5;
@@ -164,8 +135,6 @@ async function main() {
     "nextTimelockNonce",
     "activeProposalCount",
     "maxSilvSupply",
-    // ROUND 3 P2: `kycAttestationCount` was in neither list, so a layout error decoding it as 1 would have
-    // authorised an empty-roster arm and the script would still have printed UPGRADE OK.
     "kycAttestationCount",
   ] as const;
   for (const k of WATCHED) console.log(`  ${k.padEnd(24)} = ${String(before[k])}`);
@@ -183,11 +152,9 @@ async function main() {
     return;
   }
 
-  // RULE 2, with the honest action names. `assertReversible` matches the intent against the ACTION NAME,
-  // so `DOMINION_INTENT=irreversible` (what this file used to document) was always refused and the
-  // --execute path had never been exercised. Each step is gated by the intent it actually needs, so a
-  // no-extend upgrade does not demand the extend token and a retry does not need a DIFFERENT token than
-  // the first attempt, which was the worst part: the wrong string to have to guess mid-incident.
+  // RULE 2. `assertReversible` matches the intent against the ACTION NAME, not against the cost, so the
+  // tokens are the action names below. Each step is gated by the intent it actually needs: a no-extend
+  // upgrade must not demand the extend token, and a retry must not need a different token than attempt 1.
   const intent = intentFromEnv();
   if (needExtend) assertReversible("extend_program_data", intent);
   assertReversible("deploy_program", intent);
@@ -227,9 +194,8 @@ async function main() {
       ]),
     );
   } catch (e) {
-    // REVIEW-OF-FIXES P2: a failed deploy of a 1.19 MB program over a public RPC is common, and it
-    // leaves a buffer account holding the program's FULL rent (about 8 SOL). The script neither reused
-    // nor mentioned it, so the operator's money sat in an account they did not know existed.
+    // A failed deploy of a 1.19 MB program over a public RPC is common, and it leaves a buffer account
+    // holding the program's FULL rent (about 8 SOL). Say so, or the operator never learns it exists.
     console.error(`\ndeploy FAILED: ${String(e).slice(0, 400)}`);
     console.error(
       `\nRECLAIM YOUR RENT before retrying. A failed deploy leaves an orphaned buffer:\n` +
@@ -242,16 +208,14 @@ async function main() {
 
   // ---- 6. the BYTES, not the exit code ----
   step("6", "verifying the bytes actually on chain");
-  // mkdtemp, not a fixed /tmp path. REVIEW-OF-FIXES P2: `/tmp/dominion-onchain-verify.so` is predictable,
-  // so on a shared or CI host a pre-planted symlink turns this into an arbitrary file write as the
-  // operator, and the gap between the write and the hash is a TOCTOU on the MATCH verdict.
+  // mkdtemp, never a fixed /tmp path: a predictable name is a pre-planted-symlink write as the operator
+  // on a shared or CI host, and the gap between write and hash is a TOCTOU on the MATCH verdict.
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dominion-verify-"));
   const dump = path.join(tmpDir, "onchain.so");
   sh("solana", ["program", "dump", PROGRAM_ID.toBase58(), dump, "-u", CLUSTER.rpc]);
   const raw = fs.readFileSync(dump);
-  // A dump is padded to the full allocation, so compare the first localLen bytes. But ASSERT the tail is
-  // zero rather than assuming it: the claim being made is "the bytes on chain are the artifact", and
-  // trimming without checking proves it only for a prefix.
+  // A dump is padded to the full allocation, so compare the first localLen bytes. ASSERT the tail is zero
+  // rather than assuming it: trimming unchecked proves the artifact claim only for a prefix.
   const tail = raw.subarray(localLen);
   const nonZero = tail.findIndex((b) => b !== 0);
   if (nonZero !== -1) {
@@ -286,18 +250,12 @@ async function main() {
     if (!same) drift++;
     console.log(`  ${same ? "same" : "DIFF"}: ${k.padEnd(24)} ${a}${same ? "" : "  ->  " + b}`);
   }
-  // The three fields carved out of `reserved` in this upgrade must decode to their INTENDED-AT-ZERO
-  // values, because an in-place upgrade reads them from bytes the old binary left as zero. This is
-  // the whole reason `fee_routing_disabled` is negated rather than named `fee_routing_enabled`.
   // ---- 6b. republish the on-chain IDL ----
   step("6b", "publishing the new IDL on chain");
   let idlPublishFailed = false;
-  // REVIEW-OF-FIXES P1: no upgrade path touched the on-chain IDL. Only `deploy-devnet.sh` ever published
-  // one, and the runbook has no publish step, so after an in-place upgrade the PUBLISHED IDL still
-  // described the previous program: `RedeemQueued` present, `set_kyc_scope` with two accounts. Any
-  // integrator on the standard `Program.at(programId, provider)` path fetches THAT, builds `set_kyc_scope`
-  // without the `kyc_operator` slot, and the chain rejects it. Both repo gates compare only the three
-  // in-repo copies; neither reads the chain, so nothing could have noticed.
+  // An in-place upgrade does NOT touch the published IDL. Integrators on `Program.at(programId, provider)`
+  // fetch that copy, so a stale one has them building account lists the new program rejects. No repo gate
+  // can catch this: they all compare the three in-repo copies and none reads the chain.
   try {
     console.log(
       sh("anchor", [
@@ -312,10 +270,8 @@ async function main() {
     );
   } catch (e) {
     idlPublishFailed = true;
-    // RE-AUDIT P2: this logged loudly and then fell through to `UPGRADE OK` and exit 0. Loud text does not
-    // preserve failure semantics: a pasted ceremony result or any automation reads the exit code, and an
-    // integrator on `Program.at()` fetching the OLD account list builds transactions the upgraded program
-    // rejects. The bytecode really did land, so this is not a rollback, but it is not OK either.
+    // Recorded, not swallowed: this must reach the exit code at the bottom. Loud text alone does not
+    // preserve failure semantics, because automation and pasted ceremony results read the exit code.
     console.error(
       `\nIDL PUBLISH FAILED: ${String(e).slice(0, 300)}\n` +
         `The BYTECODE upgrade succeeded and is verified. The PUBLISHED IDL is now stale, so external\n` +
@@ -326,32 +282,10 @@ async function main() {
   }
 
   step("7b", "the config account survived byte-for-byte and the carved fields are coherent");
-  // ROUND 3 P2: three of these four were merely PRINTED, so a layout error decoding `kycScopeFlags = 2`,
-  // `instantUsedPrevUsdc = 10_000_000` or `kycAttestationCount = 1` produced no failure and the script
-  // printed "carved fields correct". Printing is not checking.
-  //
-  // REVIEW-OF-FIXES, and this section has now been wrong twice in opposite directions. Both are recorded
-  // because the second mistake was caused by fixing the first carelessly.
-  //
-  //   Round 3's version asserted the four read ZERO. Correct exactly once: the zero expectation comes from
-  //   the fields being read out of bytes the PRE-carve binary left as `reserved`. The SECOND upgrade runs
-  //   against an account where `kycScopeFlags` is legitimately 2 and the counter is legitimately 40, and it
-  //   would have died on correct state.
-  //
-  //   My replacement asserted "unchanged across the upgrade, and inside its domain". Two faults. The domain
-  //   predicate was `v === true || v === false` against a value read-config prints as the STRING "false",
-  //   so it could never hold and step 7b called die() on every healthy upgrade, AFTER the deploy and the IDL
-  //   republish. And "unchanged" was vacuous: both snapshots come from the same read-config run against the
-  //   same in-repo IDL, decoding an account an in-place upgrade never touches, so it was structurally true.
-  //
-  // So neither the value nor a self-comparison of the decode is the evidence. Two things are:
-  //
-  //   1. THE RAW BYTES. An in-place bytecode upgrade must not modify the config account at all. Comparing
-  //      the account data before and after is a real statement about the chain, not about our decoder, and
-  //      it is the one that would catch an upgrade that migrated state it should not have.
-  //   2. CROSS-FIELD INVARIANTS the program itself maintains. A wrong offset breaks the relationship
-  //      between two fields even when each value looks plausible on its own. These are the checks that
-  //      survive both the first upgrade and the fortieth.
+  // The evidence is the RAW BYTES being identical across the upgrade (a statement about the chain, not our
+  // decoder) plus the program's own cross-field invariants, which a wrong offset breaks even when each
+  // value still looks plausible. Do NOT restore a check that the carved fields read ZERO: that holds only
+  // on the FIRST upgrade over a pre-carve account. Two decodes of one untouched account prove nothing.
   const rawAfter = readConfigRaw();
   if (!rawBefore || !rawAfter) {
     die(
@@ -375,7 +309,9 @@ async function main() {
   };
   const scope = g("kycScopeFlags");
   const problems: string[] = [];
-  // A bool that is neither: Anchor would normally refuse to decode it, so this is the belt to step 7's braces.
+  // Carved out of `reserved`, hence negated rather than named `fee_routing_enabled`: the zero byte the
+  // pre-carve binary left means routing is ON. Anchor would normally refuse a bool that is neither, so
+  // this is belt to step 7's braces.
   if (g("feeRoutingDisabled") !== "true" && g("feeRoutingDisabled") !== "false") {
     problems.push(`feeRoutingDisabled decoded as ${g("feeRoutingDisabled")}, which is not a bool`);
   }
@@ -383,10 +319,8 @@ async function main() {
   if (!["0", "1", "2", "3"].includes(scope)) {
     problems.push(`kycScopeFlags = ${scope}, outside the side-bit set {0,1,2,3}`);
   }
-  // THE DERIVED-SIGNAL INVARIANT, and the strongest single line here. `kyc_enforced` is written only as
-  // `flags != 0`, never independently, so external readers are promised the two cannot disagree
-  // (state/config.rs). A shift that moves one field and not the other breaks this while both values still
-  // look individually plausible.
+  // THE DERIVED-SIGNAL INVARIANT, the strongest check here. `kyc_enforced` is written only as `flags != 0`,
+  // never independently (state/config.rs), so the two cannot legitimately disagree.
   const enforced = g("kycEnforced");
   if (enforced !== String(scope !== "0")) {
     problems.push(
@@ -438,18 +372,6 @@ async function main() {
   console.log("\nUPGRADE OK: bytes verified on chain, config preserved, carved fields correct.");
 }
 
-/** Read the config through the same helper the admin app uses, so a decode difference here is a real
- *  decode difference and not a second implementation of the layout. */
-/**
- * The config account as read-config.ts prints it: EVERY VALUE IS A STRING.
- *
- * REVIEW-OF-FIXES P0. This was typed `Record<string, unknown>`, and I then wrote a check
- * (`v === true || v === false`) that can never hold against a string. Because it can never hold, step 7b
- * called `die()` on every CORRECT upgrade, after the bytecode had already landed and the IDL had already
- * been republished. Reviewer measured it against the live devnet config: `"feeRoutingDisabled": "false"`.
- *
- * The type says string now, so the compiler refuses the next person's `=== true`.
- */
 /** The config account's raw data, or null. The evidence step 7b actually relies on. */
 function readConfigRaw(): Buffer | null {
   try {
@@ -472,6 +394,9 @@ function readConfigRaw(): Buffer | null {
   }
 }
 
+/** The config as read-config.ts prints it: EVERY VALUE IS A STRING, so a `=== true` test can never hold
+ *  and the return type is typed string to make the compiler say so. Read through the same helper the admin
+ *  app uses, so a decode difference here is a real one and not a second implementation of the layout. */
 function readConfig(): Record<string, string> | null {
   try {
     const out = sh("npx", ["tsx", path.join(__dirname, "read-config.ts")]);

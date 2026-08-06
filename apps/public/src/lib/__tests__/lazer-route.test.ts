@@ -1,21 +1,10 @@
 /**
- * The /api/lazer proxy holds the server-side Pyth key, and until 2026-08-06 it had no test at all.
+ * The /api/lazer proxy holds the server-side Pyth key, so these tests assert two PROPERTIES: only feed
+ * 3154 is served, and a flood is refused, both BEFORE any upstream call.
  *
- * External audit finding P-01 (P1): the route accepted ANY positive integer `feedId`, only 3154 was
- * cached, so every other value was a guaranteed cache miss and therefore one upstream Pyth call on our
- * key per request, unauthenticated and unlimited. Walking the integers exhausts the quota and the price,
- * the mint and the redeem stop working for everybody.
- *
- * The comment on the old validation asserted it prevented exactly this. It rejected junk, floats and
- * negatives, which is not the same set as "everything but 3154", and no test existed to notice the gap.
- * So these tests assert the PROPERTY the comment claimed, not the implementation:
- *
- *   1. Only 3154 is served. Anything else is refused BEFORE any upstream call.
- *   2. A flood is refused, also before any upstream call.
- *
- * Both assertions are made by counting `fetch` calls, because "the request was rejected" and "our key
- * was not spent" are different claims and only the second one matters. A 400 that still hit Pyth would
- * pass a status-code test and fail the audit finding.
+ * Every assertion counts `fetch` calls, because "the request was rejected" and "our key was not spent" are
+ * different claims and only the second matters: a 400 that still hit Pyth passes a status-code test and
+ * fails audit finding P-01.
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 
@@ -74,13 +63,13 @@ describe("the Lazer proxy only serves feed 3154", () => {
 
   it("REFUSES every other feed WITHOUT spending the key", async () => {
     const { POST } = await freshRoute();
-    // 1, 2, 3 is literally the attack from the finding: each was a cache miss and an upstream call.
+    // Walking the integers is the attack: each is a cache miss and therefore an upstream call.
     for (const feedId of [1, 2, 3, 4, 100, 3153, 3155, 999999]) {
       const res = await POST(req({ feedId }));
       expect(res.status, `feedId ${feedId} must be refused`).toBe(400);
       expect(await res.json()).toMatchObject({ error: "feed_not_allowed" });
     }
-    // The assertion that actually encodes the finding: zero upstream calls, so zero quota spent.
+    // The assertion that encodes the finding: zero upstream calls, so zero quota spent.
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -103,13 +92,8 @@ describe("the Lazer proxy only serves feed 3154", () => {
 
 describe("the Lazer proxy rate-limits", () => {
   it("throttles a flood of MISSES, which is the only kind that can reach upstream", async () => {
-    // REVIEW-OF-FIXES: this test used to hammer the legal request and expect 429s. That premise died with
-    // the fix: cache hits no longer spend tokens, so a sequential legal flood is all hits and nothing is
-    // throttled, by design. Keeping the old assertion would have meant reverting the DoS fix to satisfy a
-    // test.
-    //
-    // What still needs bounding is MISSES, since only a miss can reach the key. Make upstream fail so the
-    // cache never populates and every request is a miss.
+    // Only a MISS can reach the key, and a sequential flood of legal requests is all cache hits, which are
+    // deliberately free. So make upstream fail: the cache never populates and every request is a miss.
     const { POST } = await freshRoute();
     fetchSpy.mockImplementation(async () => new Response("upstream down", { status: 503 }));
 
@@ -129,12 +113,8 @@ describe("the Lazer proxy rate-limits", () => {
   });
 
   it("N CONCURRENT misses collapse into ONE upstream call", async () => {
-    // REVIEW-OF-FIXES: the test here used to be "the limiter runs BEFORE the upstream call" and asserted
-    // fetch was called at most once across 200 SEQUENTIAL requests. The 2s cache alone guarantees that, so
-    // deleting the token bucket entirely still passed it. It tested the cache and called it the limiter.
-    //
-    // This is the property the bucket cannot provide and the cache did not: concurrency. Measured before
-    // the fix, 40 concurrent requests on a cold instance produced 30 upstream calls.
+    // CONCURRENCY, which neither the cache nor the bucket provides: a sequential version of this test is
+    // satisfied by the 2s cache alone and still passes with the token bucket deleted.
     const { POST } = await freshRoute();
     let resolveUpstream: (v: Response) => void = () => {};
     const gate = new Promise<Response>((r) => {
@@ -157,9 +137,8 @@ describe("the Lazer proxy rate-limits", () => {
     const results = await Promise.all(inFlight);
 
     expect(fetchSpy.mock.calls.length, "40 concurrent misses must not become 40 upstream calls").toBe(1);
-    // RE-AUDIT P2: this used to accept 200 OR 429, which called a starved caller a success and hid the
-    // real measurement (30x200, 10x429). A joiner incurs no upstream cost, so it must not be rate-limited:
-    // EVERY one of the 40 gets the shared answer.
+    // Accepting 200 OR 429 here would call a starved caller a success. A joiner incurs no upstream cost, so
+    // it must not be rate-limited: every one of the 40 gets the shared answer.
     const statuses = results.map((r) => r.status);
     expect(
       statuses.filter((s) => s === 429).length,
@@ -169,9 +148,8 @@ describe("the Lazer proxy rate-limits", () => {
   });
 
   it("a cache HIT costs no token, so the limiter cannot deny a warm instance", async () => {
-    // REVIEW-OF-FIXES: `allowRequest()` used to run before the cache check, so cache hits spent tokens.
-    // With a 5/s refill and the banner polling every 5s per tab, ~25 visitors saturated it, and a 429 on
-    // the poll disables the mint and redeem buttons for everyone on that instance.
+    // Charging tokens for cache hits lets ~25 polling tabs saturate the 5/s refill, and a 429 on the poll
+    // disables the mint and redeem buttons for everyone on that instance.
     const { POST } = await freshRoute();
     // One miss to warm the cache. That one legitimately spends a token.
     expect((await POST(req({}))).status).toBe(200);
@@ -185,17 +163,11 @@ describe("the Lazer proxy rate-limits", () => {
   });
 
   it("a FAILED shared request does not charge the waiters, and they JOIN the retry", async () => {
-    // ROUND 3 P2 and REVIEW-OF-FIXES P1 in one test, because the two are the same measurement taken twice
-    // and my first fix moved the cost instead of removing it.
-    //
-    // P2: on rejection every waiter fell through to the bucket. 39 joiners drained the burst, 10 got 429,
-    // and only one of them created the retry: 29 tokens for one upstream call, then starvation.
-    // My fix: return 502 to all 39. That is worse and it is on the MONEY path. lib/lazer-client.ts throws
-    // on any non-ok status with no retry, and that is the submit-time envelope fetch, so one transient blip
-    // abandoned every in-flight mint and redeem. The old code served 29 of 40; mine served 0 of 40.
-    //
     // What the burst must do: ONE waiter creates the retry and pays ONE token, the other 38 await it, and
-    // all 40 are served. Assert the retry is joined, not fanned out, and not converted into 40 failures.
+    // all 40 are served. The two failure modes this pins are waiters that each charge for the retry (the
+    // burst drains and the last ten get 429) and waiters that are all answered 502, which is worse and on
+    // the money path: lib/lazer-client.ts throws on any non-ok status with no retry, and that is the
+    // submit-time envelope fetch, so one transient blip abandons every in-flight mint and redeem.
     const { POST } = await freshRoute();
     let rejectFirst: (e: Error) => void = () => {};
     const firstAttempt = new Promise<Response>((_, rej) => {
@@ -236,8 +208,8 @@ describe("the Lazer proxy rate-limits", () => {
   });
 
   it("an upstream that stays down answers 502 rather than looping", async () => {
-    // The other half of the bounded retry: two attempts, then a definite answer. Without the bound, a
-    // persistently dead upstream would have request N waiting on retry N-1 forever.
+    // The other half of the bounded retry: two attempts, then a definite answer. Without the bound a
+    // persistently dead upstream has request N waiting on retry N-1 forever.
     const { POST } = await freshRoute();
     fetchSpy.mockImplementation(() => Promise.reject(new Error("upstream down for good")));
 

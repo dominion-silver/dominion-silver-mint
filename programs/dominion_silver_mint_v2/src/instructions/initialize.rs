@@ -20,26 +20,16 @@ pub struct InitializeArgs {
     // Compliance off at launch
     pub compliance_mode: bool, // false at launch
 
-    // Premium
-    pub premium_bps_mint: u16, // e.g. 150 (1.5%); ceiling 300 (launch spec 2026-07)
-    pub premium_bps_redeem: u16, // e.g. 200 (2%); ceiling 500 (launch spec 2026-07)
+    // Premium. Launch values 100 / 150 bps; ceilings PREMIUM_BPS_*_CEILING (config.rs).
+    pub premium_bps_mint: u16,
+    pub premium_bps_redeem: u16,
 
-    // Oracle (Pyth Lazer). The program/storage/treasury are compile-time
-    // constants; only the numeric feed id is an init arg.
-    // SILV oracle: Metal.Index.SILVER/USD, Lazer feed 3154. CONFIRMED by Thomas
-    // 2026-07-26. PURE SPOT, no premium embedded in the feed. The retired 3304
-    // (Crypto.Index.SILV/USD, "DOMINION SILVER / US DOLLAR") was measured to be
-    // exactly 3154 x 1.05, i.e. it carried a hidden 5% premium. All of the protocol's
-    // margin now lives in premium_bps_mint / premium_bps_redeem, where it is visible
-    // on-chain instead of hidden inside a bespoke feed.
+    // Oracle (Pyth Lazer). The program/storage/treasury are compile-time constants; only the numeric
+    // feed id is an init arg. Feed 3154 (Metal.Index.SILVER/USD) is pure spot, no embedded premium.
     pub pyth_lazer_feed_id: u32,
 
-    // Option B (CONFIRMED_SPEC.md): per-tx/daily/hourly caps + on-chain
-    // reserve REMOVED. All Option B economic params default at init and are
-    // admin-tunable from the panel post-deploy (CONFIRMED_SPEC.md Section 6).
-
     // Optional overrides (else defaults)
-    pub admin_timelock_seconds: u32, // default 86400, bounds [86400, 604800] (24h..7d, launch spec 2026-07)
+    pub admin_timelock_seconds: u32, // default 86400, bounds [86400, 604800] (24h..7d)
     pub max_guardian_count: u8,      // default 3
 }
 
@@ -57,38 +47,16 @@ pub struct Initialize<'info> {
     #[account(mut)]
     pub deployer: Signer<'info>,
 
-    // === AUDIT WAVE 0, finding DOM-001 (P0): authenticate the initializer. ===
+    // DOM-001: authenticate the initializer, who must be the program's UPGRADE AUTHORITY. `initialize`
+    // is a separate transaction from `solana program deploy`, so an unconstrained Signer let ANY key
+    // seize the single [CONFIG_SEED] PDA and make itself `config.admin`.
     //
-    // Before this, `deployer` was an unconstrained Signer: ANY key could call
-    // initialize on a freshly deployed program id, seize the single [CONFIG_SEED]
-    // PDA, set itself as `config.admin` (the handler writes args.admin verbatim),
-    // then unpause, redirect the inventory and pre-mint the whole supply cap.
-    // `initialize` is a separate transaction from `solana program deploy`, so the
-    // window is real and observable on-chain.
-    //
-    // The fix binds the signer to the program's UPGRADE AUTHORITY, chaining every
-    // link so a forged ProgramData cannot be substituted:
-    //   1. `Program<'info, program::DominionSilverMint>` makes Anchor require this
-    //      account to be executable AND to equal `crate::ID` (an attacker cannot
-    //      point at their own program).
-    //   2. `programdata_address()` reads the PROGRAM account's own state, so the
-    //      expected ProgramData address is derived from chain data, not supplied.
-    //      It returns Some only for a bpf_loader_upgradeable program.
-    //   3. The constraint pins the supplied `program_data` to exactly that address,
-    //      which is what stops an attacker passing the ProgramData of a program
-    //      they control.
-    //   4. `Account<'info, ProgramData>` enforces owner == bpf_loader_upgradeable
-    //      and that the account really deserializes as the ProgramData variant
-    //      (not a Buffer, not a Program).
-    //   5. The handler then requires upgrade_authority_address == Some(deployer).
-    //
-    // Immutable-program case (decided, audit action 0.1): if the upgrade authority
-    // has been revoked, `upgrade_authority_address` is None and initialize is
-    // refused with ProgramNotUpgradeable. Initialization must therefore happen
-    // BEFORE revoking the upgrade authority, which the launch gate already
-    // requires (the authority is retained until the later phases ship). A
-    // compile-time bootstrap key was rejected as a second privileged constant to
-    // guard for no operational gain.
+    // Every link is chained so a forged ProgramData cannot be substituted: `Program<..>` forces this
+    // account to equal `crate::ID`; `programdata_address()` derives the expected ProgramData address
+    // from the PROGRAM account's own state (Some only under bpf_loader_upgradeable); the constraint
+    // pins the supplied `program_data` to it; `Account<ProgramData>` enforces the loader as owner and
+    // the ProgramData variant; and the handler requires upgrade_authority_address == Some(deployer).
+    // An immutable program (authority revoked) is REFUSED: initialize before revoking.
     #[account(
         constraint = dominion_program.programdata_address()?
             == Some(program_data.key()) @ DominionError::Unauthorized,
@@ -112,22 +80,11 @@ pub struct Initialize<'info> {
 
     // Treasury USDC ATA, owned by treasury_pda.
     //
-    // AUDIT WAVE 0, finding DOM-002 (P1): this was `init`, which fails when the
-    // account already exists. Creating an associated token account is
-    // permissionless (anyone may create the ATA of any owner/mint pair), so a
-    // third party could pre-create exactly this ATA and make `initialize` fail
-    // forever, denying the launch until a tolerant program version is deployed.
-    //
-    // `init_if_needed` closes it: when the account is absent Anchor creates it,
-    // and when it is already present Anchor VALIDATES it against the same three
-    // constraints below (mint, authority, token program), so a pre-created
-    // account is only accepted if it is byte-for-byte the account we would have
-    // created ourselves. A wrong-mint or wrong-owner account still fails.
-    //
-    // The usual `init_if_needed` hazard (an attacker re-running an initializer to
-    // reset state) does not apply here: there is no per-account initialization
-    // logic beyond creation, and since DOM-001 this instruction can only be
-    // called by the program's upgrade authority.
+    // DOM-002: `init_if_needed`, not `init`. Creating an ATA is permissionless, so with `init` a third
+    // party could pre-create exactly this one and make `initialize` fail forever. An already-present
+    // account is VALIDATED against the same three constraints below, so it is accepted only if it is
+    // what we would have created. The usual `init_if_needed` hazard does not apply: there is no
+    // per-account init logic beyond creation, and only the upgrade authority can call this.
     #[account(
         init_if_needed,
         payer = deployer,
@@ -144,18 +101,13 @@ pub struct Initialize<'info> {
 }
 
 pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
-    // DOM-001 (P0): the signer must BE the program's upgrade authority. The
-    // Accounts struct already proved that `program_data` is the genuine
-    // ProgramData of THIS program (see the chain documented there); this is the
-    // final link. Checked first, before any argument validation, so an
-    // unauthorized caller learns nothing about the accepted parameters.
+    // DOM-001, the final link. Checked before any argument validation, so an unauthorized caller
+    // learns nothing about the accepted parameters.
     let upgrade_authority = ctx
         .accounts
         .program_data
         .upgrade_authority_address
-        // None means the upgrade authority was revoked and the program is
-        // immutable. Decided in audit action 0.1: refuse, rather than fall back
-        // to a second privileged constant. Initialize before revoking.
+        // None = revoked upgrade authority, i.e. an immutable program. Refused by choice.
         .ok_or(error!(DominionError::ProgramNotUpgradeable))?;
     require_keys_eq!(
         upgrade_authority,
@@ -163,7 +115,6 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
         DominionError::DeployerNotUpgradeAuthority
     );
 
-    // Validate args.
     require!(args.pyth_lazer_feed_id != 0, DominionError::InvalidFeedId);
     require!(args.admin != Pubkey::default(), DominionError::Unauthorized);
     require!(
@@ -184,16 +135,8 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
         DominionError::PremiumSpreadTooLow
     );
 
-    // Option B: per-tx/daily/hourly/reserve cap sanity checks removed (those
-    // params no longer exist; Option B uses a hard supply cap + rolling-window
-    // instant budget + float, all defaulted here and admin-tuned post-deploy).
-
-    // SC-H1: validate token decimals at init. The mint/redeem math hard-codes
-    // 6 decimals for both USDC and SILV (see math.rs). If SILV is created
-    // off-chain with the Token-2022 example default of 9, the program would
-    // silently produce 1000x-off outputs (mint loss for users / treasury drain
-    // on redeem). Pinning at init means the assumption is checked once and
-    // never relaxed.
+    // SC-H1: the mint/redeem math hard-codes 6 decimals for both mints (math.rs). A SILV mint created
+    // with the Token-2022 example default of 9 would silently produce 1000x-off outputs.
     require!(
         ctx.accounts.usdc_mint.decimals == 6,
         DominionError::WrongMint
@@ -203,10 +146,8 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
         DominionError::WrongMint
     );
 
-    // CODEX M-02: hard-pin USDC mint to a known-good allowlist (Circle's
-    // official mainnet/devnet/testnet mints). Without this, the deployer
-    // could pass a fake "USDC" with 6 decimals that they fully control,
-    // letting them mint SILV against worthless reserves.
+    // M-02: hard-pin USDC to Circle's official mints. Without this the deployer could pass a fake
+    // "USDC" with 6 decimals that they control, and mint SILV against worthless reserves.
     const USDC_MAINNET: Pubkey =
         anchor_lang::solana_program::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
     const USDC_DEVNET: Pubkey =
@@ -219,35 +160,15 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
         DominionError::UsdcMintNotAllowed
     );
 
-    // Pyth Lazer migration: the receiver-program pin is gone (the Lazer program
-    // is a compile-time constant in lazer_cpi.rs, validated on every verify
-    // CPI). Only the numeric feed id is configurable.
-
-    // CODEX C-01: rug-by-init defense. Off-chain SILV mint creation is a
-    // 2-phase script (deployer creates with their authority, then transfers
-    // authority to the silv_mint_authority PDA). Between phase 1 and 2, the
-    // deployer COULD pre-mint X SILV to themselves, then call initialize.
-    // The program would treat those pre-minted tokens as legitimate SILV
-    // (no way to distinguish them from later-minted ones), and the deployer
-    // could redeem them against the USDC reserve.
-    //
-    // Mitigation: require supply == 0 at init. Pre-minted tokens are now
-    // detectable on-chain and reject the init.
+    // C-01: rug-by-init defense. SILV mint creation is a 2-phase off-chain script, and between the
+    // phases the deployer could pre-mint tokens this program cannot tell from legitimate SILV.
     require!(
         ctx.accounts.silv_mint.supply == 0,
         DominionError::SilvMintHasPreexistingSupply
     );
 
-    // CODEX C-02: enforce on-chain that the SILV mint authorities match the
-    // documented invariants. Without this, the deployer could keep
-    // mint_authority off-chain (silently mint SILV at will hors-program) or
-    // set a freeze_authority that does not match the disclosed compliance multisig.
-    //
-    // The mint_authority must be the silv_mint_authority PDA (owned by this
-    // program), so only mint_silv via this contract can produce SILV.
-    // The freeze_authority must equal the expected compliance multisig (launch
-    // spec 2026-07: Mark confirmed the freeze lever alongside the PermanentDelegate
-    // seize/clawback). Both are permanent Token-2022 powers fixed here at creation.
+    // C-02: mint_authority must be the silv_mint_authority PDA, so only mint_silv through this program
+    // can produce SILV. Otherwise the deployer could keep it off-chain and mint at will.
     let (silv_mint_auth_pda, _) =
         Pubkey::find_program_address(&[SILV_MINT_AUTHORITY_SEED], ctx.program_id);
     let mint_authority_opt: Option<Pubkey> = ctx.accounts.silv_mint.mint_authority.into();
@@ -255,12 +176,8 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
         mint_authority_opt == Some(silv_mint_auth_pda),
         DominionError::SilvMintAuthorityMismatch
     );
-    // Launch spec 2026-07 (Mark, freeze + seize confirmed): the SILV mint carries
-    // a freeze authority (the compliance lever, e.g. OFAC/court order) in addition
-    // to the PermanentDelegate (the seize/clawback lever). Both are locked at mint
-    // creation. Pin the freeze authority to the expected compliance multisig from
-    // block 0 (mirrors the PermanentDelegate pin below); it must be a real key, not
-    // None and not the zero pubkey.
+    // The freeze authority is the compliance lever, alongside the PermanentDelegate (seize/clawback).
+    // Pinned to the expected multisig from block 0, and it must be a real key, not None and not zero.
     let freeze_authority_opt: Option<Pubkey> = ctx.accounts.silv_mint.freeze_authority.into();
     require!(
         args.freeze_authority_expected != Pubkey::default(),
@@ -271,11 +188,8 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
         DominionError::SilvFreezeAuthorityMismatch
     );
 
-    // CODEX 2nd-pass M-01: pin the Token-2022 metadata extension's update
-    // authority at init. The execute_update_metadata path assumes the update
-    // authority is the silv_metadata_authority PDA; without on-chain
-    // verification, the deployer could keep the metadata update authority
-    // off-chain and change name/symbol/uri without going through governance.
+    // M-01: execute_update_metadata assumes the metadata update authority is the silv_metadata_authority
+    // PDA. Without this pin the deployer could keep it off-chain and rename the token outside governance.
     {
         use spl_token_2022::extension::{
             metadata_pointer::MetadataPointer, permanent_delegate::PermanentDelegate,
@@ -289,12 +203,8 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
         let mint_with_ext = StateWithExtensions::<Token2022Mint>::unpack(&mint_data)
             .map_err(|_| error!(DominionError::WrongMint))?;
 
-        // MetadataPointer extension: assert (a) authority = silv_metadata_authority
-        // PDA and (b) metadata_address points to the mint itself (in-mint metadata
-        // pattern, NOT a separate metadata account).
-        // CODEX 3rd-pass M-1: without metadata_address pinning, off-chain bootstrap
-        // could steer wallets/indexers toward metadata that the on-chain governance
-        // path (execute_update_metadata) does not actually control.
+        // MetadataPointer: authority = the PDA, metadata_address = the mint itself (in-mint metadata, NOT
+        // a separate account), or bootstrap could steer wallets toward metadata governance cannot change.
         let mp = mint_with_ext
             .get_extension::<MetadataPointer>()
             .map_err(|_| error!(DominionError::WrongMint))?;
@@ -311,9 +221,8 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
             DominionError::SilvMetadataUpdateAuthorityMismatch
         );
 
-        // TokenMetadata extension: assert (a) update_authority = silv_metadata_authority
-        // PDA and (b) the embedded `mint` field points back to the mint itself
-        // (consistency with MetadataPointer.metadata_address above).
+        // TokenMetadata: update_authority = the same PDA, and the embedded `mint` field points back
+        // to the mint (consistency with MetadataPointer.metadata_address above).
         let metadata: TokenMetadata = mint_with_ext
             .get_variable_len_extension::<TokenMetadata>()
             .map_err(|_| error!(DominionError::WrongMint))?;
@@ -327,11 +236,8 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
             DominionError::SilvMetadataUpdateAuthorityMismatch
         );
 
-        // CODEX P1-03: verify the PermanentDelegate AT INIT (previously only
-        // checked at runtime in assertions.rs). PermanentDelegate is the one
-        // privileged compliance capability (D12); its delegate must equal the
-        // expected Ops vault from block 0, not be discovered on the first user
-        // instruction.
+        // P1-03: verify the PermanentDelegate AT INIT, not on the first user instruction. It is the one
+        // privileged compliance capability (D12), so it must match the expected Ops vault from block 0.
         let pd = mint_with_ext
             .get_extension::<PermanentDelegate>()
             .map_err(|_| error!(DominionError::PermanentDelegateMismatch))?;
@@ -341,12 +247,8 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
             DominionError::PermanentDelegateMismatch
         );
 
-        // CODEX P1-03: STRICT Token-2022 extension allowlist. The SILV mint may
-        // carry ONLY MetadataPointer + TokenMetadata + PermanentDelegate. Any
-        // other extension (MintCloseAuthority, DefaultAccountState,
-        // NonTransferable, InterestBearingConfig, TransferHook, TransferFee,
-        // ConfidentialTransfer, GroupPointer, ...) can silently alter token
-        // behaviour or break future assumptions, and is rejected at bootstrap.
+        // P1-03: STRICT allowlist. Any other extension (MintCloseAuthority, DefaultAccountState,
+        // NonTransferable, TransferHook, TransferFee, ...) can silently alter token behaviour.
         let ext_types = mint_with_ext
             .get_extension_types()
             .map_err(|_| error!(DominionError::WrongMint))?;
@@ -395,13 +297,8 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
 
     config.premium_bps_mint = args.premium_bps_mint;
     config.premium_bps_redeem = args.premium_bps_redeem;
-    // REVIEW-OF-FIXES P1: `ConfigAccount::assert_premium_within_bounds` was declared and called by NOTHING.
-    // The ceilings and the combined floor are re-expressed inline at each of the four mutation sites, so
-    // there was no live gap, but the orphan is the exact class section 4c exists to catch: a rule that is
-    // written, unit-tested, and never runs. Called here as a POST-WRITE invariant, which is a different and
-    // strictly complementary statement to the inline pre-write checks: the inline ones validate a CANDIDATE
-    // value, this one validates the STORED pair, so a future setter that forgets its inline check still
-    // cannot leave the config out of bounds.
+    // POST-WRITE invariant: the checks above validate a CANDIDATE value, this validates the STORED
+    // pair, so a setter that forgets its inline check cannot leave the config out of bounds.
     config.assert_premium_within_bounds()?;
 
     config.pyth_lazer_feed_id = args.pyth_lazer_feed_id;
@@ -425,14 +322,10 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.price_delta_decay_seconds = DEFAULT_PRICE_DELTA_DECAY_SECONDS;
     config.price_update_min_amount_usdc = DEFAULT_PRICE_UPDATE_MIN_AMOUNT_USDC;
 
-    // Option B economic params: all default at init, admin-tunable post-deploy
-    // (CONFIRMED_SPEC.md Section 6). D2 cap, D7 float, D8/D10 redemption routing
-    // + rolling-window instant budget, D11 manual redemptions switch.
+    // Economic params: all default at init, admin-tunable post-deploy.
     config.max_silv_supply = DEFAULT_MAX_SILV_SUPPLY;
     config.treasury_min_float_usdc = DEFAULT_TREASURY_MIN_FLOAT_USDC;
-    // Launch spec 2026-07: public direct redeem is CLOSED at launch (users exit by
-    // selling on the DEX; direct redeem needs KYC, which ships in Phase 1). Opened
-    // by the admin switch once KYC is live.
+    // Public direct redeem is CLOSED at launch: users exit by selling on the DEX.
     config.redemptions_enabled = false;
     config.large_redeem_threshold_usdc = DEFAULT_LARGE_REDEEM_THRESHOLD_USDC;
     config.instant_redeem_budget_usdc = DEFAULT_INSTANT_REDEEM_BUDGET_USDC;
@@ -447,10 +340,8 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.guardian_count = 0;
 
     config.mint_paused_until = 0;
-    // Pyth Lazer migration (5.7): fresh deploy starts PAUSED. The operating
-    // Tier B oracle bounds (max_staleness, max_confidence_bps, min/max price,
-    // min_publishers) MUST be set from live SILV data + signed off BEFORE the
-    // admin unpauses; no mint/redeem/claim oracle read passes while paused.
+    // A fresh deploy starts PAUSED: the operating oracle bounds MUST be set from live SILV data and
+    // signed off before the admin unpauses. No mint/redeem oracle read passes while paused.
     config.paused = true;
 
     config.next_timelock_nonce = 0;
@@ -466,31 +357,23 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.pending_pyth_feed_nonce = None;
     config.pending_admin_timelock_nonce = None;
 
-    // --- Launch spec 2026-07 additions (safe launch defaults) ---
     config.pending_admin_eta = 0;
     config.pending_max_supply_nonce = None;
-    // FIX A: no redeem-limits change is pending at init.
     config.pending_redeem_limits_nonce = None;
     // Inventory wallet is set via set_inventory_wallet before the first pre-mint.
     config.inventory_wallet = Pubkey::default();
-    // Public direct mint closed at launch (opens with KYC in Phase 1).
     config.public_mint_enabled = DEFAULT_PUBLIC_MINT_ENABLED;
-    // KYC gate: shipped 2026-08-05 but DORMANT. The mechanism exists on-chain so that
-    // turning it on later is a config change rather than a program upgrade and a second
-    // audit; the off-chain half (Mark's provider) does not exist yet.
-    //
-    // `kyc_operator` unset is what BLOCKS enabling: set_kyc_scope refuses to arm the gate
-    // while there is no attestor (KycAttestorNotSet), because a gate with no way to
-    // approve anybody locks out every holder.
+    // KYC gate: on-chain but DORMANT. `kyc_operator` unset is what BLOCKS enabling: set_kyc_scope
+    // refuses to arm with no attestor, since a gate that can approve nobody locks out every holder.
     config.kyc_operator = Pubkey::default();
     config.kyc_enforced = false;
     config.pending_kyc_operator_nonce = None;
-    // Phase 2 PoR hooks (reserved; launch backing is the manual max_silv_supply cap).
+    // Phase 2 PoR hooks (launch backing is the manual max_silv_supply cap).
     config.por_feed = Pubkey::default();
     config.por_max_staleness_seconds = 0;
     config.por_enforced = false;
     config.pending_por_feed_nonce = None;
-    // Phase 1 granular pauses (reserved; the global `paused` is used at launch).
+    // Phase 1 granular pauses (the global `paused` is used at launch).
     config.mint_paused = false;
     config.redeem_paused = false;
 
@@ -502,14 +385,11 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.kyc_scope_flags = 0;
     // No prior bucket at genesis. See state/redeem_window.rs.
     config.instant_used_prev_usdc = 0;
-    // Premium routing ON at launch (the field is NEGATED, so false = on). Written explicitly even
-    // though it is the zero value, because relying on zeroing for meaning is how the previous
-    // polarity went unnoticed.
+    // Premium routing ON at launch (the field is NEGATED, so false = on). Written explicitly rather
+    // than relying on zeroing for meaning.
     config.fee_routing_disabled = false;
-    // C-02: no attestations exist on a fresh deployment, so the gate cannot be armed until the attestor
-    // writes one. Set explicitly rather than relying on the zeroing below, because this value is a
-    // SAFETY PRECONDITION and reading it from incidental zero-initialisation is how a field ends up
-    // meaning something nobody chose.
+    // C-02: no attestations exist on a fresh deployment, so the gate cannot be armed until the
+    // attestor writes one. Explicit because this value is a SAFETY PRECONDITION.
     config.kyc_attestation_count = 0;
     config.reserved = [0u8; 40];
 

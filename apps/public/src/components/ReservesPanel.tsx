@@ -95,14 +95,10 @@ export function ReservesPanel() {
             <div className="font-mono text-4xl font-bold text-accent">
               {oz(data.supply)}
             </div>
-            {/* AUDIT FINDING P-05. This read "SILV in circulation (troy oz backed 1:1)", inside a panel
-                whose every other figure is a supply number, an admin-set cap, or a USDC balance. None
-                of those is evidence of custody. What the chain can prove here is `supply <= cap`, and
-                a cap is an admin field, not a reserve: `admin_premint` mints without USDC, without an
-                oracle read and without any custody attestation.
-
-                The 1:1 backing is true as a PRODUCT claim and belongs on the page as one. It does not
-                belong on a live on-chain figure, where it reads as something this panel verified. */}
+            {/* Never attach the 1:1 backing claim to a live on-chain figure. Every number in this panel
+                is a supply, an admin-set cap or a USDC balance, so the chain proves `supply <= cap` and
+                nothing about custody (`admin_premint` mints with no USDC and no attestation). The claim
+                is a product statement and belongs on the page as one, below. */}
             <div className="mt-1 text-xs text-muted">SILV in circulation</div>
             <div className="mt-0.5 text-[11px] text-muted/70">
               Each SILV represents 1 troy oz held in custody. Custody is attested off chain, not by
