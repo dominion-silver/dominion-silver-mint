@@ -14,7 +14,7 @@
 # Re-implementing cluster selection in bash is what produced findings S-01, S-02 and D-01.
 #
 # It also does the thing this script never did: extend the ProgramData account. The binary outgrew
-# its allocation by 79,048 bytes, and `solana program deploy` fails until that is closed.
+# its allocation by 84,928 bytes at the time of writing (the script recomputes it), and `solana program deploy` fails until that is closed.
 
 set -euo pipefail
 
@@ -22,7 +22,7 @@ cat >&2 <<'EOF'
 scripts/upgrade-devnet.sh is SUPERSEDED. Use:
 
   npx tsx scripts/upgrade-program.ts                 # dry run, prints the plan, sends nothing
-  DOMINION_INTENT=irreversible \
+  DOMINION_INTENT=extend_program_data,deploy_program \
     npx tsx scripts/upgrade-program.ts --execute      # performs it
 
 Cluster comes from DOMINION_RPC (default devnet). The dry run reports the ProgramData shortfall,

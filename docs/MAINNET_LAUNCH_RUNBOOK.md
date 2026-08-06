@@ -121,8 +121,17 @@ circulating under one "reproducible" label: the Dockerfile header said Solana 1.
 1.52 / rustc 1.89.0. None of those is what produced the artifact.
 
 The toolchain that actually built `dominion_silver_mint.so` at sha256
-`799945e416c8a71151a1656a8dc2ed1c272e1d5f2764b09963f8052ee856403f`, confirmed on two independent
-machines (this one and the external auditor's, 2026-08-06):
+`91108c3ea9e7e04e2e21e0220c529b5727fb637e59323a39273927da9a7a650a` (1,185,864 bytes).
+
+**This hash MUST be re-recorded on every program change.** It was `799945e4…` until 2026-08-06 and went
+stale within the hour: the commit that closed audit findings C-01, C-02 and C-03 changed the program, and
+this line kept blessing the binary WITHOUT those fixes. An operator hash-checking at the ceremony would
+either fail on the correct artifact or go hunting for the wrong one. Regenerate with
+`shasum -a 256 target/deploy/dominion_silver_mint.so` and verify with
+`scripts/verify-release-artifact.sh`, which rebuilds and compares rather than trusting this line.
+
+Toolchain that produced it, confirmed on two independent machines (this one and the external auditor's,
+2026-08-06):
 
 | Component | Version |
 |---|---|

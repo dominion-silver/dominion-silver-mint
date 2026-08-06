@@ -19,8 +19,8 @@
  *   1. Resolve the cluster from DOMINION_RPC and apply guard RULE 1 (mainnet needs explicit consent).
  *   2. Read the on-chain ProgramData allocation and compare it with the local .so.
  *   3. If the binary no longer fits, EXTEND the ProgramData account. This is the step whose absence
- *      made the upgrade impossible: 1,179,984 bytes of binary against 1,100,936 allocated is a
- *      79,048-byte shortfall, and `solana program deploy` simply fails until it is closed.
+ *      made the upgrade impossible: 1,185,864 bytes of binary against 1,100,936 allocated is an
+ *      84,928-byte shortfall (recomputed at runtime; this number is prose and goes stale on every rebuild), and `solana program deploy` simply fails until it is closed.
  *   4. Snapshot the config BEFORE, so the after-comparison is against reality and not against a
  *      remembered value.
  *   5. Deploy.
@@ -29,7 +29,10 @@
  *
  * Usage:
  *   npx tsx scripts/upgrade-program.ts                      # devnet, dry run (default)
- *   DOMINION_INTENT=irreversible npx tsx scripts/upgrade-program.ts --execute
+ *   DOMINION_INTENT=extend_program_data,deploy_program \\
+ *     npx tsx scripts/upgrade-program.ts --execute
+ *
+ * (drop extend_program_data when the dry run reports no shortfall)
  *
  * `solana program extend` is IRREVERSIBLE: the rent for the added bytes is locked for as long as the
  * program exists, and there is no shrink. Hence the intent gate.
@@ -131,8 +134,8 @@ async function main() {
 
   if (!EXECUTE) {
     console.log(
-      "\nDRY RUN complete. Nothing was sent. Re-run with --execute and " +
-        "DOMINION_INTENT=irreversible to perform the upgrade.",
+      "\nDRY RUN complete. Nothing was sent. To perform it, re-run with --execute and\n" +
+        `  DOMINION_INTENT=${needExtend ? "extend_program_data,deploy_program" : "deploy_program"}`,
     );
     console.log(
       needExtend
@@ -142,8 +145,14 @@ async function main() {
     return;
   }
 
-  // RULE 2: an extend can never be undone, so the operator must have asked for it.
-  assertReversible(needExtend ? "set_upgrade_authority" : "execute_set_public_mint", intentFromEnv());
+  // RULE 2, with the honest action names. `assertReversible` matches the intent against the ACTION NAME,
+  // so `DOMINION_INTENT=irreversible` (what this file used to document) was always refused and the
+  // --execute path had never been exercised. Each step is gated by the intent it actually needs, so a
+  // no-extend upgrade does not demand the extend token and a retry does not need a DIFFERENT token than
+  // the first attempt, which was the worst part: the wrong string to have to guess mid-incident.
+  const intent = intentFromEnv();
+  if (needExtend) assertReversible("extend_program_data", intent);
+  assertReversible("deploy_program", intent);
 
   if (needExtend) {
     step("3", `extending ProgramData by ${(shortfall + HEADROOM).toLocaleString()} bytes`);

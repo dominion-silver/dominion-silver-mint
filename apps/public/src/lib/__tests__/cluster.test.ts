@@ -18,15 +18,21 @@
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 
-async function load(rpc?: string) {
+/**
+ * REVIEW-OF-FIXES: this helper used to set BOTH `NEXT_PUBLIC_HELIUS_RPC` and
+ * `NEXT_PUBLIC_TRITON_RPC` to the same value in every case, which made the production configuration
+ * unreachable from this suite. The runbook lists only HELIUS, TRITON has no consumer in the app, and
+ * TRITON's fallback to devnet was what poisoned `CLUSTER`. A test that can only express the
+ * both-set shape cannot fail on the only shape that ships.
+ *
+ * `triton` is therefore separate, and defaults to UNSET, which is production.
+ */
+async function load(rpc?: string, triton?: string) {
   vi.resetModules();
-  if (rpc === undefined) {
-    delete process.env.NEXT_PUBLIC_HELIUS_RPC;
-    delete process.env.NEXT_PUBLIC_TRITON_RPC;
-  } else {
-    process.env.NEXT_PUBLIC_HELIUS_RPC = rpc;
-    process.env.NEXT_PUBLIC_TRITON_RPC = rpc;
-  }
+  if (rpc === undefined) delete process.env.NEXT_PUBLIC_HELIUS_RPC;
+  else process.env.NEXT_PUBLIC_HELIUS_RPC = rpc;
+  if (triton === undefined) delete process.env.NEXT_PUBLIC_TRITON_RPC;
+  else process.env.NEXT_PUBLIC_TRITON_RPC = triton;
   return await import("../constants");
 }
 
@@ -74,5 +80,42 @@ describe("cluster derivation drives every cluster-dependent output", () => {
     const c = await load("https://api.devnet.solana.com");
     expect(c.CLUSTER).toBe("devnet");
     expect(c.EXPLORER_CLUSTER_QS).toBe("?cluster=devnet");
+  });
+});
+
+describe("the production configuration: HELIUS set, TRITON unset", () => {
+  it("a mainnet HELIUS with TRITON unset is mainnet (the P0 this suite could not see)", async () => {
+    const c = await load("https://mainnet.helius-rpc.com/?api-key=real");
+    expect(c.CLUSTER).toBe("mainnet-beta");
+    expect(c.solscanTx("SIG")).toBe("https://solscan.io/tx/SIG");
+    expect(c.SOL_TOPUP_URL).toBeNull();
+  });
+
+  it("a stale TRITON pointing at devnet does NOT drag the cluster back to devnet", async () => {
+    // The variable has no consumer, so it must have no influence. If it ever gains one, that consumer
+    // is the thing that has to be reconciled, not the cluster derivation.
+    const c = await load(
+      "https://mainnet.helius-rpc.com/?api-key=real",
+      "https://api.devnet.solana.com",
+    );
+    expect(c.CLUSTER).toBe("mainnet-beta");
+  });
+
+  it("the cluster follows the endpoint the app actually connects with", async () => {
+    const c = await load("https://api.devnet.solana.com", "https://mainnet.helius-rpc.com/?x=1");
+    expect(c.APP_RPC).toBe("https://api.devnet.solana.com");
+    expect(c.CLUSTER).toBe("devnet");
+  });
+
+  it("a mainnet URL merely CONTAINING 'devnet' is still mainnet", async () => {
+    // Same class as the scripts-side P0: match on the host, not on the URL.
+    for (const rpc of [
+      "https://api.mainnet-beta.solana.com/?tag=devnet-mirror",
+      "https://mainnet.helius-rpc.com/?api-key=7fdevnet91-aaaa",
+    ]) {
+      const c = await load(rpc);
+      expect(c.CLUSTER, rpc).toBe("mainnet-beta");
+      expect(c.SOL_TOPUP_URL, rpc).toBeNull();
+    }
   });
 });

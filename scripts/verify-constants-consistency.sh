@@ -30,6 +30,26 @@ python3 - <<'PY'
 import json, re, sys, hashlib, pathlib
 
 fail = []
+def _json_or_die(raw, path):
+    """REVIEW-OF-FIXES P0: this was a bare json.loads, and a malformed target/idl artifact made the whole
+    gate die with an uncaught JSONDecodeError. That is exactly what happened on CI: the workflow
+    redirected `anchor idl build` STDOUT into the file, cargo's "Downloaded <crate>" lines landed at the
+    top on a cache miss, and this line raised `Expecting value: line 1 column 3 (char 2)`. The gate has
+    never passed on CI, so nothing after it ever ran.
+
+    The redirect is fixed at the source (the workflow uses `-o` now), but a gate must not report an
+    infrastructure fault as a constants inconsistency, and must not report it as a traceback."""
+    import json as _json
+    try:
+        return _json.loads(raw)
+    except Exception as e:
+        print(f"   FAIL: {path} is not valid JSON ({e}).")
+        print(f"          First 120 bytes: {raw[:120]!r}")
+        print("          This is a BUILD artifact problem, not an address inconsistency.")
+        print("          Regenerate it with: (cd programs/dominion_silver_mint_v2 && \\")
+        print("            anchor idl build -o ../../target/idl/dominion_silver_mint.json -- --locked)")
+        raise SystemExit(1)
+
 def check(ok, msg):
     print(("   ok: " if ok else "   FAIL: ") + msg)
     if not ok:
@@ -109,7 +129,7 @@ for path in list(idls):
         continue
     raw = p.read_bytes()
     digests[path] = hashlib.sha256(raw).hexdigest()
-    addr = json.loads(raw).get("address")
+    addr = _json_or_die(raw, p).get("address")
     check(addr == DECLARED, f"{path} address == declare_id!")
 if len(digests) < 2:
     check(False,

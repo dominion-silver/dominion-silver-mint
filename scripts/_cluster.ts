@@ -54,18 +54,90 @@ const DEVNET = {
   foreignUpgradeableProgram: "pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt", // Pyth Lazer
 };
 
-function classify(rpc: string): Cluster {
-  if (/devnet/i.test(rpc)) return "devnet";
-  if (/127\.0\.0\.1|localhost/i.test(rpc)) return "localnet";
-  if (/testnet/i.test(rpc)) {
+/**
+ * Classify from the HOST ONLY, never the whole URL.
+ *
+ * REVIEW-OF-FIXES P0. The first version of this function tested `/devnet/i` against the entire URL,
+ * which the security review broke in three ways, all measured:
+ *
+ *   https://api.mainnet-beta.solana.com/?tag=devnet-mirror       -> "devnet"
+ *   https://mainnet.helius-rpc.com/?api-key=7fdevnet91-aaaa      -> "devnet"
+ *   https://rpc.internal/devnet-proxy-to-mainnet                 -> "devnet"
+ *
+ * A query parameter, a path segment, or six characters appearing by chance inside an API key was
+ * enough. And because `_guard.ts::isDevnet` uses the same test, `requireDevnet` returned early, so the
+ * DOMINION_ALLOW_MAINNET consent gate never fired: `upgrade-program.ts --execute` would have run
+ * `solana program extend` and `solana program deploy` against MAINNET while printing `cluster=devnet`.
+ *
+ * That is strictly worse than the S-01 it replaced. S-01 could only ever reach devnet; this could reach
+ * mainnet while claiming devnet. `verify-cluster-resolution.ts` pinned "unknown host must be mainnet"
+ * and never "known mainnet host containing the substring devnet", so the new gate could not fail on it.
+ *
+ * Host-only matching fixes the class rather than the three examples. The genesis-hash cross-check in
+ * `assertClusterMatchesChain` is the belt to this braces: a hostname is a claim, the genesis hash is
+ * what the chain actually is.
+ */
+export function classifyCluster(rpc: string): Cluster {
+  let host: string;
+  try {
+    host = new URL(rpc).hostname.toLowerCase();
+  } catch {
+    throw new Error(
+      `DOMINION_RPC is not a valid URL: ${JSON.stringify(rpc)}.\n` +
+        `Refusing to guess a cluster from an unparseable endpoint.`,
+    );
+  }
+  // Exact host or dotted-suffix match, so "devnet.example.com" counts and
+  // "mainnet.helius-rpc.com/?k=devnet" does not.
+  const hostIs = (needle: string) => host === needle || host.endsWith("." + needle);
+  if (host === "127.0.0.1" || host === "localhost" || hostIs("localhost")) return "localnet";
+  if (host === "api.devnet.solana.com" || host.startsWith("devnet.") || hostIs("devnet.solana.com")) {
+    return "devnet";
+  }
+  if (host === "api.testnet.solana.com" || host.startsWith("testnet.")) {
     throw new Error(
       "testnet is not a supported cluster for these scripts. Use devnet or mainnet-beta.",
     );
   }
-  // Anything else is treated as mainnet. Deliberately the CONSERVATIVE default: an unrecognised
-  // RPC is far more likely to be a mainnet provider (Helius, Triton, QuickNode) than a devnet one,
-  // and misclassifying mainnet as devnet is the failure this file exists to prevent.
+  // Anything else is mainnet. Deliberately the CONSERVATIVE default: an unrecognised RPC is far more
+  // likely to be a mainnet provider (Helius, Triton, QuickNode) than a devnet one, and misclassifying
+  // mainnet as devnet is the failure this file exists to prevent.
+  //
+  // A private devnet endpoint therefore needs DOMINION_ALLOW_MAINNET, which is friction in the safe
+  // direction: the cost is one env var on an unusual setup, versus a real mainnet deploy believing it
+  // is a test.
   return "mainnet-beta";
+}
+
+/** Known genesis hashes. The chain's own answer to "which cluster am I". */
+const GENESIS: Record<Cluster, string | null> = {
+  devnet: "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+  "mainnet-beta": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  localnet: null, // a fresh validator has a random genesis hash; nothing to pin.
+};
+
+/**
+ * Confirm the CHAIN agrees with the hostname before anything irreversible happens.
+ *
+ * A hostname is a claim made by whoever set the env var. The genesis hash is what the cluster is. Any
+ * proxy, tunnel, typo or copy-paste that points a devnet-looking URL at mainnet is caught here and
+ * nowhere else. Cheap: one RPC call, once, before the first transaction.
+ */
+export async function assertClusterMatchesChain(ctx: ClusterContext): Promise<void> {
+  const expected = GENESIS[ctx.cluster];
+  if (expected === null) return; // localnet
+  const actual = await new Connection(ctx.rpc, "confirmed").getGenesisHash();
+  if (actual !== expected) {
+    const named = (Object.keys(GENESIS) as Cluster[]).find((k) => GENESIS[k] === actual);
+    throw new Error(
+      `CLUSTER MISMATCH. ${ctx.rpc} looks like ${ctx.cluster} by hostname, but its genesis hash is\n` +
+        `  ${actual}\n` +
+        `which is ${named ?? "an unknown cluster"}, not ${ctx.cluster} (${expected}).\n\n` +
+        `Refusing to continue. A hostname is a claim; the genesis hash is what the chain is. This check\n` +
+        `exists because a URL containing "devnet" anywhere used to be enough to bypass the\n` +
+        `DOMINION_ALLOW_MAINNET consent gate entirely.`,
+    );
+  }
 }
 
 /**
@@ -107,7 +179,7 @@ function requiredMainnetAddress(field: string): PublicKey {
  */
 export function resolveCluster(): ClusterContext {
   const rpc = process.env.DOMINION_RPC?.trim() || DEFAULT_RPC.devnet;
-  const cluster = classify(rpc);
+  const cluster = classifyCluster(rpc);
 
   if (cluster === "devnet" || cluster === "localnet") {
     return {

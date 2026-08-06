@@ -356,6 +356,8 @@ export function computeMaxInstantRedeemableUsdc(
   cfg: ConfigAccount,
   treasuryBalanceUsdc: BN,
   nowUnixSecs: number,
+  /** The redeem premium THIS WALLET pays. Omit for the configured rate. */
+  effectiveBpsRedeem?: number,
 ): BN {
   if (cfg.paused || !cfg.redemptionsEnabled) return new BN(0);
   // SLIDING, not a fixed reset. See effectiveRedeemUsed.
@@ -371,9 +373,10 @@ export function computeMaxInstantRedeemableUsdc(
   // What the program bounds is OUTFLOW, and outflow is not always the gross. See
   // `redeemOutflowForGross` below: with fee routing off the premium is retained, so the whole of
   // `outflowMax` reaches the user and there is nothing to subtract.
+  const bps = effectiveBpsRedeem ?? cfg.premiumBpsRedeem;
   return cfg.feeRoutingDisabled
     ? outflowMax
-    : outflowMax.sub(feeFromAmount(outflowMax, cfg.premiumBpsRedeem));
+    : outflowMax.sub(feeFromAmount(outflowMax, bps));
 }
 
 /**
@@ -398,9 +401,26 @@ export function computeMaxInstantRedeemableUsdc(
  * The client mirrored a COMMENT rather than the code: `redeem_silv.rs` said "Debited by GROSS, not by
  * the user's leg" twenty lines above the line that debits net. Both have been fixed.
  */
-export function redeemOutflowForGross(cfg: ConfigAccount, grossUsdc: BN): BN {
+export function redeemOutflowForGross(
+  cfg: ConfigAccount,
+  grossUsdc: BN,
+  /** The premium THIS WALLET pays on the redeem side. Defaults to the configured rate.
+   *
+   *  REVIEW-OF-FIXES: this used `cfg.premiumBpsRedeem` unconditionally, and that broke the P-07 fix
+   *  landed in the same commit. For an exempt wallet the program computes `fee_usdc = 0`, so with
+   *  routing OFF `total_out = to_user = gross`, not `gross - fee`. The client subtracted a fee the
+   *  program never charged and under-stated the outflow by it.
+   *
+   *  Concretely, and this is the direction the P-02 comment itself calls the worse one: routing off, a
+   *  live redeem-side exemption, budget and treasury both 98.50, gross 100. Program: fee 0, outflow 100,
+   *  over both limits, REVERTS. Client: 100 - 1.50 = 98.50, within both, returns "instant" and enables
+   *  the button. The user pays a Lazer verify fee to discover it. The unconditional gross comparison
+   *  this replaced was accidentally CORRECT for that combination. */
+  effectiveBpsRedeem?: number,
+): BN {
   if (!cfg.feeRoutingDisabled) return grossUsdc;
-  return grossUsdc.sub(feeFromAmount(grossUsdc, cfg.premiumBpsRedeem));
+  const bps = effectiveBpsRedeem ?? cfg.premiumBpsRedeem;
+  return grossUsdc.sub(feeFromAmount(grossUsdc, bps));
 }
 
 /**
@@ -422,6 +442,8 @@ export function classifyRedeem(
    *  told they cannot redeem the moment the gate was armed. Dormant today, wrong the day it is
    *  turned on, which is the worst time to find out. */
   kycAttested: boolean | undefined,
+  /** The redeem premium THIS WALLET pays. Omit for the configured rate. See `redeemOutflowForGross`. */
+  effectiveBpsRedeem?: number,
 ): RedeemRoute {
   if (cfg.paused || !cfg.redemptionsEnabled) return "disabled";
   // The KYC gate, dormant at launch. Bit 1 is the redeem side (state/side.rs).
@@ -434,7 +456,7 @@ export function classifyRedeem(
   // Both limits are on TREASURY OUTFLOW, which equals the gross only while fee routing is on.
   // Audit P-02: comparing the gross unconditionally refused solvable redemptions during exactly the
   // incident that turns routing off.
-  const outflow = redeemOutflowForGross(cfg, grossUsdc);
+  const outflow = redeemOutflowForGross(cfg, grossUsdc, effectiveBpsRedeem);
   if (
     effectiveRedeemUsed(cfg, nowUnixSecs)
       .add(outflow)

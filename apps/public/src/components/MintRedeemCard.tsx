@@ -212,13 +212,25 @@ export function MintRedeemCard() {
   const redeemRoute: RedeemRoute | null = useMemo(() => {
     if (mode !== "redeem" || !cfg || !treasury || !redeemGross) return null;
     // GROSS, not net. See the note above.
-    return classifyRedeem(cfg, treasury, redeemGross, nowSecs, kycAttested);
-  }, [mode, cfg, treasury, redeemGross, nowSecs, kycAttested]);
+    return classifyRedeem(
+      cfg,
+      treasury,
+      redeemGross,
+      nowSecs,
+      kycAttested,
+      premiumBpsRedeem ?? undefined,
+    );
+  }, [mode, cfg, treasury, redeemGross, nowSecs, kycAttested, premiumBpsRedeem]);
 
   // Max instantly-redeemable, shown as USDC (and approx SILV via price).
   const maxInstant = useMemo(() => {
     if (!cfg || !treasury) return null;
-    const usdc = computeMaxInstantRedeemableUsdc(cfg, treasury, nowSecs);
+    const usdc = computeMaxInstantRedeemableUsdc(
+      cfg,
+      treasury,
+      nowSecs,
+      premiumBpsRedeem ?? undefined,
+    );
     const usdcNum = usdc.toNumber() / 1e6;
     // `usdc` is the NET the user receives. The SILV that produces it is gross/spot, and
     // gross = net / (1 - bps/1e4), so divide the net by spot*(1-bps/1e4). That is what
@@ -743,6 +755,15 @@ export function MintRedeemCard() {
           redeemRoute === "otc" ||
           redeemRoute === "limit" ||
           redeemRoute === "kyc" ||
+          // REVIEW-OF-FIXES: and NOT-YET-KNOWN blocks too. The P-04 fix made
+          // `fetchTreasuryBalance` throw on an RPC failure instead of returning BN(0), which was right
+          // in itself and turned this path FAIL-OPEN as a side effect: `treasury` becomes undefined,
+          // `redeemRoute` becomes null, null matched none of the four cases above, and `handleSubmit`
+          // fell through every guard straight to the instant send. Before the fix, BN(0) forced "otc"
+          // and blocked. So a 429 on one balance read went from "blocked" to "submit blind and let the
+          // chain decide", which is the opposite of the tri-state doctrine applied to `kycAttested`
+          // eight lines from here.
+          (mode === "redeem" && redeemRoute === null) ||
           submitting ||
           insufficientSol
         }

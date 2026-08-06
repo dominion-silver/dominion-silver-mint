@@ -101,7 +101,28 @@ jobs:
             cargo install --git https://github.com/coral-xyz/anchor --tag v0.31.1 anchor-cli --locked --force
           fi
           anchor --version
-          (cd programs/dominion_silver_mint_v2 && anchor idl build -- --locked > "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json")
+          # REVIEW-OF-FIXES P0: this used `anchor idl build -- --locked > target/idl/....json`.
+          # Redirecting STDOUT into the artifact means anything else cargo writes to stdout lands in the
+          # file. On a cargo-registry cache MISS that is the "  Downloaded <crate>" progress lines, so the
+          # file begins with two spaces and the JSON is corrupt. The step still exits 0 and goes GREEN,
+          # and the next step dies with a raw `json.decoder.JSONDecodeError: Expecting value: line 1
+          # column 3 (char 2)`.
+          #
+          # Consequence, verified against the real runs (30557224814, 30525729898, and every one of the
+          # last twelve on main): the `gate` job has NEVER PASSED, so none of the steps after this one has
+          # ever executed on CI. Not the IDL-copies diff, not the release-artifact check, not the
+          # client/IDL parity gate, not either app's typecheck, tests or build. The header comment in
+          # scripts/verify-client-idl-parity.ts claims "the CI job order closes that gap"; it was true as
+          # YAML and false in fact.
+          #
+          # `-o` writes the IDL directly and leaves stdout to cargo, which removes the class rather than
+          # this instance. It omits the trailing newline the redirect produced, so it is added back to keep
+          # the committed copies byte-identical (the JSON itself is unchanged: verified equal).
+          (cd programs/dominion_silver_mint_v2 && anchor idl build -o "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json" -- --locked)
+          printf '\n' >> "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json"
+          # Fail HERE, loudly, if the artifact is not JSON, rather than three steps later in a traceback.
+          python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json" \
+            || { echo "::error::the regenerated IDL is not valid JSON"; head -c 200 "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json"; exit 1; }
 
       # Anchor-free and network-free, so it holds even if the IDL step above is
       # unavailable. This is the gate's hard floor against the drift class that has

@@ -63,8 +63,45 @@ export const TRITON_RPC = process.env.NEXT_PUBLIC_TRITON_RPC || DEVNET_RPC;
  * forget, and forgetting it reproduces the bug; the RPC is already required to be right for the app to
  * function at all, so it cannot be stale while anything else works.
  */
-export const CLUSTER: "devnet" | "mainnet-beta" =
-  /devnet/i.test(HELIUS_RPC) || /devnet/i.test(TRITON_RPC) ? "devnet" : "mainnet-beta";
+/**
+ * THE endpoint the app actually connects to. `WalletProvider` passes this to `ConnectionProvider`, so
+ * this is the cluster by definition.
+ *
+ * REVIEW-OF-FIXES P0, found independently by two reviewers. The first version was
+ * `/devnet/i.test(HELIUS_RPC) || /devnet/i.test(TRITON_RPC)`, and `TRITON_RPC` falls back to
+ * `DEVNET_RPC` when its env var is unset. `NEXT_PUBLIC_TRITON_RPC` has NO consumer anywhere in the app,
+ * so in the documented mainnet configuration (the runbook lists only `NEXT_PUBLIC_HELIUS_RPC`) the OR
+ * fired on a variable nothing uses and `CLUSTER` came out "devnet". P-08 was therefore not fixed at all
+ * for the only configuration that ships: every Solscan link got `?cluster=devnet` and mainnet users out
+ * of SOL were sent to the devnet faucet.
+ *
+ * And `cluster.test.ts` could not see it, because its helper set BOTH variables in every case. The one
+ * realistic misconfiguration was the one shape the test could not express.
+ *
+ * Deriving from the connection endpoint removes the class: there is nothing left to be inconsistent
+ * with. A variable that does not affect the connection must not affect the cluster.
+ */
+export const APP_RPC = HELIUS_RPC;
+
+/** Host-only, never the whole URL: a query string or an API key containing "devnet" is not a cluster. */
+function clusterFromRpc(rpc: string): "devnet" | "mainnet-beta" {
+  let host: string;
+  try {
+    host = new URL(rpc).hostname.toLowerCase();
+  } catch {
+    // An unparseable endpoint is a misconfiguration. Treat it as mainnet, the direction where a wrong
+    // guess is visible (links miss the cluster param) rather than dangerous (mainnet labelled devnet).
+    return "mainnet-beta";
+  }
+  if (host === "127.0.0.1" || host === "localhost") return "devnet";
+  return host === "api.devnet.solana.com" ||
+    host.startsWith("devnet.") ||
+    host.endsWith(".devnet.solana.com")
+    ? "devnet"
+    : "mainnet-beta";
+}
+
+export const CLUSTER: "devnet" | "mainnet-beta" = clusterFromRpc(APP_RPC);
 
 /** Query suffix for explorer URLs. Mainnet takes NO cluster parameter. */
 export const EXPLORER_CLUSTER_QS = CLUSTER === "devnet" ? "?cluster=devnet" : "";

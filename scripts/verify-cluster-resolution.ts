@@ -25,6 +25,7 @@
 import fs from "fs";
 import path from "path";
 import { resolveCluster } from "./_cluster";
+import { requireDevnet } from "./_guard";
 
 const DEVNET_USDC = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 const SOT = path.join(__dirname, "..", "config", "mainnet-authorities.json");
@@ -72,6 +73,71 @@ withRpc("https://api.mainnet-beta.solana.com", () => {
     c.lazerTreasury.toBase58(),
   );
 });
+
+// 2b. REVIEW-OF-FIXES P0: a MAINNET host whose URL merely CONTAINS "devnet" must classify as mainnet.
+//     The first version of `classify()` tested /devnet/i against the whole URL, so a query parameter, a
+//     path segment, or six characters landing by chance inside an API key made it "devnet". Because
+//     `_guard.ts::isDevnet` used the same test, `requireDevnet` returned early and the
+//     DOMINION_ALLOW_MAINNET consent gate never fired: an --execute run would have extended and deployed
+//     on MAINNET while printing cluster=devnet.
+//
+//     This gate existed and could not fail on it, because it only pinned "unknown host -> mainnet".
+//     These are the exact strings from the security review.
+for (const rpc of [
+  "https://api.mainnet-beta.solana.com/?tag=devnet-mirror",
+  "https://mainnet.helius-rpc.com/?api-key=7fdevnet91-aaaa",
+  "https://rpc.internal/devnet-proxy-to-mainnet",
+  "https://api.mainnet-beta.solana.com/devnet",
+  "https://devnet-mirror.mainnet.example.com",
+]) {
+  withRpc(rpc, () => {
+    const c = resolveCluster();
+    ok(
+      `"devnet" inside a mainnet URL does NOT make it devnet: ${rpc.slice(8, 52)}`,
+      c.cluster === "mainnet-beta",
+      c.cluster,
+    );
+    ok(
+      `  and it does not hand back the devnet USDC mint`,
+      c.usdcMint.toBase58() !== DEVNET_USDC,
+    );
+  });
+}
+
+// 2c. A genuine devnet HOST must still be devnet, so the fix is not a blanket "everything is mainnet".
+for (const rpc of [
+  "https://api.devnet.solana.com",
+  "https://devnet.helius-rpc.com/?api-key=x",
+  "https://api.devnet.solana.com/?api-key=mainnet-looking-key",
+]) {
+  withRpc(rpc, () => {
+    ok(`a real devnet host stays devnet: ${rpc.slice(8, 48)}`, resolveCluster().cluster === "devnet");
+  });
+}
+
+// 2d. And the guard that actually gates transactions must agree with the classifier. Two
+//     implementations of "is this devnet" was the underlying defect; the regex was only the symptom.
+for (const [rpc, shouldNeedConsent] of [
+  ["https://api.devnet.solana.com", false],
+  ["http://127.0.0.1:8899", false], // P2-6: localnet is the mandated rehearsal cluster
+  ["https://api.mainnet-beta.solana.com", true],
+  ["https://api.mainnet-beta.solana.com/?tag=devnet-mirror", true],
+] as const) {
+  const prev = process.env.DOMINION_ALLOW_MAINNET;
+  delete process.env.DOMINION_ALLOW_MAINNET;
+  let refused = false;
+  try {
+    requireDevnet(rpc, "gate self-check");
+  } catch {
+    refused = true;
+  }
+  if (prev !== undefined) process.env.DOMINION_ALLOW_MAINNET = prev;
+  ok(
+    `requireDevnet ${shouldNeedConsent ? "DEMANDS" : "does not demand"} consent for ${rpc.slice(0, 46)}`,
+    refused === shouldNeedConsent,
+    `refused=${refused}`,
+  );
+}
 
 // 3. an unrecognised host must NOT be treated as devnet
 for (const rpc of [

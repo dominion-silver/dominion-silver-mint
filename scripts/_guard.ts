@@ -26,6 +26,8 @@
  */
 
 /** Actions classified by how expensive the UNDO is. */
+import { classifyCluster } from "./_cluster";
+
 export type ActionCost =
   /** Undo is another transaction, immediately. Safe for a test to do unasked. */
   | "reversible"
@@ -96,10 +98,43 @@ export const ACTION_COST: Record<string, ActionCost> = {
   // Funds leave to a caller-supplied address. Recoverable only if you control the
   // destination, which a script cannot assume, so this is operator-only.
   withdraw_fees: "irreversible",
+
+  // REVIEW-OF-FIXES P1. `upgrade-program.ts` borrowed `set_upgrade_authority` and
+  // `execute_set_public_mint` as its intent tokens, which was wrong twice over. First, the documented
+  // command was `DOMINION_INTENT=irreversible`, and `assertReversible` matches the intent against the
+  // ACTION NAME, not against the cost, so the documented command was REFUSED and the --execute path had
+  // never run: the S-03 shape again, an upgrade helper whose real path is dead. Second, the error names
+  // the action it wants, so the operator's natural fix was to export `DOMINION_INTENT=set_upgrade_authority`
+  // for a routine bytecode upgrade, which then pre-authorises transferring or revoking the upgrade
+  // authority for every later command in that shell. Opening the public mint by accident is the literal
+  // incident RULE 2 was created after.
+  extend_program_data: "irreversible", // rent for the added bytes is locked for the program's life
+  deploy_program: "irreversible", // new bytecode; the old bytes are gone
 };
 
+/**
+ * REVIEW-OF-FIXES P0. This was `/devnet/i.test(rpc)` against the WHOLE URL, and it is the predicate the
+ * consent gate below turns on, so it was the actual bypass: any mainnet endpoint whose query string,
+ * path or API key happened to contain the six characters "devnet" returned true, `requireDevnet`
+ * returned early, and DOMINION_ALLOW_MAINNET was never demanded. Measured examples in `_cluster.ts`.
+ *
+ * It now delegates to the one classifier, so the guard and the address resolution cannot disagree about
+ * which cluster this is. Having two implementations of "is this devnet" was the underlying defect; the
+ * regex was only how it showed up.
+ *
+ * REVIEW-OF-FIXES P2-6: LOCALNET counts as safe here. It did not, so `requireDevnet` demanded the
+ * mainnet consent variable for `http://127.0.0.1:8899`, which is the cluster the audit's own re-audit
+ * criterion 2 says to rehearse the upgrade on. Training the operator to export
+ * DOMINION_ALLOW_MAINNET for a local rehearsal disables RULE 1 for every later command in that shell.
+ */
 function isDevnet(rpc: string): boolean {
-  return /devnet/i.test(rpc);
+  try {
+    const c = classifyCluster(rpc);
+    return c === "devnet" || c === "localnet";
+  } catch {
+    // An unparseable or unsupported endpoint is not devnet. Fail towards demanding consent.
+    return false;
+  }
 }
 
 /**
