@@ -26,7 +26,11 @@
  */
 
 /** Actions classified by how expensive the UNDO is. */
-import { classifyCluster } from "./_cluster";
+import {
+  assertClusterMatchesChain,
+  classifyCluster,
+  resolveClusterFor,
+} from "./_cluster";
 
 export type ActionCost =
   /** Undo is another transaction, immediately. Safe for a test to do unasked. */
@@ -138,11 +142,27 @@ function isDevnet(rpc: string): boolean {
 }
 
 /**
- * RULE 1. Refuse to run against anything but devnet unless explicitly authorised.
+ * RULE 1. Refuse to run against anything but devnet unless explicitly authorised, AND confirm with the
+ * chain that it really is the cluster the hostname claims.
+ *
+ * **This is async and there is deliberately no synchronous version.** The previous synchronous
+ * `requireDevnet` was renamed out of existence rather than kept as an alias, so every call site became a
+ * compile error until it was updated. That is the point: the re-audit found the genesis-hash check wired
+ * into three scripts and MISSING FROM THIRTEEN, including `create-fee-vault.ts`, which is a mandatory
+ * mainnet step. I had fixed instances and left the class, for the fourth time in this batch.
+ *
+ * The lesson, written here because this is the chokepoint: when a safety check has to be CALLED, the
+ * scripts that forget it are the ones that matter. So the check lives inside the guard every sending
+ * script already calls, and the guard cannot be called without it.
  *
  * Call this FIRST in every script that sends a transaction, before building anything.
  */
-export function requireDevnet(rpc: string, scriptName: string): void {
+/** The CONSENT half of RULE 1, synchronous and network-free, so it can be unit-tested cheaply.
+ *
+ *  Split out for the cluster gate: testing consent for four URLs should not cost four RPC round trips.
+ *  It is NOT a substitute for `requireSanctionedCluster`: consent without the genesis check is exactly
+ *  the hole that let a devnet-hostname proxy spend mainnet funds. */
+export function guardConsentOnly(rpc: string, scriptName = "this script"): void {
   if (isDevnet(rpc)) return;
   if (process.env.DOMINION_ALLOW_MAINNET === "i-understand") {
     console.log(
@@ -158,6 +178,18 @@ export function requireDevnet(rpc: string, scriptName: string): void {
       `  DOMINION_ALLOW_MAINNET=i-understand\n` +
       `and re-read what the script does first.`,
   );
+}
+
+export async function requireSanctionedCluster(
+  rpc: string,
+  scriptName: string,
+): Promise<void> {
+  guardConsentOnly(rpc, scriptName);
+
+  // The hostname is a claim made by whoever set DOMINION_RPC; the genesis hash is what the chain IS.
+  // Without this, `https://devnet.proxy.example` pointed at mainnet passes the consent gate as devnet and
+  // spends real funds while printing "devnet". That was the re-audit's second P0.
+  await assertClusterMatchesChain(resolveClusterFor(rpc));
 }
 
 /**

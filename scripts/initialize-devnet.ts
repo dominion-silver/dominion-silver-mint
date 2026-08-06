@@ -70,8 +70,15 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
+import { requireSanctionedCluster } from "./_guard";
+import { resolveCluster, describeCluster } from "./_cluster";
 
-const DEVNET_RPC = "https://api.devnet.solana.com";
+// RE-AUDIT P0 (the CLASS). This was a hardcoded devnet RPC on a script that PERFORMS `initialize`, the
+// one-shot action of the whole ceremony. It ignored DOMINION_RPC and nothing confirmed the chain matched
+// the hostname. Found by the structural assertion in scripts/verify-cluster-resolution.ts, which was
+// added precisely because the re-audit's "missing fourth script" turned out to be a missing ten.
+const CLUSTER = resolveCluster();
+const DEVNET_RPC = CLUSTER.rpc;
 // CODEX P0-01: V2 program id (NOT the V1 id J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5).
 // DOMINION_PROGRAM_ID override exists ONLY for the isolated Squads E2E
 // (scripts/test-dominion-squads-e2e.ts) which deploys a throwaway instance
@@ -247,6 +254,8 @@ async function createSilvMint(
 }
 
 async function main() {
+  await requireSanctionedCluster(DEVNET_RPC, "initialize-devnet");
+  console.log("  " + describeCluster(CLUSTER));
   const { admin, upgradeSquads } = parseArgs();
   const connection = new Connection(DEVNET_RPC, "confirmed");
 

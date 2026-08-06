@@ -224,6 +224,34 @@ export function resolveCluster(): ClusterContext {
   };
 }
 
+/**
+ * The context for an ARBITRARY rpc, not the one in the environment.
+ *
+ * `resolveCluster()` reads DOMINION_RPC; the guard is handed a URL by its caller and must validate THAT
+ * one. Sharing the classification and the address table between the two is what keeps the guard and the
+ * address resolution from disagreeing about which cluster this is, which was the underlying defect behind
+ * the first cluster P0.
+ */
+export function resolveClusterFor(rpc: string): ClusterContext {
+  const cluster = classifyCluster(rpc);
+  if (cluster === "devnet" || cluster === "localnet") {
+    return {
+      rpc,
+      cluster,
+      usdcMint: new PublicKey(DEVNET.usdcMint),
+      lazerTreasury: new PublicKey(DEVNET.lazerTreasury),
+      foreignUpgradeableProgram: new PublicKey(DEVNET.foreignUpgradeableProgram),
+    };
+  }
+  return {
+    rpc,
+    cluster,
+    usdcMint: requiredMainnetAddress("usdc_mint"),
+    lazerTreasury: requiredMainnetAddress("lazer_treasury"),
+    foreignUpgradeableProgram: requiredMainnetAddress("foreign_upgradeable_program"),
+  };
+}
+
 /** Convenience: a Connection plus the resolved context, since every caller wants both. */
 export function connect(): { conn: Connection; ctx: ClusterContext } {
   const ctx = resolveCluster();

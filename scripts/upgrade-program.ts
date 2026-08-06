@@ -41,8 +41,8 @@ import { execFileSync } from "child_process";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { resolveCluster, describeCluster, assertClusterMatchesChain } from "./_cluster";
-import { requireDevnet, assertReversible, intentFromEnv } from "./_guard";
+import { resolveCluster, describeCluster } from "./_cluster";
+import { requireSanctionedCluster, assertReversible, intentFromEnv } from "./_guard";
 import { PROGRAM_ID } from "./_program-id";
 
 const EXECUTE = process.argv.includes("--execute");
@@ -72,12 +72,7 @@ async function main() {
   console.log(`  program: ${PROGRAM_ID.toBase58()}`);
   console.log(`  mode:    ${EXECUTE ? "EXECUTE (real transactions)" : "DRY RUN (no transactions)"}`);
 
-  requireDevnet(CLUSTER.rpc, "in-place program upgrade");
-  // The genesis hash is the CHAIN's answer to "which cluster am I"; the hostname is only a claim made by
-  // whoever set DOMINION_RPC. This runs before the extend and the deploy, which are the irreversible
-  // parts, and it is the only thing that catches a proxy or a typo pointing a devnet-looking URL at
-  // mainnet. Written as part of the P0 fix and, until now, never called: dead code in a safety path.
-  await assertClusterMatchesChain(CLUSTER);
+  await requireSanctionedCluster(CLUSTER.rpc, "in-place program upgrade");
 
   if (!fs.existsSync(SO)) {
     die(`no local artifact at ${SO}. Build first: cargo build-sbf -- --locked`);

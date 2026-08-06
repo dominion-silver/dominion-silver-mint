@@ -34,6 +34,30 @@ let ready = 0;
 let blocked = 0;
 let human = 0;
 let scheduled = 0;
+
+/**
+ * Which runbook step the operator is ABOUT to perform, from `--stage=N`.
+ *
+ * RE-AUDIT P1. `atStep` never affected the exit code and the gate had no notion of where the ceremony
+ * was, so an item "satisfied by step 2" stayed non-blocking forever. Fund the deployer, skip T1, skip the
+ * constants swap, skip the fee vault, and the gate could exit 0 saying "Nothing mechanically blocking"
+ * while the token did not exist, the apps still pointed at devnet, and every mint and redeem would revert
+ * for the missing vault.
+ *
+ * With `--stage=N`, anything whose step is BEHIND N is overdue and blocks. Without it the gate behaves as
+ * before, which is correct for the pre-ceremony read, and the summary says so instead of implying the
+ * checks are complete.
+ */
+const STAGE: number | null = (() => {
+  const a = process.argv.find((x) => x.startsWith("--stage="));
+  if (!a) return null;
+  const n = Number(a.slice("--stage=".length));
+  if (!Number.isFinite(n)) {
+    console.error(`--stage must be a runbook step number, got ${JSON.stringify(a)}`);
+    process.exit(2);
+  }
+  return n;
+})();
 function ok(msg: string, detail = "") {
   console.log(`  READY    ${msg}${detail ? ` -> ${detail}` : ""}`);
   ready++;
@@ -51,6 +75,15 @@ function no(msg: string, detail = "") {
  * green" would be trained to override it. That is D2's failure mode, the item this pass just fixed,
  * reproduced in the gate itself. */
 function atStep(step: string, msg: string, detail = "") {
+  // The step label can be "2" or "runbook steps 3-6"; take the FIRST number as the due step.
+  const due = Number((/(\d+)/.exec(step) ?? [])[1] ?? NaN);
+  if (STAGE !== null && Number.isFinite(due) && due < STAGE) {
+    console.log(
+      `  OVERDUE  ${msg} -> was due at step ${due}, you are at step ${STAGE}${detail ? `. ${detail}` : ""}`,
+    );
+    blocked++;
+    return;
+  }
   console.log(`  AT STEP ${step}  ${msg}${detail ? ` -> ${detail}` : ""}`);
   scheduled++;
 }
@@ -258,8 +291,23 @@ async function main() {
       true, // allowOwnerOffCurve: the owner is a PDA
       TOKEN_PROGRAM_ID,
     );
-    const info = await conn.getAccountInfo(vault).catch(() => null);
-    if (info) {
+    // RE-AUDIT P1: this was `.catch(() => null)`, so an RPC FAILURE was reported as "the vault does not
+    // exist yet", which is a different fact and the reassuring one. Same class as P-04 and A-01: a helper
+    // that cannot tell "no" from "do not know" must not answer.
+    let info: Awaited<ReturnType<typeof conn.getAccountInfo>> | null = null;
+    let vaultReadFailed = false;
+    try {
+      info = await conn.getAccountInfo(vault);
+    } catch (e) {
+      vaultReadFailed = true;
+      no(
+        "3c. could not READ the MAINNET fee vault, so its existence is UNKNOWN",
+        String(e).slice(0, 100),
+      );
+    }
+    if (vaultReadFailed) {
+      // already reported
+    } else if (info) {
       ok("3c. the MAINNET fee vault exists", vault.toBase58());
     } else {
       atStep(
@@ -302,6 +350,15 @@ async function main() {
       `\n  ${scheduled} item(s) are resolved BY a runbook step, so they are expected to be red\n` +
         "  before the ceremony and must be re-run after that step. They do NOT block starting.",
     );
+    if (STAGE === null) {
+      console.log(
+        "  Pass --stage=N (the step you are ABOUT to perform) and any of them still unmet from an\n" +
+          "  EARLIER step becomes BLOCKING. Without --stage this gate cannot tell 'not yet' from\n" +
+          "  'skipped', so a mid-ceremony run reads falsely reassuring.",
+      );
+    } else {
+      console.log(`  Evaluated at --stage=${STAGE}: anything due before it is reported OVERDUE.`);
+    }
   }
   if (blocked > 0) {
     console.log(

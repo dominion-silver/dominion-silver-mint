@@ -26,7 +26,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { resolveCluster } from "./_cluster";
-import { requireDevnet } from "./_guard";
+import { guardConsentOnly } from "./_guard";
 
 const DEVNET_USDC = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
 const SOT = path.join(__dirname, "..", "config", "mainnet-authorities.json");
@@ -128,13 +128,16 @@ for (const [rpc, shouldNeedConsent] of [
   delete process.env.DOMINION_ALLOW_MAINNET;
   let refused = false;
   try {
-    requireDevnet(rpc, "gate self-check");
+    // The guard reaches the network for the genesis check, so this asserts only the CONSENT half: a
+    // refusal for the right reason happens before any RPC call. `guardConsentOnly` is the same predicate
+    // the guard uses, exposed so this gate does not have to make 4 network calls to test 4 URLs.
+    guardConsentOnly(rpc);
   } catch {
     refused = true;
   }
   if (prev !== undefined) process.env.DOMINION_ALLOW_MAINNET = prev;
   ok(
-    `requireDevnet ${shouldNeedConsent ? "DEMANDS" : "does not demand"} consent for ${rpc.slice(0, 46)}`,
+    `consent ${shouldNeedConsent ? "DEMANDED" : "not demanded"} for ${rpc.slice(0, 46)}`,
     refused === shouldNeedConsent,
     `refused=${refused}`,
   );
@@ -150,6 +153,51 @@ for (const rpc of [
     const c = resolveCluster();
     ok(`unrecognised host is not devnet: ${new URL(rpc).host}`, c.cluster === "mainnet-beta", c.cluster);
   });
+}
+
+// 3b. STRUCTURAL: every script that SENDS a transaction must go through the one guard.
+//
+//     RE-AUDIT P0. The genesis-hash check was wired into three scripts and missing from thirteen,
+//     including `create-fee-vault.ts`, a mandatory mainnet step. Point `https://devnet.proxy.example` at
+//     mainnet, run it without consent, and it created the irreversible ATA with real SOL while printing
+//     "devnet". I had fixed instances and left the class, for the fourth time in this batch.
+//
+//     So the check moved INSIDE `requireSanctionedCluster` and the old synchronous `requireDevnet` was
+//     deleted rather than aliased, making every call site a compile error until updated. This assertion
+//     is what stops the class from reopening: a NEW sending script that forgets the guard fails here, not
+//     in production.
+{
+  const sendPattern = /sendAndConfirmTransaction|\.rpc\(\)|solana", \[\s*"program",\s*"deploy"/;
+  const scriptsDir = path.join(__dirname);
+  const offenders: string[] = [];
+  const helpers = new Set([
+    "_guard.ts",
+    "_cluster.ts",
+    "_program-id.ts",
+    "_t1-mint-helper.ts", // called BY t1, which guards; it never resolves a cluster itself
+    "verify-cluster-resolution.ts",
+  ]);
+  for (const f of fs.readdirSync(scriptsDir).filter((x) => x.endsWith(".ts"))) {
+    if (helpers.has(f)) continue;
+    const src = fs.readFileSync(path.join(scriptsDir, f), "utf8");
+    if (!sendPattern.test(src)) continue;
+    if (!/requireSanctionedCluster\s*\(/.test(src)) offenders.push(f);
+  }
+  ok(
+    "every transaction-sending script calls requireSanctionedCluster",
+    offenders.length === 0,
+    offenders.length ? offenders.join(", ") : "none unguarded",
+  );
+  // And nothing may reach for the consent-only predicate to skirt the genesis check.
+  const skirters = fs
+    .readdirSync(scriptsDir)
+    .filter((x) => x.endsWith(".ts") && x !== "verify-cluster-resolution.ts" && x !== "_guard.ts")
+    .filter((f) => /guardConsentOnly/.test(fs.readFileSync(path.join(scriptsDir, f), "utf8")));
+  ok(
+    "no script uses guardConsentOnly to skip the genesis-hash check",
+    skirters.length === 0,
+    skirters.length ? skirters.join(", ") : "none",
+  );
 }
 
 // 4. MUTATION: drop a mainnet constant and require a throw, not a devnet fallback.

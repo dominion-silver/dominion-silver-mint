@@ -26,7 +26,7 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
-import { requireDevnet, assertReversible, intentFromEnv } from "./_guard";
+import { requireSanctionedCluster, assertReversible, intentFromEnv } from "./_guard";
 
 const RPC = process.env.DOMINION_RPC || "https://api.devnet.solana.com";
 const PROGRAM_ID = SHARED_PROGRAM_ID;
@@ -50,7 +50,7 @@ async function expectRevert(name: string, code: string, fn: () => Promise<unknow
 async function main() {
   // RULE 1 (scripts/_guard.ts): refuse any cluster but devnet unless
   // DOMINION_ALLOW_MAINNET is explicitly set.
-  requireDevnet(RPC, "T3 public-mint gate");
+  await requireSanctionedCluster(RPC, "T3 public-mint gate");
   const INTENT = intentFromEnv();
   const conn = new Connection(RPC, "confirmed");
   const kp = Keypair.fromSecretKey(

@@ -234,9 +234,17 @@ d['launch_posture']['max_guardian_count'], d['authorities']['compliance']['pubke
 T1 echoes the same values on its second line of output. If they disagree with what you expect, fix
 the JSON, not the TypeScript.
 
-**`admin` and `upgradeAuthorityInfo`** are still the signer, by design: `initialize` binds them to
-the deploying upgrade authority (audit DOM-001), so deploy from the Ops Squads vault or transfer the
-upgrade authority to it AFTER initialize (step 12).
+**`admin` is the OPS SQUADS VAULT, read from `authorities.ops_admin.pubkey`. It is NOT the signer.**
+
+The sentence here until 2026-08-06 said `admin` was "still the signer, by design: `initialize` binds them
+to the deploying upgrade authority (audit DOM-001)". That was FALSE and it was a P0. DOM-001 binds the
+SIGNER to the current BPF upgrade authority; it says nothing about `args.admin`, which `initialize` writes
+verbatim with only a non-zero check. Following this page would have written the deployer into
+`config.admin`, so step 7's Ops-vault proposal would fail `has_one = admin`, and the deployer would keep
+unilateral admin authority over the protocol with no transfer step anywhere in the path.
+
+`upgradeAuthorityInfo` IS the signer, and is informational only: it records who initialised. The real
+upgrade authority is whatever the BPF loader says, moved to the upgrade vault at step 12.
 
 **Do NOT edit `scripts/_t1-mint-helper.ts` either.** That instruction was here until 2026-08-06 and it
 was a P0 waiting to happen: the helper hardcoded the mint's freeze authority and permanent delegate to

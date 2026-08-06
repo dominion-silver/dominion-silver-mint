@@ -53,11 +53,10 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { createSilvMintForTest } from "./_t1-mint-helper";
-import { requireDevnet, assertReversible, intentFromEnv } from "./_guard";
+import { requireSanctionedCluster, assertReversible, intentFromEnv } from "./_guard";
 import {
   resolveCluster,
   describeCluster,
-  assertClusterMatchesChain,
   mainnetConfig,
   type ClusterContext,
 } from "./_cluster";
@@ -110,10 +109,7 @@ function programData(id: PublicKey): PublicKey {
 async function main() {
   // RULE 1 (scripts/_guard.ts): refuse any cluster but devnet unless
   // DOMINION_ALLOW_MAINNET is explicitly set.
-  requireDevnet(RPC, "T1 hostile bootstrap");
-  // Before ANY transaction: confirm the chain is the cluster the hostname claims. T1's case 5 performs
-  // the one-shot `initialize`, so a wrong cluster here is not a retryable mistake.
-  await assertClusterMatchesChain(CLUSTER);
+  await requireSanctionedCluster(RPC, "T1 hostile bootstrap");
   const INTENT = intentFromEnv();
   const conn = new Connection(RPC, "confirmed");
   const authority = loadKp(
@@ -221,6 +217,17 @@ async function main() {
     return new PublicKey(pk);
   }
   const COMPLIANCE = ceremonyAuthority("compliance", authority.publicKey);
+  // RE-AUDIT P0. `args.admin` used to be the SIGNER, and I had written a runbook note asserting that was
+  // "by design: initialize binds them to the deploying upgrade authority (audit DOM-001)". That is false.
+  // DOM-001 binds the SIGNER to the current BPF upgrade authority (initialize.rs:162); it says nothing
+  // about `args.admin`, which `initialize` writes VERBATIM (initialize.rs:387) with only a non-zero check.
+  //
+  // So the mainnet ceremony would have written the deployer `2Lp...` into `config.admin` instead of the
+  // Ops Squads vault `65g...`. Step 7 then asks the Ops vault to propose opening the public mint, which
+  // fails `has_one = admin`, and the deployer keeps unilateral admin authority over the whole protocol
+  // with no admin-transfer step anywhere in the recommended path. I invented a constraint to justify not
+  // changing this, which is the same failure mode as the C-01 migration comment.
+  const CEREMONY_ADMIN = ceremonyAuthority("ops_admin", authority.publicKey);
 
 
   // ---- the attacker ----
@@ -469,7 +476,7 @@ async function main() {
   let initSig = "";
   try {
     initSig = await mkProgram(authority)
-      .methods.initialize(args(authority.publicKey) as never)
+      .methods.initialize(args(CEREMONY_ADMIN) as never)
       .accounts(
         accs(authority.publicKey, programData(PROGRAM_ID), PROGRAM_ID) as never,
       )
@@ -484,7 +491,21 @@ async function main() {
     const program = mkProgram(authority);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const cfg = await (program.account as any).configAccount.fetch(configPda);
-    ok("case 8: config.admin is the intended admin", new PublicKey(cfg.admin).equals(authority.publicKey));
+    // Was `equals(authority.publicKey)`, i.e. "the admin is whoever signed", which is true by
+    // construction and therefore proved nothing. It now compares against the SOURCE OF TRUTH, so on
+    // mainnet it fails loudly if the ceremony admin is not the Ops vault.
+    ok(
+      "case 8: config.admin is the intended ceremony admin",
+      new PublicKey(cfg.admin).equals(CEREMONY_ADMIN),
+      `${new PublicKey(cfg.admin).toBase58()} (expected ${CEREMONY_ADMIN.toBase58()})`,
+    );
+    ok(
+      "case 8: on a real cluster the admin is NOT the deployer",
+      CLUSTER.cluster === "devnet" ||
+        CLUSTER.cluster === "localnet" ||
+        !new PublicKey(cfg.admin).equals(authority.publicKey),
+      "the deployer must not retain unilateral admin authority",
+    );
     ok("case 8: config.silvMint is the intended mint", new PublicKey(cfg.silvMint).equals(silvMint.publicKey));
     ok("case 8: starts paused", cfg.paused === true);
     ok("case 8: public mint closed", cfg.publicMintEnabled === false);

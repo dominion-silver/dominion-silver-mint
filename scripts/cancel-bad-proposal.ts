@@ -2,9 +2,19 @@ import { Connection, PublicKey, Keypair, SystemProgram, Transaction, sendAndConf
 import { AnchorProvider, Program, BN, Idl, Wallet } from "@coral-xyz/anchor";
 import fs from "fs"; import path from "path"; import os from "os";
 import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
+import { requireSanctionedCluster } from "./_guard";
+import { resolveCluster, describeCluster } from "./_cluster";
 
 const PROGRAM_ID = SHARED_PROGRAM_ID;
-const conn = new Connection("https://api.devnet.solana.com", "confirmed");
+// RE-AUDIT P0 (the CLASS, not the instance). This script sends transactions and had NO cluster guard:
+// it hardcoded the devnet RPC, so `DOMINION_RPC` was ignored and nothing confirmed the chain matched.
+// The re-audit named `create-fee-vault.ts` as "the missing fourth"; the structural assertion in
+// scripts/verify-cluster-resolution.ts then found NINE more, of which this is one. Every sending script
+// now resolves its cluster from the environment and passes through the one guard, which does the consent
+// check AND the genesis-hash cross-check.
+const CLUSTER = resolveCluster();
+const RPC = CLUSTER.rpc;
+const conn = new Connection(RPC, "confirmed");
 const deployer = Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(os.homedir()+"/.config/solana/dominion-dev.json", "utf8"))));
 
 const wallet: Wallet = {
@@ -24,6 +34,8 @@ nonceBuf.writeBigUInt64LE(0n, 0);
 const [timelockPda] = PublicKey.findProgramAddressSync([Buffer.from("timelock"), nonceBuf], PROGRAM_ID);
 
 async function main() {
+  await requireSanctionedCluster(RPC, "cancel-bad-proposal.ts");
+  console.log("  " + describeCluster(CLUSTER));
   const cfg = await (program.account as any).configAccount.fetch(configPda);
   console.log("active_proposal_count:", cfg.activeProposalCount);
   console.log("pending_min_reserve_nonce:", cfg.pendingMinReserveNonce?.toString());

@@ -169,14 +169,24 @@ async function main() {
 
   console.log("\n6. Cluster-specific constants in the config");
   const lp = cfg.launch_posture;
+  // RE-AUDIT P1, and this one is entirely self-inflicted. The D-01 consolidation moved the real addresses
+  // into `cluster_constants` and left PROSE POINTERS behind in `launch_posture` ("SEE
+  // cluster_constants.usdc_mint..."), so these two comparisons started measuring a sentence against a
+  // base58 address and failed unconditionally. The live run was 19 passed / 1 warning / 4 failures, of
+  // which two were pure noise, and the runbook demands zero failures: funding the deployer would have
+  // left the ceremony blocked by a broken check.
+  //
+  // Reading `cluster_constants` is also the correct fix rather than restoring the duplicate: having the
+  // same address in two places is what D-01 was about.
+  const cc = cfg.cluster_constants ?? {};
   const expectedUsdc = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   const expectedLazerTreasury = "Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak";
-  lp.usdc_mint_mainnet === expectedUsdc
+  cc.usdc_mint === expectedUsdc
     ? ok("USDC mint is the mainnet mint")
-    : bad("USDC mint is not the mainnet mint", lp.usdc_mint_mainnet);
-  lp.lazer_treasury_mainnet === expectedLazerTreasury
+    : bad("USDC mint is not the mainnet mint", cc.usdc_mint);
+  cc.lazer_treasury === expectedLazerTreasury
     ? ok("Lazer treasury is the mainnet value (it is cluster-specific)")
-    : bad("Lazer treasury is not the mainnet value", lp.lazer_treasury_mainnet);
+    : bad("Lazer treasury is not the mainnet value", cc.lazer_treasury);
 
   console.log(`\n=== ${pass} passed, ${warn} warnings, ${fail} failures ===`);
   if (fail > 0) {

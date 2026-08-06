@@ -28,6 +28,8 @@ import { execFileSync } from "child_process";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { requireSanctionedCluster } from "./_guard";
+import { resolveCluster, describeCluster } from "./_cluster";
 
 const APUB = "/Users/thomasblanc/1_app/dominion/apps/admin/";
 const REPO = "/Users/thomasblanc/1_app/dominion";
@@ -46,7 +48,14 @@ const {
 const multisig = r("@sqds/multisig");
 const anchor = r("@coral-xyz/anchor");
 
-const RPC = "https://api.devnet.solana.com";
+// RE-AUDIT P0 (the CLASS, not the instance). This script sends transactions and had NO cluster guard:
+// it hardcoded the devnet RPC, so `DOMINION_RPC` was ignored and nothing confirmed the chain matched.
+// The re-audit named `create-fee-vault.ts` as "the missing fourth"; the structural assertion in
+// scripts/verify-cluster-resolution.ts then found NINE more, of which this is one. Every sending script
+// now resolves its cluster from the environment and passes through the one guard, which does the consent
+// check AND the genesis-hash cross-check.
+const CLUSTER = resolveCluster();
+const RPC = CLUSTER.rpc;
 
 function loadFunder(): any {
   const p = (
@@ -114,6 +123,8 @@ async function waitForAccount(conn: any, pk: any, tries = 24, delayMs = 1500) {
 }
 
 async function main() {
+  await requireSanctionedCluster(RPC, "test-dominion-squads-e2e.ts");
+  console.log("  " + describeCluster(CLUSTER));
   const programIdStr = process.env.DOMINION_E2E_PROGRAM_ID;
   if (!programIdStr) {
     console.error(

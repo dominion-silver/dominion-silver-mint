@@ -19,8 +19,8 @@ import idl from "../target/idl/dominion_silver_mint.json";
 import { lazerMessageData } from "../apps/public/src/lib/lazer-assembly";
 import { assembleLazerOracleIxs, ED25519_IX_INDEX } from "../apps/public/src/lib/lazer-tx";
 import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
-import { requireDevnet, assertReversible, intentFromEnv } from "./_guard";
-import { resolveCluster, describeCluster, assertClusterMatchesChain } from "./_cluster";
+import { requireSanctionedCluster, assertReversible, intentFromEnv } from "./_guard";
+import { resolveCluster, describeCluster } from "./_cluster";
 
 // AUDIT S-02: RPC, USDC_MINT and LAZER_TREASURY were all hardcoded to devnet, and the runbook
 // presents this script as the proof that the PRICED MINT PATH works after a mainnet init. It could
@@ -108,8 +108,7 @@ async function walletFlagAccounts(conn: anchor.web3.Connection, wallet: PublicKe
 async function main() {
   // RULE 1 (scripts/_guard.ts): refuse any cluster but devnet unless
   // DOMINION_ALLOW_MAINNET is explicitly set.
-  requireDevnet(RPC, "priced mint E2E");
-  await assertClusterMatchesChain(CLUSTER);
+  await requireSanctionedCluster(RPC, "priced mint E2E");
   console.log("  " + describeCluster(CLUSTER));
   const INTENT = intentFromEnv();
   const conn = new Connection(RPC, "confirmed");

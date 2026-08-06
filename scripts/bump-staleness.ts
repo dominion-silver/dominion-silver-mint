@@ -16,6 +16,8 @@ import { createHash } from "crypto";
 import fs from "fs";
 import os from "os";
 import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
+import { requireSanctionedCluster } from "./_guard";
+import { resolveCluster, describeCluster } from "./_cluster";
 
 const PID = SHARED_PROGRAM_ID;
 
@@ -27,12 +29,22 @@ function anchorIxDisc(snakeName: string): Buffer {
 }
 
 async function main() {
+  await requireSanctionedCluster(RPC, "bump-staleness.ts");
+  console.log("  " + describeCluster(CLUSTER));
   const secs = parseInt(process.argv[2] ?? "90", 10);
   if (isNaN(secs) || secs < 1 || secs > 600) {
     console.error("Invalid secs (must be 1..600)"); process.exit(1);
   }
 
-  const c = new Connection("https://api.devnet.solana.com", "confirmed");
+// RE-AUDIT P0 (the CLASS, not the instance). This script sends transactions and had NO cluster guard:
+// it hardcoded the devnet RPC, so `DOMINION_RPC` was ignored and nothing confirmed the chain matched.
+// The re-audit named `create-fee-vault.ts` as "the missing fourth"; the structural assertion in
+// scripts/verify-cluster-resolution.ts then found NINE more, of which this is one. Every sending script
+// now resolves its cluster from the environment and passes through the one guard, which does the consent
+// check AND the genesis-hash cross-check.
+const CLUSTER = resolveCluster();
+const RPC = CLUSTER.rpc;
+  const c = new Connection(RPC, "confirmed");
   const admin = Keypair.fromSecretKey(
     Uint8Array.from(JSON.parse(fs.readFileSync(os.homedir()+"/.config/solana/dominion-dev.json","utf8"))),
   );

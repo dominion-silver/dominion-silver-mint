@@ -68,7 +68,7 @@ async function expectRevert(name: string, code: string, fn: () => Promise<unknow
 async function main() {
   // RULE 1 (scripts/_guard.ts): refuse any cluster but devnet unless
   // DOMINION_ALLOW_MAINNET is explicitly set.
-  requireDevnet(RPC, "T2 guardian lifecycle");
+  await requireSanctionedCluster(RPC, "T2 guardian lifecycle");
   const INTENT = intentFromEnv();
   // This script INSTALLS guardians and leaves them installed. That is acceptable on
   // devnet and unacceptable anywhere else, so refuse to run against a non-devnet
