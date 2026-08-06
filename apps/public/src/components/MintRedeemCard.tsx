@@ -145,11 +145,20 @@ export function MintRedeemCard() {
   // The caller's on-chain per-wallet accounts. Needed so `classifyRedeem` can answer the KYC
   // question for THIS wallet instead of only reporting that the gate is armed. Cheap: one batched
   // RPC call, and only meaningful once an admin arms the gate.
-  const { data: walletFlags } = useSWR(
+  //
+  // `error` is destructured DELIBERATELY. Making the resolver throw only helps if somebody reads the
+  // throw, and the first version of this fix ignored `error`, so a failed read was invisible: the
+  // route silently fell back to whatever `undefined` implies and the fee-exemption line just never
+  // appeared. The punch list claimed this call site surfaced the error before it actually did.
+  const { data: walletFlags, error: walletFlagsError } = useSWR(
     wallet.publicKey ? `wallet-flags-${wallet.publicKey.toBase58()}` : null,
     () => resolveWalletFlags(connection, wallet.publicKey!),
     { refreshInterval: 30_000, keepPreviousData: true },
   );
+  // Tri-state, and the third state has to stay reachable: `undefined` means NOT KNOWN, which
+  // `classifyRedeem` turns into the "kyc" route whenever the gate is armed (`kycAttested !== true`).
+  // That is the fail-closed direction, so an RPC failure blocks rather than promising an instant
+  // redeem the chain would revert.
   const kycAttested = walletFlags ? walletFlags.kyc != null : undefined;
 
   const redeemRoute: RedeemRoute | null = useMemo(() => {
@@ -501,6 +510,20 @@ export function MintRedeemCard() {
           {mode === "mint" ? "SILV" : "USDC"}
         </span>
       </div>
+
+      {/* The per-wallet read failed. Say so, in both modes, because the consequence differs and both
+          are things the user would want to know BEFORE signing. On mint, a fee exemption we cannot
+          see is a fee exemption the program is not told about, so an exempt wallet pays full
+          premium with nothing reverting. On redeem, an attestation we cannot see routes to "kyc". */}
+      {wallet.publicKey && walletFlagsError && (
+        <div className="mb-4 rounded-md border border-warning/40 bg-warning/10 px-3 py-2 text-xs text-warning">
+          Could not read this wallet&apos;s fee-exemption
+          {mode === "redeem" ? " or verification" : ""} status from the network.
+          {mode === "mint"
+            ? " If you hold an exemption it will NOT be applied to this transaction. Retry in a moment rather than signing."
+            : " Redemption will be routed as unverified until the read succeeds."}
+        </div>
+      )}
 
       {/* Option B redeem routing hint. */}
       {mode === "redeem" && (

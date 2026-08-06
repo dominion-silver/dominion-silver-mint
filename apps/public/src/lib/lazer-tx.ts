@@ -181,7 +181,19 @@ export async function resolveWalletFlags(
  *
  * Safe HERE in a way it is not for display, because the program re-checks everything: an omitted
  * exemption charges the full premium and an omitted attestation reverts KycRequired with a mapped
- * message. Building nothing at all would be worse than building a correctly-priced transaction. */
+ * message. Building nothing at all would be worse than building a correctly-priced transaction.
+ *
+ * But "safe" is not "free", and the review-of-fixes was too quick to call it safe and stop. Safe
+ * means the PROTOCOL cannot be cheated. The USER can still lose: if this wallet really does hold a
+ * `FeeExemptAccount` and the read blips, we omit the account, the program cannot see the exemption,
+ * and it charges the full premium on a transaction the user already signed. Nothing reverts, so
+ * there is no second chance. That is a real (if small) cost imposed by our RPC flake, not theirs.
+ *
+ * So retry once before conceding. One extra `getMultipleAccountsInfo` covers the transient blip
+ * that motivates the fallback in the first place, and costs one round trip on the rare failure path
+ * only. It cannot fix a sustained outage: if the wallet is exempt and both reads fail, they overpay.
+ * Closing THAT would mean refusing to build the transaction, which penalises every non-exempt
+ * wallet (nearly all of them) for a fault that affects one, so it is the wrong trade. */
 async function resolveWalletFlagsOrDefault(
   connection: Connection,
   user: PublicKey,
@@ -189,7 +201,11 @@ async function resolveWalletFlagsOrDefault(
   try {
     return await resolveWalletFlags(connection, user);
   } catch {
-    return { feeExempt: null, kyc: null };
+    try {
+      return await resolveWalletFlags(connection, user);
+    } catch {
+      return { feeExempt: null, kyc: null };
+    }
   }
 }
 

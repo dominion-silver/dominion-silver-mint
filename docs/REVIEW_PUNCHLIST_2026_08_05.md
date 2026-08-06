@@ -272,7 +272,31 @@ Closed in that commit. Listed here so this file is the single index.
 A failed RPC read is not the same fact as "this wallet has no exemption", but the resolver returned
 the same value for both, so a flaky endpoint silently quoted a fee-exempt wallet the full premium.
 It now THROWS, and the transaction builders call `resolveWalletFlagsOrDefault`, which is the one
-place allowed to choose a fallback. The SWR call site surfaces the error instead of hiding it.
+place allowed to choose a fallback.
+
+**The last sentence of this entry used to read "The SWR call site surfaces the error instead of
+hiding it", and that was FALSE when written.** The call site destructured only `{ data }`, so the
+throw reached nobody: SWR retried in the background and the UI showed no difference between "no
+exemption" and "could not tell". Making a resolver throw is worthless if no reader is watching, and
+this is the fourth false claim I have written in this batch, all of the same shape: describing the
+intent of a change as though it were its effect. Verifying, not assuming, is the only defence.
+
+Now actually true, and each half verified rather than asserted:
+- The call site destructures `error` and renders an amber banner in BOTH modes. Confirmed against the
+  BUILT CSS, not just the source: `.border-warning\/40{border-color:rgb(245 158 11/.4)}` is present
+  in `.next/static/css`, so the banner has a real colour rather than being an invisible no-op div.
+- The copy differs per mode because the consequence differs. On mint, an exemption the client cannot
+  see is one the program is never told about, so an exempt wallet pays the full premium and NOTHING
+  REVERTS: no second chance, hence "retry rather than signing". On redeem, an unreadable attestation
+  routes to `"kyc"`, which is fail-closed already.
+- `classifyRedeem`'s tri-state was re-checked at the source: `kycAttested !== true` returns `"kyc"`
+  whenever the gate is armed, so `undefined` blocks. The `undefined` branch is genuinely reachable
+  after a failure now, which was the entire point of making the resolver throw.
+- `resolveWalletFlagsOrDefault` retries ONCE before conceding. "Safe" had been conflated with "free":
+  it is safe for the protocol, and it is the USER who pays when a blip hides their exemption. One
+  extra read covers the transient case that motivated the fallback. A sustained outage still
+  overcharges an exempt wallet, and closing that would mean refusing to build for everyone, which
+  penalises the many for a fault affecting one. Documented in the function, deliberately not fixed.
 
 ### [x] E3. `pyth-posting.ts` was dead
 Deleted. Nothing imported it.
