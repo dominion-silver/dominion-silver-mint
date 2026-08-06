@@ -78,7 +78,23 @@ async function walletFlagAccounts(conn: anchor.web3.Connection, wallet: PublicKe
   const ky = PublicKey.findProgramAddressSync(
     [Buffer.from("kyc"), wallet.toBuffer()], PROGRAM_ID)[0];
   const infos = await conn.getMultipleAccountsInfo([fe, ky]);
-  return { feeExempt: infos[0] ? fe : null, kyc: infos[1] ? ky : null };
+  // OWNER + DISCRIMINATOR, not mere existence. Creating an account at a PDA address is
+  // permissionless: a one-lamport SystemProgram.transfer to `feeExemptPda(wallet)` makes a
+  // System-owned account there, and passing that address makes the program revert on the owner
+  // check. Existence-only was a P0 in the app client; the same shape lived here.
+  const disc = (name: string) =>
+    Uint8Array.from(
+      ((idl as any).accounts.find((a: any) => a.name === name)).discriminator as number[],
+    );
+  const ok = (info: any, d: Uint8Array) =>
+    !!info &&
+    info.owner.equals(PROGRAM_ID) &&
+    info.data.length >= 8 &&
+    d.every((b, i) => info.data[i] === b);
+  return {
+    feeExempt: ok(infos[0], disc("FeeExemptAccount")) ? fe : null,
+    kyc: ok(infos[1], disc("KycAccount")) ? ky : null,
+  };
 }
 
 async function main() {

@@ -38,12 +38,16 @@
 // the raw balance, not balance minus float. The float gates the ADMIN's withdrawal, so users
 // come ahead of the admin's ability to move cash out.
 //
-// PREMIUM ROUTING (2026-08-05) changes the treasury's cash flow, which is the one
-// non-obvious consequence of this batch. The treasury now pays out the FULL spot value of
-// the burned SILV, split between the user (spot minus premium) and the fee vault (the
-// premium). Before routing it paid only the user's share and quietly kept the premium. So
-// the solvency check must cover the SUM of both legs, and the treasury drains marginally
-// faster per redemption than it used to.
+// PREMIUM ROUTING (2026-08-05) changes the treasury's cash flow, which is the one non-obvious
+// consequence of this batch. With routing ON the treasury pays out the FULL spot value of the burned
+// SILV, split between the user (spot minus premium) and the fee vault (the premium), so it drains
+// marginally faster per redemption than it used to and the solvency check must cover BOTH legs.
+//
+// With routing OFF (the `fee_routing_disabled` escape hatch) only the user's leg leaves and the
+// premium is retained, which is the pre-2026-08-05 behaviour. The premium is charged either way:
+// what the user receives is identical in both modes. Only the destination differs, which is what
+// stops the escape hatch from doubling as an instant global fee waiver. `total_out` is the figure
+// that drives both the budget debit and the solvency check, so neither over- nor under-counts.
 
 use crate::lazer_cpi::{LazerVerifyAccounts, LAZER_FEE_PAYER_SEED};
 use anchor_lang::prelude::*;
@@ -245,16 +249,14 @@ pub fn handler(
         // must not become a broken product for that wallet.
         now,
     );
-    // A5: with routing OFF the premium stays in the treasury, which is the pre-2026-08-05
-    // behaviour. Zeroing the fee here means the treasury pays only the user's leg, no fee CPI
-    // runs, and an unusable fee vault cannot brick redemption. Note this makes the payout LARGER
-    // (the user receives the full spot value), which is the right direction for a fallback: it
-    // forgoes revenue rather than blocking users.
-    let fee_usdc = if !config.fee_routing_disabled {
-        fee_from_amount(gross_usdc, premium_bps)?
-    } else {
-        0
-    };
+    // The premium is ALWAYS charged. Only its DESTINATION depends on the escape hatch.
+    //
+    // CORRECTED, same as mint_silv. The first version zeroed the fee when routing was disabled and
+    // claimed that left the premium in the treasury. It did not: `to_user` became the FULL gross, so
+    // the treasury paid out 1.5% MORE per redemption than the documented model, for SILV that had
+    // been minted with a premium taken off. Combined with the mint side, the flag was a global
+    // instant both-sides fee waiver that bypassed the 24h timelock on premium changes.
+    let fee_usdc = fee_from_amount(gross_usdc, premium_bps)?;
     // `fee_from_amount` is proven never to exceed its input (math.rs). Checked anyway: an
     // unchecked subtraction here would wrap into a colossal payout.
     let to_user_usdc = gross_usdc
@@ -287,9 +289,17 @@ pub fn handler(
         config.instant_used_usdc,
         config.instant_used_prev_usdc,
     );
+    // What ACTUALLY leaves the treasury: the user's leg, plus the premium leg only when routing is
+    // on. With routing off the premium is retained, so debiting the budget by the gross would
+    // over-count the outflow and refuse redemptions the treasury can comfortably fund.
+    let fee_routed = if config.fee_routing_disabled { 0 } else { fee_usdc };
+    let total_out = to_user_usdc
+        .checked_add(fee_routed)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
+
     let new_used = win
         .effective_used
-        .checked_add(gross_usdc)
+        .checked_add(total_out)
         .ok_or(error!(DominionError::ArithmeticOverflow))?;
 
     // 7. The two limits, ordered by what they protect.
@@ -311,7 +321,7 @@ pub fn handler(
     // withdrawal, so a user redeeming comes ahead of the admin's ability to move cash out.
     let treasury_balance = ctx.accounts.usdc_treasury.amount;
     require!(
-        treasury_balance >= gross_usdc,
+        treasury_balance >= total_out,
         DominionError::InsufficientTreasury
     );
 
@@ -327,7 +337,7 @@ pub fn handler(
     config.instant_used_prev_usdc = win.rolled_prev;
     config.instant_used_usdc = win
         .rolled_current
-        .checked_add(gross_usdc)
+        .checked_add(total_out)
         .ok_or(error!(DominionError::ArithmeticOverflow))?;
 
     // 9. Dust-filter price update (feeds the circuit breaker; D38). Uses the pre-premium
@@ -371,7 +381,7 @@ pub fn handler(
     // Ordered AFTER the user's leg deliberately. Both are in one transaction so neither can
     // land alone, but if a future change ever splits them, the user being paid first is the
     // failure mode to prefer.
-    if fee_usdc > 0 {
+    if fee_routed > 0 {
         usdc_transfer_treasury_to_fee_vault(
             ctx.accounts.classic_token_program.to_account_info(),
             ctx.accounts.usdc_treasury.to_account_info(),
@@ -379,7 +389,7 @@ pub fn handler(
             ctx.accounts.usdc_mint.to_account_info(),
             ctx.accounts.treasury_pda.to_account_info(),
             signer_seeds,
-            fee_usdc,
+            fee_routed,
             ctx.accounts.usdc_mint.decimals,
         )?;
     }
@@ -394,7 +404,9 @@ pub fn handler(
         // The EFFECTIVE premium, not config.premium_bps_redeem: 0 means the caller used a
         // redeem-side fee exemption.
         premium_bps_used: premium_bps,
-        fee_usdc,
+        // What the VAULT received. Zero with routing disabled, in which case the premium was still
+        // charged (see `premium_bps_used`) and retained in the treasury.
+        fee_usdc: fee_routed,
         timestamp: now,
     });
 

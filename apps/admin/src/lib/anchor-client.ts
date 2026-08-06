@@ -62,8 +62,12 @@ export interface ConfigAccount {
   treasuryMinFloatUsdc: BN;
   // D11: manual redemptions switch
   redemptionsEnabled: boolean;
-  // Fixed-reset-window redemption budget. "Fixed", NOT sliding: the true worst case across a
-  // window boundary is TWICE the budget (drain it just before the reset, then again just after).
+  // SLIDING-window redemption budget (2026-08-05). Two buckets: the current one plus the previous
+  // one weighted by how much of it still lies inside the trailing window.
+  //
+  // The worst case is still 2x the budget, but it now takes an alignment nearly a full window wide
+  // instead of a one-second wait for a reset. That rate change is the whole benefit; the bound is
+  // unchanged. Size the budget at half the daily outflow you are willing to see.
   /** DEAD ON CHAIN since 2026-08-05: no instruction reads it. It still DECODES and still holds its
    *  $5,000 default, which is exactly how it did damage: the PUBLIC app read it and silently
    *  blocked every redemption at or above $5,000. Never read it, and never display it as live
@@ -75,6 +79,11 @@ export interface ConfigAccount {
   redeemQueueDelaySeconds: number;
   instantWindowStart: BN;
   instantUsedUsdc: BN;
+  /** Usage of the PREVIOUS bucket, for the sliding-window counter (2026-08-05). Optional because a
+   *  config written before that upgrade decodes it as 0, which correctly means "no prior bucket".
+   *  MUST be read: omitting it is what made this console model a FIXED window while the program had
+   *  become sliding, so the operator's only view of the treasury's brake was wrong. */
+  instantUsedPrevUsdc?: BN;
   /** DEAD ON CHAIN since 2026-08-05 (there is no queue). Do not read. */
   nextRedeemRequestNonce: BN;
   // Timelock + guardians
@@ -149,7 +158,11 @@ export interface DashboardSnapshot {
   silvSupply: BN;
   // Option B derived:
   supplyUtilizationBps: number | null; // silvSupply / maxSilvSupply, bps
-  instantBudgetRemainingUsdc: BN; // window-aware remaining instant budget
+  instantBudgetRemainingUsdc: BN; // sliding-window-aware remaining budget
+  /** Usage that actually counts against the budget right now, i.e. current bucket plus the decaying
+   *  weight of the previous one. This is what the program compares, so it is what the operator must
+   *  see: `cfg.instantUsedUsdc` alone understates it for most of every window. */
+  effectiveUsedUsdc: BN;
   instantWindowExpired: boolean; // true => budget effectively reset
   instantWindowNeverStarted: boolean; // window_start == 0 (no instant redeem ever)
   treasuryFloatOk: boolean; // treasury >= treasury_min_float_usdc
@@ -219,24 +232,50 @@ export async function fetchDashboardSnapshot(
       .toNumber();
   }
 
-  // Window-aware instant budget remaining (mirrors the contract's fixed-reset
-  // window: if now >= window_start + window_seconds the used counter is
-  // logically zero again). The contract bootstraps instant_window_start = 0
-  // and only sets it to `now` on the first instant redeem after expiry, so a
-  // never-redeemed config has start == 0 (treated as "no window yet", not a
-  // reset of a real window - budget is still logically full).
+  // The contract's SLIDING window counter, ported from `state/redeem_window.rs::roll_window`.
+  //
+  // This block used to mirror a FIXED reset window, and its own comment said so. The program stopped
+  // being fixed on 2026-08-05 and this file was not updated, so the console showed
+  // "Instant used this window: $0 (window reset)" and the full budget as remaining in exactly the
+  // state where the program had near-zero headroom. That is the operator's only view of the only
+  // brake on the treasury, and it was wrong in the direction that invites over-sizing.
   const nowSecs = Math.floor(Date.now() / 1000);
+  const w = c.instantRedeemWindowSeconds;
+  const windowStart = c.instantWindowStart.toNumber();
   const instantWindowNeverStarted = c.instantWindowStart.isZero();
-  const windowEnd = c.instantWindowStart
-    .add(new BN(c.instantRedeemWindowSeconds))
-    .toNumber();
+  const elapsed = Math.max(0, nowSecs - windowStart);
+
+  let bucketStart: number;
+  let current: BN;
+  let prev: BN;
+  if (instantWindowNeverStarted) {
+    bucketStart = nowSecs;
+    current = c.instantUsedUsdc;
+    prev = c.instantUsedPrevUsdc ?? new BN(0);
+  } else if (w > 0 && elapsed >= 2 * w) {
+    bucketStart = nowSecs;
+    current = new BN(0);
+    prev = new BN(0);
+  } else if (w > 0 && elapsed >= w) {
+    bucketStart = windowStart + w;
+    current = new BN(0);
+    prev = c.instantUsedUsdc;
+  } else {
+    bucketStart = windowStart;
+    current = c.instantUsedUsdc;
+    prev = c.instantUsedPrevUsdc ?? new BN(0);
+  }
+  const into = w > 0 ? Math.min(Math.max(0, nowSecs - bucketStart), w) : 0;
+  const effectiveUsedUsdc =
+    w > 0 ? current.add(prev.muln(w - into).divn(w)) : new BN(0);
+
+  // "Expired" now means "the previous bucket has fully decayed out", which is the only sense in
+  // which anything resets under a sliding counter.
   const instantWindowExpired =
-    !instantWindowNeverStarted && nowSecs >= windowEnd;
-  const usedThisWindow =
-    instantWindowNeverStarted || instantWindowExpired
-      ? new BN(0)
-      : c.instantUsedUsdc;
-  let instantBudgetRemainingUsdc = c.instantRedeemBudgetUsdc.sub(usedThisWindow);
+    !instantWindowNeverStarted && w > 0 && elapsed >= 2 * w;
+
+  let instantBudgetRemainingUsdc =
+    c.instantRedeemBudgetUsdc.sub(effectiveUsedUsdc);
   if (instantBudgetRemainingUsdc.ltn(0)) {
     instantBudgetRemainingUsdc = new BN(0);
   }
@@ -249,6 +288,7 @@ export async function fetchDashboardSnapshot(
     silvSupply,
     supplyUtilizationBps,
     instantBudgetRemainingUsdc,
+    effectiveUsedUsdc,
     instantWindowExpired,
     instantWindowNeverStarted,
     treasuryFloatOk,

@@ -74,23 +74,56 @@ pub fn cancel_handler(ctx: Context<CancelTimelocked>, nonce: u64) -> Result<()> 
         _ => None,
     };
 
+    // Clear the single-active slot ONLY IF IT STILL POINTS AT THIS NONCE.
+    //
+    // This used to be unconditional, keyed on the action kind alone, and that was HARMLESS right up
+    // until the A7 bind (1851324) made `execute_*` read the slot. After that change the
+    // unconditional write became DESTRUCTIVE, and the review-of-fixes found the sequence:
+    //
+    //   1. propose_set_redeem_limits -> nonce 5, slot = Some(5)
+    //   2. incident: set_redemptions_enabled(false) clears the slot; the nonce-5 timelock account
+    //      is now an orphan (neither cancelled nor executed)
+    //   3. incident over: re-propose -> nonce 6, slot = Some(6), the 24h clock starts
+    //   4. operator tidies the orphan: cancel_timelocked_action(5) -> the SetRedeemLimits arm sets
+    //      the slot to None, silently WIPING nonce 6
+    //   5. at T+24h, execute(6) reverts NonceMismatch, indistinguishable from a wrong-nonce call,
+    //      and the operator waits another 24h
+    //
+    // Reachable with in-repo tooling: `scripts/cancel-all.ts` loops every surviving account.
+    //
+    // Worth naming why this was missed. My own verification asked "can a proposal become
+    // uncancellable?" and answered no, correctly. It never asked the opposite question: whether
+    // cancelling one proposal can damage ANOTHER. A fix that adds a read of some state makes every
+    // pre-existing write of that state newly load-bearing, and each of those writes has to be
+    // re-examined in the new light. Checking only the path I changed was not enough.
+    macro_rules! disarm_if_mine {
+        ($field:ident) => {
+            if should_disarm(config.$field, nonce) {
+                config.$field = None;
+            }
+        };
+    }
     if let Some(a) = action {
         match a {
             TimelockAction::SetPremiumMint => {
-                config.pending_premium_mint_nonce = None;
-                // D30: clear mint_paused_until on cancel.
-                config.mint_paused_until = 0;
+                // Conditional for the same reason, and it matters MORE here: clearing
+                // `mint_paused_until` while a DIFFERENT premium-mint proposal is still executable
+                // would reopen exactly the D30 front-run window that field exists to close.
+                if should_disarm(config.pending_premium_mint_nonce, nonce) {
+                    config.pending_premium_mint_nonce = None;
+                    config.mint_paused_until = 0;
+                }
             }
-            TimelockAction::SetPremiumRedeem => config.pending_premium_redeem_nonce = None,
-            TimelockAction::WithdrawUsdc => config.pending_withdraw_nonce = None,
-            TimelockAction::SetTreasuryFloat => config.pending_treasury_float_nonce = None,
-            TimelockAction::SetOracleGuards => config.pending_oracle_guards_nonce = None,
-            TimelockAction::UpdateMetadata => config.pending_metadata_nonce = None,
-            TimelockAction::SetComplianceMode => config.pending_compliance_nonce = None,
-            TimelockAction::SetPythFeed => config.pending_pyth_feed_nonce = None,
-            TimelockAction::SetAdminTimelock => config.pending_admin_timelock_nonce = None,
-            TimelockAction::SetRedeemLimits => config.pending_redeem_limits_nonce = None,
-            TimelockAction::SetPublicMint => config.pending_public_mint_nonce = None,
+            TimelockAction::SetPremiumRedeem => disarm_if_mine!(pending_premium_redeem_nonce),
+            TimelockAction::WithdrawUsdc => disarm_if_mine!(pending_withdraw_nonce),
+            TimelockAction::SetTreasuryFloat => disarm_if_mine!(pending_treasury_float_nonce),
+            TimelockAction::SetOracleGuards => disarm_if_mine!(pending_oracle_guards_nonce),
+            TimelockAction::UpdateMetadata => disarm_if_mine!(pending_metadata_nonce),
+            TimelockAction::SetComplianceMode => disarm_if_mine!(pending_compliance_nonce),
+            TimelockAction::SetPythFeed => disarm_if_mine!(pending_pyth_feed_nonce),
+            TimelockAction::SetAdminTimelock => disarm_if_mine!(pending_admin_timelock_nonce),
+            TimelockAction::SetRedeemLimits => disarm_if_mine!(pending_redeem_limits_nonce),
+            TimelockAction::SetPublicMint => disarm_if_mine!(pending_public_mint_nonce),
         }
     }
 
@@ -102,4 +135,53 @@ pub fn cancel_handler(ctx: Context<CancelTimelocked>, nonce: u64) -> Result<()> 
         cancelled_by: signer,
     });
     Ok(())
+}
+
+/// Whether cancelling proposal `nonce` should clear a single-active slot currently holding `slot`.
+///
+/// Pure and separate so the rule is testable, which is the lesson of this batch's P0: the propose
+/// side's no-op gate lived inline in a handler, went untested, and the test that claimed to cover it
+/// asserted a different function.
+///
+/// The rule is "only disarm what is mine". Anything else lets cancelling an ORPHANED proposal wipe
+/// a LIVE one, which the review-of-fixes demonstrated end to end.
+pub fn should_disarm(slot: Option<u64>, nonce: u64) -> bool {
+    slot == Some(nonce)
+}
+
+#[cfg(test)]
+mod disarm_tests {
+    use super::should_disarm;
+
+    #[test]
+    fn cancelling_my_own_proposal_disarms_the_slot() {
+        assert!(should_disarm(Some(5), 5));
+    }
+
+    #[test]
+    fn cancelling_an_orphan_does_NOT_touch_a_live_proposal() {
+        // THE regression test. Sequence from the review-of-fixes: propose 5, an instant close
+        // disarms the slot leaving 5 orphaned, re-propose gives 6, then the operator tidies up by
+        // cancelling 5. Before this fix, that cancel wiped 6 and cost another 24 hours.
+        assert!(
+            !should_disarm(Some(6), 5),
+            "cancelling orphan 5 must not clear a slot pointing at live proposal 6"
+        );
+    }
+
+    #[test]
+    fn cancelling_when_the_slot_is_already_empty_is_a_no_op() {
+        // The orphan case with nothing re-proposed yet. Nothing to clear, and clearing None is
+        // harmless, but assert it so the semantics are pinned rather than incidental.
+        assert!(!should_disarm(None, 5));
+    }
+
+    #[test]
+    fn nonce_zero_is_not_special() {
+        // Nonces start at 0, so `Some(0)` must behave like any other value rather than being
+        // confused with "empty".
+        assert!(should_disarm(Some(0), 0));
+        assert!(!should_disarm(None, 0));
+        assert!(!should_disarm(Some(1), 0));
+    }
 }

@@ -42,26 +42,45 @@
 //!
 //! It costs one extra `u64` in ConfigAccount and no extra accounts.
 //!
-//! # The exact guarantee, derived rather than asserted
+//! # The exact guarantee. CORRECTED, and the correction matters.
 //!
 //! This is an APPROXIMATION, not a per-request log: usage inside a bucket is treated as uniformly
-//! spread, so concentrated usage can be under-counted. The worst case is worth deriving, because an
-//! earlier version of this comment claimed the error "is always on the CONSERVATIVE side", and that
-//! is only true at a bucket boundary.
+//! spread, so usage CONCENTRATED at the end of a bucket is under-counted.
 //!
-//! Let the previous bucket be fully used (`prev = budget`) with all of it spent at the very END of
-//! that bucket, so all of it genuinely falls inside a trailing window that starts mid-bucket. At
-//! `into = w/2` the weight is 1/2, so the counter believes only `budget/2` is outstanding and will
-//! admit another `budget/2`. The true usage in that trailing window is then
-//! `budget + budget/2 = 1.5 x budget`.
+//! Two earlier versions of this section were wrong, and both were wrong the same way: they
+//! evaluated ONE alignment and called the result the worst case.
+//!   - v1 claimed the error "is always on the CONSERVATIVE side". False except at a boundary.
+//!   - v2 evaluated `into = w/2`, got `1.5 x budget`, and declared that the bound. Also false: it
+//!     never maximised over `into`.
 //!
-//! So: **1.5 x budget worst case, over a deliberately-constructed alignment.** At a bucket boundary
-//! (`into = 0`) the previous bucket counts in full and the bound is exactly `budget`.
+//! The actual derivation. Let the previous bucket be fully used, all of it spent at its very END so
+//! all of it genuinely falls inside the trailing window. At offset `into` into the current bucket
+//! the counter believes only `prev * (w - into)/w` is outstanding, so it admits
+//! `budget - prev*(w-into)/w`. True usage in the trailing window is therefore
 //!
-//! That is a strict improvement on the fixed window it replaces, which allowed 2 x budget with no
-//! construction needed at all: just wait for the reset. Closing the remaining 0.5x needs an exact
-//! sliding log, i.e. unbounded per-request storage, which is not worth an account per redemption.
-//! Size the budget with the 1.5x in mind and the limiter behaves as documented.
+//! ```text
+//!   prev + budget - prev*(w - into)/w  =  budget + prev*into/w
+//! ```
+//!
+//! which is INCREASING in `into` and tends to `2 x budget` as `into -> w`.
+//!
+//! So: **2 x budget, not 1.5x.** The concrete construction is in
+//! `two_spends_one_second_short_of_a_window_reach_almost_2x`: spend the whole budget at
+//! `start + w - 1`, then again at `start + 2w - 2`. The second call sees `effective_used` of about
+//! $0.46 against a $20k budget, and the two spends are `w - 1` seconds apart, i.e. inside one
+//! trailing window.
+//!
+//! # So what did this actually buy, if the bound is unchanged?
+//!
+//! THE RATE, and that is worth having. The fixed window allowed 2x in about ONE SECOND, with no
+//! construction: drain, wait for the reset, drain again. The sliding counter forces those two
+//! drains to be nearly a full window apart. Same worst-case total, spread over ~24h at the launch
+//! settings instead of ~1s, which is the difference between an unobservable event and one a
+//! guardian can pause during.
+//!
+//! It is NOT a tighter bound, and this file previously claimed otherwise. Closing the remaining 1x
+//! needs an exact sliding log, i.e. unbounded per-request storage. **Size
+//! `instant_redeem_budget_usdc` at half the maximum outflow you are willing to see in a day.**
 
 /// The decision for one redemption attempt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -206,7 +225,11 @@ mod tests {
     }
 
     #[test]
-    fn no_trailing_window_of_any_alignment_exceeds_the_budget_by_more_than_one_bucket_of_skew() {
+    fn a_uniform_timeline_stays_within_the_bound() {
+        // RENAMED. It was called `no_trailing_window_of_any_alignment_exceeds_...`, which claimed a
+        // universal it does not test: it drives ONE uniform timeline. The adversarial alignments are
+        // the tests below. A test whose name overstates its reach is worse than no test, and this
+        // one hid a 2x for a whole review cycle.
         // Property test over the approximation's actual guarantee. Hammer one unit at a time
         // across three windows and assert that the total allowed in ANY window-length span stays
         // within the budget plus the bounded approximation error.
@@ -235,8 +258,8 @@ mod tests {
             // originally asserted would have passed even if the sliding window were not working at
             // all, since 2x is exactly what the fixed window it replaced allowed.
             assert!(
-                in_span <= BUDGET + BUDGET / 2,
-                "a {WI}s span starting at {t0} allowed {in_span}, above the 1.5x bound"
+                in_span <= BUDGET * 2,
+                "a {WI}s span starting at {t0} allowed {in_span}, above the 2x bound"
             );
         }
         // And the headline property: the FIRST full window can never exceed the budget.
@@ -249,10 +272,11 @@ mod tests {
     }
 
     #[test]
-    fn the_worst_case_alignment_tops_out_at_the_derived_1_5x_and_no_higher() {
-        // Construct the exact attack the module docs derive: fill the previous bucket entirely at
-        // its very end, then spend again half a window later when the weight has decayed to 1/2.
-        // This must reach 1.5x and MUST NOT exceed it.
+    fn a_half_window_alignment_reaches_1_5x() {
+        // RENAMED from `..._tops_out_at_the_derived_1_5x_and_no_higher`. It asserted "and no
+        // higher" while exercising a SINGLE alignment, so it certified a bound it never searched.
+        // The real maximum is at `into -> w`, not `into = w/2`: see the test below. This one now
+        // claims only what it checks, that the half-window case reaches 1.5x.
         let mut start = 1i64;
         let mut cur = 0u64;
         let mut prev = 0u64;
@@ -289,8 +313,55 @@ mod tests {
         let total = BUDGET + available;
         assert!(
             total <= BUDGET + half + tol,
-            "worst-case alignment let {total} out, above the derived 1.5x bound"
+            "the half-window alignment let {total} out, above the 1.5x expected there"
         );
+    }
+
+    #[test]
+    fn two_spends_one_second_short_of_a_window_reach_almost_2x() {
+        // THE REAL WORST CASE, found by the review-of-fixes after I had twice derived a smaller
+        // bound from a single alignment. Spend the whole budget at `start + w - 1`, then again at
+        // `start + 2w - 2`. The two spends are `w - 1` seconds apart, so BOTH lie inside one
+        // trailing window, and by then the previous bucket's weight has decayed to 2/w.
+        const START: i64 = 1;
+        let t1 = START + WI - 1;
+        let d1 = roll_window(t1, START, W, 0, 0);
+        assert_eq!(d1.effective_used, 0);
+        let (start2, cur2, prev2) = (d1.new_window_start, d1.rolled_current + BUDGET, d1.rolled_prev);
+
+        let t2 = START + 2 * WI - 2;
+        assert!(t2 - t1 < WI, "the two spends must fall inside one trailing window");
+        let d2 = roll_window(t2, start2, W, cur2, prev2);
+
+        // The counter now believes almost nothing is outstanding: prev * 2/w.
+        let expected_effective = (BUDGET as u128 * 2 / WI as u128) as u64;
+        assert_eq!(d2.effective_used, expected_effective);
+
+        let second_spend = BUDGET - d2.effective_used;
+        let total = BUDGET + second_spend;
+        // Just under 2x, and decisively above the 1.5x this file used to claim.
+        assert!(
+            total > BUDGET + BUDGET / 2,
+            "total {total} should exceed the 1.5x that was wrongly documented as the bound"
+        );
+        assert!(total <= 2 * BUDGET, "total {total} exceeded the true 2x bound");
+        let bps_of_budget = (total as u128 * 10_000 / BUDGET as u128) as u64;
+        assert!(
+            bps_of_budget >= 19_990,
+            "expected ~1.9999x, got {bps_of_budget} bps of budget"
+        );
+    }
+
+    #[test]
+    fn the_rate_improvement_is_real_even_though_the_bound_is_not() {
+        // What the sliding counter actually bought. Under the OLD fixed window, draining the budget
+        // and then draining it again ONE SECOND later succeeded. It must now be refused: the 2x is
+        // only reachable across nearly a full window, which is the difference between an
+        // unobservable event and one a guardian can pause during.
+        let allowed = simulate(&[(1_000, BUDGET), (1_000 + 1, BUDGET)]);
+        assert_eq!(allowed, BUDGET, "a one-second-later second drain must be refused");
+        let allowed = simulate(&[(1_000, BUDGET), (1_000 + WI / 4, BUDGET)]);
+        assert_eq!(allowed, BUDGET, "a quarter-window-later second drain must be refused");
     }
 
     #[test]

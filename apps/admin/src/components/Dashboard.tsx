@@ -331,6 +331,7 @@ function RedemptionsTab({
 }) {
   const {
     cfg,
+    effectiveUsedUsdc,
     instantBudgetRemainingUsdc,
     instantWindowExpired,
     instantWindowNeverStarted,
@@ -351,18 +352,16 @@ function RedemptionsTab({
         <Metric
           title="Window length"
           value={`${(cfg.instantRedeemWindowSeconds / 3600).toFixed(1)}h`}
-          tip="Length of the window after which the redemption budget fully resets. This is a FIXED window, not a sliding one, so the true worst case across a boundary is TWICE the budget: drain it just before the reset, then again just after."
+          tip="Length of the SLIDING window the redemption budget is measured over. Nothing 'resets': the previous window's usage decays out linearly as this one fills. The worst case is still TWICE the budget, but it now requires two drains nearly a full window apart rather than one second apart, which is the difference between an unobservable event and one a guardian can pause during. Size the budget at half the daily outflow you are willing to see."
         />
         <Metric
-          title="Instant used this window"
+          title="Counting against the budget now"
           value={
             instantWindowNeverStarted
               ? "$0 (none yet)"
-              : instantWindowExpired
-                ? "$0 (window reset)"
-                : `$${formatUsdc(cfg.instantUsedUsdc)}`
+              : `$${formatUsdc(effectiveUsedUsdc)}`
           }
-          tip="How much of the instant-redemption budget has been used in the current window."
+          tip="What the PROGRAM currently counts: this bucket's usage plus the previous bucket's, weighted by how much of it still lies inside the trailing window. This used to render cfg.instantUsedUsdc with a '(window reset)' label, which understated it for most of every window and read as $0 in exactly the state where the program had almost no headroom left."
         />
         <Metric
           title="Instant remaining now"

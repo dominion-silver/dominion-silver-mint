@@ -24,7 +24,7 @@ import {
   createAssociatedTokenAccountIdempotentInstruction,
   getAssociatedTokenAddressSync,
 } from "@solana/spl-token";
-import { getProgram, type RedemptionRequestView } from "./anchor-client";
+import { getProgram } from "./anchor-client";
 import {
   configPda,
   lazerFeePayerPda,
@@ -40,11 +40,13 @@ import {
   LAZER_PROGRAM_ID,
   LAZER_STORAGE,
   LAZER_TREASURY,
+  PROGRAM_ID,
   SILV_MINT,
   TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
   USDC_MINT,
 } from "./constants";
+import idl from "./idl/dominion_silver_mint.json";
 import { assembleLazerTx, lazerMessageData } from "./lazer-assembly";
 
 // CRITICAL ix ORDERING (the ed25519 precompile uses ABSOLUTE instruction-index
@@ -133,9 +135,13 @@ export function feeVaultUsdcAta(): PublicKey {
 
 /** Resolve the caller's OPTIONAL per-wallet accounts (fee exemption, KYC attestation).
  *
- * Anchor optional accounts must be `null` when absent. Passing the PDA address of an account
- * that does NOT exist is worse than passing null: the program would try to deserialize it and
- * fail. So this checks existence first, with ONE batched RPC call.
+ * Anchor optional accounts must be `null` when absent. Passing the PDA address of an account the
+ * program cannot deserialize is worse than passing null: the program reverts. So this validates
+ * OWNER and DISCRIMINATOR, not merely existence, in ONE batched RPC call.
+ *
+ * An earlier version checked existence only, and said so in this docstring as though that were the
+ * guard. It was not: anyone can create an account at a PDA address with a dust transfer, which
+ * bricked the victim's mint and redeem permanently. See `usable` below.
  *
  * Resolving from chain rather than from a caller-supplied flag makes the client self-healing: a
  * wallet that gets whitelisted or approved starts benefiting on its next transaction with no
@@ -153,12 +159,58 @@ export async function resolveWalletFlags(
   try {
     const infos = await connection.getMultipleAccountsInfo([fe, ky]);
     return {
-      feeExempt: infos[0] ? fe : null,
-      kyc: infos[1] ? ky : null,
+      feeExempt: usable(infos[0], FEE_EXEMPT_DISCRIMINATOR) ? fe : null,
+      kyc: usable(infos[1], KYC_DISCRIMINATOR) ? ky : null,
     };
   } catch {
     return { feeExempt: null, kyc: null };
   }
+}
+
+/** Anchor account discriminators: the first 8 bytes of sha256("account:<StructName>").
+ *
+ *  Read from the IDL rather than hardcoded, so they cannot drift from the program. */
+function discriminatorFromIdl(name: string): Uint8Array {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const acc = (idl as any).accounts?.find((a: any) => a.name === name);
+  if (!acc?.discriminator) {
+    throw new Error(`no discriminator for account ${name} in the IDL`);
+  }
+  return Uint8Array.from(acc.discriminator as number[]);
+}
+const FEE_EXEMPT_DISCRIMINATOR = discriminatorFromIdl("FeeExemptAccount");
+const KYC_DISCRIMINATOR = discriminatorFromIdl("KycAccount");
+
+/** Whether an account is genuinely one of OUR accounts of the expected type.
+ *
+ * EXISTENCE IS NOT ENOUGH, and assuming it was is a P0 this code shipped with. Creating an account
+ * at a PDA address is PERMISSIONLESS for anybody: a bare `SystemProgram.transfer` of one lamport to
+ * `feeExemptPda(victim)` produces a System-owned, zero-data account there. The previous version saw
+ * a non-null AccountInfo, reported the exemption as present, and the builder passed the real PDA.
+ * Anchor treats any key that is not the program id as "optional account SUPPLIED", so
+ * `Option<Account<'info, FeeExemptAccount>>` then failed its owner check and the program reverted.
+ *
+ * Result: every mint and every redeem from that wallet reverted, permanently, for the price of a
+ * dust transfer, with no self-service remedy, because nobody can sign for a PDA to close it. A
+ * griefing attack on any address an attacker can name.
+ *
+ * So: owner must be THIS program, and the first 8 bytes must be the expected Anchor discriminator.
+ * Both are needed. The owner check alone would still accept a different account type of ours at a
+ * colliding address, and the discriminator alone would accept a spoofed account owned by someone
+ * else. Together they match exactly what `Account<'info, T>::try_from` enforces on chain, which is
+ * the property this function has to mirror.
+ */
+export function usable(
+  info: { owner: PublicKey; data: Uint8Array | Buffer } | null,
+  discriminator: Uint8Array,
+): boolean {
+  if (!info) return false;
+  if (!info.owner.equals(PROGRAM_ID)) return false;
+  if (info.data.length < 8) return false;
+  for (let i = 0; i < 8; i++) {
+    if (info.data[i] !== discriminator[i]) return false;
+  }
+  return true;
 }
 
 
@@ -240,7 +292,6 @@ export async function buildLazerMintTx(
   const program = getProgram(connection, wallet);
   const user = wallet.publicKey;
 
-  const usdcTreasuryAta = getAssociatedTokenAddressSync(USDC_MINT, treasuryPda(), true, TOKEN_PROGRAM_ID);
   const userUsdcAta = getAssociatedTokenAddressSync(USDC_MINT, user, false, TOKEN_PROGRAM_ID);
   const userSilvAta = getAssociatedTokenAddressSync(SILV_MINT, user, false, TOKEN_2022_PROGRAM_ID);
   const messageData = Buffer.from(lazerMessageData(args.envelope));
@@ -274,7 +325,6 @@ export async function buildLazerRedeemTx(
   const program = getProgram(connection, wallet);
   const user = wallet.publicKey;
 
-  const usdcTreasuryAta = getAssociatedTokenAddressSync(USDC_MINT, treasuryPda(), true, TOKEN_PROGRAM_ID);
   const userUsdcAta = getAssociatedTokenAddressSync(USDC_MINT, user, false, TOKEN_PROGRAM_ID);
   const userSilvAta = getAssociatedTokenAddressSync(SILV_MINT, user, false, TOKEN_2022_PROGRAM_ID);
   const messageData = Buffer.from(lazerMessageData(args.envelope));

@@ -256,19 +256,27 @@ pub fn handler(
         // must not become a broken product for that wallet.
         now,
     );
-    // A5: with routing OFF, the premium stays in the treasury (the pre-2026-08-05 behaviour) and
-    // NO fee amount is carved out at all. Setting `fee_usdc` to zero is what makes the whole
-    // downstream path fall back cleanly: the treasury receives the gross, no fee CPI runs, and a
-    // frozen or otherwise unusable fee vault stops mattering.
+    // The premium is ALWAYS charged. Only its DESTINATION depends on the escape hatch.
     //
-    // The user's SILV changes, deliberately and in their favour by the premium, because the SILV is
-    // minted on the net. That is correct for a fallback whose purpose is to keep the product
-    // working: it forgoes revenue rather than charging a fee it cannot route.
-    let fee_usdc = if !config.fee_routing_disabled {
-        fee_from_amount(amount_usdc, premium_bps)?
-    } else {
-        0
-    };
+    // CORRECTED. The first version of A5 zeroed `fee_usdc` when routing was disabled, and its
+    // comment claimed that made "the premium simply stay in the treasury, exactly the behaviour the
+    // program had before 2026-08-05". The review-of-fixes showed that was false on both sides, and
+    // the consequence was not cosmetic:
+    //
+    //   - zeroing the fee made `net == amount`, so SILV was minted on the FULL amount at pure spot.
+    //     The premium was not retained anywhere, it was HANDED TO THE MINTER. Before 2026-08-05 the
+    //     premium lived as under-issuance and WAS retained.
+    //   - so `set_fee_routing_enabled(false)` was a global, instant, admin-only, guardian-unvetoable
+    //     both-sides fee waiver for every wallet, routing around the 24h timelock that
+    //     `propose_set_premium_mint` carries precisely because it changes what users are charged.
+    //     state/fee_exempt.rs warns against exactly that configuration for a SINGLE wallet.
+    //
+    // So: compute the fee unconditionally, keep `net` net of it so the user's SILV is unchanged in
+    // either mode, and let only the TRANSFER be conditional. With routing off the whole
+    // `amount_usdc` goes to the treasury and the premium is retained there as under-issuance, which
+    // IS the pre-2026-08-05 behaviour. The escape hatch now survives a frozen vault without being an
+    // economic lever.
+    let fee_usdc = fee_from_amount(amount_usdc, premium_bps)?;
     // `fee_from_amount` is proven never to exceed its input (math.rs), so this cannot
     // underflow. Checked anyway: an unchecked subtraction here would wrap into a colossal
     // net on any future change to that guarantee.
@@ -301,15 +309,24 @@ pub fn handler(
     maybe_update_last_price(config, oracle_price, amount_usdc, now);
 
     // 11. CPIs.
-    // 11a. USDC: user -> treasury. The BACKING leg, net of premium. The treasury now
-    // receives exactly what backs the SILV just issued, with no premium mixed in.
+    // Only the DESTINATION of the premium is conditional (see step 7). `fee_routed` is what the
+    // vault receives; the treasury takes the rest, so the two legs always sum to `amount_usdc` and
+    // the user pays the same either way.
+    let fee_routed = if config.fee_routing_disabled { 0 } else { fee_usdc };
+    let to_treasury = amount_usdc
+        .checked_sub(fee_routed)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
+
+    // 11a. USDC: user -> treasury. The BACKING leg. With routing ON this is net of the premium, so
+    // the treasury holds exactly what backs the SILV just issued. With routing OFF it is the full
+    // amount and the premium is retained here as under-issuance.
     usdc_transfer_user_to_treasury(
         ctx.accounts.classic_token_program.to_account_info(),
         ctx.accounts.user_usdc_ata.to_account_info(),
         ctx.accounts.usdc_treasury.to_account_info(),
         ctx.accounts.usdc_mint.to_account_info(),
         ctx.accounts.user.to_account_info(),
-        net_usdc,
+        to_treasury,
         ctx.accounts.usdc_mint.decimals,
     )?;
 
@@ -320,14 +337,14 @@ pub fn handler(
     //
     // Both legs are in the same transaction as the mint, so there is no state in which the
     // user has paid and received nothing: any failure here reverts the SILV mint too.
-    if fee_usdc > 0 {
+    if fee_routed > 0 {
         usdc_transfer_user_to_fee_vault(
             ctx.accounts.classic_token_program.to_account_info(),
             ctx.accounts.user_usdc_ata.to_account_info(),
             ctx.accounts.fee_vault.to_account_info(),
             ctx.accounts.usdc_mint.to_account_info(),
             ctx.accounts.user.to_account_info(),
-            fee_usdc,
+            fee_routed,
             ctx.accounts.usdc_mint.decimals,
         )?;
     }
@@ -356,7 +373,10 @@ pub fn handler(
         // The EFFECTIVE premium, not config.premium_bps_mint: 0 here means the caller used a
         // mint-side fee exemption. This is the field to read when auditing whitelist usage.
         premium_bps_used: premium_bps,
-        fee_usdc,
+        // What the VAULT received. Zero with routing disabled, in which case the premium was still
+        // charged (see `premium_bps_used`) and retained in the treasury. The pair
+        // (premium_bps_used > 0, fee_usdc == 0) is exactly "charged but not routed".
+        fee_usdc: fee_routed,
         timestamp: now,
     });
 

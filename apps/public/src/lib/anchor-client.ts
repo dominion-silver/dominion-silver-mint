@@ -69,6 +69,12 @@ export interface ConfigAccount {
   redeemQueueDelaySeconds: number;
   instantWindowStart: BN;
   instantUsedUsdc: BN;
+  /** Usage of the PREVIOUS window bucket, for the sliding-window counter. Added 2026-08-05.
+   *
+   *  Optional because a config written before that upgrade decodes it as 0, which correctly means
+   *  "no prior bucket". It MUST be read: omitting it is what made this client model a FIXED window
+   *  while the program had become sliding. */
+  instantUsedPrevUsdc?: BN;
   /** DEAD ON CHAIN since 2026-08-05. Do not read. */
   nextRedeemRequestNonce: BN;
   paused: boolean;
@@ -228,6 +234,64 @@ export async function fetchSilvSupply(connection: Connection): Promise<BN> {
  * receives is net. Keep the two named apart.
  */
 
+/**
+ * The program's SLIDING window counter, ported from `state/redeem_window.rs::roll_window`.
+ *
+ * WHY THIS EXISTS. Commit fe97c42 replaced the program's fixed reset window with a two-bucket
+ * sliding counter and added `instant_used_prev_usdc`. It did not touch this file, so the client kept
+ * computing `used = now >= windowEnd ? 0 : instantUsedUsdc` while the program computed
+ * `current + prev * (w - into) / w`. Both reviewers found it independently.
+ *
+ * The user-visible failure: immediately after a bucket boundary the program counts the WHOLE
+ * previous bucket (weight 1.0 at `into == 0`) while this client believed zero was used. The card
+ * said "redeems INSTANTLY" and "Max instant now: $20,000", the user signed, paid the Lazer verify
+ * fee, and got `RedeemLimitExceeded`. That is bug B2's exact shape -- client model diverged from
+ * program model, both sides BN so TypeScript sees nothing -- reintroduced two commits after B2 was
+ * fixed.
+ *
+ * Kept a faithful port rather than an approximation, and pinned by a test that reimplements the
+ * Rust independently, because "close enough" here means promising a redemption the chain refuses.
+ */
+export function effectiveRedeemUsed(
+  cfg: ConfigAccount,
+  nowUnixSecs: number,
+): BN {
+  const w = cfg.instantRedeemWindowSeconds;
+  if (w <= 0) return new BN(0); // degenerate config; the program fails open here too
+
+  const windowStart = cfg.instantWindowStart.toNumber();
+  const usedCurrent = cfg.instantUsedUsdc;
+  const usedPrev = cfg.instantUsedPrevUsdc ?? new BN(0);
+
+  const elapsed = Math.max(0, nowUnixSecs - windowStart);
+
+  let start: number;
+  let current: BN;
+  let prev: BN;
+  if (windowStart === 0) {
+    // Bootstrap sentinel: `initialize` leaves it at 0, which is not a real bucket start.
+    start = nowUnixSecs;
+    current = usedCurrent;
+    prev = usedPrev;
+  } else if (elapsed >= 2 * w) {
+    start = nowUnixSecs;
+    current = new BN(0);
+    prev = new BN(0);
+  } else if (elapsed >= w) {
+    start = windowStart + w;
+    current = new BN(0);
+    prev = usedCurrent;
+  } else {
+    start = windowStart;
+    current = usedCurrent;
+    prev = usedPrev;
+  }
+
+  const into = Math.min(Math.max(0, nowUnixSecs - start), w);
+  const weightedPrev = prev.muln(w - into).divn(w);
+  return current.add(weightedPrev);
+}
+
 /** GROSS USDC value of `amountSilv` at pure spot: what LEAVES THE TREASURY.
  *
  *  Mirrors `silv_to_usdc_at_oracle` in math.rs. This is the figure the rolling budget is debited
@@ -273,11 +337,10 @@ export function computeMaxInstantRedeemableUsdc(
   nowUnixSecs: number,
 ): BN {
   if (cfg.paused || !cfg.redemptionsEnabled) return new BN(0);
-  const windowEnd =
-    cfg.instantWindowStart.toNumber() + cfg.instantRedeemWindowSeconds;
-  const windowExpired = nowUnixSecs >= windowEnd;
-  const usedThisWindow = windowExpired ? new BN(0) : cfg.instantUsedUsdc;
-  let budgetRemaining = cfg.instantRedeemBudgetUsdc.sub(usedThisWindow);
+  // SLIDING, not a fixed reset. See effectiveRedeemUsed.
+  let budgetRemaining = cfg.instantRedeemBudgetUsdc.sub(
+    effectiveRedeemUsed(cfg, nowUnixSecs),
+  );
   if (budgetRemaining.ltn(0)) budgetRemaining = new BN(0);
 
   let grossMax = budgetRemaining;
@@ -315,10 +378,13 @@ export function classifyRedeem(
   // self-correcting and harmless, whereas promising "instant" and then reverting with a raw
   // KycRequired costs the user a Lazer fee to discover.
   if (((cfg.kycScopeFlags ?? 0) & 2) !== 0 && kycAttested !== true) return "kyc";
-  const windowEnd =
-    cfg.instantWindowStart.toNumber() + cfg.instantRedeemWindowSeconds;
-  const used = nowUnixSecs >= windowEnd ? new BN(0) : cfg.instantUsedUsdc;
-  if (used.add(grossUsdc).gt(cfg.instantRedeemBudgetUsdc)) return "limit";
+  if (
+    effectiveRedeemUsed(cfg, nowUnixSecs)
+      .add(grossUsdc)
+      .gt(cfg.instantRedeemBudgetUsdc)
+  ) {
+    return "limit";
+  }
   if (treasuryBalanceUsdc.lt(grossUsdc)) return "otc";
   return "instant";
 }

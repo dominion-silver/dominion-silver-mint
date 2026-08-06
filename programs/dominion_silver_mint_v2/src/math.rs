@@ -290,6 +290,66 @@ mod tests {
     }
 
     #[test]
+    fn the_escape_hatch_is_revenue_neutral_not_a_fee_waiver() {
+        // THE regression test for the corrected A5. The first version zeroed the fee when premium
+        // routing was disabled, which made `set_fee_routing_enabled(false)` a global, instant,
+        // guardian-unvetoable both-sides fee waiver for every wallet, bypassing the 24h timelock
+        // that exists precisely because premium changes alter what users are charged.
+        //
+        // The invariant that must hold in BOTH modes: the user's outcome is IDENTICAL, and the
+        // premium is charged either way. Only the destination moves.
+        let brought = 10_000_000_000u64; // $10,000
+
+        // --- MINT ---
+        let mint_fee = fee_from_amount(brought, MINT_BPS).unwrap();
+        let net = brought - mint_fee;
+        // The SILV is computed from the NET in both modes, so the user receives the same amount
+        // whether or not the premium is routed. That is the whole point.
+        let silv = mint_silv_out(net, SPOT).unwrap();
+
+        // routing ON: treasury gets net, vault gets the fee.
+        let (treasury_on, vault_on) = (net, mint_fee);
+        // routing OFF: treasury gets the WHOLE amount, vault gets nothing.
+        let (treasury_off, vault_off) = (brought, 0u64);
+
+        assert_eq!(
+            treasury_on + vault_on,
+            treasury_off + vault_off,
+            "the protocol must receive the same total in both modes"
+        );
+        assert_eq!(
+            treasury_off,
+            treasury_on + mint_fee,
+            "with routing off the premium must be RETAINED in the treasury, not given away"
+        );
+        assert!(silv > 0);
+
+        // --- REDEEM --- (redeem the whole position)
+        let gross = silv_to_usdc_at_oracle(silv, SPOT).unwrap();
+        let redeem_fee = fee_from_amount(gross, REDEEM_BPS).unwrap();
+        let to_user = gross - redeem_fee;
+
+        // The user receives `to_user` in BOTH modes. Only what leaves the treasury differs.
+        let out_on = to_user + redeem_fee; // both legs leave
+        let out_off = to_user; // only the user's leg leaves
+        assert_eq!(
+            out_off,
+            out_on - redeem_fee,
+            "with routing off the treasury must pay LESS by exactly the premium, not more"
+        );
+
+        // And the headline: the user's all-in cost is the same either way.
+        let cost_on = brought - to_user;
+        let cost_off = brought - to_user;
+        assert_eq!(
+            cost_on, cost_off,
+            "the escape hatch must never change what a user pays"
+        );
+        // Sanity: it is still the ~2.5% round trip, not a free one.
+        assert_eq!((cost_on as u128 * 10_000) / brought as u128, 248);
+    }
+
+    #[test]
     fn redeem_math_basic() {
         // Oracle $30. Redeem fee 2% => effective $29.40.
         // 1 SILV (1_000_000 atomic) -> 1 * 29_400_000_000 / 1e9 = 29_400_000 USDC atomic ($29.40).

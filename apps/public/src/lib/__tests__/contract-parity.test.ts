@@ -18,10 +18,21 @@ import { PublicKey } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import idl from "../idl/dominion_silver_mint.json";
 import { effectiveMintPrice, effectiveRedeemPrice } from "../pyth";
-import { mintSilvAccounts, redeemSilvAccounts, feeVaultUsdcAta } from "../lazer-tx";
+import {
+  mintSilvAccounts,
+  redeemSilvAccounts,
+  feeVaultUsdcAta,
+  usable,
+} from "../lazer-tx";
 import { feeVaultPda, feeExemptPda, kycPda } from "../pdas";
 import { USDC_MINT, TOKEN_PROGRAM_ID, PROGRAM_ID } from "../constants";
-import { feeFromAmount, redeemGrossUsdc, redeemUsdcOut } from "../anchor-client";
+import {
+  feeFromAmount,
+  redeemGrossUsdc,
+  redeemUsdcOut,
+  effectiveRedeemUsed,
+  type ConfigAccount,
+} from "../anchor-client";
 
 // --- The contract's own arithmetic, reimplemented in integers. ---------------
 // Mirrors math.rs. Deliberately a separate implementation rather than a call into the client
@@ -237,5 +248,140 @@ describe("account list parity", () => {
       expect(names).not.toContain(gone);
     }
     expect(PROGRAM_ID.toBase58()).toBe((idl as any).address);
+  });
+});
+
+describe("optional-account validation (the dust-griefing P0)", () => {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const disc = (name: string): Uint8Array =>
+    Uint8Array.from(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (idl as any).accounts.find((a: any) => a.name === name).discriminator,
+    );
+  const FEE = disc("FeeExemptAccount");
+  const KYC = disc("KycAccount");
+  const data = (d: Uint8Array, len = 120) => {
+    const b = new Uint8Array(len);
+    b.set(d.slice(0, 8), 0);
+    return b;
+  };
+
+  it("a genuine program-owned account of the right type is usable", () => {
+    expect(usable({ owner: PROGRAM_ID, data: data(FEE) }, FEE)).toBe(true);
+  });
+
+  it("an absent account is not usable", () => {
+    expect(usable(null, FEE)).toBe(false);
+  });
+
+  it("A DUSTED SYSTEM-OWNED ACCOUNT AT THE PDA IS NOT USABLE", () => {
+    // THE regression test for the P0. Creating an account at a PDA address is permissionless: a
+    // one-lamport SystemProgram.transfer to `feeExemptPda(victim)` makes a System-owned, zero-data
+    // account there. The previous existence-only check reported it as an exemption, the builder
+    // passed the real PDA, and the program reverted on the owner check -- so every mint and every
+    // redeem from that wallet failed permanently, for the price of a dust transfer, with no
+    // self-service remedy because nobody can sign for a PDA to close it.
+    const SYSTEM_PROGRAM = new PublicKey("11111111111111111111111111111111");
+    expect(usable({ owner: SYSTEM_PROGRAM, data: new Uint8Array(0) }, FEE)).toBe(
+      false,
+    );
+    // Also with a spoofed discriminator: the owner check must carry it alone.
+    expect(usable({ owner: SYSTEM_PROGRAM, data: data(FEE) }, FEE)).toBe(false);
+  });
+
+  it("our account of the WRONG type is not usable", () => {
+    // The discriminator must carry it alone, in case a future account type collides at an address.
+    expect(usable({ owner: PROGRAM_ID, data: data(KYC) }, FEE)).toBe(false);
+    expect(usable({ owner: PROGRAM_ID, data: data(FEE) }, KYC)).toBe(false);
+  });
+
+  it("a truncated account is not usable", () => {
+    expect(usable({ owner: PROGRAM_ID, data: FEE.slice(0, 7) }, FEE)).toBe(false);
+  });
+
+  it("the two discriminators differ, so the type check is meaningful", () => {
+    expect(Buffer.from(FEE).toString("hex")).not.toBe(
+      Buffer.from(KYC).toString("hex"),
+    );
+  });
+});
+
+// --- the sliding window, ported vs the Rust -----------------------------------
+
+/** Independent reimplementation of `state/redeem_window.rs::roll_window`.
+ *
+ *  Deliberately written from the Rust rather than from the TypeScript port, because a test that
+ *  calls the code under test proves nothing. This is the guard for the drift that shipped twice:
+ *  the program moved to a sliding window and the client kept a fixed one, and both reviewers found
+ *  it independently because nothing mechanical could. */
+function rustEffectiveUsed(
+  now: number,
+  windowStart: number,
+  w: number,
+  usedCurrent: bigint,
+  usedPrev: bigint,
+): bigint {
+  if (w <= 0) return 0n;
+  const elapsed = Math.max(0, now - windowStart);
+  let start: number, current: bigint, prev: bigint;
+  if (windowStart === 0) {
+    [start, current, prev] = [now, usedCurrent, usedPrev];
+  } else if (elapsed >= 2 * w) {
+    [start, current, prev] = [now, 0n, 0n];
+  } else if (elapsed >= w) {
+    [start, current, prev] = [windowStart + w, 0n, usedCurrent];
+  } else {
+    [start, current, prev] = [windowStart, usedCurrent, usedPrev];
+  }
+  const into = Math.min(Math.max(0, now - start), w);
+  return current + (prev * BigInt(w - into)) / BigInt(w);
+}
+
+describe("sliding window parity with the program", () => {
+  const W = 86_400;
+  const BUDGET = 20_000_000_000n;
+
+  const cfg = (
+    windowStart: number,
+    used: bigint,
+    prev: bigint,
+  ): ConfigAccount =>
+    ({
+      paused: false,
+      redemptionsEnabled: true,
+      instantRedeemWindowSeconds: W,
+      instantRedeemBudgetUsdc: new BN(BUDGET.toString()),
+      instantWindowStart: new BN(windowStart),
+      instantUsedUsdc: new BN(used.toString()),
+      instantUsedPrevUsdc: new BN(prev.toString()),
+      premiumBpsRedeem: 150,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    }) as any as ConfigAccount;
+
+  it("agrees with the Rust across every branch and alignment", () => {
+    const cases: [number, number, bigint, bigint][] = [
+      [1_000, 0, 0n, 0n], // bootstrap sentinel
+      [1_000, 1, 0n, 0n],
+      [1_000, 1, BUDGET, 0n], // same bucket
+      [1 + W, 1, BUDGET, 0n], // exactly one boundary
+      [1 + W + 1, 1, BUDGET, 0n], // just past it: the case that used to read 0
+      [1 + W + W / 2, 1, 0n, BUDGET], // half decayed
+      [1 + 2 * W - 2, 1, BUDGET, 0n], // the near-2x alignment
+      [1 + 10 * W, 1, BUDGET, BUDGET], // long gap
+      [500, 5_000, BUDGET, BUDGET], // backwards clock
+    ];
+    for (const [now, start, used, prev] of cases) {
+      const ts = BigInt(effectiveRedeemUsed(cfg(start, used, prev), now).toString());
+      const rust = rustEffectiveUsed(now, start, W, used, prev);
+      expect(ts, `now=${now} start=${start} used=${used} prev=${prev}`).toBe(rust);
+    }
+  });
+
+  it("one second past a boundary counts the WHOLE previous bucket, not zero", () => {
+    // THE regression test. The old client returned 0 here and told the user "redeems INSTANTLY";
+    // the program counts almost all of the previous bucket and reverts RedeemLimitExceeded, after
+    // the user has paid the Lazer verify fee.
+    const used = effectiveRedeemUsed(cfg(1, BUDGET, 0n), 1 + W + 1);
+    expect(BigInt(used.toString())).toBeGreaterThan((BUDGET * 999n) / 1000n);
   });
 });

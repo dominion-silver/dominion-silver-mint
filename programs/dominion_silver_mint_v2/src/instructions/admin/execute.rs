@@ -764,8 +764,17 @@ pub fn execute_set_redeem_limits_handler(
     //   - `cancel_timelocked_action` does NOT read any pending_*_nonce as a precondition, and it
     //     clears the matching one via a match on the action discriminant, so a proposal is ALWAYS
     //     cancellable and cancelling always frees the single-active slot.
-    //   - `close_timelock_account` then reclaims the rent, so an orphaned account left behind by an
-    //     instant close is cleanable rather than permanent dust.
+    //   - CORRECTION, from the review-of-fixes: an earlier version of this note claimed
+    //     "`close_timelock_account` then reclaims the rent, so an orphaned account left behind by an
+    //     instant close is cleanable rather than permanent dust." THAT IS FALSE.
+    //     `CloseTimelockAccount` requires `cancelled || executed_at.is_some()`, and an orphan is
+    //     neither, so it cannot be closed directly. The only exit is `cancel_timelocked_action`,
+    //     which marks it cancelled, decrements `active_proposal_count` and THEN permits the close.
+    //     That path is safe now that cancel only disarms its own nonce (see timelock.rs); before
+    //     that fix it was the very instruction that could wipe a live proposal.
+    //     Operational consequence, so nobody discovers it at ten: an orphan still counts toward
+    //     MAX_ACTIVE_PROPOSALS, so disarm-then-re-propose cycles must be cleaned up with cancel or
+    //     every propose_* eventually reverts TooManyActiveProposals.
     //   - nonces come from a monotonically increasing `next_timelock_nonce` and are never reused,
     //     so a disarmed proposal cannot become executable again by coincidence.
     // The failure mode is therefore "cannot execute, must be cancelled", which is exactly the
