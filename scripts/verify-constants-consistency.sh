@@ -111,10 +111,21 @@ for path in list(idls):
     digests[path] = hashlib.sha256(raw).hexdigest()
     addr = json.loads(raw).get("address")
     check(addr == DECLARED, f"{path} address == declare_id!")
-if len(digests) == 3:
+if len(digests) < 2:
+    check(False,
+          f"only {len(digests)} IDL copy present, so NOTHING was compared: the byte-identity "
+          "check needs at least the two committed app copies")
+if len(digests) >= 2:
+    # WAS `== 3`. target/idl is GENERATED and gitignored, so on a fresh checkout only the two
+    # committed app copies exist, and the check silently did not run at all. Since it is the ONLY
+    # comparison between apps/admin and apps/public (each is otherwise checked for its `address`
+    # field alone), skipping it meant the two app IDLs were compared to nothing.
     uniq = set(digests.values())
+    # Report the ACTUAL count, not a hardcoded "three". With target/idl absent this printed
+    # "all three IDL copies are byte-identical" after comparing two, which is the kind of
+    # overclaim in a green check that stops anyone looking.
     check(len(uniq) == 1,
-          "all three IDL copies are byte-identical"
+          f"all {len(digests)} present IDL copies are byte-identical"
           + ("" if len(uniq) == 1 else f" (got {len(uniq)} distinct digests)"))
     if len(uniq) == 1:
         print(f"        sha256 {next(iter(uniq))}")

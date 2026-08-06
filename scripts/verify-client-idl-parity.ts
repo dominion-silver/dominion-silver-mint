@@ -64,6 +64,74 @@ function walk(dir: string, out: string[] = []): string[] {
   return out;
 }
 
+/** Replace comment bodies with spaces, keeping every newline so line numbers survive. */
+function stripComments(src: string): string {
+  let out = "";
+  let i = 0;
+  type Mode = "code" | "line" | "block" | "str";
+  let mode: Mode = "code";
+  let quote = "";
+  while (i < src.length) {
+    const c = src[i];
+    const c2 = src[i + 1];
+    if (mode === "code") {
+      if (c === "/" && c2 === "/") {
+        mode = "line";
+        out += "  ";
+        i += 2;
+        continue;
+      }
+      if (c === "/" && c2 === "*") {
+        mode = "block";
+        out += "  ";
+        i += 2;
+        continue;
+      }
+      if (c === '"' || c === "'" || c === "`") {
+        mode = "str";
+        quote = c;
+        out += c;
+        i++;
+        continue;
+      }
+      out += c;
+      i++;
+      continue;
+    }
+    if (mode === "line") {
+      if (c === "\n") {
+        mode = "code";
+        out += c;
+      } else {
+        out += " ";
+      }
+      i++;
+      continue;
+    }
+    if (mode === "block") {
+      if (c === "*" && c2 === "/") {
+        mode = "code";
+        out += "  ";
+        i += 2;
+        continue;
+      }
+      out += c === "\n" ? c : " ";
+      i++;
+      continue;
+    }
+    // string literal: copy through, honouring escapes, so a quote inside does not end it early
+    if (c === "\\") {
+      out += c + (c2 ?? "");
+      i += 2;
+      continue;
+    }
+    if (c === quote) mode = "code";
+    out += c;
+    i++;
+  }
+  return out;
+}
+
 interface Finding {
   file: string;
   line: number;
@@ -106,8 +174,16 @@ function main() {
   const findings: Finding[] = [];
 
   for (const rel of files) {
-    const src = fs.readFileSync(path.join(ROOT, rel), "utf8");
-    const lines = src.split("\n");
+    const raw = fs.readFileSync(path.join(ROOT, rel), "utf8");
+    // Blank out comments before scanning, PRESERVING line numbers and length so every offset below
+    // still maps to the real file.
+    //
+    // Without this, check 1 greps `.claimRedemption(` across prose, and this codebase's style is long
+    // explanatory comments that name exactly the things that were removed. One comment written as
+    // "the old code called `.claimRedemption()`" would hard-fail CI with no code defect, and a gate
+    // that cries wolf is a gate somebody deletes. Same hazard for check 3 scanning `__tests__`, where
+    // a negative test deliberately passes a bogus account key.
+    const src = stripComments(raw);
 
     // --- 1. removed instruction names in a CALL position ---
     for (const gone of REMOVED) {
@@ -165,7 +241,13 @@ function main() {
     }
 
     // --- 4. ("ErrorName", 12345) pairs must match the IDL ---
-    const errRe = /["'](\w*(?:Error|Exceeded|Disabled|Paused|Blocked|Required|Mismatch|Invalid|Insufficient\w*|Queue|NoOp|Active|Cancelled|Elapsed|TooHigh|TooLow|TooShort|TooLong|Breached|Expired|Exhausted|Unchanged|NotSet|NotSettled|NotPending)\w*)["']\s*,\s*(\d{4,6})\b/g;
+    //
+    // Matches ANY CamelCase identifier paired with a code, rather than a suffix allowlist. The
+    // allowlist this replaced silently skipped `StaleOracle` (12004, mapped in the public client),
+    // `ZeroAmount`, `Unauthorized`, `WrongMint` and `PriceOutOfBounds`, while the gate's own output
+    // claimed to check "every error code the clients use". If a variant is ever inserted before
+    // StaleOracle in the enum, the client keeps 12004 and the user gets a raw Custom dump.
+    const errRe = /["']([A-Z][A-Za-z0-9]{3,})["']\s*,\s*(\d{4,6})\b/g;
     let em: RegExpExecArray | null;
     while ((em = errRe.exec(src)) !== null) {
       const [, name, codeStr] = em;
@@ -191,7 +273,6 @@ function main() {
         });
       }
     }
-    void lines;
   }
 
   console.log("Client / IDL parity");

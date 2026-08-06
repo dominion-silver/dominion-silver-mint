@@ -140,6 +140,17 @@ jobs:
         with:
           node-version: 20
 
+      # D6 was marked closed when this script was WRITTEN. The review-of-fixes pointed out it ran
+      # NOWHERE: the punch-list item is literally titled "No CI gate catches client-vs-IDL drift", so a
+      # script a human has to remember to type did not close it.
+      #
+      # Placed after Node setup (it needs npx/tsx) and it reads `target/idl`, which the "Regenerate
+      # the IDL" step above creates. Order matters in both directions.
+      - name: Verify the clients call only instructions/accounts/errors the IDL declares (BLOCKING)
+        run: |
+          npm ci
+          npx tsx scripts/verify-client-idl-parity.ts
+
       - name: Public app (BLOCKING - typecheck, tests, production build)
         working-directory: apps/public
         run: |
