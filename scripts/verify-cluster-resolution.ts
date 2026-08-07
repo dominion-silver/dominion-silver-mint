@@ -195,6 +195,8 @@ for (const rpc of [
   const SENDERS = new Set([
     "bump-staleness.ts",
     "cancel-all.ts",
+    "ceremony-step7.ts",
+    "ceremony-step8.ts",
     "cancel-bad-proposal.ts",
     "cancel-nonce-1.ts",
     "create-fee-vault.ts",

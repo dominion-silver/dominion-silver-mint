@@ -10,10 +10,10 @@ skip-lint = false
 # not this binary's declare_id. An operator could initialize, verify or sign against
 # the wrong program. localnet now matches declare_id.
 [programs.localnet]
-dominion_silver_mint = "6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh"
+dominion_silver_mint = "HXaptAcaXBoEAsNuEv4ZwYrciHbMxSpip2VScRVDjo1Z"
 
 [programs.devnet]
-dominion_silver_mint = "6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh"
+dominion_silver_mint = "HXaptAcaXBoEAsNuEv4ZwYrciHbMxSpip2VScRVDjo1Z"
 
 # AUDIT DOM-014: the mainnet entry is intentionally ABSENT until the real mainnet
 # program id is generated and reviewed. Declaring a stale id here is worse than

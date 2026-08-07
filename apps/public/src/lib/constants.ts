@@ -3,7 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 // DEVNET, deployed 2026-07-25. `initialize` runs once per program id, so a config or guardian layout
 // change forces a new id: replace PROGRAM_ID and SILV_MINT in the SAME commit, and list the old id in
 // RETIRED in scripts/verify-constants-consistency.sh.
-export const PROGRAM_ID = new PublicKey("6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh");
+export const PROGRAM_ID = new PublicKey("HXaptAcaXBoEAsNuEv4ZwYrciHbMxSpip2VScRVDjo1Z");
 
 // Token programs.
 export const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -15,7 +15,7 @@ export const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJD
 
 // The SILV mint created by the DEVNET init above. Read it back with scripts/read-config.ts after every
 // fresh init.
-export const SILV_MINT = new PublicKey("62dTkSN7FF2HH8tENWL1mXmrCm8ouqX1bditK71yfxPr");
+export const SILV_MINT = new PublicKey("G5zez3JWETJMfG3hnCQbdPm7usXMnmKUpajdGJYB5JFF");
 
 // Pyth Lazer (Pyth Pro) accounts, passed by the dominion oracle ix. No Pyth Core / Hermes XAG feed id
 // belongs here: the program prices from Lazer 3154 alone, and a second live-looking price source is how

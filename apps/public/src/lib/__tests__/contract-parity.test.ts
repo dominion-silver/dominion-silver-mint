@@ -204,7 +204,7 @@ function idlAccountNames(ixName: string): string[] {
 }
 
 describe("account list parity", () => {
-  const user = new PublicKey("6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh");
+  const user = new PublicKey("HXaptAcaXBoEAsNuEv4ZwYrciHbMxSpip2VScRVDjo1Z");
   const none = { feeExempt: null, kyc: null };
 
   it("mintSilvAccounts covers exactly the IDL's mint_silv accounts", () => {

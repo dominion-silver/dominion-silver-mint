@@ -26,7 +26,7 @@ use instructions::*;
 // pre-Lazer V2, and the "no stale state" hypothesis depends on the id being neither. Retired ids: V1
 // J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5, pre-Lazer V2
 // GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX. Keypair: target/deploy (gitignored).
-declare_id!("6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh");
+declare_id!("HXaptAcaXBoEAsNuEv4ZwYrciHbMxSpip2VScRVDjo1Z");
 
 #[program]
 pub mod dominion_silver_mint {

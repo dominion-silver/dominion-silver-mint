@@ -139,6 +139,7 @@ if "SILV_MINT" in a and "SILV_MINT" in p_:
     RETIRED_MINTS = {
         "9jM14E8kV6asGw2FwNhKk3gXQNzGhoLrJGyFZ8U7gMoF",  # gc5TW era, program closed
         "5i13gz6vGKTYhpWbMuQfiBAApfNHCxxJu2GtDGM1A2Li",  # AX7se era, program closed
+        "62dTkSN7FF2HH8tENWL1mXmrCm8ouqX1bditK71yfxPr",  # 6bgSnXYg era, program closed 2026-08-07
     }
     check(a["SILV_MINT"] not in RETIRED_MINTS,
           "SILV_MINT is not a known-retired mint")
@@ -366,6 +367,9 @@ print("5. Retired program ids")
 # WHEN YOU RETIRE A PROGRAM ID, ADD IT HERE IN THE SAME COMMIT. The gate cannot catch what it does not
 # know, and this list has shipped one generation behind twice, each time missing the id just retired.
 RETIRED = {
+    # Retired 2026-08-07: replaced by the full-ceremony rehearsal deploy HXaptAca..., and closed to
+    # reclaim its 9 SOL. Its initialize window was already spent, so it could not rehearse T1 again.
+    "6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh": "devnet 2026-07-26 to 2026-08-07, CLOSED on-chain",
     "2ujQgKtxvaU9Ax3jL22374SypSyTR9J4yztqYkX23oMT": "devnet, the original Lazer deploy",
     "gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc": "devnet 2026-07-26, CLOSED on-chain",
     "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W": "devnet 2026-07-25, CLOSED on-chain",

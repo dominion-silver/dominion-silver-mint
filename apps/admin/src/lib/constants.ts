@@ -3,7 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 // Program ID: fresh devnet deploy 2026-07-25 (wave-0 audit remediation changed the
 // ConfigAccount + GuardianAccount layout, and initialize can only ever run once
 // per program id, so a new id was required). Retired: AX7seVo6..., GDN5ktEm...
-export const PROGRAM_ID = new PublicKey("6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh");
+export const PROGRAM_ID = new PublicKey("HXaptAcaXBoEAsNuEv4ZwYrciHbMxSpip2VScRVDjo1Z");
 
 // Token programs.
 export const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");
@@ -16,7 +16,7 @@ export const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJD
 
 // SILV mint - created by the 2026-07-25 init (scripts/t1-hostile-bootstrap.ts case 5).
 // Must be updated after every fresh init: read it back with scripts/read-config.ts.
-export const SILV_MINT = new PublicKey("62dTkSN7FF2HH8tENWL1mXmrCm8ouqX1bditK71yfxPr");
+export const SILV_MINT = new PublicKey("G5zez3JWETJMfG3hnCQbdPm7usXMnmKUpajdGJYB5JFF");
 
 // AUDIT FINDING P-06: `PYTH_XAG_USD_FEED_ID` (the retired Pyth Core XAG/USD feed) was exported here
 // with zero call sites. The program reads Pyth LAZER feed 3154 via a signed message; there is no Core

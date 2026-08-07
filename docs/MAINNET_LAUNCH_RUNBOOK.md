@@ -320,15 +320,28 @@ Do this immediately, not at the end. It costs nothing and saves a day.
 ### 8. Register the guardians, set the inventory wallet, unpause
 
 ```
-add_guardian(<guardian 1>)
-add_guardian(<guardian 2>)
-set_inventory_wallet(EkDhR65JUL8tGhxRhnueaqri6zNzxMEJ82UU35pQ7V56)
-set_treasury_min_float_usdc(<non-zero>)   # SolidProof LOW #4
-unpause
+add_guardian(<guardian 1>)                 # instant
+add_guardian(<guardian 2>)                 # instant
+set_inventory_wallet(EkDhR65JUL8tGhxRhnueaqri6zNzxMEJ82UU35pQ7V56)   # instant
+unpause                                    # instant
+propose_set_treasury_min_float(<non-zero>)  # TIMELOCKED 24h, see below
 ```
 
+Run `scripts/ceremony-step8.ts`, which sends the four instant calls in one pass and reads
+every field back off the chain. Written 2026-08-07, after the devnet rehearsal found this
+step had no script and was four hand-typed instructions.
+
+**`set_treasury_min_float_usdc` DOES NOT EXIST.** This step used to list it as an instant
+call; the devnet rehearsal of 2026-08-07 found no such instruction in the IDL. The real
+pair is `propose_set_treasury_min_float` / `execute_set_treasury_min_float`, so it carries
+the same 24h delay as the mint open, and it is a BLOCKER before opening redeem (P2 below).
+
+Propose it in the SAME window as the public mint and the redeem open. The program allows
+one active proposal per TYPE, not one in total, so all three clocks run in parallel and
+mature together. Verified on devnet with four coexisting proposals.
+
 `treasury_min_float_usdc` defaults to 0, which means a withdrawal can drain the whole
-treasury. Set it before any USDC arrives.
+treasury. Propose it before any USDC arrives, so the 24h has elapsed by the time it can matter.
 
 ### 9. Pre-mint and seed the pool
 
