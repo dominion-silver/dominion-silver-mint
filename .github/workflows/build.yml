@@ -356,7 +356,14 @@ jobs:
         run: cargo install solana-verify --locked
 
       - name: Verifiable build
-        run: solana-verify build
+        # S-07. Without --base-image, solana-verify picks its own default Docker image (2.3.0 on the run
+        # that exposed this), whose platform-tools do not produce our bytes. The release toolchain is
+        # declared in Anchor.toml as solana_version 3.0.0, and solanafoundation/solana-verifiable-build:3.0.0
+        # exists, so the two can be made to agree instead of the comparison being permanently red.
+        run: |
+          solana-verify build \
+            --base-image solanafoundation/solana-verifiable-build:3.0.0 \
+            --library-name dominion_silver_mint
 
       - name: Compare the verifiable build against the pinned release hash
         run: |
