@@ -40,3 +40,4 @@ Thumbs.db
 /public
 /private
 *.tsbuildinfo
+tools/state-harness/target/
