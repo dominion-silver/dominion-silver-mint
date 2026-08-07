@@ -246,14 +246,14 @@ pub enum DominionError {
     // "invalid format string". Write "mint and redeem", never braces (escaping as {{ }} reads badly).
     #[msg("KYC scope value is unchanged, or sets bits other than mint and redeem")]
     KycScopeInvalid,
-    #[msg("Fee-exemption flags are unchanged, zero, or set bits other than mint and redeem; use remove_fee_exempt to revoke an exemption entirely")]
+    #[msg("Fee-exemption flags must be 1 (mint), 2 (redeem) or 3 (both). Zero and any undefined bit are refused; use remove_fee_exempt to revoke an exemption entirely")]
     FeeExemptFlagsInvalid,
     #[msg("Fee vault balance is below the requested sweep amount")]
     InsufficientFeeVault,
     #[msg("Attestation account does not belong to the signing wallet")]
     AttestationWalletMismatch,
     // Review-of-fixes 2026-08-05. APPEND ONLY.
-    #[msg("Fee-exemption expiry is invalid: it must be 0 (never), or a unix timestamp in SECONDS that is in the future and at most MAX_FEE_EXEMPT_TERM_SECONDS away. A 13-digit millisecond value is rejected here.")]
+    #[msg("Fee-exemption expiry is invalid: it is MANDATORY and must be a unix timestamp in SECONDS, strictly in the future, at most MAX_FEE_EXEMPT_TERM_SECONDS away. Zero is NOT an indefinite term. A 13-digit millisecond value is rejected here.")]
     FeeExemptExpiryInvalid,
     #[msg("withdraw_fees destination must not be owned by the fee-vault PDA: funds sent there could never be moved again")]
     FeeWithdrawDestinationStranded,

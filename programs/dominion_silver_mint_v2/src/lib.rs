@@ -81,8 +81,9 @@ pub mod dominion_silver_mint {
     // === Fee-exemption whitelist (per-side flags) ===
     // Both instant: the worst case is foregone revenue, not lost principal. Rationale at the handlers.
 
-    /// `expires_at` is a unix timestamp, or 0 for "never expires". An expiry already in the past
-    /// is rejected: it would grant nothing while appearing in every roster as active.
+    /// `expires_at` is MANDATORY: a unix timestamp in SECONDS, strictly in the future, capped at
+    /// MAX_FEE_EXEMPT_TERM_SECONDS. Zero is refused (C-01), so every waiver carries a term and is
+    /// renewed by one instant transaction. That renewal IS the review the term exists to force.
     pub fn set_fee_exempt(
         ctx: Context<SetFeeExempt>,
         wallet: Pubkey,

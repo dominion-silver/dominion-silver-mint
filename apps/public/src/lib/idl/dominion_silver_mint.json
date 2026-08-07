@@ -3882,8 +3882,9 @@
     {
       "name": "set_fee_exempt",
       "docs": [
-        "`expires_at` is a unix timestamp, or 0 for \"never expires\". An expiry already in the past",
-        "is rejected: it would grant nothing while appearing in every roster as active."
+        "`expires_at` is MANDATORY: a unix timestamp in SECONDS, strictly in the future, capped at",
+        "MAX_FEE_EXEMPT_TERM_SECONDS. Zero is refused (C-01), so every waiver carries a term and is",
+        "renewed by one instant transaction. That renewal IS the review the term exists to force."
       ],
       "discriminator": [
         224,
@@ -5631,7 +5632,7 @@
     {
       "code": 12107,
       "name": "FeeExemptFlagsInvalid",
-      "msg": "Fee-exemption flags are unchanged, zero, or set bits other than mint and redeem; use remove_fee_exempt to revoke an exemption entirely"
+      "msg": "Fee-exemption flags must be 1 (mint), 2 (redeem) or 3 (both). Zero and any undefined bit are refused; use remove_fee_exempt to revoke an exemption entirely"
     },
     {
       "code": 12108,
@@ -5646,7 +5647,7 @@
     {
       "code": 12110,
       "name": "FeeExemptExpiryInvalid",
-      "msg": "Fee-exemption expiry is invalid: it must be 0 (never), or a unix timestamp in SECONDS that is in the future and at most MAX_FEE_EXEMPT_TERM_SECONDS away. A 13-digit millisecond value is rejected here."
+      "msg": "Fee-exemption expiry is invalid: it is MANDATORY and must be a unix timestamp in SECONDS, strictly in the future, at most MAX_FEE_EXEMPT_TERM_SECONDS away. Zero is NOT an indefinite term. A 13-digit millisecond value is rejected here."
     },
     {
       "code": 12111,
@@ -6328,8 +6329,8 @@
           {
             "name": "expires_at",
             "docs": [
-              "0 = never expires. Emitted so a monitor can alert on an exemption granted WITHOUT a term,",
-              "which is the shape a compromised admin would use."
+              "Always a future timestamp: C-01 made the term mandatory, so zero cannot occur. Emitted so a",
+              "monitor can alert on an unusually long term, which is the shape a compromised admin would use."
             ],
             "type": "i64"
           },

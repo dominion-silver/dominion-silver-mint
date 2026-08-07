@@ -80,8 +80,8 @@ pub struct RedeemEvent {
 pub struct FeeExemptSet {
     pub wallet: Pubkey,
     pub flags: u8,
-    /// 0 = never expires. Emitted so a monitor can alert on an exemption granted WITHOUT a term,
-    /// which is the shape a compromised admin would use.
+    /// Always a future timestamp: C-01 made the term mandatory, so zero cannot occur. Emitted so a
+    /// monitor can alert on an unusually long term, which is the shape a compromised admin would use.
     pub expires_at: i64,
     pub by: Pubkey,
     pub timestamp: i64,
