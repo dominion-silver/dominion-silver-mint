@@ -266,6 +266,10 @@ async function main() {
         path.join(__dirname, "..", "target", "idl", "dominion_silver_mint.json"),
         "--provider.cluster",
         CLUSTER.rpc,
+        // Without this, anchor falls back to ~/.config/solana/id.json regardless of `solana config`,
+        // and the publish dies on "Unable to read keypair file" AFTER the bytecode has landed.
+        "--provider.wallet",
+        keypairPath(),
       ]),
     );
   } catch (e) {
@@ -370,6 +374,18 @@ async function main() {
     process.exit(3); // distinct from 1 (verification failed) so automation can tell them apart
   }
   console.log("\nUPGRADE OK: bytes verified on chain, config preserved, carved fields correct.");
+}
+
+/** The keypair the solana CLI is configured to use, which is not always anchor's default. */
+function keypairPath(): string {
+  try {
+    const out = sh("solana", ["config", "get"]);
+    const m = out.match(/Keypair Path:\s*(\S+)/);
+    if (m) return m[1];
+  } catch {
+    /* fall through */
+  }
+  return path.join(os.homedir(), ".config", "solana", "id.json");
 }
 
 /** The config account's raw data, or null. The evidence step 7b actually relies on. */
