@@ -124,16 +124,6 @@ jobs:
           python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json" \
             || { echo "::error::the regenerated IDL is not valid JSON"; head -c 200 "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json"; exit 1; }
 
-      # Anchor-free and network-free, so it holds even if the IDL step above is
-      # unavailable. This is the gate's hard floor against the drift class that has
-      # already bitten this repo three times.
-      - name: Typecheck the root transaction scripts (BLOCKING)
-        # ROUND 3 P2: CI typechecked each APP and never the root scripts, while the structural gate checked
-        # for the PRESENCE of guard text rather than loadability. So three transaction scripts shipped unable
-        # to start (TS2448 twice, TS2304 twice) and a five-argument call to a six-argument function sat in
-        # T1's hostile-mint case, which meant the ceremony could not compile.
-        run: npx tsc -p tsconfig.scripts.json
-
       - name: Verify every hand-copied address agrees with declare_id! (BLOCKING)
         run: bash scripts/verify-constants-consistency.sh
 
@@ -168,6 +158,23 @@ jobs:
         with:
           node-version: 20
 
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Typecheck the root transaction scripts (BLOCKING)
+        # ROUND 3 P2: CI typechecked each APP and never the root scripts, while the structural gate checked
+        # for the PRESENCE of guard text rather than loadability. So three transaction scripts shipped unable
+        # to start (TS2448 twice, TS2304 twice) and a five-argument call to a six-argument function sat in
+        # T1's hostile-mint case, which meant the ceremony could not compile.
+        #
+        # This step used to sit ABOVE Node setup, with a comment calling it "Anchor-free and network-free".
+        # Both halves were wrong: with no node_modules on the runner, bare `npx tsc` DOWNLOADS whatever
+        # TypeScript is newest (6.0.3 on the run that exposed this) and finds no @types/node, so it failed
+        # on `moduleResolution=node10` and `baseUrl` having been removed in 6.x while the repo pins 5.9.3.
+        # It never typechecked anything on CI. `--no-install` is the fix that keeps it from recurring: an
+        # absent local compiler now fails loudly instead of silently fetching a different one.
+        run: npx --no-install tsc -p tsconfig.scripts.json
+
       # D6 was marked closed when this script was WRITTEN. The review-of-fixes pointed out it ran
       # NOWHERE: the punch-list item is literally titled "No CI gate catches client-vs-IDL drift", so a
       # script a human has to remember to type did not close it.
@@ -175,9 +182,8 @@ jobs:
       # Placed after Node setup (it needs npx/tsx) and it reads `target/idl`, which the "Regenerate
       # the IDL" step above creates. Order matters in both directions.
       - name: Verify the clients call only instructions/accounts/errors the IDL declares (BLOCKING)
-        run: |
-          npm ci
-          npx tsx scripts/verify-client-idl-parity.ts
+        # Root deps are installed above; re-running npm ci here just paid for the same install twice.
+        run: npx --no-install tsx scripts/verify-client-idl-parity.ts
 
       - name: Public app (BLOCKING - typecheck, tests, production build)
         working-directory: apps/public
