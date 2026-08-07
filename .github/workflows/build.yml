@@ -124,6 +124,18 @@ jobs:
           python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json" \
             || { echo "::error::the regenerated IDL is not valid JSON"; head -c 200 "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json"; exit 1; }
 
+      # Node comes up HERE, before anything that shells out to npx. The typecheck step used to sit above
+      # this line and silently downloaded whatever TypeScript was newest; verify-constants-consistency.sh
+      # runs the same tsc inside its section 4b and hit the identical failure one step later. Both need a
+      # real node_modules, so both now run after this.
+      - name: Node setup
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install root dependencies
+        run: npm ci
+
       - name: Verify every hand-copied address agrees with declare_id! (BLOCKING)
         run: bash scripts/verify-constants-consistency.sh
 
@@ -152,14 +164,6 @@ jobs:
 
       - name: Assert the deploy artifact is still clean after the harness
         run: scripts/verify-release-artifact.sh
-
-      - name: Node setup
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install root dependencies
-        run: npm ci
 
       - name: Typecheck the root transaction scripts (BLOCKING)
         # ROUND 3 P2: CI typechecked each APP and never the root scripts, while the structural gate checked

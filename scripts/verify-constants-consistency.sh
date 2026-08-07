@@ -207,7 +207,7 @@ print("4b. scripts/ typecheck")
 # run never reaches is invisible. tsconfig.scripts.json stubs the ONE package whose .d.ts aborts tsc on
 # a parse error before it reaches this directory, which skipLibCheck does not suppress.
 _tc = subprocess.run(
-    ["npx", "tsc", "-p", "tsconfig.scripts.json"],
+    ["npx", "--no-install", "tsc", "-p", "tsconfig.scripts.json"],
     capture_output=True, text=True,
 )
 _diags = [l for l in _tc.stdout.splitlines() if l.startswith("scripts/") and "error" in l]
