@@ -37,11 +37,18 @@ export function base64ToBytes(b64: string): Uint8Array {
  */
 export async function fetchLazerEnvelope(
   feedId?: number,
+  /**
+   * Skip the proxy cache. REQUIRED on the submit path: the program demands a STRICTLY increasing feed
+   * timestamp, so one envelope prices exactly one operation, and a cached envelope shared with another
+   * signer means the second transaction is refused with NonMonotonic after the verify fee is paid.
+   * The price banner leaves this false.
+   */
+  fresh = false,
 ): Promise<{ envelope: Uint8Array; priceUsd: number | null }> {
   const resp = await fetch("/api/lazer", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(feedId != null ? { feedId } : {}),
+    body: JSON.stringify({ ...(feedId != null ? { feedId } : {}), ...(fresh ? { fresh: true } : {}) }),
   });
   if (resp.status === 503) throw new LazerNotConfiguredError();
   if (!resp.ok) {

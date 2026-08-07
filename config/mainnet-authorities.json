@@ -138,25 +138,51 @@
     ],
     "admin_timelock_seconds": 86400,
     "min_publishers": 2,
-    "treasury_min_float_usdc": "SET A NON-ZERO VALUE before enabling any withdrawal (SolidProof LOW #4)",
+    "treasury_min_float_usdc": 0,
     "usdc_mint_mainnet": "SEE cluster_constants.usdc_mint (single source; scripts/_cluster.ts reads that one)",
     "lazer_treasury_mainnet": "SEE cluster_constants.lazer_treasury (single source; scripts/_cluster.ts reads that one)",
     "premint_plan": "$6.75M worth of SILV at launch, which is ~115,705 oz at $58.34 spot, i.e. ~77% of the 150,000 oz cap. Compute the exact ounce figure at ceremony time with scripts/premint-sizing.ts: the budget is in dollars, the cap is in ounces, so a fall in the silver price increases the ounces needed. Leaves ~34,300 oz (~$2.03M) of headroom, which is the hard ceiling on PUBLIC MINT volume since mint_silv draws on the same cap.",
     "pyth_lazer_feed_id": 3154,
     "max_guardian_count": 5,
     "_max_guardian_count_note": [
-      "5, deliberately, and this is a PERMANENT choice: max_guardian_count is written once by",
-      "initialize and NO instruction can raise it (see state/config.rs:515). The audit reported T1's",
-      "literal 5 as contradicting this file's prose note about the default being 3. The contradiction",
-      "was real, but lowering T1 to 3 would have been the wrong resolution.",
+      "5, CONFIRME PAR THOMAS le 2026-08-07. Ecrit une seule fois par initialize, AUCUNE instruction ne",
+      "peut le monter. C est un plafond, pas un nombre de gardiens: chaque ajout reste une action admin",
+      "et MIN_ACTIVE_GUARDIANS vaut 1."
+    ],
+    "_treasury_min_float_note": [
+      "0, DECIDE PAR THOMAS le 2026-08-07, en connaissance de cause.",
       "",
-      "The cap only bounds how many guardians you MAY add; every addition is still a separate admin",
-      "action, and MIN_ACTIVE_GUARDIANS is 1. So a cap of 5 costs nothing and preserves optionality,",
-      "whereas a cap of 3 is an irreversible ceiling adopted by accident from a default. Thomas",
-      "recorded on 2026-07-26 that more guardians are to be added; 3 could have blocked that",
-      "permanently, with no fix short of a new program id.",
+      "Ce que ca veut dire: aucun plancher ne s oppose a un retrait admin, donc un retrait peut vider",
+      "la totalite de la tresorerie USDC, celle qui adosse les redemptions des utilisateurs. C est le",
+      "constat SolidProof LOW #4 et il reste OUVERT par choix.",
       "",
-      "THOMAS: confirm 5 is the ceiling you want. It cannot be raised after the ceremony."
+      "Ce qui reste comme protection, et c est ce qui rend le choix defendable: withdraw_usdc est",
+      "TIMELOCKE (propose_set puis execute, 24 h) et le gardien peut l annuler pendant la fenetre. Un",
+      "retrait est donc annonce 24 h a l avance et vetoable. Le plancher n etait qu une seconde ceinture.",
+      "",
+      "Il reste modifiable a tout moment par propose_/execute_set_treasury_min_float, donc ce n est pas",
+      "une decision irreversible: si le volume de redeem grossit, posez un plancher a ce moment-la."
+    ],
+    "_redemptions_note": [
+      "FERMEES au lancement, CONFIRME PAR THOMAS le 2026-08-07, a ouvrir juste apres.",
+      "",
+      "Ce n est plus une contrainte de calendrier: les horloges de 24 h tournent en parallele (une",
+      "proposition active par TYPE), donc ouvrir le redeem au lancement n aurait coute aucun jour de plus.",
+      "C est un choix d exposition: le seul chemin qui sort de l USDC reste ferme le temps d observer le",
+      "mint sous charge reelle. scripts/ceremony-step7.ts refuse de tourner si cet etat derive."
+    ],
+    "_oracle_replay_model": [
+      "STRICT, DECIDE PAR THOMAS le 2026-08-07 (round 4 P0-01). lazer_price.rs refuse desormais",
+      "fut <= last_used_feed_update_us: une enveloppe signee price exactement UNE operation.",
+      "",
+      "CONSEQUENCE OPERATIONNELLE, a connaitre avant d ouvrir le mint public: la config est un compte",
+      "writable partage, donc au plus UN mint ou redeem peut reussir par print Lazer. Le feed publie a",
+      "fixed_rate@1000ms, ce qui plafonne le protocole a environ une operation par seconde. Deux",
+      "utilisateurs qui signent contre la meme enveloppe: le second recoit NonMonotonic apres avoir paye",
+      "les frais de verification Lazer.",
+      "",
+      "Le chemin de soumission de l app passe donc `fresh: true` au proxy pour ne jamais reutiliser une",
+      "enveloppe en cache. La banniere de prix garde le cache: elle n affiche qu un nombre."
     ]
   },
   "cluster_constants": {
@@ -192,7 +218,7 @@
       "the local build: it rebuilds and compares rather than reading this line. The runbook carried a",
       "stale hash for two rebuilds before this file existed."
     ],
-    "sha256": "cdd556c198397400802c130e3f8d6eabb3938291e8d512ecdd330a4e5b3ad43f",
+    "sha256": "60c8a2696e7d994287e619d89d150d89043d70160f0f307df5a980f9e00a60fa",
     "bytes": 1193616,
     "toolchain": "solana-cli/SBF 3.0.0, platform-tools v1.51, SBF rustc 1.84.1, anchor-cli 0.31.1"
   }

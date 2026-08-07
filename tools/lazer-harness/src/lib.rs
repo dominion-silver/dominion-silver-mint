@@ -345,6 +345,34 @@ mod harness {
     }
 
     #[test]
+    fn the_same_envelope_cannot_be_consumed_twice() {
+        // ROUND 4 P0-01, and the on-chain half of the decision. The program went from `fut <` to `fut <=`
+        // against the high-water mark, so one signed envelope prices exactly ONE operation. This test drives
+        // the real deployed bytes: an envelope whose feed timestamp EQUALS the stored high-water mark is
+        // refused, while the same envelope one microsecond newer is accepted.
+        let ts = NOW_US;
+
+        // Already consumed: the config high-water mark is exactly this envelope's timestamp.
+        let mut consumed = default_oracle();
+        consumed.last_used_feed_ts_us = ts;
+        let mut env = setup(&consumed, 1);
+        let err = run_probe(&mut env, &fresh_payload(5_834_000, 100, 3))
+            .expect_err("replaying a consumed envelope must be refused");
+        assert!(
+            err.contains("NonMonotonic") || err.contains("Custom"),
+            "expected a NonMonotonic refusal, got {err}"
+        );
+
+        // One microsecond newer than the mark: accepted. This is what proves the refusal above is about
+        // the equality and not about some unrelated failure in the fixture.
+        let mut not_yet = default_oracle();
+        not_yet.last_used_feed_ts_us = ts - 1;
+        let mut env2 = setup(&not_yet, 1);
+        run_probe(&mut env2, &fresh_payload(5_834_000, 100, 3))
+            .expect("a strictly newer envelope must be accepted");
+    }
+
+    #[test]
     fn happy_path_price_flows_and_fee_isolated() {
         let mut env = setup(&default_oracle(), 1);
         let treas_before = treasury_lamports(&env);

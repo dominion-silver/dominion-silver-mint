@@ -67,7 +67,7 @@ echo "[2/4] run litesvm harness (rustc 1.89; litesvm needs >= 1.86)"
 # dont le filtre ne matche rien sort 0, et ce script imprimait alors son message OK sur une execution de
 # ZERO test. Le compte est lu et asserte, avec le total attendu epingle: un test perdu est aussi grave
 # qu un test rouge, et il est plus silencieux.
-EXPECTED_LAZER_TESTS=6
+EXPECTED_LAZER_TESTS=7
 if ! _out="$(mktemp)"; then echo "ERROR: mktemp failed" >&2; exit 1; fi
 set +e
 cargo +1.89.0 test --manifest-path tools/lazer-harness/Cargo.toml "$@" 2>&1 | tee "$_out"

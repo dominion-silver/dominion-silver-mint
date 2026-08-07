@@ -55,7 +55,13 @@ async function _impl(
   }
 
   // 1. Fetch the signed envelope + its price (throws LazerNotConfiguredError on 503).
-  const { envelope, priceUsd } = await fetchLazerEnvelope(feedId);
+  const { envelope, priceUsd } = await fetchLazerEnvelope(
+    feedId,
+    // THIS IS THE SUBMIT PATH. `fresh` is mandatory here: the program refuses a feed timestamp it has
+    // already consumed, so a cached envelope shared with another signer costs this user a failed
+    // transaction plus the Lazer verify fee. See round 4 P0-01.
+    true,
+  );
 
   // 2. Build the single consumer tx (ed25519 + dominion). The caller computes
   //    min_out from `priceUsd` - the envelope's OWN price - so the slippage floor

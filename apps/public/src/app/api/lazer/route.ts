@@ -49,11 +49,14 @@ export async function POST(req: NextRequest) {
   // ALLOWLIST, not a numeric filter (P-01). Only 3154 is cached, so any other value is a guaranteed miss
   // and therefore one unauthenticated upstream call on our key; walking the integers exhausts the quota.
   let requestedFeed: unknown;
+  // `fresh: true` skips the cache. Only the submit path sets it; see the note at the cache check below.
+  let fresh = false;
   try {
     const body = await req.json().catch(() => ({}));
     requestedFeed = body?.feedId;
+    fresh = body?.fresh === true;
   } catch {
-    /* no body: the default feed */
+    /* no body: the default feed, cached */
   }
   if (requestedFeed !== undefined && requestedFeed !== SILV_FEED_ID) {
     return NextResponse.json(
@@ -69,7 +72,15 @@ export async function POST(req: NextRequest) {
   // CACHE FIRST, before `allowRequest()`: a hit costs nothing upstream so it must cost nothing here.
   // Charging hits let ~25 polling tabs saturate the 5/s refill, and a 429 on the poll leaves `price`
   // undefined, disabling mint AND redeem for everyone on that instance.
-  if (silvCache && Date.now() - silvCache.at < CACHE_TTL_MS) {
+  // A SUBMIT MUST NOT REUSE A CACHED ENVELOPE. The program requires a STRICTLY increasing feed timestamp
+  // since round 4 P0-01, so one envelope prices exactly ONE operation. The cache holds for CACHE_TTL_MS
+  // and the feed publishes every 1000ms, so two signers served the same cached envelope would have the
+  // second transaction refused with NonMonotonic AFTER paying the Lazer verify fee.
+  //
+  // The price banner keeps the cache: it displays a number, and a 2s-old number is fine. The submit path
+  // passes `fresh: true`. That costs one token per submit instead of one per 2s window, which is the
+  // right trade: a refused mint costs the user a fee, a spent token costs nothing they would notice.
+  if (!fresh && silvCache && Date.now() - silvCache.at < CACHE_TTL_MS) {
     return NextResponse.json(silvCache.payload);
   }
 
@@ -79,7 +90,7 @@ export async function POST(req: NextRequest) {
   // that is the SUBMIT-time fetch). Two attempts max, so a dead upstream answers instead of looping.
   for (let attempt = 0; attempt < 2; attempt++) {
     // Re-checked every pass: the attempt we just waited on may have populated it.
-    if (silvCache && Date.now() - silvCache.at < CACHE_TTL_MS) {
+    if (!fresh && silvCache && Date.now() - silvCache.at < CACHE_TTL_MS) {
       return NextResponse.json(silvCache.payload);
     }
 
@@ -90,7 +101,7 @@ export async function POST(req: NextRequest) {
       } catch {
         sharedFailed = true;
       }
-      if (silvCache && Date.now() - silvCache.at < CACHE_TTL_MS) {
+      if (!fresh && silvCache && Date.now() - silvCache.at < CACHE_TTL_MS) {
         return NextResponse.json(silvCache.payload);
       }
       if (sharedFailed && attempt + 1 < 2) {

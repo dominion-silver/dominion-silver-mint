@@ -131,8 +131,18 @@ pub fn price_from_lazer(
         return Err(LazerPolicyError::Stale);
     }
 
-    // 5.4: non-decreasing high-water mark (allow equality for concurrency).
-    if fut < last_used_feed_update_us {
+    // 5.4: STRICTLY increasing high-water mark. One signed envelope, one operation.
+    //
+    // This was `<` until 2026-08-07, which let the same envelope price several transactions inside the
+    // freshness window. Round 4 P0-01 called that out against the stated invariant, and Thomas chose the
+    // strict guarantee over the concurrent one.
+    //
+    // THE COST IS REAL AND IT IS ON THE HOT PATH: the config is a shared writable account, so at most ONE
+    // mint or redeem can succeed per Lazer print. The feed publishes at fixed_rate@1000ms, so that is the
+    // ceiling, roughly one operation per second protocol-wide. Two users submitting against the same
+    // envelope means the second gets NonMonotonic. The submit path must therefore never reuse a cached
+    // envelope: see the `fresh` flag in apps/public/src/app/api/lazer/route.ts.
+    if fut <= last_used_feed_update_us {
         return Err(LazerPolicyError::NonMonotonic);
     }
 
@@ -302,12 +312,19 @@ mod tests {
     }
 
     #[test]
-    fn high_water_mark_allows_equal_rejects_older() {
+    fn high_water_mark_is_STRICTLY_increasing() {
         let now = 100_000_000;
         let p = silv(now);
-        // equal to last-used: allowed (concurrency).
-        assert!(price_from_lazer(&p, &params(now), now).is_ok());
-        // strictly older than last-used: rejected.
+        // Strictly newer than last-used: the only accepted case.
+        assert!(price_from_lazer(&p, &params(now), now - 1).is_ok());
+        // EQUAL to last-used: rejected. One envelope, one operation. This assertion is the whole of the
+        // decision taken on round 4 P0-01, and it inverts what this test asserted before.
+        assert_eq!(
+            price_from_lazer(&p, &params(now), now),
+            Err(LazerPolicyError::NonMonotonic),
+            "replaying the same envelope must be refused"
+        );
+        // Strictly older: rejected too.
         assert_eq!(
             price_from_lazer(&p, &params(now), now + 1),
             Err(LazerPolicyError::NonMonotonic)
