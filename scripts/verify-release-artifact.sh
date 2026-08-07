@@ -84,7 +84,45 @@ else
     echo "   with a different toolchain. Do not deploy it."
     fail=1
   else
-    echo "   ok: byte-identical to a clean default rebuild ($h_ref)"
+    echo "   ok: byte-identical to a clean default rebuild on THIS host ($h_ref)"
+  fi
+
+  # ---- 1b. And that is NOT the same claim as matching the release pin ----
+  #
+  # S-07, measured 2026-08-07. Check 1a compares two builds made on the SAME machine, so it proves the
+  # artifact is a clean default build here. It says NOTHING about whether it matches what ships, because
+  # SBF builds are not deterministic across host platforms: our .so embeds
+  # /Users/runner/work/platform-tools/... paths baked into the macOS-built platform-tools std, and the
+  # linux-x86_64 tarball carries /home/runner/... of a different length, shifting every rodata offset
+  # after it. macOS and Linux disagree at v1.51 AND at v1.52.
+  #
+  # The Solana docs state it directly: "Solana program builds are not deterministic across different
+  # systems", and "make sure that you actually deploy the verified build and don't accidentally overwrite
+  # it with anchor build or cargo build-sbf". The RELEASE artifact is therefore a Linux container build
+  # produced by `solana-verify build`, and release_artifact.sha256 pins THAT.
+  #
+  # So this check reports the comparison honestly instead of letting 1a's green imply something it cannot
+  # mean. It FAILS only on linux/x86_64, where the two should agree.
+  PINNED="$(python3 -c "import json;print(json.load(open('config/mainnet-authorities.json'))['release_artifact']['sha256'])" 2>/dev/null || echo "")"
+  HOST_OS="$(uname -s)"; HOST_ARCH="$(uname -m)"
+  echo "1b. The local artifact versus the PINNED release hash"
+  if [[ -z "$PINNED" ]]; then
+    echo "   FAIL: could not read release_artifact.sha256 from config/mainnet-authorities.json"
+    fail=1
+  elif [[ "$h_have" == "$PINNED" ]]; then
+    echo "   ok: the local artifact IS the pinned release artifact ($PINNED)"
+  elif [[ "$HOST_OS" == "Linux" && ( "$HOST_ARCH" == "x86_64" || "$HOST_ARCH" == "amd64" ) ]]; then
+    echo "   FAIL: on linux/x86_64 the local build should reproduce the pinned release artifact."
+    echo "     local : $h_have"
+    echo "     pinned: $PINNED"
+    echo "   Either the pin is stale (re-record it from a solana-verify build) or the source differs."
+    fail=1
+  else
+    echo "   EXPECTED MISMATCH on $HOST_OS/$HOST_ARCH, and it is not a defect:"
+    echo "     local : $h_have"
+    echo "     pinned: $PINNED   (a linux/amd64 solana-verify container build)"
+    echo "   This host CANNOT reproduce the release artifact. Do not deploy this .so to mainnet."
+    echo "   The deployable bytes come from CI: solana-verify build, job reproducible-build."
   fi
 fi
 

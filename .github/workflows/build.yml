@@ -386,106 +386,63 @@ jobs:
       - name: Install solana-verify
         run: cargo install solana-verify --locked
 
-      # S-07 INSTRUMENTED PROBE. One run must answer the whole question, because this is the only place the
-      # experiment is meaningful: the image is published for amd64 ONLY, the dev machine is arm64 Darwin, so
-      # a local test would run it under emulation and could not distinguish "our build differs" from
-      # "emulation differs". ubuntu-latest is amd64 native, which is exactly what a third-party verifier runs.
+      # S-07, RESOLVED as a process change rather than a fix. Two independent investigations, crossed,
+      # measured that the SBF build is not deterministic across host platforms at the SAME toolchain
+      # version. Our .so embeds /Users/runner/work/platform-tools/platform-tools/out/rust/library/alloc/...
+      # at three places: the paths of the GitHub macOS runner that compiled the platform-tools tarball,
+      # baked into its prebuilt std. The linux-x86_64 tarball carries /home/runner/..., a different string
+      # of different length, which shifts every rodata offset after it. macOS and Linux disagree at v1.51
+      # AND at v1.52, while each host is deterministic with itself.
       #
-      # Established by reading solana-verify 0.5.1's source, so these are NOT the hypotheses under test:
-      #   --locked IS passed (main.rs:1077, plus a sparse-registry override), so lockfile drift is ruled out
-      #   the build runs against OUR mounted Cargo.toml, so [profile.release] (lto=fat, codegen-units=1,
-      #     overflow-checks) applies
-      #   our .so embeds no host paths (verified: zero occurrences), so the mount point cannot matter
+      # The first hypothesis, forcing --tools-version v1.51, was WRONG: the container already links
+      # 1.84.1-sbpf-solana-v1.51, identical to local.
       #
-      # HYPOTHESIS KILLED, and it was mine. I proposed forcing --tools-version v1.51 on the assumption the
-      # image shipped a different platform-tools. An independent investigation measured that the container
-      # ALREADY links 1.84.1-sbpf-solana-v1.51, identical to local, so the version was never the cause.
+      # The Solana docs say it outright: "If you verify your program which is not build in a docker
+      # container it will most likely fail because Solana program builds are not deterministic across
+      # different systems", and "make sure that you actually deploy the verified build and don't
+      # accidentally overwrite it with anchor build or cargo build-sbf". Drift does exactly this in CI
+      # (solana-verify build --library-name drift --base-image ...), and the Solana Foundation reusable
+      # workflow builds on a Linux runner then proposes the deploy to Squads.
       #
-      # THE MEASURED CAUSE: the SBF build is not reproducible ACROSS HOST PLATFORMS at the same toolchain
-      # version. Our .so embeds `/Users/runner/work/platform-tools/platform-tools/out/rust/library/alloc/...`
-      # (verified, 3 occurrences). Those are not our paths: they are the paths on the GitHub macOS runner that
-      # compiled the platform-tools tarball, baked into its prebuilt std. The linux-x86_64 tarball carries
-      # `/home/runner/...`, a different string of different length, which shifts every rodata offset after it.
-      # Measured four ways: macOS and Linux disagree at BOTH v1.51 and v1.52, while each host is deterministic
-      # with itself.
-      #
-      # So this probe no longer tests a fix. It measures the divergence and pins the evidence, and the
-      # discriminator is the runner-native build: if that ALSO differs from the pinned hash, the cause is
-      # host-versus-Linux rather than anything about the container.
-      - name: S-07 probe, what the container actually contains
+      # So THIS JOB PRODUCES THE DEPLOYABLE BYTES. It is no longer a build compared against itself.
+      # --base-image is unnecessary now: [workspace.metadata.cli] solana = "3.0.0" in the root Cargo.toml
+      # is read first by solana-verify (main.rs:954), which removes the silent fallback to the lockfile's
+      # solana-program version that picked the 2.3.0 image on the first attempt.
+      - name: Verifiable build, and THESE are the bytes that ship
+        run: |
+          set -euo pipefail
+          rm -f target/deploy/dominion_silver_mint.so
+          solana-verify build --library-name dominion_silver_mint
+          test -f target/deploy/dominion_silver_mint.so
+          echo "container build sha256:"
+          sha256sum target/deploy/dominion_silver_mint.so
+
+      - name: Publish the verifiable artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dominion_silver_mint-verifiable-so
+          path: target/deploy/dominion_silver_mint.so
+          if-no-files-found: error
+
+      # Kept as diagnostics, non-blocking, because the cross-host divergence is the thing most likely to
+      # be re-litigated later and the numbers should be on record in every run.
+      - name: Diagnostics, the divergence on record
         continue-on-error: true
         run: |
-          set -x
-          IMG=solanafoundation/solana-verifiable-build:3.0.0
-          docker pull "$IMG"
-          echo "=== toolchain and platform-tools INSIDE the image ==="
-          docker run --rm --entrypoint sh "$IMG" -c 'rustc --version; rustup toolchain list; cargo build-sbf --version || true'
-          echo "=== what the runner itself has, for comparison ==="
-          rustc --version; cargo build-sbf --version || true
-          echo "=== our own default build, on this runner, for a side-by-side hash ==="
+          cp target/deploy/dominion_silver_mint.so /tmp/container.so
+          echo "=== toolchain the container actually linked ==="
+          grep -iE "container Rust toolchain|Docker image Solana version" /dev/null || true
+          echo "=== a native build on this runner, for the side-by-side ==="
+          rm -f target/deploy/dominion_silver_mint.so
           cargo build-sbf --manifest-path programs/dominion_silver_mint_v2/Cargo.toml -- --locked
-          sha256sum target/deploy/dominion_silver_mint.so || true
-          mv target/deploy/dominion_silver_mint.so /tmp/runner-native.so || true
-
-      - name: S-07 probe, verifiable build WITHOUT a forced tools-version
-        continue-on-error: true
-        run: |
-          solana-verify build \
-            --base-image solanafoundation/solana-verifiable-build:3.0.0 \
-            --library-name dominion_silver_mint
-          echo "hash without --tools-version:"
-          sha256sum target/deploy/dominion_silver_mint.so || true
-          cp target/deploy/dominion_silver_mint.so /tmp/verify-default.so || true
-
-      - name: S-07 probe, verifiable build WITH --tools-version v1.51 (negative control)
-        continue-on-error: true
-        run: |
-          rm -f target/deploy/dominion_silver_mint.so
-          solana-verify build \
-            --base-image solanafoundation/solana-verifiable-build:3.0.0 \
-            --library-name dominion_silver_mint \
-            --cargo-build-sbf-args="--tools-version v1.51"
-          echo "hash with --tools-version v1.51:"
-          sha256sum target/deploy/dominion_silver_mint.so || true
-          cp target/deploy/dominion_silver_mint.so /tmp/verify-v151.so || true
-
-      - name: S-07 probe, the std path baked into the container platform-tools
-        continue-on-error: true
-        run: |
-          IMG=solanafoundation/solana-verifiable-build:3.0.0
-          echo "Our .so carries these toolchain-build paths:"
-          strings target/deploy/dominion_silver_mint.so 2>/dev/null | grep -oE "/(Users|home)/runner/work[^ ]{0,60}" | sort -u | head -5 || true
-          echo "And the container's own prebuilt std carries:"
-          docker run --rm --entrypoint sh "$IMG" -c \
-            'ls -d ~/.cache/solana/*/platform-tools 2>/dev/null; \
-             for f in ~/.cache/solana/*/platform-tools/rust/lib/rustlib/sbf-solana-solana/lib/liballoc-*.rlib; do \
-               echo "== $f"; strings "$f" 2>/dev/null | grep -oE "/(Users|home)/runner/work[^ ]{0,60}" | sort -u | head -3; \
-             done' || echo "(the cache is only populated during a build, so this may be empty)"
-          echo "If the two prefixes differ, the mechanism is confirmed and the mitigation is UPSTREAM in"
-          echo "platform-tools, not in this repo. Nothing we pass on the command line can change it."
-
-      - name: S-07 probe, the four hashes side by side
-        continue-on-error: true
-        run: |
-          echo "pinned in config/mainnet-authorities.json:"
-          python3 -c "import json;print(json.load(open('config/mainnet-authorities.json'))['release_artifact']['sha256'])"
-          for f in /tmp/runner-native.so /tmp/verify-default.so /tmp/verify-v151.so; do
-            [ -f "$f" ] && echo "$(sha256sum "$f")" || echo "MISSING $f"
-          done
-          echo "If verify-v151 equals the pinned hash, S-07 closes by forcing the tools version and OUR"
-          echo "BINARY DOES NOT CHANGE, which is the only acceptable shape of fix before a launch."
-          echo "If runner-native also differs from the pinned hash, the divergence is host-vs-linux and not"
-          echo "container-specific, which is a different and larger problem."
-
-      # The real gate. It stays RED until a verifiable build reproduces the pinned artifact: a green that
-      # compares nothing is worse than a visible red.
-      - name: Verifiable build
-        run: |
-          rm -f target/deploy/dominion_silver_mint.so
-          solana-verify build \
-            --base-image solanafoundation/solana-verifiable-build:3.0.0 \
-            --library-name dominion_silver_mint \
-            --cargo-build-sbf-args="--tools-version v1.51"
+          echo "runner-native : $(sha256sum target/deploy/dominion_silver_mint.so | cut -d" " -f1)"
+          echo "container     : $(sha256sum /tmp/container.so | cut -d" " -f1)"
+          echo "pinned        : $(python3 -c "import json;print(json.load(open('config/mainnet-authorities.json'))['release_artifact']['sha256'])")"
+          echo "If runner-native equals container, this runner and the image agree and the only divergence"
+          echo "was macOS. If they differ, the container image itself is the reference and nothing else is."
+          echo "=== the std paths baked into each ==="
+          strings /tmp/container.so | grep -oE "/(Users|home)/runner/work[^ ]{0,50}" | sort -u | head -3 || true
+          cp /tmp/container.so target/deploy/dominion_silver_mint.so
 
       - name: Compare the verifiable build against the pinned release hash
         run: |
@@ -505,15 +462,15 @@ jobs:
           # proved it produces OUR binary, because the hash was only printed. "Independent third-party
           # check" was theatre until this comparison existed.
           #
-          # KNOWN AND DELIBERATE: this is expected to FAIL today. The Docker toolchain
-          # (solana-verify reported v2.3.0) differs from the release toolchain (3.0.0 / platform-tools
-          # 1.51), so the bytes differ. That is exactly the open divergence documented in the runbook as
-          # S-07, and it should be visible as a red check rather than hidden behind a green one that
-          # compares nothing. Fix the toolchain, do not delete the comparison.
+          # This comparison is now the real gate, not a known-red. The bytes above ARE the deployable
+          # artifact, so a mismatch means release_artifact.sha256 is stale relative to the source at this
+          # commit. Re-record it from THIS job's output, never from a local cargo build-sbf: a local build
+          # on macOS cannot reproduce these bytes (S-07, measured).
           if [ "$GOT" != "$EXPECTED" ]; then
             echo "::error::the verifiable build does NOT match the pinned release artifact."
             echo "Either the release hash in config/mainnet-authorities.json is stale (re-record it), or"
-            echo "the solana-verify toolchain differs from the release toolchain (runbook, S-07)."
+            echo "Re-record it from this job's sha256 above. Do NOT use a local cargo build-sbf hash:"
+            echo "SBF builds are not deterministic across host platforms (S-07, measured 2026-08-07)."
             exit 1
           fi
           echo "MATCH: an independent solana-verify build reproduces the pinned release artifact."

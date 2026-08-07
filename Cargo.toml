@@ -10,6 +10,14 @@ members = ["programs/dominion_silver_mint_v2", "tools/mock-lazer"]
 exclude = ["programs/dominion_silver_mint_v1"]
 resolver = "2"
 
+# solana-verify choisit son image Docker en lisant CETTE cle EN PREMIER
+# (solana-verify 0.5.1, main.rs:954-959), et ne retombe sur la version de `solana-program` du
+# Cargo.lock qu a defaut. C est ce fallback qui avait selectionne l image 2.3.0 au premier essai,
+# alors que la chaine de release est 3.0.0. La declarer ici rend le choix explicite et rend
+# --base-image inutile.
+[workspace.metadata.cli]
+solana = "3.0.0"
+
 [profile.release]
 overflow-checks = true
 lto = "fat"
