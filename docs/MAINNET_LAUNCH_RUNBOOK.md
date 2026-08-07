@@ -395,11 +395,23 @@ Then prove the priced path works with real money, smallest possible amount:
 ```bash
 DOMINION_ALLOW_MAINNET=i-understand \
 DOMINION_RPC=https://api.mainnet-beta.solana.com \
-npx tsx scripts/e2e-lazer-mint.ts
+E2E_ALLOW_MINT_ONLY=1 npx tsx scripts/e2e-lazer-mint.ts
 ```
 
 It simulates before sending, so a failure names the guard that rejected it instead of an
 opaque revert. Confirm the implied premium comes out at 1.500%.
+
+**ROUND 4 P1-05, lisez ceci avant de lancer le smoke test.** `e2e-lazer-mint.ts` soumet un mint REEL de
+10 USDC, puis sort en code 2 si `redemptions_enabled == false`, ce qui est la posture de lancement. Donc sans
+`E2E_ALLOW_MINT_ONLY=1` il depense 10 USDC reels puis echoue, et chaque relance pour obtenir un vert depense
+10 USDC de plus. La variable est ajoutee aux commandes ci-dessus.
+
+Le code de sortie 2 existe pour qu une demi-preuve ne passe pas pour un succes. En mainnet au lancement la
+moitie redeem est fermee PAR CONCEPTION, donc l override est la bonne reponse, pas l ouverture du redeem.
+N ouvrez jamais le redeem pour faire verdir un test.
+
+Il faut aussi `PYTH_LAZER_KEY` dans l environnement (pour recuperer l enveloppe) et un `DOMINION_KEYPAIR`
+mainnet finance en SOL et en USDC.
 
 ### 11. Deploy both apps, pointed at mainnet
 

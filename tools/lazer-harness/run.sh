@@ -63,7 +63,25 @@ if ! scan_for target/harness/dominion_silver_mint.so ProbeOraclePrice; then
 fi
 
 echo "[2/4] run litesvm harness (rustc 1.89; litesvm needs >= 1.86)"
-cargo +1.89.0 test --manifest-path tools/lazer-harness/Cargo.toml "$@"
+# ROUND 4 P2-04. Le runner state avait ce defaut et il a ete corrige; celui-ci le gardait. Un `cargo test`
+# dont le filtre ne matche rien sort 0, et ce script imprimait alors son message OK sur une execution de
+# ZERO test. Le compte est lu et asserte, avec le total attendu epingle: un test perdu est aussi grave
+# qu un test rouge, et il est plus silencieux.
+EXPECTED_LAZER_TESTS=6
+if ! _out="$(mktemp)"; then echo "ERROR: mktemp failed" >&2; exit 1; fi
+set +e
+cargo +1.89.0 test --manifest-path tools/lazer-harness/Cargo.toml "$@" 2>&1 | tee "$_out"
+_rc="${PIPESTATUS[0]}"
+set -e
+if [[ "$_rc" -ne 0 ]]; then rm -f "$_out"; echo "FAIL: la suite Lazer n a pas passe (cargo $_rc)" >&2; exit "$_rc"; fi
+_ran="$(awk '/^test result:/ { for (i = 1; i <= NF; i++) if ($i == "passed;") t += $(i-1) } END { print t + 0 }' "$_out")"
+rm -f "$_out"
+if [[ "$_ran" -ne "$EXPECTED_LAZER_TESTS" ]]; then
+  echo "FAIL: $_ran test(s) Lazer executes, $EXPECTED_LAZER_TESTS attendus." >&2
+  echo "      Un test ajoute ou supprime: mettez a jour EXPECTED_LAZER_TESTS dans le MEME commit." >&2
+  exit 1
+fi
+echo "  $_ran/$EXPECTED_LAZER_TESTS tests Lazer executes."
 
 echo "[3/4] target/deploy untouched by design (harness builds into target/harness),"
 echo "      so there is nothing to restore. Verify the deploy artifact separately:"

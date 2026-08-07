@@ -104,6 +104,16 @@ fi
 # Sum the "N passed" across every test binary. Zero executed is a FAILURE, whatever cargo's exit code says.
 executed="$(awk '/^test result:/ { for (i = 1; i <= NF; i++) if ($i == "passed;") total += $(i-1) } END { print total + 0 }' "$tmp_out")"
 rm -f "$tmp_out"
+# ROUND 4 P2-04: compter n est pas suffisant, il faut EPINGLER. Un test silencieusement perdu (un fichier
+# renomme, un module non declare) laissait le total baisser sans rien signaler. Mettez ce nombre a jour dans
+# le meme commit que tout ajout ou suppression de test.
+EXPECTED_STATE_TESTS=141
+if [[ "$executed" -ne 0 && "$executed" -ne "$EXPECTED_STATE_TESTS" && ${#ARGS[@]} -eq 0 ]]; then
+  echo >&2
+  echo "FAIL: $executed test(s) executes, $EXPECTED_STATE_TESTS attendus (sans filtre)." >&2
+  echo "      Un test a ete ajoute ou perdu. Mettez a jour EXPECTED_STATE_TESTS dans le MEME commit." >&2
+  exit 1
+fi
 if [[ "$executed" -eq 0 ]]; then
   echo >&2
   echo "FAIL: the suite executed ZERO tests, so it proved nothing." >&2

@@ -26,6 +26,33 @@ function ceremony(): { guardians: string[]; inventoryWallet: string } {
   return { guardians: [g, ...extra], inventoryWallet: inv };
 }
 
+/**
+ * ROUND 4 P0-03. `config.admin` en mainnet est un PDA Squads OFF-CURVE
+ * (`65g5nNXTtqtFz3jggKAqyvS6oCoVUXuXqAU9B8jHqPPS`, `isOnCurve == false`). Aucune cle privee ne peut signer
+ * pour lui, donc tout `has_one = admin` echoue, quelle que soit la cle passee. Ce script envoyait
+ * directement avec un `Keypair`: il ne pouvait pas fonctionner en mainnet, et il a ete valide sur devnet ou
+ * l admin EST la cle de dev, c est-a-dire la seule configuration ou le defaut est invisible.
+ *
+ * En attendant la decision (supprimer ces scripts et passer par le panneau admin, qui route deja 35 actions
+ * via Squads, ou les convertir en constructeurs de transactions Squads), ils REFUSENT de tourner plutot que
+ * d echouer en pleine ceremonie.
+ */
+function refuseIfAdminIsOffCurve(configAdmin: PublicKey, signer: PublicKey): void {
+  if (configAdmin.equals(signer)) return;
+  const onCurve = PublicKey.isOnCurve(configAdmin.toBytes());
+  const why = onCurve
+    ? "config.admin n est pas la cle passee: ce script ne peut signer que pour lui-meme."
+    : "config.admin est OFF-CURVE (un PDA, typiquement un coffre Squads). Aucune cle privee n existe pour " +
+      "lui, donc has_one = admin echouera quoi qu il arrive.";
+  throw new Error(
+    `REFUS: ${why}\n` +
+      `  config.admin : ${configAdmin.toBase58()}${onCurve ? "" : "  (off-curve)"}\n` +
+      `  cle fournie  : ${signer.toBase58()}\n` +
+      `Passez par le panneau admin, qui construit ces instructions et les depose dans la transaction ` +
+      `Squads. Voir ROUND 4 P0-03.`,
+  );
+}
+
 async function main() {
   const CLUSTER = await resolveCluster();
   await requireSanctionedCluster(CLUSTER.rpc, "ceremony step 8: guardians, inventory, unpause");
@@ -46,6 +73,7 @@ async function main() {
   const send = (ix: any) =>
     sendAndConfirmTransaction(conn, new Transaction().add(ix), [admin], { commitment: "confirmed" });
 
+  refuseIfAdminIsOffCurve((await cfg()).admin, admin.publicKey);
   const { guardians, inventoryWallet } = ceremony();
   console.log(`  guardians a enregistrer : ${guardians.join(", ")}`);
   console.log(`  inventory wallet        : ${inventoryWallet}`);

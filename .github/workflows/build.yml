@@ -133,8 +133,19 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install root dependencies
-        run: npm ci
+      - name: Install root and public-app dependencies
+        # The root install is what makes `npx --no-install tsc` and `npx --no-install tsx` resolve the
+        # pinned compiler instead of downloading one.
+        #
+        # apps/public is installed HERE, before the typecheck, and that is not incidental:
+        # scripts/e2e-lazer-mint.ts imports lazer-assembly and lazer-tx from apps/public/src/lib rather
+        # than keeping a second copy of the envelope assembly that could drift from the one the frontend
+        # ships. lazer-tx pulls @solana/wallet-adapter-react, an app dependency, so typechecking scripts/
+        # genuinely requires the app's node_modules. Without this the gate failed with TS2307 on a module
+        # that exists, and section 4b of verify-constants-consistency.sh hit the same error one step later.
+        run: |
+          npm ci
+          npm ci --prefix apps/public
 
       - name: Verify every hand-copied address agrees with declare_id! (BLOCKING)
         run: bash scripts/verify-constants-consistency.sh
@@ -157,6 +168,21 @@ jobs:
         # which is what catches a dev-hatch or test-harness build reaching the
         # deploy path. Also fails on a missing IDL.
         run: scripts/verify-release-artifact.sh
+
+      - name: On-chain state harness, 141 tests (BLOCKING - audit round 4, P1-04)
+        # These 141 litesvm tests run against target/deploy/dominion_silver_mint.so, the release artifact
+        # built two steps above, and they are the only thing that proves the HANDLERS still call the rules
+        # in src/state/. An adversarial pass measured 192 handler-level mutations that leave all 158 unit
+        # tests green; this suite catches the ones that matter.
+        #
+        # ROUND 4 P1-04: nothing under .github/ referenced this runner. The suite existed, passed locally,
+        # and gated no merge. The 19 P0 mutations closed in f9c7112 were unprotected in CI from the moment
+        # they were written.
+        #
+        # It must run AFTER the release artifact is built and BEFORE the Lazer harness, which rebuilds into
+        # target/harness with --features test-harness. The runner asserts the artifact it loads is
+        # probe-free, so an ordering mistake fails loudly rather than testing the wrong bytes.
+        run: bash tools/state-harness/run.sh --no-build
 
       - name: Lazer behavioural harness (BLOCKING - audit H-01)
         # Builds into target/harness, so it cannot contaminate the deploy artifact.
