@@ -381,15 +381,79 @@ jobs:
       - name: Install solana-verify
         run: cargo install solana-verify --locked
 
-      - name: Verifiable build
-        # S-07. Without --base-image, solana-verify picks its own default Docker image (2.3.0 on the run
-        # that exposed this), whose platform-tools do not produce our bytes. The release toolchain is
-        # declared in Anchor.toml as solana_version 3.0.0, and solanafoundation/solana-verifiable-build:3.0.0
-        # exists, so the two can be made to agree instead of the comparison being permanently red.
+      # S-07 INSTRUMENTED PROBE. One run must answer the whole question, because this is the only place the
+      # experiment is meaningful: the image is published for amd64 ONLY, the dev machine is arm64 Darwin, so
+      # a local test would run it under emulation and could not distinguish "our build differs" from
+      # "emulation differs". ubuntu-latest is amd64 native, which is exactly what a third-party verifier runs.
+      #
+      # Established by reading solana-verify 0.5.1's source, so these are NOT the hypotheses under test:
+      #   --locked IS passed (main.rs:1077, plus a sparse-registry override), so lockfile drift is ruled out
+      #   the build runs against OUR mounted Cargo.toml, so [profile.release] (lto=fat, codegen-units=1,
+      #     overflow-checks) applies
+      #   our .so embeds no host paths (verified: zero occurrences), so the mount point cannot matter
+      #
+      # What remains: the container forces RUSTUP_TOOLCHAIN to its own active toolchain, and platform-tools
+      # is selectable with `cargo build-sbf --tools-version`. We build with v1.51. The 3.0.0 image was
+      # pushed 2026-05-04 and may ship a different one.
+      - name: S-07 probe, what the container actually contains
+        continue-on-error: true
+        run: |
+          set -x
+          IMG=solanafoundation/solana-verifiable-build:3.0.0
+          docker pull "$IMG"
+          echo "=== toolchain and platform-tools INSIDE the image ==="
+          docker run --rm --entrypoint sh "$IMG" -c 'rustc --version; rustup toolchain list; cargo build-sbf --version || true'
+          echo "=== what the runner itself has, for comparison ==="
+          rustc --version; cargo build-sbf --version || true
+          echo "=== our own default build, on this runner, for a side-by-side hash ==="
+          cargo build-sbf --manifest-path programs/dominion_silver_mint_v2/Cargo.toml -- --locked
+          sha256sum target/deploy/dominion_silver_mint.so || true
+          mv target/deploy/dominion_silver_mint.so /tmp/runner-native.so || true
+
+      - name: S-07 probe, verifiable build WITHOUT a forced tools-version
+        continue-on-error: true
         run: |
           solana-verify build \
             --base-image solanafoundation/solana-verifiable-build:3.0.0 \
             --library-name dominion_silver_mint
+          echo "hash without --tools-version:"
+          sha256sum target/deploy/dominion_silver_mint.so || true
+          cp target/deploy/dominion_silver_mint.so /tmp/verify-default.so || true
+
+      - name: S-07 probe, verifiable build WITH --tools-version v1.51
+        continue-on-error: true
+        run: |
+          rm -f target/deploy/dominion_silver_mint.so
+          solana-verify build \
+            --base-image solanafoundation/solana-verifiable-build:3.0.0 \
+            --library-name dominion_silver_mint \
+            --cargo-build-sbf-args="--tools-version v1.51"
+          echo "hash with --tools-version v1.51:"
+          sha256sum target/deploy/dominion_silver_mint.so || true
+          cp target/deploy/dominion_silver_mint.so /tmp/verify-v151.so || true
+
+      - name: S-07 probe, the four hashes side by side
+        continue-on-error: true
+        run: |
+          echo "pinned in config/mainnet-authorities.json:"
+          python3 -c "import json;print(json.load(open('config/mainnet-authorities.json'))['release_artifact']['sha256'])"
+          for f in /tmp/runner-native.so /tmp/verify-default.so /tmp/verify-v151.so; do
+            [ -f "$f" ] && echo "$(sha256sum "$f")" || echo "MISSING $f"
+          done
+          echo "If verify-v151 equals the pinned hash, S-07 closes by forcing the tools version and OUR"
+          echo "BINARY DOES NOT CHANGE, which is the only acceptable shape of fix before a launch."
+          echo "If runner-native also differs from the pinned hash, the divergence is host-vs-linux and not"
+          echo "container-specific, which is a different and larger problem."
+
+      # The real gate. It stays RED until a verifiable build reproduces the pinned artifact: a green that
+      # compares nothing is worse than a visible red.
+      - name: Verifiable build
+        run: |
+          rm -f target/deploy/dominion_silver_mint.so
+          solana-verify build \
+            --base-image solanafoundation/solana-verifiable-build:3.0.0 \
+            --library-name dominion_silver_mint \
+            --cargo-build-sbf-args="--tools-version v1.51"
 
       - name: Compare the verifiable build against the pinned release hash
         run: |
