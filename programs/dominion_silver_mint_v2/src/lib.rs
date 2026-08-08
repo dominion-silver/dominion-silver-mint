@@ -22,11 +22,24 @@ pub mod state;
 
 use instructions::*;
 
+// THE MAINNET PROGRAM ID, generated 2026-08-08 at the mainnet ceremony (runbook step 1). Keypair at
+// ~/.config/solana/dominion-mainnet-program.json, mode 600, NEVER in this repo.
+//
+// ONE ID FOR BOTH CLUSTERS, deliberately. `declare_id!` is a single literal, so a devnet rehearsal on
+// a different id can only ever exercise a DIFFERENT binary than the one that ships. Round 5 concluded
+// NO-GO partly because "the mainnet candidate does not exist yet"; keeping a separate rehearsal id
+// would have preserved exactly that gap. The devnet deployment under this id is the rehearsal, and its
+// bytes are the candidate's bytes.
+//
 // This id MUST be a fresh deploy: the ConfigAccount layout is incompatible with V1 and with the
-// pre-Lazer V2, and the "no stale state" hypothesis depends on the id being neither. Retired ids: V1
-// J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5, pre-Lazer V2
-// GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX. Keypair: target/deploy (gitignored).
-declare_id!("HXaptAcaXBoEAsNuEv4ZwYrciHbMxSpip2VScRVDjo1Z");
+// pre-Lazer V2, and the "no stale state" hypothesis depends on the id being neither.
+//
+// Retired: V1 J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5, pre-Lazer V2
+// GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX.
+// SUPERSEDED but still deployed on devnet: HXaptAcaXBoEAsNuEv4ZwYrciHbMxSpip2VScRVDjo1Z, the 2026-08-07 rehearsal
+// contract. It carries three timelocked proposals and predates the round 5 remediation, so it is a
+// historical record, not a target. Close it once the rehearsal under this id has run.
+declare_id!("3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ");
 
 #[program]
 pub mod dominion_silver_mint {
@@ -169,6 +182,15 @@ pub mod dominion_silver_mint {
 
     pub fn set_redemptions_enabled(ctx: Context<SetParam>, enabled: bool) -> Result<()> {
         instructions::admin::caps::set_redemptions_enabled_handler(ctx, enabled)
+    }
+
+    /// ROUND 5 P1-04. The minimum size of a priced operation, atomic USDC: `amount_usdc` on the mint
+    /// side, the gross USDC value of `amount_silv` on the redeem side. Instant in BOTH directions,
+    /// bounded by `MIN_OPERATION_CEILING_USDC`; zero disables the floor. It is an availability
+    /// control on the strict-anti-replay slot, not a value control, which is why it carries no
+    /// timelock. Full reasoning at `caps::set_min_operation_usdc_handler`.
+    pub fn set_min_operation_usdc(ctx: Context<SetParam>, new_min_usdc: u64) -> Result<()> {
+        instructions::admin::caps::set_min_operation_usdc_handler(ctx, new_min_usdc)
     }
 
     // FIX A: the redeem throttles are loosen-slow / tighten-fast. This is the ONLY instant path and it

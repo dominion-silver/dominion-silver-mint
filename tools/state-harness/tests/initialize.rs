@@ -609,7 +609,15 @@ fn initialize_writes_every_config_field_and_the_values_read_back_on_chain() {
     assert!(!c.mint_paused, "mint_paused");
     assert!(!c.redeem_paused, "redeem_paused");
     assert_eq!(c.version, CONFIG_SCHEMA_VERSION, "config.version");
-    assert_eq!(c.reserved, [0u8; 40], "config.reserved");
+    // ROUND 5 P1-04. NOT zero, and that is the point: a fresh mainnet config must ship with the
+    // availability floor already armed. Zero is the value an in-place upgrade of an OLD config
+    // decodes, and it means no floor, so an initialize that left it zero would ship the defect the
+    // field exists to close.
+    assert_eq!(
+        c.min_operation_usdc, DEFAULT_MIN_OPERATION_USDC,
+        "config.min_operation_usdc must be the shipped default, not zero"
+    );
+    assert_eq!(c.reserved, [0u8; 32], "config.reserved");
 }
 
 #[test]

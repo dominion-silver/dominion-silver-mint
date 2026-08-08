@@ -94,7 +94,10 @@ function grep(rel: string, re: RegExp): string | null {
 
 function runScript(rel: string, args: string[] = []): boolean {
   try {
-    execFileSync("bash", [path.join(ROOT, rel), ...args], { stdio: "pipe" });
+    // cwd is pinned to ROOT: `verify-release-artifact.sh` resolves `docs/` relative to the caller's
+    // working directory in its stray-hash gate, so inheriting whatever cwd this process was started
+    // from silently skipped that check.
+    execFileSync("bash", [path.join(ROOT, rel), ...args], { stdio: "pipe", cwd: ROOT });
     return true;
   } catch {
     return false;
@@ -113,12 +116,62 @@ async function main() {
 
   // ---------------------------------------------------------------- build
   section("A. Build and artifact");
-  runScript("scripts/verify-release-artifact.sh")
-    ? ok("artifact matches a clean default rebuild, no dev hatch")
-    : no("verify-release-artifact.sh FAILED", "run it directly for the reason");
+  // ROUND 5, review pass: `--local-only`, and the flag is what makes this gate answerable.
+  //
+  // Without it the script also compares against the RELEASE PIN, which no machine running this
+  // readiness check can reproduce: the release artifact is a linux/amd64 container build, and today
+  // there is no candidate pinned at all. It therefore exits 3 (NOT ATTESTED), `runScript` collapses
+  // every non-zero into `false`, and this printed a BLOCKING failure whose own banner says "it cannot
+  // be fixed by any step of the runbook". A permanently red gate is a gate the operator learns to run
+  // the ceremony without.
+  //
+  // The question this check is actually asking is the local one: is the artifact on this machine a
+  // clean default-feature build with no dev hatch. `--local-only` asks exactly that and exits 0.
+  // Attesting the RELEASE binary is the reproducible-build job's job, and the runbook says so.
+  runScript("scripts/verify-release-artifact.sh", ["--local-only"])
+    ? ok("local artifact is a clean default rebuild, no dev hatch (NOT a release attestation)")
+    : no(
+        "verify-release-artifact.sh --local-only FAILED",
+        "run it directly for the reason; the release pin is checked by CI, not here",
+      );
   runScript("scripts/verify-constants-consistency.sh")
     ? ok("every hand-copied address agrees with declare_id!")
     : no("verify-constants-consistency.sh FAILED", "run it directly");
+
+  // ROUND 6 R6-07. The release pin, as a STAGED requirement. Before step 3 there is nothing to deploy
+  // and `no-candidate` is the correct state, so reporting it as a blocker would be the permanently-red
+  // gate the previous round already had to undo. From step 3 (the deploy) onward it IS a blocker, and
+  // the schema has to validate, not merely exist.
+  {
+    const relPin = cfg.release_artifact ?? {};
+    const pinStatus: string = relPin.status ?? "MISSING";
+    let schema = "-";
+    try {
+      schema = execFileSync(
+        "python3",
+        [path.join(ROOT, "scripts/_read-release-pin.py"), path.join(ROOT, "config/mainnet-authorities.json"), ROOT],
+        { encoding: "utf8", cwd: ROOT },
+      )
+        .trim()
+        .split(/\s+/)
+        .slice(3)
+        .join(" ");
+    } catch {
+      schema = "the pin could not be read";
+    }
+    if (pinStatus === "pinned" && schema === "-") {
+      ok("release candidate pinned and the pin validates", relPin.sha256?.slice(0, 16) + "...");
+    } else if (pinStatus === "pinned") {
+      no("the release pin does NOT validate", schema);
+    } else {
+      atStep(
+        "2c, BEFORE step 3",
+        "no release candidate is pinned",
+        `release_artifact.status = ${pinStatus}. Pin it from the reproducible-build job (runbook 2c)`,
+        3,
+      );
+    }
+  }
 
   // ------------------------------------------------------------ authorities
   section("B. Authorities and funding");
@@ -159,7 +212,11 @@ async function main() {
     );
     usdc === USDC_MAINNET
       ? ok(`apps/${app} USDC_MINT is the mainnet mint`)
-      : atStep("2", `apps/${app} USDC_MINT is not mainnet yet`, `${usdc} (swapped at runbook step 2)`, 2);
+      // ROUND 6 R6-05: due at 2a, so it is OVERDUE and BLOCKING from step 3 (the deploy) onward. It
+      // used to be due at "2" with the dueStep also 2, which meant `dueStep < STAGE` only fired from
+      // step 3 anyway; what changed is that the label now names 2a, the sub-step that actually does it,
+      // because the audit found the batch had executed only the program-id half of step 2a.
+      : atStep("2a", `apps/${app} USDC_MINT is not mainnet yet`, `${usdc} (swapped at runbook step 2a)`, 2);
   }
   const lt = grep(
     "apps/public/src/lib/constants.ts",
@@ -167,11 +224,61 @@ async function main() {
   );
   lt === LAZER_TREASURY_MAINNET
     ? ok("apps/public LAZER_TREASURY is the mainnet value")
-    : atStep("2", "apps/public LAZER_TREASURY is not mainnet yet", `${lt} (it is cluster-specific)`, 2);
+    : atStep("2a", "apps/public LAZER_TREASURY is not mainnet yet", `${lt} (it is cluster-specific)`, 2);
   const feed = grep("apps/public/src/lib/constants.ts", /LAZER_SILV_FEED_ID\s*=\s*(\d+)/);
   Number(feed) === FEED_ID
     ? ok(`feed id is ${FEED_ID} (Metal.Index.SILVER/USD, pure spot)`)
     : no(`feed id is ${feed}, expected ${FEED_ID}`);
+
+  // ROUND 6 R6-05. THE CHECK THAT DID NOT EXIST: compare the apps' constants against the LIVE mainnet
+  // Config, not against each other.
+  //
+  // The offline gate (verify-constants-consistency.sh) proves the two apps agree and that the value is
+  // not on a three-entry list of retired mints. Both were true of the devnet mint `G5zez3...` while the
+  // apps carried the mainnet PROGRAM_ID, which is a state where the panel and the public card build
+  // ATAs and instructions against a mint that does not exist on the cluster they point at. The program
+  // refuses them, so no value is at risk; the product simply does not work, and several ceremony
+  // actions become unavailable at the moment they are needed.
+  //
+  // SILV_MINT cannot be known before T1 creates it, so this is STAGED: unknowable until step 6, a hard
+  // requirement from step 7 on. That ordering is the finding, not a detail.
+  {
+    const silvConst = grep("apps/public/src/lib/constants.ts", /SILV_MINT\s*=\s*new PublicKey\("([^"]+)"/);
+    const silvAdmin = grep("apps/admin/src/lib/constants.ts", /SILV_MINT\s*=\s*new PublicKey\("([^"]+)"/);
+    const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
+    const info = await conn.getAccountInfo(configPda);
+    if (!info) {
+      atStep(
+        "4-6 (T1 initialises)",
+        "the mainnet Config does not exist yet, so SILV_MINT cannot be compared on chain",
+        `apps carry ${silvConst}; T1 creates the real mint and this becomes checkable`,
+        7,
+      );
+    } else {
+      // ConfigAccount layout: 8 discriminator, then admin(32), pending_admin Option<Pubkey>,
+      // pending_admin_expires_at(8), upgrade_authority_info(32), permanent_delegate_expected(32),
+      // freeze_authority_expected(32), compliance_mode(1), premium x2 (4), feed id(4),
+      // min_publishers(2), last_used_feed_ts(8), then usdc_mint(32) and silv_mint(32).
+      const d = info.data;
+      let o = 8 + 32;
+      o += d.readUInt8(o) === 1 ? 33 : 1; // pending_admin
+      o += 8 + 32 + 32 + 32 + 1 + 2 + 2 + 4 + 2 + 8;
+      const onChainUsdc = new PublicKey(d.subarray(o, o + 32)).toBase58();
+      const onChainSilv = new PublicKey(d.subarray(o + 32, o + 64)).toBase58();
+      onChainSilv === silvConst && onChainSilv === silvAdmin
+        ? ok("both apps' SILV_MINT equals the on-chain config.silv_mint", onChainSilv)
+        : atStep(
+            "6c, BEFORE deploying the panel",
+            "the apps' SILV_MINT does NOT match the on-chain config.silv_mint",
+            `on chain ${onChainSilv}, public ${silvConst}, admin ${silvAdmin}. ` +
+              `Write the observed mint into both apps, commit, test, THEN deploy the panel`,
+            7,
+          );
+      onChainUsdc === USDC_MAINNET
+        ? ok("the on-chain config.usdc_mint is the mainnet USDC mint")
+        : no("the on-chain config.usdc_mint is NOT mainnet USDC", onChainUsdc);
+    }
+  }
 
   // ----------------------------------------------------------------- oracle
   section("D. Oracle, against MAINNET feed data");
@@ -299,8 +406,15 @@ async function main() {
     "4. redeem: closed now, open later WITHOUT an upgrade",
     "set_redemptions_enabled still refuses true, but the 24h-timelocked SetRedeemLimits action " +
       "now carries the switch (propose_set_redeem_limits with redemptionsEnabled=true). " +
-      "PRECONDITIONS: the fee vault must exist (scripts/create-fee-vault.ts), the treasury must " +
-      "hold USDC, and treasury_min_float_usdc must be non-zero",
+      // ROUND 5 P1-06. This used to list "treasury_min_float_usdc must be non-zero" as a
+      // precondition, which contradicts D5. Two sources of truth gave incompatible orders: following
+      // the decision made this gate report a blocker, following the gate annulled the decision. The
+      // float is a risk the owner accepted, so it is stated as one and gates nothing.
+      "PRECONDITIONS: the fee vault must exist (scripts/create-fee-vault.ts) and the treasury must " +
+      "hold USDC. treasury_min_float_usdc is 0 by decision D5 (risk accepted, SolidProof LOW #4 " +
+      "open by choice); withdraw_usdc stays 24h-timelocked and guardian-cancellable, which is what " +
+      "makes that defensible. Set a floor later with propose_set_treasury_min_float if redeem volume " +
+      "grows",
   );
   ok("5. admin portal for admin + guardians + Squads members", "step 11");
   ok(
@@ -315,7 +429,14 @@ async function main() {
   byHand("https://dominion.market/silv-metadata.json resolves (baked into the mint forever)");
   byHand("site copy discloses the freeze and seize powers");
   byHand("at least 2 independent guardian keys exist, on hardware");
-  byHand("treasury_min_float_usdc will be set NON-ZERO before any USDC arrives");
+  // ROUND 5 P1-06. Was "treasury_min_float_usdc will be set NON-ZERO before any USDC arrives", which
+  // asked a human to confirm the opposite of D5. What a human genuinely has to own is the MONITORING
+  // that replaces the floor, since the accepted risk is only defensible while somebody is watching the
+  // 24h window a withdrawal announces itself in.
+  byHand(
+    "treasury balance monitoring + a named human to veto a withdrawal inside its 24h window " +
+      "(this is what stands in for treasury_min_float_usdc, which D5 sets to 0 on purpose)",
+  );
   byHand("the mint-creation ceremony uses the COMPLIANCE vault, not the dev wallet");
 
   console.log(

@@ -65,6 +65,21 @@ else
   echo "[1/3] build SKIPPED (--no-build): testing whatever artifact is already at $SO"
 fi
 
+# ROUND 5 P1-03. The mock Lazer program, ALWAYS built, INCLUDING under --no-build. `--no-build` means
+# "do not rebuild the dominion artifact under test", which is what CI needs when that artifact came
+# out of the release container; it has never meant "run without the mock". Built into target/harness,
+# never target/deploy, for the same reason tools/lazer-harness/run.sh does it: nothing that is not the
+# release artifact may land on the path `solana program deploy` reads.
+echo "      + mock-lazer -> target/harness (the anti-replay persistence tests need a Lazer that runs)"
+cargo build-sbf --manifest-path tools/mock-lazer/Cargo.toml --sbf-out-dir target/harness
+# A missing mock is a hard failure and not a skip. The tests that need it would otherwise panic on a
+# read, or worse, a future refactor could make them skip silently, which is the exact false-green
+# class this harness exists to close.
+if [[ ! -f target/harness/mock_lazer.so ]]; then
+  echo "ERROR: mock-lazer produced no target/harness/mock_lazer.so. Refusing to run." >&2
+  exit 1
+fi
+
 echo "[2/3] assert $SO is probe-free and dev-hatch-free"
 # A MISSING artifact is a hard failure, never a skip: the previous generation of this check in
 # tools/lazer-harness printed OK about a file that did not exist.
@@ -107,7 +122,7 @@ rm -f "$tmp_out"
 # ROUND 4 P2-04: compter n est pas suffisant, il faut EPINGLER. Un test silencieusement perdu (un fichier
 # renomme, un module non declare) laissait le total baisser sans rien signaler. Mettez ce nombre a jour dans
 # le meme commit que tout ajout ou suppression de test.
-EXPECTED_STATE_TESTS=141
+EXPECTED_STATE_TESTS=155
 if [[ "$executed" -ne 0 && "$executed" -ne "$EXPECTED_STATE_TESTS" && ${#ARGS[@]} -eq 0 ]]; then
   echo >&2
   echo "FAIL: $executed test(s) executes, $EXPECTED_STATE_TESTS attendus (sans filtre)." >&2

@@ -201,6 +201,24 @@ const ACTIONS: ActionDesc[] = [
     build: (c, p) => actions.setInventoryWallet(c, pk(p.wallet)),
   },
   {
+    id: "set-min-operation",
+    label: "Set minimum operation size",
+    group: "Instant",
+    mode: "squads",
+    fields: [{ name: "usd", label: "Minimum per mint / redeem (USDC)", kind: "usdc" }],
+    tip:
+      "ROUND 5 P1-04. The floor on a single priced operation: amount_usdc on mint, the gross USDC " +
+      "value on redeem. D2 lets one signed Lazer print price exactly ONE operation protocol-wide, so " +
+      "without a floor a dust mint or a dust redeem captured every print for a fraction of a cent and " +
+      "denied the priced path to everyone. Instant in BOTH directions, capped at 1,000 USDC on chain. " +
+      "Zero DISABLES the floor, which is what an in-place upgrade of an existing config decodes.",
+    current: (c) => {
+      const v = c.minOperationUsdc ? Number(c.minOperationUsdc) : 0;
+      return v === 0 ? "0 (NO FLOOR)" : `${v / 1e6} USDC`;
+    },
+    build: (c, p) => actions.setMinOperationUsdc(c, parseAtomic(p.usd, 6)),
+  },
+  {
     id: "propose-min-float",
     label: "Propose treasury minimum",
     group: "Delayed (24h)",

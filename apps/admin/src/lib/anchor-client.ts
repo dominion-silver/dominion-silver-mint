@@ -148,6 +148,15 @@ export interface ConfigAccount {
    *  callback, where a typo would silently render "scope 0 (dormant)" for an ARMED gate and still
    *  typecheck. Optional because a config written before this upgrade decodes it as 0. */
   kycScopeFlags?: number;
+  /** ROUND 5 P1-04. The minimum size of a priced operation, atomic USDC: `amount_usdc` on mint, the
+   *  gross USDC value on redeem. Zero means NO floor, which is what a config initialised before this
+   *  field existed decodes out of `reserved`, so read it as `?? 0` and never assume a non-zero value.
+   *  Admin-settable and instant in both directions, so the live account is the only source of truth. */
+  minOperationUsdc?: BN;
+  /** ROUND 5. Live count of KycAccounts. Was missing from this mirror despite the header claiming the
+   *  interface mirrors ConfigAccount field for field; `set_kyc_scope` refuses to arm at zero, so a
+   *  console that cannot show it cannot explain why arming was refused. */
+  kycAttestationCount?: number;
 }
 
 

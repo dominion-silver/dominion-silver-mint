@@ -43,6 +43,12 @@ pub struct PremintEvent {
     pub inventory: Pubkey,
     pub amount: u64,
     pub supply_post: u64,
+    /// SOLIDPROOF T-006. The signer that minted. `inventory` is the DESTINATION, and the admin
+    /// chooses it via `set_inventory_wallet`, so without this field the event records where supply
+    /// went but not who sent it. Appended after `supply_post` rather than inserted, for the same
+    /// reason `fee_usdc` was left in place above: readers rebuild against the new IDL either way,
+    /// but an append keeps the existing field offsets stable for anything decoding by position.
+    pub by: Pubkey,
     pub timestamp: i64,
 }
 
@@ -185,6 +191,23 @@ pub struct AdminActionExecuted {
 pub struct AdminActionCancelled {
     pub nonce: u64,
     pub cancelled_by: Pubkey,
+}
+
+/// SOLIDPROOF T-006. `close_timelock_account` was the one privileged instruction that changed state
+/// and said nothing. It cannot resurrect an action (it only accepts a timelock already cancelled or
+/// already executed), so the risk is not theft, it is BLINDNESS: after the account is gone, an
+/// indexer replaying the chain sees a nonce proposed and then nothing, with no way to distinguish a
+/// swept account from one that never existed. `action_disc` and `was_cancelled` are recorded here
+/// because they are readable for the last time at this point.
+#[event]
+pub struct TimelockAccountClosed {
+    pub nonce: u64,
+    pub action_disc: u8,
+    /// true if the action was cancelled, false if it had been executed. Exactly one holds: the
+    /// account constraint admits no other state.
+    pub was_cancelled: bool,
+    pub rent_recipient: Pubkey,
+    pub by: Pubkey,
 }
 
 #[event]
@@ -389,5 +412,15 @@ pub struct AdminTransferCancelled {
 pub struct PublicMintEnabledChanged {
     pub old_enabled: bool,
     pub new_enabled: bool,
+    pub by: Pubkey,
+}
+
+/// ROUND 5 P1-04. The mint floor is the availability control on the strict-anti-replay slot, so a
+/// monitor needs the transition: raising it prices small users out, lowering it re-cheapens print
+/// capture. Same old/new/by shape as the other instant setters, for the same LOW #3 reason.
+#[event]
+pub struct MinOperationChanged {
+    pub old_min_usdc: u64,
+    pub new_min_usdc: u64,
     pub by: Pubkey,
 }

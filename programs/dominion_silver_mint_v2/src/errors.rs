@@ -294,4 +294,35 @@ pub enum DominionError {
     /// becomes an admin key for this instruction.
     #[msg("the KYC attestor may not be the admin key: the whole hot/cold split depends on them differing")]
     KycOperatorMayNotBeAdmin,
+
+    /// ROUND 5 P1-04. The operation is below `config.min_operation_usdc`: `amount_usdc` on the mint
+    /// side, the gross USDC value of `amount_silv` on the redeem side. The floor is what stops a dust
+    /// operation from consuming the single global Lazer high-water slot for essentially nothing; see
+    /// `ConfigAccount::min_operation_usdc`. It names the field rather than a number, because the live
+    /// floor is admin-settable and a hardcoded value here would be the next stale string.
+    #[msg("operation is below config.min_operation_usdc: read the live floor before retrying")]
+    OperationBelowMinimum,
+
+    /// ROUND 5 P1-04. The requested floor exceeds `MIN_OPERATION_CEILING_USDC`. The floor bounds
+    /// availability, not value, so the rail bounds how far it can be pushed toward locking users out.
+    #[msg("the requested minimum operation size exceeds MIN_OPERATION_CEILING_USDC")]
+    MinOperationTooHigh,
+
+    /// ROUND 5 P1-04. Writing the value already stored. Refused for the same reason the other instant
+    /// setters here refuse a no-op: a success in an audit log reads as a change that happened.
+    #[msg("the minimum operation size already holds that value")]
+    MinOperationUnchanged,
+
+    /// ROUND 5, found while writing the P1-03 persistence tests. `LazerPolicyError::NonMonotonic` and
+    /// `LazerPolicyError::CarriedForward` both used to surface as `LazerCarriedForward`, so the two
+    /// most common refusals on the priced path were indistinguishable to a caller.
+    ///
+    /// That collapse was tolerable while the anti-replay was `<`, because a replay was rare. D2 made
+    /// it `<=`, so ONE operation per Lazer print is now the normal steady state and losing the race is
+    /// the single most likely thing a user hits. "Carried-forward oracle" tells them the feed is
+    /// broken; this tells them to retry with a newer price, which is the truth and the fix.
+    ///
+    /// Appended at the END of the enum, so no existing error number moves.
+    #[msg("this price envelope was already used: another operation consumed it, retry with a fresh price")]
+    LazerReplayed,
 }

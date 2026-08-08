@@ -238,7 +238,18 @@ if _suppressors:
     print("          scripts sign mainnet transactions. Fix the type instead.")
 check(not _suppressors, "no @ts-nocheck / @ts-ignore / @ts-expect-error anywhere in scripts/")
 
-print("4c. Every state rule is called, in the right place, outside test code")
+print("4c. Every state rule has a LEXICAL call in the file that must call it, outside test code")
+# ROUND 5 P2-05, and this is a WORDING fix that matters. The heading said "every state rule is
+# called", and the summary line said the rules "are called where they must be". That is more than
+# this check can know. It searches the source text for `rule(` after stripping comments, strings and
+# test modules: a call inside a dead branch, a call whose result is discarded, or a helper that no
+# longer affects the handler all satisfy it.
+#
+# It is a WIRING ALARM and it is a good one: it catches a deleted call site, which is a real thing
+# that happened. It is not semantic proof. The semantic proof is the handler-level tests in
+# tools/state-harness, which drive the real bytes and observe the resulting state, plus the targeted
+# mutations run against them. Presenting a lexical grep as "the rule runs" is how a gate that shows
+# `ok` on an empty set survives: four gates in this repo did exactly that.
 # The rules are pure functions in `state/`, so the unit tests prove the RULE and nothing proved the
 # HANDLER still calls it: deleting a call site left every Rust test green. Three properties make this
 # fail rather than reassure: each rule declares WHICH files must call it (two call sites means both are
@@ -360,7 +371,10 @@ for _u in sorted(set(_uncovered)):
     print(f"   FAIL: {_u} is declared in state/ and absent from the 4c manifest, so nothing checks it runs")
 check(
     not _absent and not _missing and not _uncovered,
-    f"all {len(_RULES)} state rules are called where they must be ({sum(len(v) for v in _RULES.values())} sites)",
+    # ROUND 5 P2-05: "lexical call present", not "called". The difference is the whole finding.
+    f"all {len(_RULES)} state rules have a lexical call at each required site "
+    f"({sum(len(v) for v in _RULES.values())} sites). Wiring alarm, NOT semantic proof: "
+    f"the handler-level proof is tools/state-harness",
 )
 
 print("5. Retired program ids")

@@ -15,6 +15,11 @@ import { fetchLazerEnvelope } from "./lazer-client";
 
 const FLOW_TIMEOUT_MS = 90_000;
 
+// ROUND 5 P1-05. How many prints a submitter may try to claim before giving up, and how long to wait
+// between tries. The feed publishes at fixed_rate@1000ms, so one second is exactly one new print.
+const CLAIM_ATTEMPTS = 3;
+const CLAIM_RETRY_MS = 1_100;
+
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     p,
@@ -22,6 +27,40 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
       setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms),
     ),
   ]);
+}
+
+/**
+ * ROUND 5 P1-05. Fetch a print for submission, preferring one no other submitter has been handed.
+ *
+ * D2 lets one signed envelope price exactly ONE operation, so two submitters on the same print means
+ * the second is refused `LazerReplayed` after paying the Lazer verify fee. The proxy marks a print
+ * `contended` when somebody already took it; waiting ~1s gets the next one, and the feed publishes at
+ * fixed_rate@1000ms.
+ *
+ * IT ALWAYS RETURNS AN ENVELOPE. Contention is a preference, never a refusal: this runs before the
+ * wallet popup, so a delay is invisible, but a refusal would mean an anonymous request loop against the
+ * unauthenticated proxy could stop every user from minting. Losing the race costs a fraction of a cent
+ * on a transaction the user chose to send; being unable to send at all costs the product.
+ */
+async function claimEnvelope(
+  feedId?: number,
+): Promise<{ envelope: Uint8Array; priceUsd: number | null; contended: boolean }> {
+  let last = await fetchLazerEnvelope(feedId, true);
+  for (let attempt = 1; attempt < CLAIM_ATTEMPTS && last.contended; attempt++) {
+    await new Promise((r) => setTimeout(r, CLAIM_RETRY_MS));
+    try {
+      last = await fetchLazerEnvelope(feedId, true);
+    } catch {
+      // KEEP THE ENVELOPE WE ALREADY HAVE. A review pass caught this: the loop discarded a usable
+      // contended envelope and re-fetched, and `fetchLazerEnvelope` throws on any non-2xx, so a 429
+      // or a transient 502 on the OPTIONAL retry killed a mint that was one signature away from
+      // working. Contention costs the user a fraction of a cent if they lose the race; propagating
+      // this costs them the transaction. The doc above says this function always returns an envelope,
+      // and it now does.
+      break;
+    }
+  }
+  return last;
 }
 
 /**
@@ -55,13 +94,16 @@ async function _impl(
   }
 
   // 1. Fetch the signed envelope + its price (throws LazerNotConfiguredError on 503).
-  const { envelope, priceUsd } = await fetchLazerEnvelope(
-    feedId,
-    // THIS IS THE SUBMIT PATH. `fresh` is mandatory here: the program refuses a feed timestamp it has
-    // already consumed, so a cached envelope shared with another signer costs this user a failed
-    // transaction plus the Lazer verify fee. See round 4 P0-01.
-    true,
-  );
+  //
+  // THIS IS THE SUBMIT PATH. `fresh` is mandatory here: the program refuses a feed timestamp it has
+  // already consumed, so an envelope shared with another signer costs this user a failed transaction
+  // plus the Lazer verify fee. See round 4 P0-01.
+  //
+  // ROUND 5 P1-05: the proxy marks a print `contended` when another submitter already took it, and
+  // `claimEnvelope` waits for a fresher one up to CLAIM_ATTEMPTS times. It always returns an envelope:
+  // this runs BEFORE the wallet popup, so a wait is invisible, but a refusal here would hand anyone
+  // with curl a way to stop every mint on the site. Bounded at 3 tries inside a 90s flow budget.
+  const { envelope, priceUsd } = await claimEnvelope(feedId);
 
   // 2. Build the single consumer tx (ed25519 + dominion). The caller computes
   //    min_out from `priceUsd` - the envelope's OWN price - so the slippage floor

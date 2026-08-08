@@ -8,6 +8,10 @@
 //     of the four goes through the 24h-timelocked SetRedeemLimits (propose.rs /
 //     execute.rs). This closes the head-dev "one-block drain": an admin can no
 //     longer strip the redemption rate-limits in a single instant tx.
+//   - set_min_operation_usdc: BOTH directions instant, bounded by
+//     MIN_OPERATION_CEILING_USDC (round 5 P1-04). The one setter here with no
+//     direction asymmetry, because neither direction risks value; the reasoning is
+//     written out at the handler.
 //
 // The four individual instant throttle setters (set_instant_redeem_budget /
 // _window, set_large_redeem_threshold, set_redeem_queue_delay) were REMOVED in
@@ -22,8 +26,8 @@ use anchor_spl::token_interface::Mint as InterfaceMint;
 
 use crate::errors::DominionError;
 use crate::events::{
-    InventoryWalletChanged, MaxSupplyChanged, PublicMintEnabledChanged, RedeemLimitsTightened,
-    RedemptionsEnabledChanged,
+    InventoryWalletChanged, MaxSupplyChanged, MinOperationChanged, PublicMintEnabledChanged,
+    RedeemLimitsTightened, RedemptionsEnabledChanged,
 };
 use crate::instructions::admin::execute::{
     redeem_limits_all_tighten, redeem_limits_any_set, redeem_limits_effective_change,
@@ -203,6 +207,60 @@ pub fn set_public_mint_enabled_handler(ctx: Context<SetParam>, enabled: bool) ->
         new_enabled: enabled,
         by: ctx.accounts.admin.key(),
     });
+    Ok(())
+}
+
+/// ROUND 5 P1-04: the minimum size of a priced operation, atomic USDC, on BOTH sides. INSTANT IN
+/// BOTH DIRECTIONS,
+/// bounded by `MIN_OPERATION_CEILING_USDC`, and that asymmetry-free shape is deliberate.
+///
+/// Why it exists: D2 made the Lazer anti-replay strict, so `last_used_feed_update_timestamp_us` is
+/// one global slot in a writable config and the first operation on each print blocks the rest. With
+/// no floor a 60 micro-USDC mint captured that slot (the derivation is on the config field), which
+/// turned the anti-replay invariant into a permissionless denial primitive.
+///
+/// Why it is NOT timelocked, and the honest form of that argument. The timelock announces actions that
+/// put VALUE at risk; this field puts none at risk in either direction. Raising it prices small
+/// operations out; lowering it re-cheapens print capture. Both cost availability, neither costs
+/// principal.
+///
+/// A REVIEW PASS CORRECTED THE FIRST VERSION OF THIS NOTE, which claimed the setter "grants strictly
+/// less power than `set_public_mint_enabled(false)`, which the same admin can already call instantly".
+/// That is true of the TIGHTENING direction only. Every other instant path in this file is
+/// one-directional by construction: the supply cap tightens only, both switches close only, the redeem
+/// throttles accept safe-direction values only. This is the one instant LOOSENING of a protection in
+/// the file, and a compromised admin can set it to zero, run the dust capture it exists to price out,
+/// and restore it, all inside one slot with no window for a guardian to cancel.
+///
+/// It is still not timelocked, deliberately, and the reason is proportion rather than symmetry: the
+/// worst case is a denial of the priced path, which that key can already achieve instantly and more
+/// completely with `set_public_mint_enabled(false)` plus `pause()`. A twelfth `TimelockAction` would
+/// put more new surface in the mainnet binary than that buys. What the asymmetry does buy is
+/// OBSERVABILITY, which is why `MinOperationChanged` carries the old value, the new value and the
+/// signer: an admin that zeroes the floor is visible in one event.
+///
+/// `MIN_OPERATION_CEILING_USDC` is the rail on the lockout direction, and zero is legal: it means
+/// no floor, which is what an in-place upgrade of an existing config decodes out of `reserved`.
+pub fn set_min_operation_usdc_handler(ctx: Context<SetParam>, new_min_usdc: u64) -> Result<()> {
+    let old_min_usdc = ctx.accounts.config.min_operation_usdc;
+    validate_min_operation(old_min_usdc, new_min_usdc)?;
+    ctx.accounts.config.min_operation_usdc = new_min_usdc;
+    emit!(MinOperationChanged {
+        old_min_usdc,
+        new_min_usdc,
+        by: ctx.accounts.admin.key(),
+    });
+    Ok(())
+}
+
+/// Split out of the handler so the unit tests below exercise the real predicate rather than a
+/// paraphrase of it. Round 4's lesson: a test that restates the rule passes when the rule is deleted.
+pub(crate) fn validate_min_operation(current: u64, requested: u64) -> Result<()> {
+    require!(
+        requested <= MIN_OPERATION_CEILING_USDC,
+        DominionError::MinOperationTooHigh
+    );
+    require!(current != requested, DominionError::MinOperationUnchanged);
     Ok(())
 }
 
@@ -468,5 +526,101 @@ mod public_mint_tests {
         // The launch posture is public mint CLOSED; opening is a deliberate,
         // timelocked, announced act.
         assert!(!DEFAULT_PUBLIC_MINT_ENABLED);
+    }
+}
+
+/// ROUND 5 P1-04. These exercise `validate_min_operation`, the function the handler actually
+/// calls, not a restatement of it.
+#[cfg(test)]
+mod min_operation_tests {
+    use super::*;
+    use crate::math::{fee_from_amount, mint_silv_out};
+
+    fn code(e: anchor_lang::error::Error) -> u32 {
+        match e {
+            anchor_lang::error::Error::AnchorError(a) => a.error_code_number,
+            _ => panic!("expected an AnchorError"),
+        }
+    }
+
+    #[test]
+    fn raising_and_lowering_are_both_allowed() {
+        // No direction asymmetry, deliberately: neither direction puts value at risk. See the
+        // handler doc for why this differs from every other setter in this file.
+        assert!(validate_min_operation(10_000_000, 50_000_000).is_ok());
+        assert!(validate_min_operation(50_000_000, 10_000_000).is_ok());
+    }
+
+    #[test]
+    fn zero_is_legal_and_means_no_floor() {
+        // An in-place upgrade of an already-initialised config decodes zero out of `reserved`, so
+        // zero must be a state the setter can also reach and leave.
+        assert!(validate_min_operation(10_000_000, 0).is_ok());
+        assert!(validate_min_operation(0, 10_000_000).is_ok());
+    }
+
+    #[test]
+    fn above_the_ceiling_is_refused() {
+        let e = validate_min_operation(0, MIN_OPERATION_CEILING_USDC + 1).unwrap_err();
+        assert_eq!(code(e), DominionError::MinOperationTooHigh as u32 + 6000);
+    }
+
+    #[test]
+    fn exactly_the_ceiling_is_allowed() {
+        // An off-by-one here would make the documented rail unreachable.
+        assert!(validate_min_operation(0, MIN_OPERATION_CEILING_USDC).is_ok());
+    }
+
+    #[test]
+    fn writing_the_current_value_is_refused() {
+        let e = validate_min_operation(10_000_000, 10_000_000).unwrap_err();
+        assert_eq!(code(e), DominionError::MinOperationUnchanged as u32 + 6000);
+    }
+
+    #[test]
+    fn the_ceiling_check_runs_before_the_no_op_check() {
+        // Same ordering rule as the public-mint setter: an operator who pastes an absurd number
+        // must be told it is out of range, not that it is unchanged.
+        let e = validate_min_operation(
+            MIN_OPERATION_CEILING_USDC + 1,
+            MIN_OPERATION_CEILING_USDC + 1,
+        )
+        .unwrap_err();
+        assert_eq!(code(e), DominionError::MinOperationTooHigh as u32 + 6000);
+    }
+
+    #[test]
+    fn the_default_floor_prices_out_the_measured_capture_amount() {
+        // THE FINDING, as an executable assertion rather than a comment. At $58.34/oz and 100 bps,
+        // 60 micro-USDC is the smallest amount that mints a non-zero SILV: `fee_from_amount` ceils
+        // 60*100/10000 to 1, leaving 59 net, and `mint_silv_out` floors 59/58.34 to exactly 1.
+        // That is the whole cost of capturing a Lazer print, so the derivation is pinned here: if
+        // the rounding ever changes, this fails rather than leaving a stale number in a doc.
+        const PRICE_SCALED: u128 = 58_340_000_000; // $58.34 * 1e9
+        let fee = fee_from_amount(60, 100).unwrap();
+        assert_eq!(fee, 1, "the ceiling fee on 60 micro-USDC");
+        assert_eq!(
+            mint_silv_out(60 - fee, PRICE_SCALED).unwrap(),
+            1,
+            "60 micro-USDC still buys a non-zero amount of SILV, so it is a valid capture"
+        );
+        // One micro-USDC less and the mint reverts ZeroAmount on its own, which is why 60 and not 59.
+        let fee59 = fee_from_amount(59, 100).unwrap();
+        assert_eq!(
+            mint_silv_out(59 - fee59, PRICE_SCALED).unwrap(),
+            0,
+            "59 micro-USDC rounds to zero SILV, so the floor below 60 was already implicit"
+        );
+        // And the shipped default puts the floor five orders of magnitude above that.
+        assert!(
+            DEFAULT_MIN_OPERATION_USDC > 60 * 100_000,
+            "the default floor must dominate the measured capture amount, not merely exceed it"
+        );
+    }
+
+    #[test]
+    fn the_default_is_within_its_own_ceiling() {
+        // A default above the rail would make initialize write a value the setter can never restore.
+        assert!(DEFAULT_MIN_OPERATION_USDC <= MIN_OPERATION_CEILING_USDC);
     }
 }

@@ -222,3 +222,219 @@ describe("the Lazer proxy rate-limits", () => {
     expect(fetchSpy.mock.calls.length).toBeLessThanOrEqual(2);
   });
 });
+
+/**
+ * ROUND 5 P1-05. The `fresh: true` path, which had NO test at all: every case above goes through the
+ * cached path, and the defect lived exactly in the branch none of them entered.
+ *
+ * The audit measured it: 40 concurrent `fresh` requests produced 30 x 200, 10 x 429 and 2 upstream
+ * calls, because a waiter that joined an in-flight call skipped both cache checks (`!fresh` guarded
+ * them), fell through to `allowRequest()`, and paid a token for a call it had not made.
+ *
+ * The first fix answered 409 to a contended caller. A review pass showed that turned an
+ * unauthenticated endpoint into a free product-wide denial (one curl per second claims every print),
+ * so contention is now ADVISORY: everybody is served, and `contended` says whether this caller was
+ * first. These tests pin BOTH halves, because reverting either one is a regression.
+ */
+describe("the fresh (submit) path", () => {
+  /** Upstream that always answers with the SAME feed timestamp, which is what a fixed 1s print is. */
+  function stubUpstream(feedUpdateTimestamp: string) {
+    fetchSpy.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            solana: { encoding: "base64", data: "AAAA" },
+            parsed: {
+              priceFeeds: [
+                { price: "5688400", exponent: -2, confidence: "100", feedUpdateTimestamp, publisherCount: 3 },
+              ],
+            },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+  }
+
+  /** A timestamp near now, in microseconds, so the route's forward-skew bound accepts it. */
+  function nowUs(offsetSec = 0): string {
+    return String((Date.now() + offsetSec * 1000) * 1000);
+  }
+
+  it("NO fresh waiter is charged a token for a call it did not make", async () => {
+    // THE ORIGINAL FINDING, as an assertion. A joiner causes no upstream cost, so it must never be
+    // rate-limited.
+    const { POST } = await freshRoute();
+    stubUpstream(nowUs());
+
+    const statuses = (await Promise.all(Array.from({ length: 40 }, () => POST(req({ fresh: true })))))
+      .map((r: Response) => r.status);
+
+    expect(
+      statuses.filter((s) => s === 429).length,
+      `no fresh waiter may be 429'd, got ${statuses.filter((s) => s === 429).length}`,
+    ).toBe(0);
+    // ONE upstream call for the whole burst. A review pass caught that the earlier bound of 3 was
+    // ratifying an amplification rather than catching it: the route retried a contended claim in-line,
+    // with no sleep, against a feed that returns the same print for a full second, so each request
+    // could spend three tokens on three identical answers. That tripled the cost, on our Pyth key, of
+    // the anonymous request loop this endpoint has to survive.
+    expect(
+      fetchSpy.mock.calls.length,
+      "a fresh burst must collapse into ONE upstream call, not one per attempt per caller",
+    ).toBe(1);
+  });
+
+  it("NEVER refuses a submitter, so an anonymous loop cannot deny the mint path", async () => {
+    // THE REGRESSION GUARD for the 409 that a review pass removed. Every one of these must be served:
+    // this endpoint has no authentication, so a status that means "you may not have a price" is a
+    // status anybody can force on everybody else with one request per second.
+    const { POST } = await freshRoute();
+    stubUpstream(nowUs());
+
+    const results = await Promise.all(Array.from({ length: 40 }, () => POST(req({ fresh: true }))));
+    const statuses = results.map((r: Response) => r.status);
+    expect(statuses.every((s) => s === 200), `got ${[...new Set(statuses)].join(",")}`).toBe(true);
+    for (const r of results) {
+      expect((await r.clone().json()).envelopeBase64).toBe("AAAA");
+    }
+  });
+
+  it("marks exactly ONE caller uncontended per print, and the rest contended", async () => {
+    // The advisory half. D2 lets one signed envelope price one operation, so a submitter that is not
+    // first should look for a newer print before asking a human to sign.
+    const { POST } = await freshRoute();
+    stubUpstream(nowUs());
+
+    const bodies = await Promise.all(
+      (await Promise.all(Array.from({ length: 40 }, () => POST(req({ fresh: true }))))).map(
+        (r: Response) => r.json(),
+      ),
+    );
+    expect(bodies.filter((b) => b.contended === false).length, "exactly one first claimant").toBe(1);
+    expect(bodies.filter((b) => b.contended === true).length).toBe(39);
+  });
+
+  it("a NEW print is claimable again, so contention is about the print and not a dead end", async () => {
+    // Time is driven explicitly, because round 6 R6-04 put a FLOOR on how often this route may call
+    // upstream: within MIN_UPSTREAM_INTERVAL_MS a caller is served what we already have, whatever it
+    // asks for. Without advancing the clock the second stub would never be fetched, and the test would
+    // be asserting the cadence floor while claiming to assert the claim.
+    vi.useFakeTimers();
+    try {
+      const { POST } = await freshRoute();
+      stubUpstream(nowUs());
+      expect((await (await POST(req({ fresh: true }))).json()).contended).toBe(false);
+      expect((await (await POST(req({ fresh: true }))).json()).contended).toBe(true);
+
+      vi.advanceTimersByTime(1100); // past the publish period, so a refresh is due
+      stubUpstream(nowUs(1)); // and the feed has advanced one second
+      expect((await (await POST(req({ fresh: true }))).json()).contended).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a fresh caller inside the publish period does NOT trigger an upstream call", async () => {
+    // THE R6-04 PROPERTY. `fresh:true` is unauthenticated, and it used to mean "bypass the cache", so
+    // one anonymous request loop spent Dominion's Pyth quota with no wallet, no gas and nothing
+    // submitted. The upstream cadence is now a property of this module, not of the caller.
+    vi.useFakeTimers();
+    try {
+      const { POST } = await freshRoute();
+      stubUpstream(nowUs());
+      expect((await POST(req({ fresh: true }))).status).toBe(200);
+      const afterWarm = fetchSpy.mock.calls.length;
+      expect(afterWarm).toBe(1);
+
+      // Two hundred serialised fresh requests inside one publish period.
+      for (let i = 0; i < 200; i++) {
+        vi.advanceTimersByTime(4); // 800ms total, still inside the 1000ms period
+        expect((await POST(req({ fresh: true }))).status).toBe(200);
+      }
+      expect(
+        fetchSpy.mock.calls.length,
+        "a caller must not be able to raise the upstream call rate",
+      ).toBe(afterWarm);
+
+      // Past the period, exactly one refresh is due.
+      vi.advanceTimersByTime(1100);
+      await POST(req({ fresh: true }));
+      expect(fetchSpy.mock.calls.length).toBe(afterWarm + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never serves a submitter an envelope aged past the publish period", async () => {
+    // The original purpose of `fresh` SURVIVES the R6-04 change, in the form that is actually true: a
+    // submitter is never handed a print older than one publish period, because past that a refresh is
+    // due and happens. What changed is that the caller no longer FORCES the refresh; the clock does.
+    vi.useFakeTimers();
+    try {
+      const { POST } = await freshRoute();
+      stubUpstream(nowUs());
+      expect((await POST(req({}))).status).toBe(200); // banner warms the cache
+      expect(fetchSpy.mock.calls.length).toBe(1);
+
+      vi.advanceTimersByTime(1100); // the cached print is now older than the publish period
+      stubUpstream(nowUs(1));
+      const res = await POST(req({ fresh: true }));
+      expect(res.status).toBe(200);
+      expect(
+        fetchSpy.mock.calls.length,
+        "a submitter was served a print older than the publish period",
+      ).toBe(2);
+      expect((await res.json()).contended).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a fresh burst does not starve the banner, which keeps reading the cache for free", async () => {
+    const { POST } = await freshRoute();
+    stubUpstream(nowUs());
+    await Promise.all(Array.from({ length: 20 }, () => POST(req({ fresh: true }))));
+
+    const callsBefore = fetchSpy.mock.calls.length;
+    let served = 0;
+    for (let i = 0; i < 100; i++) {
+      if ((await POST(req({}))).status === 200) served++;
+    }
+    expect(served, "the banner must still be served").toBe(100);
+    expect(fetchSpy.mock.calls.length, "and from the cache, at no upstream cost").toBe(callsBefore);
+  });
+
+  it("an unparseable feed timestamp is never marked uncontended, and still serves", async () => {
+    // A payload we cannot pin to a timestamp must not be presented as a clean print, and must not be
+    // withheld either.
+    const { POST } = await freshRoute();
+    fetchSpy.mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({ solana: { encoding: "base64", data: "AAAA" }, parsed: { priceFeeds: [] } }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+    );
+    const res = await POST(req({ fresh: true }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).contended).toBe(true);
+  });
+
+  it("an ABSURD future timestamp cannot poison the claim state for the instance's lifetime", async () => {
+    // `lastClaimedFeedTsUs` only moves forward. Without an upper bound, one upstream response carrying
+    // a nanosecond-scale or clock-skewed timestamp would mark every future print contended forever.
+    vi.useFakeTimers();
+    try {
+      const { POST } = await freshRoute();
+      stubUpstream(String(Date.now() * 1_000_000)); // nanoseconds, i.e. 1000x too large
+      expect((await (await POST(req({ fresh: true }))).json()).contended).toBe(true);
+
+      // A normal print afterwards must still be claimable, once a refresh is due.
+      vi.advanceTimersByTime(1100);
+      stubUpstream(nowUs());
+      expect((await (await POST(req({ fresh: true }))).json()).contended).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

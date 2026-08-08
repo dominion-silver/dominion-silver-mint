@@ -86,6 +86,10 @@ pub const E_KYC_LAST_ATTESTATION_WHILE_ARMED: u32 = 12114;
 pub const E_KYC_SUBJECT_INVALID: u32 = 12115;
 pub const E_KYC_REVOKE_WOULD_DISARM: u32 = 12116;
 pub const E_KYC_OPERATOR_MAY_NOT_BE_ADMIN: u32 = 12117;
+// ROUND 5 P1-04. Verified against target/idl/dominion_silver_mint.json, not counted by hand.
+pub const E_OPERATION_BELOW_MINIMUM: u32 = 12118;
+pub const E_MIN_OPERATION_TOO_HIGH: u32 = 12119;
+pub const E_MIN_OPERATION_UNCHANGED: u32 = 12120;
 
 pub const SIDE_MINT_BIT: u8 = 1;
 pub const SIDE_REDEEM_BIT: u8 = 2;
@@ -93,6 +97,10 @@ pub const SIDE_ALL_BITS: u8 = 3;
 
 pub const NOW_SECS: i64 = 1_700_000_000;
 pub const ADMIN_TIMELOCK_SECONDS: u32 = 86_400;
+/// ROUND 5 P1-04. Mirrors `DEFAULT_MIN_OPERATION_USDC` in state/config.rs; `initialize` writes it,
+/// so the fixture and the tests must agree with the program or every mint here reverts.
+pub const DEFAULT_MIN_OPERATION_USDC: u64 = 10_000_000; // $10
+pub const MIN_OPERATION_CEILING_USDC: u64 = 1_000_000_000; // $1,000
 pub const KYC_ACCOUNT_SIZE: usize = 145;
 pub const CONFIG_ACCOUNT_SIZE: usize = 800;
 
@@ -242,7 +250,11 @@ pub struct Config {
     pub instant_used_prev_usdc: u64,
     pub fee_routing_disabled: bool,
     pub kyc_attestation_count: u32,
-    pub reserved: [u8; 40],
+    /// ROUND 5 P1-04, carved out of `reserved` per THE RULE in state/config.rs. This mirror is what
+    /// caught the layout change when the field was added: the harness read 10_000_000 LE bleeding
+    /// into `reserved` and the initialize test failed rather than silently mis-decoding.
+    pub min_operation_usdc: u64,
+    pub reserved: [u8; 32],
 }
 
 impl Config {
@@ -799,7 +811,23 @@ impl Fixture {
     /// read then fails with LazerProgramNotExecutable, which is the marker that the KYC gate at step
     /// 2b LET THE CALL THROUGH. `supply_kyc = false` presents the program id in the optional slot,
     /// Anchor's encoding for None.
+    ///
+    /// The amount is `DEFAULT_MIN_OPERATION_USDC` and NOT the 1 USDC it used to be: round 5 P1-04
+    /// added an availability floor at step 3b, which sits BEFORE the oracle read, so a 1 USDC call
+    /// now stops at OperationBelowMinimum and never reaches the marker these tests read. Use
+    /// `try_mint_amount` to exercise the floor itself.
     pub fn try_mint(&mut self, user: &Keypair, supply_kyc: bool) -> TxOutcome {
+        self.try_mint_amount(user, supply_kyc, DEFAULT_MIN_OPERATION_USDC)
+    }
+
+    /// `try_mint` with an explicit `amount_usdc`, so a test can drive the round 5 P1-04 floor from
+    /// both sides without every other caller having to carry the amount.
+    pub fn try_mint_amount(
+        &mut self,
+        user: &Keypair,
+        supply_kyc: bool,
+        amount_usdc: u64,
+    ) -> TxOutcome {
         let pid = program_id();
         let classic = pk(CLASSIC_TOKEN_PROGRAM);
         let t22 = pk(TOKEN_2022_PROGRAM);
@@ -808,7 +836,7 @@ impl Fixture {
         } else {
             pid
         };
-        let mut args = 1_000_000u64.to_le_bytes().to_vec(); // amount_usdc
+        let mut args = amount_usdc.to_le_bytes().to_vec(); // amount_usdc
         args.extend_from_slice(&0u64.to_le_bytes()); // min_silv_out
         args.extend_from_slice(&0u32.to_le_bytes()); // message_data: empty Vec<u8>
         args.extend_from_slice(&0u16.to_le_bytes()); // ed25519_instruction_index
@@ -841,5 +869,325 @@ impl Fixture {
             data: ix_data("mint_silv", &args),
         };
         self.send(&[ix], &[user])
+    }
+}
+
+// ===================================================================================================
+// ROUND 5 P1-03: a Lazer that actually EXECUTES, so the anti-replay high-water mark can be observed
+// being written and then enforced.
+//
+// The finding: `tools/lazer-harness` names a test `the_same_envelope_cannot_be_consumed_twice`, but
+// it PRE-WRITES `last_used_feed_ts_us` into a hand-built config and calls `probe_oracle_price` once.
+// The probe is read-only by construction (its own module header says so), so that test never exercises
+// a write. The only two writes in the program are `mint_silv.rs` and `redeem_silv.rs`, and deleting
+// either one left the reassuringly-named test green.
+//
+// Everything below exists to close that: a mock Lazer program installed as EXECUTABLE, a real signed
+// envelope, funded token accounts, and mint/redeem calls that succeed. The base fixture deliberately
+// keeps the Lazer account NON-executable (several tests read LazerProgramNotExecutable as the marker
+// that an earlier gate let the call through), so installing the mock is opt-in per test.
+// ===================================================================================================
+
+pub const LAZER_TREASURY: &str = "Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak";
+/// Offset of the fee field inside the Lazer storage account, mirroring tools/lazer-harness.
+const STORAGE_FEE_OFFSET: usize = 72;
+const LAZER_CHANNEL_ID: u8 = 4; // the subscribed channel: fixed_rate@1000ms
+const SILV_FEED_ID: u32 = 3154; // Metal.Index.SILVER/USD
+/// The fee the mock drains from the isolated fee-payer PDA. 1 lamport keeps the arithmetic visible.
+const LAZER_FEE_LAMPORTS: u64 = 1;
+
+/// A price inside every default oracle guard: $58.34 at exponent -5, 3 publishers, 1bp of confidence.
+/// Chosen to be the same figure the round 5 finding was measured at, so the two read as one story.
+pub const SILV_PRICE_MANTISSA: i64 = 5_834_000;
+pub const SILV_PRICE_EXPONENT: i16 = -5;
+
+fn mock_lazer_path() -> String {
+    format!("{}/../../target/harness/mock_lazer.so", env!("CARGO_MANIFEST_DIR"))
+}
+
+/// SPL Token account body (165 bytes), written directly rather than minted: the fixture's USDC mint
+/// authority is a key nobody holds, so there is no `mint_to` path, and fabricating the balance is
+/// both shorter and independent of the token program's own behaviour.
+fn token_account_body(mint: &Pubkey, owner: &Pubkey, amount: u64) -> Vec<u8> {
+    let mut d = vec![0u8; 165];
+    d[0..32].copy_from_slice(mint.as_ref());
+    d[32..64].copy_from_slice(owner.as_ref());
+    d[64..72].copy_from_slice(&amount.to_le_bytes());
+    d[108] = 1; // AccountState::Initialized
+    d
+}
+
+impl Fixture {
+    /// Current on-chain time in microseconds. Read from the sysvar rather than from NOW_SECS: the
+    /// timelock helpers WARP, so a payload stamped with the constant would be stale by a day and the
+    /// call would fail on staleness instead of on the thing under test.
+    pub fn now_us(&self) -> u64 {
+        let clock: solana_sdk::clock::Clock = self.svm.get_sysvar();
+        (clock.unix_timestamp as u64) * 1_000_000
+    }
+
+    /// Replace the deliberately non-executable Lazer account with the mock program, and stand up the
+    /// storage and treasury accounts its CPI reads. Opt-in, per test.
+    pub fn install_mock_lazer(&mut self) {
+        let path = mock_lazer_path();
+        let elf = std::fs::read(&path).unwrap_or_else(|e| {
+            panic!("read {path}: {e}\nBuild it: bash tools/state-harness/run.sh (it builds mock-lazer into target/harness)")
+        });
+        self.svm.add_program(pk(LAZER_PROGRAM_ID), &elf).unwrap();
+
+        // storage: treasury pubkey at [40..72], fee at [72..80]. `read_treasury` validates the
+        // treasury account passed to the CPI against this field, so the two must agree.
+        let mut storage = vec![0u8; STORAGE_FEE_OFFSET + 16];
+        storage[40..72].copy_from_slice(pk(LAZER_TREASURY).as_ref());
+        storage[STORAGE_FEE_OFFSET..STORAGE_FEE_OFFSET + 8]
+            .copy_from_slice(&LAZER_FEE_LAMPORTS.to_le_bytes());
+        self.svm
+            .set_account(
+                pk(LAZER_STORAGE),
+                Account {
+                    lamports: 5_000_000,
+                    data: storage,
+                    owner: pk(LAZER_PROGRAM_ID),
+                    executable: false,
+                    rent_epoch: 0,
+                },
+            )
+            .unwrap();
+        self.svm
+            .set_account(
+                pk(LAZER_TREASURY),
+                Account {
+                    lamports: 5_000_000,
+                    data: vec![],
+                    owner: solana_sdk::system_program::ID,
+                    executable: false,
+                    rent_epoch: 0,
+                },
+            )
+            .unwrap();
+    }
+
+    /// Give an existing SPL token account a balance by writing its body. Used for the user's USDC and
+    /// for the treasury that a redemption pays out of.
+    pub fn fund_token_account(&mut self, mint: &Pubkey, owner: &Pubkey, amount: u64) {
+        let token_program = pk(CLASSIC_TOKEN_PROGRAM);
+        let addr = ata(mint, owner, &token_program);
+        self.svm
+            .set_account(
+                addr,
+                Account {
+                    lamports: 2_039_280, // rent-exempt minimum for a 165-byte account
+                    data: token_account_body(mint, owner, amount),
+                    owner: token_program,
+                    executable: false,
+                    rent_epoch: 0,
+                },
+            )
+            .unwrap();
+    }
+
+    /// Balance of an SPL token account, or 0 if it does not exist.
+    pub fn token_balance(&self, mint: &Pubkey, owner: &Pubkey, token_program: &str) -> u64 {
+        let addr = ata(mint, owner, &pk(token_program));
+        self.svm
+            .get_account(&addr)
+            .map(|a| u64::from_le_bytes(a.data[64..72].try_into().unwrap()))
+            .unwrap_or(0)
+    }
+}
+
+/// A canonical Lazer payload, LE-serialized, exactly as tools/lazer-harness builds it. `feed_ts_us`
+/// is the field the anti-replay high-water mark is compared against, so it is the only knob these
+/// tests turn.
+pub fn lazer_payload(feed_ts_us: u64) -> Vec<u8> {
+    lazer_payload_at(feed_ts_us, feed_ts_us)
+}
+
+/// `global_ts` and `feed_ts` separately, because the program rejects a carried-forward print (the two
+/// disagreeing). Every test here passes them equal; the split exists so a future test can drive that.
+pub fn lazer_payload_at(global_ts_us: u64, feed_ts_us: u64) -> Vec<u8> {
+    use byteorder::LittleEndian;
+    use pyth_lazer_protocol::payload::{AggregatedPriceFeedData, PayloadData};
+    use pyth_lazer_protocol::time::TimestampUs;
+    use pyth_lazer_protocol::{ChannelId, Price, PriceFeedId, PriceFeedProperty};
+
+    let mut agg = AggregatedPriceFeedData::empty(
+        SILV_PRICE_EXPONENT,
+        pyth_lazer_protocol::api::MarketSession::Regular,
+        TimestampUs::from_micros(feed_ts_us),
+    );
+    agg.price = Some(Price::from_mantissa(SILV_PRICE_MANTISSA).unwrap());
+    agg.confidence = Some(Price::from_mantissa(100).unwrap());
+    agg.publisher_count = 3;
+    let payload = PayloadData::new(
+        TimestampUs::from_micros(global_ts_us),
+        ChannelId(LAZER_CHANNEL_ID),
+        &[(PriceFeedId(SILV_FEED_ID), agg)],
+        &[
+            PriceFeedProperty::Price,
+            PriceFeedProperty::PublisherCount,
+            PriceFeedProperty::Exponent,
+            PriceFeedProperty::Confidence,
+            PriceFeedProperty::FeedUpdateTimestamp,
+        ],
+    );
+    let mut buf = Vec::new();
+    payload.serialize::<LittleEndian>(&mut buf).unwrap();
+    buf
+}
+
+/// The trailing three args every priced instruction takes: `message_data: Vec<u8>` (4-byte length
+/// prefix), `ed25519_instruction_index: u16`, `signature_index: u8`. The mock ignores the last two.
+pub fn envelope_args(message_data: &[u8]) -> Vec<u8> {
+    let mut d = Vec::with_capacity(message_data.len() + 7);
+    d.extend_from_slice(&(message_data.len() as u32).to_le_bytes());
+    d.extend_from_slice(message_data);
+    d.extend_from_slice(&0u16.to_le_bytes());
+    d.push(0);
+    d
+}
+
+impl Fixture {
+    /// `mint_silv` with a REAL envelope and the REAL Lazer treasury, so the call can succeed. This is
+    /// the difference from `try_mint_amount`, which passes a random treasury and a non-executable
+    /// Lazer on purpose and can therefore never reach a write.
+    pub fn mint_priced(&mut self, user: &Keypair, amount_usdc: u64, message_data: &[u8]) -> TxOutcome {
+        let pid = program_id();
+        let classic = pk(CLASSIC_TOKEN_PROGRAM);
+        let t22 = pk(TOKEN_2022_PROGRAM);
+        let mut args = amount_usdc.to_le_bytes().to_vec();
+        args.extend_from_slice(&0u64.to_le_bytes()); // min_silv_out
+        args.extend_from_slice(&envelope_args(message_data));
+        let ix = Instruction {
+            program_id: pid,
+            accounts: vec![
+                AccountMeta::new(config_pda(), false),
+                AccountMeta::new(user.pubkey(), true),
+                AccountMeta::new(self.usdc_mint, false),
+                AccountMeta::new(self.silv_mint, false),
+                AccountMeta::new(ata(&self.usdc_mint, &treasury_pda(), &classic), false),
+                AccountMeta::new_readonly(fee_vault_pda(), false),
+                AccountMeta::new(ata(&self.usdc_mint, &fee_vault_pda(), &classic), false),
+                AccountMeta::new(ata(&self.usdc_mint, &user.pubkey(), &classic), false),
+                AccountMeta::new(ata(&self.silv_mint, &user.pubkey(), &t22), false),
+                AccountMeta::new_readonly(silv_mint_authority_pda(), false),
+                AccountMeta::new_readonly(pk(LAZER_PROGRAM_ID), false),
+                AccountMeta::new_readonly(pk(LAZER_STORAGE), false),
+                AccountMeta::new(pk(LAZER_TREASURY), false),
+                AccountMeta::new(lazer_fee_payer_pda(), false),
+                AccountMeta::new_readonly(solana_sdk::sysvar::instructions::ID, false),
+                AccountMeta::new_readonly(pid, false), // fee_exempt: None
+                AccountMeta::new_readonly(pid, false), // kyc: None
+                AccountMeta::new_readonly(classic, false),
+                AccountMeta::new_readonly(t22, false),
+                AccountMeta::new_readonly(pk(ASSOCIATED_TOKEN_PROGRAM), false),
+                AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
+            ],
+            data: ix_data("mint_silv", &args),
+        };
+        self.send(&[ix], &[user])
+    }
+
+    /// `redeem_silv` with a REAL envelope. Same account order as `RedeemSilv` in the program, which
+    /// differs from mint: it carries `treasury_pda` (the signer of the payout) and no mint authority.
+    pub fn redeem_priced(&mut self, user: &Keypair, amount_silv: u64, message_data: &[u8]) -> TxOutcome {
+        let pid = program_id();
+        let classic = pk(CLASSIC_TOKEN_PROGRAM);
+        let t22 = pk(TOKEN_2022_PROGRAM);
+        let mut args = amount_silv.to_le_bytes().to_vec();
+        args.extend_from_slice(&0u64.to_le_bytes()); // min_usdc_out
+        args.extend_from_slice(&envelope_args(message_data));
+        let ix = Instruction {
+            program_id: pid,
+            accounts: vec![
+                AccountMeta::new(config_pda(), false),
+                AccountMeta::new(user.pubkey(), true),
+                AccountMeta::new(self.usdc_mint, false),
+                AccountMeta::new(self.silv_mint, false),
+                AccountMeta::new(ata(&self.usdc_mint, &treasury_pda(), &classic), false),
+                AccountMeta::new_readonly(fee_vault_pda(), false),
+                AccountMeta::new(ata(&self.usdc_mint, &fee_vault_pda(), &classic), false),
+                AccountMeta::new(ata(&self.usdc_mint, &user.pubkey(), &classic), false),
+                AccountMeta::new(ata(&self.silv_mint, &user.pubkey(), &t22), false),
+                AccountMeta::new_readonly(treasury_pda(), false),
+                AccountMeta::new_readonly(pk(LAZER_PROGRAM_ID), false),
+                AccountMeta::new_readonly(pk(LAZER_STORAGE), false),
+                AccountMeta::new(pk(LAZER_TREASURY), false),
+                AccountMeta::new(lazer_fee_payer_pda(), false),
+                AccountMeta::new_readonly(solana_sdk::sysvar::instructions::ID, false),
+                AccountMeta::new_readonly(pid, false), // fee_exempt: None
+                AccountMeta::new_readonly(pid, false), // kyc: None
+                AccountMeta::new_readonly(classic, false),
+                AccountMeta::new_readonly(t22, false),
+                AccountMeta::new_readonly(pk(ASSOCIATED_TOKEN_PROGRAM), false),
+                AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
+            ],
+            data: ix_data("redeem_silv", &args),
+        };
+        self.send(&[ix], &[user])
+    }
+
+    /// How much SILV is worth `usdc` at the harness price, so a test can express "an operation at the
+    /// floor" without hardcoding a number that goes stale with the price constant.
+    pub fn silv_for_usdc(&self, usdc: u64) -> u64 {
+        // gross = amount_silv * price / 1e9, so amount_silv = ceil(usdc * 1e9 / price). Ceil, because
+        // the caller wants to be AT OR ABOVE the floor and flooring would land one atom under it.
+        let price = (SILV_PRICE_MANTISSA as u128) * 10u128.pow((9 + SILV_PRICE_EXPONENT) as u32);
+        let num = (usdc as u128) * 1_000_000_000u128;
+        (num.div_ceil(price)) as u64
+    }
+
+    /// `set_min_operation_usdc`, the instant setter, for tests that need the floor out of the way.
+    pub fn set_min_operation_usdc(&mut self, new_min: u64) {
+        let admin = self.admin.insecure_clone();
+        let ix = Instruction {
+            program_id: program_id(),
+            accounts: vec![
+                AccountMeta::new(config_pda(), false),
+                AccountMeta::new_readonly(admin.pubkey(), true),
+            ],
+            data: ix_data("set_min_operation_usdc", &new_min.to_le_bytes()),
+        };
+        expect_ok(self.send(&[ix], &[&admin]), "set_min_operation_usdc");
+    }
+
+    /// Open redemptions the ONLY way the program allows: the 24h-timelocked SetRedeemLimits action
+    /// carrying `redemptions_enabled = Some(true)`. `set_redemptions_enabled` refuses `true` by
+    /// construction, so a test that needs an open redeem path has to go the long way, and going the
+    /// long way is also what proves the path exists.
+    pub fn open_redemptions(&mut self) {
+        let admin = self.admin.insecure_clone();
+        let pid = program_id();
+        // Borsh of RedeemLimitsArgs: four None tags then Some(true).
+        let args = vec![0u8, 0, 0, 0, 1, 1];
+        let nonce = self.config().next_timelock_nonce;
+        let propose = Instruction {
+            program_id: pid,
+            accounts: vec![
+                AccountMeta::new(config_pda(), false),
+                AccountMeta::new(admin.pubkey(), true),
+                AccountMeta::new(timelock_pda(nonce), false),
+                AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
+            ],
+            data: ix_data("propose_set_redeem_limits", &args),
+        };
+        expect_ok(self.send(&[propose], &[&admin]), "open_redemptions: propose");
+
+        self.warp(ADMIN_TIMELOCK_SECONDS as i64 + 1);
+        let execute = Instruction {
+            program_id: pid,
+            accounts: vec![
+                AccountMeta::new(config_pda(), false),
+                AccountMeta::new_readonly(admin.pubkey(), true),
+                AccountMeta::new(timelock_pda(nonce), false),
+                AccountMeta::new(admin.pubkey(), false),
+            ],
+            data: ix_data("execute_set_redeem_limits", &nonce.to_le_bytes()),
+        };
+        expect_ok(self.send(&[execute], &[&admin]), "open_redemptions: execute");
+        assert!(
+            self.config().redemptions_enabled,
+            "open_redemptions left redemptions closed"
+        );
     }
 }

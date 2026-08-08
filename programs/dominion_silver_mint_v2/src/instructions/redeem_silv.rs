@@ -180,6 +180,42 @@ pub fn handler(
     let gross_usdc = silv_to_usdc_at_oracle(amount_silv, oracle_price)?;
     require!(gross_usdc > 0, DominionError::ZeroAmount);
 
+    // 4b. ROUND 5 P1-04, the SECOND HALF, and it was missing until the review pass caught it.
+    //
+    // The floor was added to `mint_silv` alone, and the high-water mark it protects is ONE field in
+    // ONE shared config that BOTH handlers write (the write on this side is a few lines ABOVE, and
+    // `tools/state-harness/tests/oracle_replay.rs::both_sides_share_one_high_water_mark` proves a mint
+    // consumes the print for redeem too). So a floor on one side is not a floor. Measured at
+    // $58.34/oz with the launch 150 bps redeem premium: `amount_silv = 1` atomic unit gives
+    // `silv_to_usdc_at_oracle(1) = 58` micro-USDC gross, a 1 micro-USDC fee and 57 back to the user,
+    // so capturing a print cost about 1.3 micro-USDC NET, roughly thirty times cheaper than the mint
+    // capture the floor was written to price out.
+    //
+    // Not exploitable at the launch posture, because `redemptions_enabled` is false. It becomes
+    // exploitable on the day redeem opens, which is a 24h config change needing no upgrade and no
+    // re-audit, and closing it THEN would need a program upgrade. That is exactly the shape of defect
+    // worth paying for now.
+    //
+    // It is denominated in USDC, like the mint side, so one field governs both: the floor is a
+    // MINIMUM OPERATION SIZE, not a minimum mint. Hence `min_operation_usdc`.
+    //
+    // WHAT IT COSTS, stated rather than glossed. The round trip is not symmetric: minting exactly the
+    // floor pays the mint premium, so the resulting SILV is worth slightly LESS than the floor and
+    // cannot be redeemed in one call. Any holder whose ENTIRE balance is worth less than
+    // `min_operation_usdc` gross has no redeem exit until they acquire more, and an admin can put
+    // every position under MIN_OPERATION_CEILING_USDC (1000 USDC) in that state instantly. That is a
+    // real cost of closing the capture primitive, it is not hypothetical, and it is why the ceiling
+    // exists and why the setter emits an event carrying the old and new values.
+    //
+    // WHY IT SITS AFTER THE ORACLE READ, unlike the mint side: the value of `amount_silv` is unknown
+    // until the price is read. The transaction reverts either way, so the high-water write above is
+    // rolled back and no print is consumed; what a dust caller pays for the privilege is the Lazer
+    // verify fee, which is the right way round.
+    require!(
+        gross_usdc >= config.min_operation_usdc,
+        DominionError::OperationBelowMinimum
+    );
+
     let premium_bps = effective_premium_bps(
         config.premium_bps_redeem,
         ctx.accounts.fee_exempt.as_deref(),

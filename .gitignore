@@ -41,3 +41,12 @@ Thumbs.db
 /private
 *.tsbuildinfo
 tools/state-harness/target/
+tools/lazer-harness/target/
+# ROUND 5 P2-01. Written by the reproducible-build job and by anyone exercising that step locally. It
+# is a MEASUREMENT of one build, never a source of truth: the pin lives in
+# config/mainnet-authorities.json and is copied there deliberately, once, per candidate.
+release-manifest.json
+# ROUND 5 P0-03. Emitted by the ceremony builders: the exact instructions for the Ops Squads.
+# Kept OUT of the repo because it is per-ceremony and per-cluster, and a committed copy would be
+# read as the canonical one long after the ceremony it came from.
+ceremony-out/

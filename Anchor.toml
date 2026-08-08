@@ -10,16 +10,17 @@ skip-lint = false
 # not this binary's declare_id. An operator could initialize, verify or sign against
 # the wrong program. localnet now matches declare_id.
 [programs.localnet]
-dominion_silver_mint = "HXaptAcaXBoEAsNuEv4ZwYrciHbMxSpip2VScRVDjo1Z"
+dominion_silver_mint = "3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ"
 
 [programs.devnet]
-dominion_silver_mint = "HXaptAcaXBoEAsNuEv4ZwYrciHbMxSpip2VScRVDjo1Z"
+dominion_silver_mint = "3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ"
 
-# AUDIT DOM-014: the mainnet entry is intentionally ABSENT until the real mainnet
-# program id is generated and reviewed. Declaring a stale id here is worse than
-# declaring none: it silently points mainnet tooling at a program nobody controls.
-# [programs.mainnet]
-# dominion_silver_mint = "<TBD: generate at the mainnet deploy ceremony>"
+# AUDIT DOM-014 is now SATISFIED rather than deferred: the mainnet id was generated on 2026-08-08 and
+# is the same id on every cluster, so no tooling can point at a program nobody controls. The comment
+# that used to sit here said declaring a stale id is worse than declaring none, which was right; what
+# closes it is a real id, not an absent entry.
+[programs.mainnet]
+dominion_silver_mint = "3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ"
 
 [registry]
 url = "https://api.apr.dev"

@@ -391,7 +391,12 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     // C-02: no attestations exist on a fresh deployment, so the gate cannot be armed until the
     // attestor writes one. Explicit because this value is a SAFETY PRECONDITION.
     config.kyc_attestation_count = 0;
-    config.reserved = [0u8; 40];
+    // ROUND 5 P1-04. Written from the constant, NOT an InitializeArgs field: same treatment as
+    // max_silv_supply, and for the same reason. An arg would put the availability floor in the hands
+    // of whoever types the ceremony command, and the ceremony is exactly where a wrong number is
+    // hardest to notice. Change it here, rebuild, re-audit. The instant setter tunes it afterwards.
+    config.min_operation_usdc = DEFAULT_MIN_OPERATION_USDC;
+    config.reserved = [0u8; 32];
 
     msg!("dominion_silver_mint initialized");
     Ok(())

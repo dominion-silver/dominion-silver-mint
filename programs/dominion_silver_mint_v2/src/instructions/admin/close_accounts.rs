@@ -6,6 +6,7 @@
 use anchor_lang::prelude::*;
 
 use crate::errors::DominionError;
+use crate::events::TimelockAccountClosed;
 use crate::state::*;
 
 // === close_timelock_account ===
@@ -43,5 +44,16 @@ pub fn close_timelock_account_handler(
         ctx.accounts.timelock.nonce == nonce,
         DominionError::NonceMismatch
     );
+
+    // SOLIDPROOF T-006. Read BEFORE the account is closed. Anchor's `close = rent_recipient` runs
+    // after the handler returns, so these fields are still valid here and unreachable afterwards.
+    let tl = &ctx.accounts.timelock;
+    emit!(TimelockAccountClosed {
+        nonce,
+        action_disc: tl.action_disc,
+        was_cancelled: tl.cancelled,
+        rent_recipient: ctx.accounts.rent_recipient.key(),
+        by: ctx.accounts.admin.key(),
+    });
     Ok(())
 }

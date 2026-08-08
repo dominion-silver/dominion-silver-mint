@@ -96,6 +96,7 @@ pub fn premint_handler(ctx: Context<AdminPremint>, amount: u64) -> Result<()> {
         inventory: config.inventory_wallet,
         amount,
         supply_post,
+        by: ctx.accounts.admin.key(),
         timestamp: Clock::get()?.unix_timestamp,
     });
     Ok(())

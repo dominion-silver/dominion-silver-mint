@@ -136,6 +136,24 @@ export const setRedemptionsEnabled = (c: BuildCtx, on: boolean): Ix =>
 export const setInventoryWallet = (c: BuildCtx, wallet: PublicKey): Ix =>
   instant(c, "setInventoryWallet", wallet);
 
+/**
+ * ROUND 5 P1-04. The MINIMUM SIZE OF A PRICED OPERATION, atomic USDC: `amount_usdc` on mint, the gross
+ * USDC value of `amount_silv` on redeem. Instant in BOTH directions, bounded by
+ * MIN_OPERATION_CEILING_USDC (1000 USDC on chain); zero disables the floor.
+ *
+ * It exists because D2 made the Lazer anti-replay strict, so one signed print prices exactly one
+ * operation protocol-wide and, with no floor, capturing every print cost about 0.00006 USDC on the mint
+ * side and less on redeem. The floor is what makes that cost working capital.
+ *
+ * THIS BUILDER IS WHY THE FLOOR IS ADJUSTABLE AT ALL. `config.admin` is the off-curve Ops Squads vault,
+ * so no keypair can call the instruction; the panel is the only thing that wraps a dominion instruction
+ * into a Squads vault transaction. A review pass caught that the setter shipped with no builder and no
+ * card, which made "instant in both directions, so operators can react" true of the program and false
+ * of the product: there was nothing to react with, and an in-place upgrade lands with the floor at 0.
+ */
+export const setMinOperationUsdc = (c: BuildCtx, minUsdc: bigint): Ix =>
+  instant(c, "setMinOperationUsdc", new BN(minUsdc.toString()));
+
 /** Every field is optional (null = leave unchanged). The keys MUST be camelCase: Anchor camelCases the
  *  IDL at runtime, so a snake_case key silently encodes None and the field is dropped with NO error.
  *  emergencyTightenRedeemLimits is instant and takes SAFE-DIRECTION values only (budget DOWN, window
