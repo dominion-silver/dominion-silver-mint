@@ -8,11 +8,19 @@ name: Anchor Build + Test
 # refs: whoever controls them controls what runs in the job that produces the release binary, and this
 # workflow's whole purpose is to say those bytes came from this source.
 #
-# The token has the default `read` permission, which bounds the blast radius inside the repository but
-# does nothing about the ARTIFACT: a compromised toolchain still gets to compile it.
+# The token is scoped to `contents: read` by the `permissions:` block below. That bounds the blast
+# radius inside the repository but does nothing about the ARTIFACT: a compromised toolchain still gets
+# to compile it.
 #
 # When you bump one, bump the SHA and the comment together, and record the identity in the release
 # manifest so a future reader can tell which toolchain produced a given binary.
+
+# REVIEW PASS ON 3bf3097. This block did not exist, and the header above ASSERTED the read-only scope
+# as if it did. The real scope was the org/repo default, a setting outside this file and outside any
+# commit, so the claim could become false without a diff. An assertion about a security property
+# belongs in the file that enforces it.
+permissions:
+  contents: read
 
 on:
   push:
@@ -93,7 +101,12 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/bin/anchor
-          key: gate-cargo-${{ hashFiles('**/Cargo.lock') }}
+          # REVIEW PASS ON 3bf3097: ANCHOR_COMMIT belongs in the KEY. The cached `anchor` binary was
+          # keyed on Cargo.lock alone, and the install step below is skipped on `command -v anchor`.
+          # So bumping the --rev pin without touching Cargo.lock restored and ran the OLD anchor,
+          # and the pin whose entire purpose is 'a tag can move, a commit cannot' was not in force
+          # on any cache hit. The IDL this job diffs against the committed copies came from it.
+          key: gate-cargo-${{ env.ANCHOR_COMMIT }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install Solana CLI (for cargo build-sbf)
         run: bash .github/install-solana.sh
@@ -108,7 +121,12 @@ jobs:
         run: cargo test -p dominion_silver_mint --lib --locked
 
       - name: Build the release artifact, default features (BLOCKING)
-        run: cargo build-sbf --manifest-path programs/dominion_silver_mint_v2/Cargo.toml
+        # REVIEW PASS ON 3bf3097: `--locked` was missing HERE and present in the verifier's own
+        # reference build and in verifier-self-test. An unlocked build-sbf may rewrite Cargo.lock;
+        # the reference build then reads the rewritten lock and the two agree with each other while
+        # disagreeing with the committed tree. `cargo check --locked` above makes that unreachable
+        # today, which is luck, not design.
+        run: cargo build-sbf --manifest-path programs/dominion_silver_mint_v2/Cargo.toml -- --locked
 
       # AUDIT review of daac4ac (P0, integration reviewer, proved by execution): this
       # job could NEVER have passed on a fresh runner. `cargo build-sbf` does not
@@ -282,7 +300,7 @@ jobs:
 
   # ROUND 5 P0-02, and it is its OWN JOB on purpose (review pass).
   #
-  # `scripts/test-verify-release-artifact.sh` runs the verifier END TO END seven times, and each run
+  # `scripts/test-verify-release-artifact.sh` runs the verifier END TO END ten times, and each run
   # rebuilds the program into a fresh isolated CARGO_TARGET_DIR that nothing reuses. That is the price
   # of testing the conclusion instead of the branch, and it is the right price: the defect it exists
   # to catch was a script that printed EXPECTED MISMATCH and then exited 0 with ARTIFACT OK, which no
@@ -335,23 +353,20 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          # REVIEW PASS ON 3bf3097: same defect as the gate's cache, wider blast radius, because this
+          # job caches all of ~/.cargo/bin and produces the artifacts.
+          key: ${{ runner.os }}-cargo-${{ env.ANCHOR_COMMIT }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install Solana CLI (Agave v${{ env.SOLANA_VERSION }})
+        # REVIEW PASS ON 3bf3097, P0. This was the FOURTH install site and the only one that still
+        # ran `sh -c "$(curl ...)"`. R6-08 moved three jobs onto the checksummed installer and the
+        # commit message claimed the pattern was gone repo-wide; it was not. This job is a `needs:`
+        # dependency of `reproducible-build`, holds GITHUB_TOKEN and uploads artifacts, so it was
+        # the worst of the four to leave behind. The retry loop that justified the local copy now
+        # lives inside the installer, around the DOWNLOAD, with the checksum still gating execution.
         run: |
-          # Pin to the exact version rather than "stable" (which has returned
-          # corrupted tarballs on anza.xyz CDN at least once; retry loop makes
-          # the install resilient to transient network errors).
-          for attempt in 1 2 3; do
-            if sh -c "$(curl -sSfL https://release.anza.xyz/v${SOLANA_VERSION}/install)"; then
-              break
-            fi
-            echo "Solana install attempt $attempt failed, retrying..."
-            sleep 10
-          done
-          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
-          $HOME/.local/share/solana/install/active_release/bin/solana --version
-          $HOME/.local/share/solana/install/active_release/bin/cargo-build-sbf --version
+          bash .github/install-solana.sh
+          "$HOME/.local/share/solana/install/active_release/bin/cargo-build-sbf" --version
 
       - name: Install Anchor CLI (git+tag+locked pattern)
         run: |
@@ -422,11 +437,19 @@ jobs:
         run: yarn install
         continue-on-error: true
 
-      - name: Upload IDL artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: idl
-          path: target/idl/
+      # REVIEW PASS ON 3bf3097. The `idl` upload is REMOVED, for the same reason and by the same
+      # argument as the `program-binary` upload below.
+      #
+      # It came from the `anchor build` step above, which carries `continue-on-error: true`, out of a
+      # `target/` restored from a cache keyed only on Cargo.lock. So it could be a failed build's
+      # leftovers or a stale cached file, it was gated by nothing, it published on every event
+      # including a fork's pull_request, and it sat in the same run listing as the verifiable `.so`
+      # that runbook step 2b tells the operator to download. R5 P1-01 made exactly this argument
+      # about the binary and stopped one file short. The IDL is what both apps decode accounts with.
+      #
+      # There is no gap left behind: the IDL is committed in-repo, and `reproducible-build` builds it
+      # from the pinned toolchain, diffs it against both committed copies and hashes it into the
+      # manifest. The committed copy IS the built one or CI is red.
 
       # ROUND 5 P1-01. The `program-binary` upload was REMOVED, not renamed.
       #
@@ -441,11 +464,11 @@ jobs:
       # reproducible-build, after it has been tested and hashed. An artifact nobody can confuse with the
       # release is worth more than a second one that has to be explained.
 
-      - name: Upload Cargo.lock (for commit if not present)
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: cargo-lock
-          path: Cargo.lock
+      # REVIEW PASS ON 3bf3097. The `cargo-lock` upload is REMOVED. Its name said "for commit if not
+      # present"; Cargo.lock has been committed for a long time, and `verify-release-artifact.sh`
+      # rebuilds against the committed one. An ungated artifact that duplicates a tracked file only
+      # creates a second candidate for "which lock produced this binary", which is the question the
+      # release manifest exists to answer.
 
       - name: anchor test
         run: anchor test --skip-local-validator

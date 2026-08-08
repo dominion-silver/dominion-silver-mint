@@ -13,7 +13,8 @@
     "belongs in a commit that says why, with the reachability argument in the script's header.",
     "",
     "Measured 2026-08-08 with npm audit --omit=dev. Re-measure with scripts/verify-npm-audit-policy.sh",
-    "--print-baseline, never by hand."
+    "by re-reading the FAIL output of scripts/verify-npm-audit-policy.sh, which prints every id",
+    "it refused. An earlier note pointed at a --print-baseline flag that was never implemented."
   ],
   "measured": "2026-08-08",
   "workspaces": {

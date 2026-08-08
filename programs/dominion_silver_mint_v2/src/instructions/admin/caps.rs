@@ -26,8 +26,8 @@ use anchor_spl::token_interface::Mint as InterfaceMint;
 
 use crate::errors::DominionError;
 use crate::events::{
-    InventoryWalletChanged, MaxSupplyChanged, MinOperationChanged, PublicMintEnabledChanged,
-    RedeemLimitsTightened, RedemptionsEnabledChanged,
+    MaxSupplyChanged, MinOperationChanged, PublicMintEnabledChanged, RedeemLimitsTightened,
+    RedemptionsEnabledChanged,
 };
 use crate::instructions::admin::execute::{
     redeem_limits_all_tighten, redeem_limits_any_set, redeem_limits_effective_change,

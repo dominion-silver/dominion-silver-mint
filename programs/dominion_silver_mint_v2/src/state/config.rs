@@ -69,7 +69,15 @@ pub const DEFAULT_MIN_OPERATION_USDC: u64 = 10_000_000; // $10
 
 // Rail on the setter, NOT a target. The floor is a liveness knob, so its abuse direction is locking
 // small users out, and this bounds how far a compromised admin can push that.
-pub const MIN_OPERATION_CEILING_USDC: u64 = 1_000_000_000; // $1,000
+//
+// REVIEW PASS ON 3bf3097, lowered from $1,000 to $100. The setter is instant in both directions, so
+// the ceiling IS the blast radius: at $1,000 one admin transaction removed the redeem exit for every
+// holder whose entire position was worth less than that, and it presented to them as a failed
+// transaction rather than as a visible closed state the way `pause` does. $100 keeps a 10x band above
+// the $10 default, which is all the operational room the floor was ever meant to have, and shrinks
+// the set of holders a compromised admin can strand by an order of magnitude. Raising it further is a
+// deliberate change to this constant, in a commit, in a binary an auditor can diff.
+pub const MIN_OPERATION_CEILING_USDC: u64 = 100_000_000; // $100
 pub const DEFAULT_TREASURY_MIN_FLOAT_USDC: u64 = 0; // Mark sets from panel (D7)
 pub const DEFAULT_LARGE_REDEEM_THRESHOLD_USDC: u64 = 5_000_000_000; // $5k (D10)
 pub const DEFAULT_INSTANT_REDEEM_BUDGET_USDC: u64 = 20_000_000_000; // $20k/window (D10)

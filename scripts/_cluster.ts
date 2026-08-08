@@ -77,8 +77,35 @@ const GENESIS: Record<Cluster, string | null> = {
  *  a devnet-looking URL at mainnet is caught here and nowhere else, for one RPC call. */
 export async function assertClusterMatchesChain(ctx: ClusterContext): Promise<void> {
   const expected = GENESIS[ctx.cluster];
-  if (expected === null) return; // localnet
   const actual = await new Connection(ctx.rpc, "confirmed").getGenesisHash();
+
+  // REVIEW PASS ON 3bf3097. localnet used to `return` here BEFORE any RPC call, because a fresh
+  // validator has a random genesis hash and there is nothing to pin. But localnet is also exempt from
+  // the consent gate (`_guard.ts::guardConsentOnly`) and from the release-pin gate
+  // (`upgrade-program.ts::decideUpgradeGate`, which keys on the literal "mainnet-beta"), and any
+  // 127.0.0.1, localhost or *.localhost URL classifies as localnet. An SSH tunnel or a local RPC proxy
+  // pointed at mainnet therefore reached `solana program deploy` with an unpinned local .so, no
+  // consent prompt and no genesis check: three gates off at once through one carve-out.
+  //
+  // We cannot say what a local genesis hash SHOULD be. We can say what it must NOT be, and that is
+  // enough, because the attack needs the tunnel to terminate on a real cluster, and a real cluster has
+  // a known hash.
+  if (expected === null) {
+    const reached = (Object.keys(GENESIS) as Cluster[]).find(
+      (k) => k !== "localnet" && GENESIS[k] === actual,
+    );
+    if (reached) {
+      throw new Error(
+        `CLUSTER MISMATCH. ${ctx.rpc} classifies as localnet by hostname, but its genesis hash is\n` +
+          `  ${actual}\n` +
+          `which is ${reached}. A local address reaching a public cluster is a tunnel or a proxy.\n\n` +
+          `Refusing to continue. localnet is exempt from the mainnet consent gate AND from the release\n` +
+          `pin gate, so this path would have sent an unattested binary to ${reached} in silence.\n` +
+          `Point DOMINION_RPC at the real endpoint and take the gates that come with it.`,
+      );
+    }
+    return;
+  }
   if (actual !== expected) {
     const named = (Object.keys(GENESIS) as Cluster[]).find((k) => GENESIS[k] === actual);
     throw new Error(
@@ -95,10 +122,26 @@ export async function assertClusterMatchesChain(ctx: ClusterContext): Promise<vo
 /** Read a ceremony value out of `config/mainnet-authorities.json`, the source of truth. Ceremony values are
  *  READ, never retyped into a script, so there is exactly one place to be wrong (audit D-01). */
 export function mainnetConfig(): Record<string, unknown> {
-  // `DOMINION_MAINNET_CONFIG` lets the cluster gate test against a TEMP COPY. Nothing else sets it.
-  const p =
-    process.env.DOMINION_MAINNET_CONFIG ||
-    path.join(__dirname, "..", "config", "mainnet-authorities.json");
+  // `DOMINION_MAINNET_CONFIG` lets the cluster gate test against a TEMP COPY.
+  //
+  // REVIEW PASS ON 3bf3097. R6-03 deleted `DOMINION_RELEASE_MANIFEST` because an env var that
+  // redirects which file a gate trusts is not a test seam, it is the hole the gate exists to close.
+  // This sibling survived one file over, and it redirects `usdc_mint`, `lazer_treasury` and
+  // `foreign_upgradeable_program` for mainnet. The release PIN was never reachable through it, which
+  // is why it is narrower, not why it is acceptable.
+  //
+  // It now takes TWO variables, and the second one says out loud that this is a self-test. Production
+  // sets neither; an operator who sets only the path gets a refusal instead of a redirect.
+  const override = process.env.DOMINION_MAINNET_CONFIG;
+  if (override && process.env.DOMINION_CLUSTER_SELFTEST !== "1") {
+    throw new Error(
+      `DOMINION_MAINNET_CONFIG is set (${override}) but DOMINION_CLUSTER_SELFTEST is not "1".\n` +
+        `Refusing to read the source of truth from an alternate path. This override exists only for\n` +
+        `scripts/verify-cluster-resolution.ts, which sets both. If you are trying to test against a\n` +
+        `modified manifest, set both; if you are not, unset this and let the committed file be read.`,
+    );
+  }
+  const p = override || path.join(__dirname, "..", "config", "mainnet-authorities.json");
   if (!fs.existsSync(p)) {
     throw new Error(`missing source of truth: ${p}`);
   }

@@ -365,6 +365,9 @@ try {
   delete mutated.cluster_constants.usdc_mint;
   fs.writeFileSync(tmpSot, JSON.stringify(mutated, null, 2) + "\n");
   process.env.DOMINION_MAINNET_CONFIG = tmpSot;
+  // REVIEW PASS ON 3bf3097: the override now requires this second variable, so that setting the
+  // path alone (an operator, a stale shell) is a refusal rather than a silent redirect.
+  process.env.DOMINION_CLUSTER_SELFTEST = "1";
   let threw = false;
   let message = "";
   withRpc("https://api.mainnet-beta.solana.com", () => {
@@ -383,6 +386,7 @@ try {
   );
 } finally {
   delete process.env.DOMINION_MAINNET_CONFIG;
+  delete process.env.DOMINION_CLUSTER_SELFTEST;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 }
 // The strongest form of the property: the file was never written, so there is nothing to restore.

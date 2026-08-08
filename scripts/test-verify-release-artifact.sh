@@ -162,13 +162,35 @@ run_case "an unrecognised status fails closed" 1 \
 run_case "--local-only exits 0 and the verdict is the final line" 0 \
   "LOCAL BUILD OK" -- bash "$VERIFY" --local-only
 
-# 10. R6-03 REGRESSION GUARD. `DOMINION_RELEASE_MANIFEST` must do NOTHING. If the override is ever
-#     restored, the production script would read the injected pin and exit 0 with ARTIFACT OK; here it
-#     must keep reading the committed manifest and answer exactly as case 9 does.
+# 10. R6-03 REGRESSION GUARD. `DOMINION_RELEASE_MANIFEST` must do NOTHING.
+#
+#     REVIEW PASS ON 3bf3097. This case used to assert an ABSOLUTE exit 3, which is only reachable
+#     while the committed manifest says `no-candidate`. Runbook step 2c sets it to `pinned`, and from
+#     that moment the verifier answers 0 or 1 on the CI host, so this case would have failed on the
+#     very commit that pins the release candidate, in a BLOCKING job. That is the exact trap case 3
+#     was rewritten with a sandbox to avoid.
+#
+#     What is actually under test is not a number: it is that the env var changes NOTHING. So run the
+#     verifier twice, with and without it, and require both runs to agree. That property holds in
+#     every manifest state, before and after the pin.
 echo "-- the removed override --"
 sandbox_manifest pinned "$LOCAL_SHA" "$LOCAL_BYTES"
-run_case "DOMINION_RELEASE_MANIFEST is ignored by the production verifier" 3 \
-  "DO NOT DEPLOY THIS FILE" -- env DOMINION_RELEASE_MANIFEST="$SANDBOX/config/mainnet-authorities.json" bash "$VERIFY"
+plain_out="$TMP/override-plain.log"; ovr_out="$TMP/override-set.log"
+bash "$VERIFY" >"$plain_out" 2>&1; plain_code=$?
+env DOMINION_RELEASE_MANIFEST="$SANDBOX/config/mainnet-authorities.json" bash "$VERIFY" >"$ovr_out" 2>&1
+ovr_code=$?
+plain_last="$(grep -v '^[[:space:]]*$' "$plain_out" | tail -1)"
+ovr_last="$(grep -v '^[[:space:]]*$' "$ovr_out" | tail -1)"
+if [[ "$plain_code" == "$ovr_code" && "$plain_last" == "$ovr_last" ]]; then
+  echo "  ok  : DOMINION_RELEASE_MANIFEST changes nothing (both runs: exit $plain_code, same verdict)"
+  pass=$((pass + 1))
+else
+  echo "  FAIL: DOMINION_RELEASE_MANIFEST changed the answer."
+  echo "        without: exit $plain_code | $plain_last"
+  echo "        with   : exit $ovr_code | $ovr_last"
+  echo "        The override was restored, or something else reads that variable."
+  fail=$((fail + 1))
+fi
 
 # 9. The COMMITTED manifest, whatever state it is in, must produce a verdict this script recognises and
 #    an exit code that agrees with it. Deliberately not pinned to a number: this case exists to catch a
@@ -179,7 +201,7 @@ bash "$VERIFY" >"$out" 2>&1
 code=$?
 last="$(grep -v '^[[:space:]]*$' "$out" | tail -1)"
 case "$code:$last" in
-  0:ARTIFACT\ OK*|1:ARTIFACT\ REJECTED*|3:DO\ NOT\ DEPLOY*)
+  0:ARTIFACT\ OK*|1:ARTIFACT\ REJECTED*|3:ARTIFACT\ NOT\ ATTESTED*)
     echo "  ok  : the committed manifest yields exit $code with a matching verdict"
     pass=$((pass + 1)) ;;
   *)

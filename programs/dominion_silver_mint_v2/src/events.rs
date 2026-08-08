@@ -43,13 +43,18 @@ pub struct PremintEvent {
     pub inventory: Pubkey,
     pub amount: u64,
     pub supply_post: u64,
+    pub timestamp: i64,
     /// SOLIDPROOF T-006. The signer that minted. `inventory` is the DESTINATION, and the admin
     /// chooses it via `set_inventory_wallet`, so without this field the event records where supply
-    /// went but not who sent it. Appended after `supply_post` rather than inserted, for the same
-    /// reason `fee_usdc` was left in place above: readers rebuild against the new IDL either way,
-    /// but an append keeps the existing field offsets stable for anything decoding by position.
+    /// went but not who sent it.
+    ///
+    /// LAST, after `timestamp`, and that placement is the whole point. The first version of this
+    /// change put `by` between `supply_post` and `timestamp` while its comment claimed an append
+    /// kept the offsets stable. That was false in exactly the way `MintEvent::fee_usdc` above
+    /// documents: a positional decoder would have read the first 8 bytes of this pubkey as the
+    /// timestamp and produced a plausible wrong number rather than an error. Appending for real
+    /// costs nothing here, because the field has never shipped.
     pub by: Pubkey,
-    pub timestamp: i64,
 }
 
 #[event]
@@ -191,23 +196,6 @@ pub struct AdminActionExecuted {
 pub struct AdminActionCancelled {
     pub nonce: u64,
     pub cancelled_by: Pubkey,
-}
-
-/// SOLIDPROOF T-006. `close_timelock_account` was the one privileged instruction that changed state
-/// and said nothing. It cannot resurrect an action (it only accepts a timelock already cancelled or
-/// already executed), so the risk is not theft, it is BLINDNESS: after the account is gone, an
-/// indexer replaying the chain sees a nonce proposed and then nothing, with no way to distinguish a
-/// swept account from one that never existed. `action_disc` and `was_cancelled` are recorded here
-/// because they are readable for the last time at this point.
-#[event]
-pub struct TimelockAccountClosed {
-    pub nonce: u64,
-    pub action_disc: u8,
-    /// true if the action was cancelled, false if it had been executed. Exactly one holds: the
-    /// account constraint admits no other state.
-    pub was_cancelled: bool,
-    pub rent_recipient: Pubkey,
-    pub by: Pubkey,
 }
 
 #[event]

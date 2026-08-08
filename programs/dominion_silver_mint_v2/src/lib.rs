@@ -426,8 +426,19 @@ pub mod dominion_silver_mint {
     }
 
     // === Rent reclaim ===
-
-    pub fn close_timelock_account(ctx: Context<CloseTimelockAccount>, nonce: u64) -> Result<()> {
-        instructions::admin::close_accounts::close_timelock_account_handler(ctx, nonce)
-    }
+    //
+    // REVIEW PASS ON 3bf3097. `close_timelock_account` is REMOVED, and it was the last member of this
+    // section. It swept a timelock account left behind by a cancel or an execute, and it required
+    // `cancelled || executed_at.is_some()`. Both writers of those fields close the account in the
+    // same transaction: `CancelTimelocked` carries `close = rent_recipient`, and so does every one of
+    // the ten `Execute*` contexts. Anchor's close runs on exit, drains the lamports and zeroes the
+    // account, so no LIVE account can ever hold the state this instruction demanded.
+    //
+    // It was unreachable, and the repo's own tests said so without anyone reading it: both had to
+    // fabricate the state with `clone_timelock(.., |tl| tl.cancelled = true)`, under the comment
+    // "Cancel closes the account, so that state is placed directly."
+    //
+    // This is the sixth instruction in SolidProof T-006. Adding an event to something that cannot
+    // execute would satisfy the letter of the finding and tell the reader something false. The
+    // honest answer is five instructions carrying events, and a sixth that could never run.
 }

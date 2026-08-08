@@ -40,7 +40,22 @@ fi
 
 tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
-curl -sSfL "https://release.anza.xyz/v${VERSION}/install" -o "$tmp"
+
+# The retry wraps the DOWNLOAD only. The `build` job used to carry its own three-attempt loop around
+# `sh -c "$(curl ...)"`, which is what kept it off this installer; the resilience was real, the way it
+# was bought was not. Retrying here keeps it and still puts the checksum between the network and the
+# shell: a transient failure is retried, a changed script is refused.
+for attempt in 1 2 3; do
+  if curl -sSfL "https://release.anza.xyz/v${VERSION}/install" -o "$tmp"; then
+    break
+  fi
+  if [[ "$attempt" == 3 ]]; then
+    echo "::error::could not download the Anza installer for v$VERSION after 3 attempts."
+    exit 1
+  fi
+  echo "download attempt $attempt failed, retrying in 10s"
+  sleep 10
+done
 
 got="$(shasum -a 256 "$tmp" | awk '{print $1}')"
 if [[ "$got" != "$want" ]]; then

@@ -96,10 +96,35 @@ for entry in "${BASELINE[@]}"; do
   # branch, the gate printed "improved (N -> 0). Lower the baseline in this commit." and exited 0
   # having measured nothing, while actively inviting the operator to zero out the baseline. A gate
   # whose failure mode is "everything is fine" is worse than no gate.
-  if [ -z "$json" ] || ! printf '%s' "$json" | python3 -c '
-import json, sys
+  #
+  # REVIEW PASS ON 3bf3097. The guard above proved `metadata.vulnerabilities` was a dict and stopped
+  # there, which left two shapes that still read as "everything is fine":
+  #
+  #   1. A report with every count at 0 and an EMPTY `vulnerabilities` map. Measured: the gate printed
+  #      "critical improved (1 -> 0). Lower the baseline in this commit." and exited 0, i.e. it
+  #      instructed the operator to destroy the only memory the gate has. An offline mirror, a proxy
+  #      returning no advisory data or any soft failure produces exactly this.
+  #   2. A report with NO top-level `vulnerabilities` key at all (the npm 6 shape, which uses
+  #      `advisories`). The counts still compared and passed while the entire R6-09 advisory-id
+  #      ratchet silently did nothing.
+  #
+  # Both are now shape failures. A gate must be able to tell "I measured zero" from "I measured
+  # nothing", and only the second one is an emergency.
+  b_total=$((b_crit + b_high + b_mod + b_low))
+  if [ -z "$json" ] || ! printf '%s' "$json" | B_TOTAL="$b_total" python3 -c '
+import json, os, sys
 d = json.load(sys.stdin)
-sys.exit(0 if isinstance(d.get("metadata", {}).get("vulnerabilities"), dict) else 1)
+if not isinstance(d.get("metadata", {}).get("vulnerabilities"), dict):
+    sys.exit(1)
+vulns = d.get("vulnerabilities")
+if not isinstance(vulns, dict):
+    sys.exit(1)
+# An EMPTY map where the baseline expects findings is a collapse, not a clean bill of health. If a
+# workspace genuinely reaches zero, the baseline is lowered to zero in the same commit and this stops
+# firing, which is the correct order: the human states the new expectation, the gate does not infer it.
+if not vulns and int(os.environ["B_TOTAL"]) > 0:
+    sys.exit(1)
+sys.exit(0)
 ' 2>/dev/null; then
     echo "   FAIL: npm audit produced no usable report in $ws (it may have errored)."
     echo "         A gate that cannot measure must not pass. Output was:"

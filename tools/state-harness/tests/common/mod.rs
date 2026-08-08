@@ -100,7 +100,10 @@ pub const ADMIN_TIMELOCK_SECONDS: u32 = 86_400;
 /// ROUND 5 P1-04. Mirrors `DEFAULT_MIN_OPERATION_USDC` in state/config.rs; `initialize` writes it,
 /// so the fixture and the tests must agree with the program or every mint here reverts.
 pub const DEFAULT_MIN_OPERATION_USDC: u64 = 10_000_000; // $10
-pub const MIN_OPERATION_CEILING_USDC: u64 = 1_000_000_000; // $1,000
+// MIRROR of state::config::MIN_OPERATION_CEILING_USDC. Nothing enforces that these agree, so the
+// test that reads it is the enforcement: it asserts the boundary on both sides, and it went red
+// the moment the program's ceiling moved. Keep them in the same commit.
+pub const MIN_OPERATION_CEILING_USDC: u64 = 100_000_000; // $100
 pub const KYC_ACCOUNT_SIZE: usize = 145;
 pub const CONFIG_ACCOUNT_SIZE: usize = 800;
 

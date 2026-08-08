@@ -23,6 +23,7 @@ import {
   redeemGrossUsdc,
   classifyRedeem,
   parseRedeemError,
+  isBelowMinimumError,
   isStaleOracleError,
   STALE_ORACLE_USER_MESSAGE,
   errorToText,
@@ -484,9 +485,16 @@ export function MintRedeemCard() {
       // as well as the simulation revert that pyth-posting already maps.
       const reroute =
         mode === "redeem" ? parseRedeemError(flat) : null;
+      // REVIEW PASS ON 3bf3097. `isBelowMinimumError` had ZERO call sites, so the on-chain revert it
+      // exists for reached the user as a raw simulation string. It is genuinely reachable: the
+      // pre-flight guards are computed off a client-side quote, so the price can move between quote
+      // and land, and the admin can raise the floor mid-flight. It is checked on BOTH sides, above the
+      // redeem-only reroutes, because mint raises the same error and had no mapping at all.
       const friendly =
         isStaleOracleError(flat)
           ? STALE_ORACLE_USER_MESSAGE
+          : isBelowMinimumError(flat)
+            ? "That amount is below the protocol's minimum operation size. Nothing was charged. Try a larger amount."
           : reroute === "limit"
             ? "The protocol's rolling redemption limit for this window is used up. Your SILV was not touched. Retry after the window rolls, or redeem less."
             : reroute === "kyc"

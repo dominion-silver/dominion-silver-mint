@@ -41,7 +41,12 @@ set -euo pipefail
 # root it scanned nothing and passed. Exactly the defect this same file fixes for the manifest read a
 # hundred lines below, left in place one block earlier. `verify-mainnet-readiness.ts` invoked it with
 # an inherited cwd.
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# REVIEW PASS ON 3bf3097. `-P` resolves symlinks. Without it, ROOT was the directory of the
+# INVOKED path, so a symlink to this script from another tree made it read that tree's manifest,
+# lib.rs and target/. R6-03 removed the env var that redirected the manifest; this was the same
+# redirection through the filesystem. The self-test uses an rsync COPY, not a symlink, so it is
+# unaffected: a copy legitimately owns its own tree.
+ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 _stray=$(grep -rnoE --include="*.md" "\b[0-9a-f]{64}\b" "$ROOT/docs" 2>/dev/null || true)
 if [ -n "$_stray" ]; then
   echo ""
@@ -325,7 +330,10 @@ if [[ "$not_attested" -ne 0 ]]; then
   echo "this run establishes. It does NOT match, and could not be compared against, the release"
   echo "artifact that ships."
   echo "  reason: $not_attested_why"
-  echo "DO NOT DEPLOY THIS FILE. The deployable bytes come from the reproducible-build CI job."
+  echo "  the deployable bytes come from the reproducible-build CI job."
+  # REVIEW PASS ON 3bf3097: the DO-NOT-DEPLOY sentence used to be the last line here, so this was
+  # the one path where `tail -1` did not start with ARTIFACT. The header promises uniformity.
+  echo "ARTIFACT NOT ATTESTED. DO NOT DEPLOY THIS FILE."
   exit 3
 fi
 

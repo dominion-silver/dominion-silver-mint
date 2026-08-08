@@ -541,81 +541,6 @@
       ]
     },
     {
-      "name": "close_timelock_account",
-      "discriminator": [
-        157,
-        176,
-        62,
-        226,
-        77,
-        88,
-        128,
-        77
-      ],
-      "accounts": [
-        {
-          "name": "config",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "timelock",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  105,
-                  109,
-                  101,
-                  108,
-                  111,
-                  99,
-                  107
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "nonce"
-              }
-            ]
-          }
-        },
-        {
-          "name": "rent_recipient",
-          "writable": true
-        }
-      ],
-      "args": [
-        {
-          "name": "nonce",
-          "type": "u64"
-        }
-      ]
-    },
-    {
       "name": "deposit_usdc",
       "discriminator": [
         184,
@@ -5121,19 +5046,6 @@
       ]
     },
     {
-      "name": "TimelockAccountClosed",
-      "discriminator": [
-        230,
-        250,
-        216,
-        187,
-        206,
-        235,
-        70,
-        102
-      ]
-    },
-    {
       "name": "TreasuryDeposit",
       "discriminator": [
         176,
@@ -7128,19 +7040,24 @@
             "type": "u64"
           },
           {
+            "name": "timestamp",
+            "type": "i64"
+          },
+          {
             "name": "by",
             "docs": [
               "SOLIDPROOF T-006. The signer that minted. `inventory` is the DESTINATION, and the admin",
               "chooses it via `set_inventory_wallet`, so without this field the event records where supply",
-              "went but not who sent it. Appended after `supply_post` rather than inserted, for the same",
-              "reason `fee_usdc` was left in place above: readers rebuild against the new IDL either way,",
-              "but an append keeps the existing field offsets stable for anything decoding by position."
+              "went but not who sent it.",
+              "",
+              "LAST, after `timestamp`, and that placement is the whole point. The first version of this",
+              "change put `by` between `supply_post` and `timestamp` while its comment claimed an append",
+              "kept the offsets stable. That was false in exactly the way `MintEvent::fee_usdc` above",
+              "documents: a positional decoder would have read the first 8 bytes of this pubkey as the",
+              "timestamp and produced a plausible wrong number rather than an error. Appending for real",
+              "costs nothing here, because the field has never shipped."
             ],
             "type": "pubkey"
-          },
-          {
-            "name": "timestamp",
-            "type": "i64"
           }
         ]
       }
@@ -7429,46 +7346,6 @@
           {
             "name": "new_enabled",
             "type": "bool"
-          },
-          {
-            "name": "by",
-            "type": "pubkey"
-          }
-        ]
-      }
-    },
-    {
-      "name": "TimelockAccountClosed",
-      "docs": [
-        "SOLIDPROOF T-006. `close_timelock_account` was the one privileged instruction that changed state",
-        "and said nothing. It cannot resurrect an action (it only accepts a timelock already cancelled or",
-        "already executed), so the risk is not theft, it is BLINDNESS: after the account is gone, an",
-        "indexer replaying the chain sees a nonce proposed and then nothing, with no way to distinguish a",
-        "swept account from one that never existed. `action_disc` and `was_cancelled` are recorded here",
-        "because they are readable for the last time at this point."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "nonce",
-            "type": "u64"
-          },
-          {
-            "name": "action_disc",
-            "type": "u8"
-          },
-          {
-            "name": "was_cancelled",
-            "docs": [
-              "true if the action was cancelled, false if it had been executed. Exactly one holds: the",
-              "account constraint admits no other state."
-            ],
-            "type": "bool"
-          },
-          {
-            "name": "rent_recipient",
-            "type": "pubkey"
           },
           {
             "name": "by",
