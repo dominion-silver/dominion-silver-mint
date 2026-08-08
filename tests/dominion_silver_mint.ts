@@ -316,7 +316,6 @@ describe("dominion_silver_mint", () => {
 
     it.skip("close_daily_counter after 30-day retention returns rent to original payer", async () => {});
     it.skip("close_hourly_counter after 48h retention returns rent", async () => {});
-    it.skip("close_timelock_account after execute/cancel returns rent", async () => {});
   });
 
   it("placeholder: program loads", async () => {

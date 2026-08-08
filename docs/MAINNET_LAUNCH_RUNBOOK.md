@@ -159,7 +159,7 @@ across different systems"*, and *"make sure that you actually deploy the verifie
 accidentally overwrite it with anchor build or cargo build-sbf"*.
 
 So: **the `reproducible-build` CI job produces the bytes that ship.** It builds in the `solana-verify`
-container, takes ownership of the file, runs the 155 on-chain tests against THAT file, scans it,
+container, takes ownership of the file, runs the 154 on-chain tests against THAT file, scans it,
 hashes it, writes `release-manifest.json`, and only then publishes it. A local build is for devnet and
 for the local gates. It is never a mainnet artifact.
 

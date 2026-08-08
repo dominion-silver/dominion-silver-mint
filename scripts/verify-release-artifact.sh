@@ -41,12 +41,20 @@ set -euo pipefail
 # root it scanned nothing and passed. Exactly the defect this same file fixes for the manifest read a
 # hundred lines below, left in place one block earlier. `verify-mainnet-readiness.ts` invoked it with
 # an inherited cwd.
-# REVIEW PASS ON 3bf3097. `-P` resolves symlinks. Without it, ROOT was the directory of the
-# INVOKED path, so a symlink to this script from another tree made it read that tree's manifest,
-# lib.rs and target/. R6-03 removed the env var that redirected the manifest; this was the same
-# redirection through the filesystem. The self-test uses an rsync COPY, not a symlink, so it is
-# unaffected: a copy legitimately owns its own tree.
-ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# ROOT is the tree of the REAL script, not of the path used to invoke it. R6-03 removed the env var
+# that redirected the manifest; a symlink is the same redirection through the filesystem, and ROOT is
+# what selects MANIFEST_JSON below.
+#
+# REVIEW OF FIXES ON 993e628, P1. The first attempt was `cd -P "$(dirname "$BASH_SOURCE")/.."`, which
+# closes only ONE of the two symlink shapes. Measured:
+#   ln -s <repo>/scripts       <fake>/scripts        -> cd -P resolves it. Closed.
+#   ln -s <repo>/scripts/x.sh  <fake>/scripts/x.sh   -> dirname is already <fake>/scripts, a real
+#                                                       directory, so -P has nothing to resolve.
+# The second shape is the natural one, and it still read a prepared tree's manifest, lib.rs and
+# target/. Resolving BASH_SOURCE ITSELF is what closes both. `readlink -f` is not portable to older
+# macOS, and this script already depends on python3.
+_self="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")"
+ROOT="$(cd -P "$(dirname "$_self")/.." && pwd)"
 _stray=$(grep -rnoE --include="*.md" "\b[0-9a-f]{64}\b" "$ROOT/docs" 2>/dev/null || true)
 if [ -n "$_stray" ]; then
   echo ""

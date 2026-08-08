@@ -126,8 +126,11 @@ if not vulns and int(os.environ["B_TOTAL"]) > 0:
     sys.exit(1)
 sys.exit(0)
 ' 2>/dev/null; then
-    echo "   FAIL: npm audit produced no usable report in $ws (it may have errored)."
-    echo "         A gate that cannot measure must not pass. Output was:"
+    echo "   FAIL: npm audit did not produce a report this gate can trust in $ws."
+    echo "         Either it errored (registry unreachable, missing lockfile, auth), or it returned an"
+    echo "         EMPTY vulnerability list while the baseline for $ws expects $b_total. If this"
+    echo "         workspace genuinely reached zero, lower its baseline to 0:0:0:0 in this commit and"
+    echo "         this stops firing. A gate that cannot measure must not pass. Output was:"
     printf '%s\n' "${json:0:300}" | sed 's/^/         /'
     fail=1
     continue

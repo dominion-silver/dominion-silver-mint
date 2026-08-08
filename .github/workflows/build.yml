@@ -141,7 +141,7 @@ jobs:
         run: |
           mkdir -p "$GITHUB_WORKSPACE/target/idl"
           if ! command -v anchor >/dev/null 2>&1; then
-            cargo install --git https://github.com/coral-xyz/anchor --rev 47284f8f0b9844c6b83234aa90f556bad00e12ed anchor-cli --locked --force
+            cargo install --git https://github.com/coral-xyz/anchor --rev "${ANCHOR_COMMIT}" anchor-cli --locked --force
           fi
           anchor --version
           # REVIEW-OF-FIXES P0: this used `anchor idl build -- --locked > target/idl/....json`.
@@ -215,11 +215,11 @@ jobs:
         # the runner, and the release artifact is the linux/amd64 CONTAINER build produced by
         # reproducible-build. Asking a native build to match the release pin made this step fail on a
         # comparison it was never the right job to make, which is why every step after it (including the
-        # 155 on-chain tests) was skipped in run 31218108656. The pin has exactly one authority now, and
+        # 154 on-chain tests) was skipped in run 31218108656. The pin has exactly one authority now, and
         # it is the job that produces the bytes.
         run: scripts/verify-release-artifact.sh --local-only
 
-      - name: On-chain state harness, 155 tests (BLOCKING - audit round 4, P1-04)
+      - name: On-chain state harness, 154 tests (BLOCKING - audit round 4, P1-04)
         # These litesvm tests run against target/deploy/dominion_silver_mint.so, the release artifact
         # built two steps above, and they are the only thing that proves the HANDLERS still call the rules
         # in src/state/. An adversarial pass measured 192 handler-level mutations that leave all 158 unit
@@ -300,7 +300,8 @@ jobs:
 
   # ROUND 5 P0-02, and it is its OWN JOB on purpose (review pass).
   #
-  # `scripts/test-verify-release-artifact.sh` runs the verifier END TO END ten times, and each run
+  # `scripts/test-verify-release-artifact.sh` runs the verifier END TO END across ten cases (eleven invocations: case 10 runs it twice), and
+  # each FULL run
   # rebuilds the program into a fresh isolated CARGO_TARGET_DIR that nothing reuses. That is the price
   # of testing the conclusion instead of the branch, and it is the right price: the defect it exists
   # to catch was a script that printed EXPECTED MISMATCH and then exited 0 with ARTIFACT OK, which no
@@ -326,7 +327,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/target/idl"
           if ! command -v anchor >/dev/null 2>&1; then
-            cargo install --git https://github.com/coral-xyz/anchor --rev 47284f8f0b9844c6b83234aa90f556bad00e12ed anchor-cli --locked --force
+            cargo install --git https://github.com/coral-xyz/anchor --rev "${ANCHOR_COMMIT}" anchor-cli --locked --force
           fi
           (cd programs/dominion_silver_mint_v2 && anchor idl build -o "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json" -- --locked)
           printf '\n' >> "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json"
@@ -578,7 +579,7 @@ jobs:
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/target/idl"
           if ! command -v anchor >/dev/null 2>&1; then
-            cargo install --git https://github.com/coral-xyz/anchor --rev 47284f8f0b9844c6b83234aa90f556bad00e12ed anchor-cli --locked --force
+            cargo install --git https://github.com/coral-xyz/anchor --rev "${ANCHOR_COMMIT}" anchor-cli --locked --force
           fi
           # `-o`, never a stdout redirect: cargo writes progress to stdout on a registry cache miss and
           # the JSON silently becomes invalid while the command still exits 0. See the gate job.
@@ -599,7 +600,7 @@ jobs:
       # of the pipeline. It is one now.
       #
       # `--no-build` is what makes this test the container bytes rather than a fresh native build.
-      - name: Run the 155 on-chain tests against the CONTAINER binary (BLOCKING)
+      - name: Run the 154 on-chain tests against the CONTAINER binary (BLOCKING)
         run: bash tools/state-harness/run.sh --no-build
 
       # NOT `verify-release-artifact.sh --local-only` here, and a reviewer was right to flag why: even

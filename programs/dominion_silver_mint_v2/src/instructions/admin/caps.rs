@@ -149,9 +149,10 @@ pub fn set_redemptions_enabled_handler(ctx: Context<SetParam>, enabled: bool) ->
     // keeping it armed costs an unwanted re-open at the worst possible moment.
     if let Some(orphan) = ctx.accounts.config.pending_redeem_limits_nonce {
         // Breadcrumb, because disarming the slot leaves the timelock ACCOUNT alive and it still
-        // counts toward MAX_ACTIVE_PROPOSALS. `close_timelock_account` refuses it (neither cancelled
-        // nor executed), so the only exit is `cancel_timelocked_action(orphan)`, which needs the
-        // nonce. Without this the operator would have to enumerate every surviving timelock account
+        // counts toward MAX_ACTIVE_PROPOSALS. The only exit is `cancel_timelocked_action(orphan)`,
+        // which needs the nonce, and which CLOSES the account. (This used to say a rent sweeper
+        // refused the orphan; that sweeper is gone, because every path that could have fed it closes
+        // the account itself. The exit is the same one it always was.) Without this the operator would have to enumerate every surviving timelock account
         // to find it. Repeated disarm-then-re-propose cycles otherwise leak count slots until every
         // propose_* reverts TooManyActiveProposals.
         msg!(

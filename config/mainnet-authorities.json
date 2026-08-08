@@ -178,7 +178,7 @@
       "dans une commande tapee pendant la ceremonie.",
       "",
       "REGLABLE ENSUITE, instantanement DANS LES DEUX SENS, par set_min_operation_usdc, plafonne a",
-      "MIN_OPERATION_CEILING_USDC (1000 USDC). Pas de timelock, et c est delibere: aucun des deux sens",
+      "MIN_OPERATION_CEILING_USDC (100 USDC). Pas de timelock, et c est delibere: aucun des deux sens",
       "ne met de la VALEUR en risque. Zero desactive le plancher.",
       "",
       "ROUND 6 R6-11, correction de cette note. Elle disait que fermer le mint public est STRICTEMENT",

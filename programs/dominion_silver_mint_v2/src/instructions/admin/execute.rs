@@ -686,10 +686,10 @@ pub fn execute_set_redeem_limits_handler(
     // redemptions are shut while a pending OPEN proposal is still armed and lands hours later.
     //
     // This cannot create an inescapable state: `cancel_timelocked_action` reads no pending_*_nonce as
-    // a precondition and clears the matching one, so a proposal is ALWAYS cancellable. Note though
-    // that `close_timelock_account` requires `cancelled || executed_at.is_some()`, so an orphan left
-    // by an instant close must be cancelled before it can be closed, and it counts toward
-    // MAX_ACTIVE_PROPOSALS until then. Nonces come from a monotonic counter and are never reused, so a
+    // a precondition and clears the matching one, so a proposal is ALWAYS cancellable, and cancelling
+    // CLOSES the account. An orphan left by an instant close therefore counts toward
+    // MAX_ACTIVE_PROPOSALS until someone cancels it, and cancelling is both the disarm and the
+    // cleanup. Nonces come from a monotonic counter and are never reused, so a
     // disarmed proposal cannot become executable again.
     require!(
         config.pending_redeem_limits_nonce == Some(nonce),

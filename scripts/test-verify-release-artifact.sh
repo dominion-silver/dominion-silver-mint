@@ -173,8 +173,28 @@ run_case "--local-only exits 0 and the verdict is the final line" 0 \
 #     What is actually under test is not a number: it is that the env var changes NOTHING. So run the
 #     verifier twice, with and without it, and require both runs to agree. That property holds in
 #     every manifest state, before and after the pin.
+#     REVIEW OF FIXES ON 993e628, P1. Comparing the two runs is right, but the sandbox was pinned to
+#     THIS HOST'S build, which makes the case vacuous in exactly the state it was rewritten to survive.
+#     Once runbook step 2c pins the committed manifest to the container hash, on a linux runner that
+#     reproduces it, the plain run answers 0/ARTIFACT OK and a sandbox pinned to the same bytes answers
+#     0/ARTIFACT OK too: identical, so the case would PASS with the override restored.
+#
+#     The sandbox must be pinned to whatever the committed manifest is NOT, so an honoured override
+#     always yields a different verdict. no-candidate answers 3, a pin to the local build answers 0,
+#     and they cannot collide in either state.
 echo "-- the removed override --"
-sandbox_manifest pinned "$LOCAL_SHA" "$LOCAL_BYTES"
+committed_status="$(python3 -c '
+import json
+d = json.load(open("config/mainnet-authorities.json"))
+print(d.get("release_artifact", {}).get("status", "unknown"))
+')"
+if [[ "$committed_status" == "no-candidate" ]]; then
+  sandbox_manifest pinned "$LOCAL_SHA" "$LOCAL_BYTES"
+  echo "  (committed manifest is no-candidate, so the sandbox is pinned to this host's build)"
+else
+  sandbox_manifest no-candidate "$LOCAL_SHA" "$LOCAL_BYTES"
+  echo "  (committed manifest is $committed_status, so the sandbox is set to no-candidate)"
+fi
 plain_out="$TMP/override-plain.log"; ovr_out="$TMP/override-set.log"
 bash "$VERIFY" >"$plain_out" 2>&1; plain_code=$?
 env DOMINION_RELEASE_MANIFEST="$SANDBOX/config/mainnet-authorities.json" bash "$VERIFY" >"$ovr_out" 2>&1
@@ -217,4 +237,5 @@ if [[ "$fail" -ne 0 ]]; then
   trap - EXIT
   exit 1
 fi
-echo "SELF-TEST OK: $pass cases, every one asserting BOTH the exit code and the final line."
+echo "SELF-TEST OK: $pass cases. Nine assert BOTH an exit code and the final line; case 10 asserts"
+echo "that two runs AGREE, the only form of that property that survives the manifest being pinned."

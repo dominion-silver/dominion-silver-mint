@@ -1,4 +1,4 @@
-// On-chain tests for the admin-transfer state machine, the timelock rent sweeper and the two
+// On-chain tests for the admin-transfer state machine, the timelock lifecycle and the two
 // counter subtractions in the guardian path. Every assertion reads an account back OUT of the VM:
 // a handover that reports success and leaves config.admin untouched is invisible to a unit test.
 
@@ -17,7 +17,6 @@ const E_ARITHMETIC_OVERFLOW: u32 = 12018;
 const E_INVALID_PENDING_ADMIN: u32 = 12020;
 const E_PENDING_ADMIN_EXPIRED: u32 = 12021;
 const E_TIMELOCK_NOT_ELAPSED: u32 = 12028;
-const E_TIMELOCK_ACTION_ALREADY_EXECUTED: u32 = 12030;
 const E_NONCE_MISMATCH: u32 = 12042;
 const E_PROPOSAL_NO_OP: u32 = 12043;
 const E_PROPOSAL_ALREADY_ACTIVE: u32 = 12044;

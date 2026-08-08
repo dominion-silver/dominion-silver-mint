@@ -139,7 +139,7 @@ export const setInventoryWallet = (c: BuildCtx, wallet: PublicKey): Ix =>
 /**
  * ROUND 5 P1-04. The MINIMUM SIZE OF A PRICED OPERATION, atomic USDC: `amount_usdc` on mint, the gross
  * USDC value of `amount_silv` on redeem. Instant in BOTH directions, bounded by
- * MIN_OPERATION_CEILING_USDC (1000 USDC on chain); zero disables the floor.
+ * MIN_OPERATION_CEILING_USDC (100 USDC on chain); zero disables the floor.
  *
  * It exists because D2 made the Lazer anti-replay strict, so one signed print prices exactly one
  * operation protocol-wide and, with no floor, capturing every print cost about 0.00006 USDC on the mint
