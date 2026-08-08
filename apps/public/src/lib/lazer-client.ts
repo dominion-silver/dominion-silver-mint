@@ -13,6 +13,12 @@ export class LazerNotConfiguredError extends Error {
   }
 }
 
+// ROUND 5 P1-05. There was a `LazerPriceAlreadyClaimedError` here, for a 409 the proxy no longer sends.
+// The proxy briefly REFUSED a contended print; a review pass showed that turned an unauthenticated
+// endpoint into a free denial of the whole mint and redeem UI, so contention is now advisory and every
+// caller is served. `contended` on the response is the signal, and losing a race costs one Lazer verify
+// fee rather than costing everyone the product. See the note on `claimFresh` in api/lazer/route.ts.
+
 /** Decode a base64 string to bytes (browser-safe via atob). Pure + testable. */
 export function base64ToBytes(b64: string): Uint8Array {
   if (b64.length === 0 || /[^A-Za-z0-9+/=]/.test(b64)) {
@@ -38,13 +44,16 @@ export function base64ToBytes(b64: string): Uint8Array {
 export async function fetchLazerEnvelope(
   feedId?: number,
   /**
-   * Skip the proxy cache. REQUIRED on the submit path: the program demands a STRICTLY increasing feed
-   * timestamp, so one envelope prices exactly one operation, and a cached envelope shared with another
-   * signer means the second transaction is refused with NonMonotonic after the verify fee is paid.
-   * The price banner leaves this false.
+   * CLAIM a print for submission. REQUIRED on the submit path: the program demands a STRICTLY increasing
+   * feed timestamp, so one envelope prices exactly one operation, and an envelope shared with another
+   * signer means the second transaction is refused after the verify fee is paid.
+   *
+   * ROUND 5 P1-05: this used to mean only "skip the proxy cache", which was not the same guarantee. The
+   * proxy now also marks the response `contended` when another submitter was handed the same print
+   * first. It never refuses: see the note above. The price banner leaves this false.
    */
   fresh = false,
-): Promise<{ envelope: Uint8Array; priceUsd: number | null }> {
+): Promise<{ envelope: Uint8Array; priceUsd: number | null; contended: boolean }> {
   const resp = await fetch("/api/lazer", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -55,9 +64,17 @@ export async function fetchLazerEnvelope(
     const detail = await resp.text().catch(() => "");
     throw new Error(`Lazer proxy ${resp.status}: ${detail.slice(0, 200)}`);
   }
-  const { envelopeBase64, price } = (await resp.json()) as {
+  const { envelopeBase64, price, contended } = (await resp.json()) as {
     envelopeBase64: string;
     price: { priceUsd: number } | null;
+    contended?: boolean;
   };
-  return { envelope: base64ToBytes(envelopeBase64), priceUsd: price?.priceUsd ?? null };
+  // `contended === true` means another submitter was handed this exact print first, so this transaction
+  // is racing and the loser is refused LazerReplayed after paying the verify fee. Absent on the banner
+  // path, where it is meaningless; defaults to false so a caller that ignores it behaves as before.
+  return {
+    envelope: base64ToBytes(envelopeBase64),
+    priceUsd: price?.priceUsd ?? null,
+    contended: contended === true,
+  };
 }

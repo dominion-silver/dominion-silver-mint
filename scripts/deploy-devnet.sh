@@ -47,12 +47,18 @@ if [[ "$MODE" == "ci" ]]; then
   echo "==> Latest success run: $RUN_ID"
   rm -rf /tmp/dominion-artifact
   mkdir -p /tmp/dominion-artifact
-  gh run download "$RUN_ID" --name program-binary --dir /tmp/dominion-artifact
-  gh run download "$RUN_ID" --name idl --dir /tmp/dominion-artifact
+  # REVIEW PASS ON 3bf3097. This block was DEAD and failed on its first line. It downloaded
+  # `program-binary`, an artifact round 5 P1-01 deleted precisely because it came from a
+  # continue-on-error build and could be stale, and `idl`, deleted in this pass for the same reason.
+  # The only downloadable binary is now the container build from `reproducible-build`, published after
+  # the gate that judges it, and the IDL that matches it is the one committed in-repo: that job builds
+  # the IDL from the pinned toolchain and diffs it against both committed copies, so the repo copy IS
+  # the built one or CI is red.
+  gh run download "$RUN_ID" --name dominion_silver_mint-verifiable-so --dir /tmp/dominion-artifact
   mkdir -p target/deploy target/idl
   cp /tmp/dominion-artifact/dominion_silver_mint.so target/deploy/
-  cp /tmp/dominion-artifact/dominion_silver_mint.json target/idl/
-  echo "==> Copied .so and IDL into target/"
+  cp apps/public/src/lib/idl/dominion_silver_mint.json target/idl/
+  echo "==> Copied the verifiable .so from CI, and the committed IDL, into target/"
 fi
 
 if [[ ! -f target/deploy/dominion_silver_mint.so ]]; then

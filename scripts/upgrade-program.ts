@@ -40,6 +40,126 @@ function die(msg: string): never {
   process.exit(1);
 }
 
+/**
+ * ROUND 6 R6-02. THE CLUSTER GATE. Runs before anything is measured, read or written.
+ *
+ * THE DEFECT IT REPLACES. `refuseMainnetDirectUpgrade()` tested the CURVE of the observed upgrade
+ * authority, not the cluster, and returned quietly whenever that authority was on-curve. On mainnet
+ * the authority IS on-curve for the entire window between the first deploy and step 12, which is the
+ * most sensitive window of the launch. Alongside it, `assertArtifactIsAttested()` printed that a
+ * `no-candidate` artifact was "Fine for devnet" and then returned WITHOUT checking that the cluster
+ * was devnet. Together they let `--execute` with the right intents and the deployer key reach
+ * `solana program deploy` with any locally built `.so`, unpinned. The comment above them said the
+ * script was "explicitly a DEVNET tool. On any other cluster it refuses", and that sentence was false.
+ *
+ * The rule now has no exceptions: ON MAINNET, THE ARTIFACT MUST BE THE PINNED CANDIDATE. Not "unless
+ * the authority looks like a keypair", not "unless no candidate is pinned yet". `no-candidate` is a
+ * devnet-only state, stated as such.
+ */
+export interface UpgradeGateInput {
+  /** From `_cluster.ts`, never from a flag or a hostname substring. */
+  cluster: string;
+  /** `release_artifact.status` as read from config/mainnet-authorities.json. */
+  status: string;
+  localHash: string;
+  localBytes: number;
+  pinnedHash: string | null;
+  pinnedBytes: number | null;
+}
+
+/**
+ * THE DECISION, extracted so the {devnet, mainnet} x {no-candidate, pinned} x {match, mismatch} matrix
+ * is exercised by `scripts/test-upgrade-gate.ts` against THIS function rather than a paraphrase of it.
+ *
+ * Returns null to allow, or the refusal reason. The caller turns a reason into `die`. Note what is NOT
+ * an input: the shape of the upgrade authority. That was the round 6 R6-02 defect, and it is not a
+ * parameter of this decision at all any more.
+ */
+export function decideUpgradeGate(i: UpgradeGateInput): string | null {
+  if (i.cluster !== "mainnet-beta") return null;
+  if (i.status !== "pinned") {
+    return (
+      `MAINNET requires a pinned release candidate, and release_artifact.status is "${i.status}".\n` +
+      `  cluster : ${i.cluster}\n` +
+      `  artifact: ${i.localHash} (${i.localBytes.toLocaleString()} bytes)\n` +
+      `This script signs with a local keypair and reads a local file. Neither is an attestation.\n` +
+      `Pin the candidate first (runbook step 2c) from the reproducible-build job's output, never\n` +
+      `from a local build: SBF builds are not deterministic across host platforms (S-07).`
+    );
+  }
+  if (i.localHash !== i.pinnedHash || i.localBytes !== i.pinnedBytes) {
+    return (
+      `the artifact on disk is NOT the pinned release binary, and this is mainnet.\n` +
+      `  on disk : ${i.localHash} (${i.localBytes.toLocaleString()} bytes)\n` +
+      `  pinned  : ${i.pinnedHash} (${Number(i.pinnedBytes).toLocaleString()} bytes)\n` +
+      `Download the published artifact from the reproducible-build run rather than rebuilding.`
+    );
+  }
+  return null;
+}
+
+function assertPinnedIfMainnet(): void {
+  const manifestPath = path.join(__dirname, "..", "config", "mainnet-authorities.json");
+  const rel = JSON.parse(fs.readFileSync(manifestPath, "utf8")).release_artifact ?? {};
+  if (!fs.existsSync(SO)) return; // the existence check below reports this properly.
+  const localHash = sha256(SO);
+  const localBytes = fs.statSync(SO).size;
+  const reason = decideUpgradeGate({
+    cluster: CLUSTER.cluster,
+    status: rel.status ?? "MISSING",
+    localHash,
+    localBytes,
+    pinnedHash: rel.sha256 ?? null,
+    pinnedBytes: rel.bytes ?? null,
+  });
+  if (reason) die(reason);
+  console.log(
+    CLUSTER.cluster === "mainnet-beta"
+      ? `\n  cluster: mainnet-beta. Release pin MATCHED (${localHash}, ${localBytes.toLocaleString()} bytes)`
+      : `\n  cluster: ${CLUSTER.cluster}. Release pin NOT required.\n` +
+          `  artifact: ${localHash} (${localBytes.toLocaleString()} bytes), pin status "${rel.status ?? "MISSING"}".`,
+  );
+}
+
+/**
+ * ROUND 5 P1-08, narrowed by round 6 R6-02 to the one thing it can actually decide.
+ *
+ * An off-curve upgrade authority means no keypair can sign, on any cluster. That is a fact about the
+ * SIGNATURE, and it is the only thing this check ever proved. It is no longer load-bearing for the
+ * mainnet question, which `assertPinnedIfMainnet` above answers unconditionally.
+ */
+async function refuseOffCurveAuthority(): Promise<void> {
+  let show: { authority?: string };
+  try {
+    show = JSON.parse(
+      sh("solana", ["program", "show", PROGRAM_ID.toBase58(), "-u", CLUSTER.rpc, "--output", "json"]),
+    );
+  } catch {
+    return; // step 2 below reports this properly; do not duplicate the failure here.
+  }
+  if (!show.authority) return; // immutable: step 2 refuses with the right message.
+  const authority = new PublicKey(show.authority);
+  if (PublicKey.isOnCurve(authority.toBytes())) return;
+
+  die(
+    `the upgrade authority is OFF-CURVE, so no keypair can sign this upgrade.\n` +
+      `  program           : ${PROGRAM_ID.toBase58()}\n` +
+      `  upgrade authority : ${authority.toBase58()}  (a PDA, i.e. a Squads vault)\n` +
+      `\n` +
+      `This script signs directly. The Squads upgrade path is:\n` +
+      `  1. Take the .so from the reproducible-build CI job for the target commit, and verify its\n` +
+      `     sha256, size and program id against release-manifest.json from that same run.\n` +
+      `  2. solana program write-buffer <that .so>            (a normal keypair pays for the buffer)\n` +
+      `  3. solana program set-buffer-authority <buffer> --new-buffer-authority ${authority.toBase58()}\n` +
+      `  4. Propose "BpfLoaderUpgradeable::Upgrade" from the Upgrade Squads, with that buffer.\n` +
+      `  5. Approve to threshold and execute from the Squads UI or the admin panel.\n` +
+      `  6. solana program dump, truncate to the artifact length, and compare sha256 to step 1.\n` +
+      `  7. anchor idl upgrade, then re-read the IDL account and compare it to the attested file.\n` +
+      `Steps 1 and 6 are what make this an upgrade to a KNOWN binary rather than to whatever\n` +
+      `was on the machine that ran it.`,
+  );
+}
+
 async function main() {
   console.log("Dominion in-place program upgrade");
   console.log("  " + describeCluster(CLUSTER));
@@ -49,8 +169,33 @@ async function main() {
   await requireSanctionedCluster(CLUSTER.rpc, "in-place program upgrade");
 
   if (!fs.existsSync(SO)) {
-    die(`no local artifact at ${SO}. Build first: cargo build-sbf -- --locked`);
+    die(
+      `no artifact at ${SO}.\n` +
+        `For DEVNET: cargo build-sbf --manifest-path programs/dominion_silver_mint_v2/Cargo.toml -- --locked\n` +
+        `For MAINNET: download the .so published by the reproducible-build CI job and place it there.\n` +
+        `A local build is NOT a mainnet artifact: SBF builds are not deterministic across host\n` +
+        `platforms (S-07, measured 2026-08-07).`,
+    );
   }
+
+  // ROUND 5 P1-08, and it runs before anything is measured or sent.
+  //
+  // TWO DEFECTS, one file. First, this script read `target/deploy/dominion_silver_mint.so` and told
+  // the operator to produce it with `cargo build-sbf`, which is exactly the binary the release
+  // doctrine forbids deploying. It then verified faithfully, afterwards, that the wrong file had
+  // indeed been deployed. Second, the check further down requires `solana address` to BE the upgrade
+  // authority. After step 12 hands that authority to the off-curve Upgrade Squads vault
+  // `FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3`, no private key can satisfy it: the documented
+  // upgrade path stops working precisely in the posture the launch ends in.
+  //
+  // So this script is now explicitly a DEVNET tool. On any other cluster it refuses and prints the
+  // Squads path instead of pretending to be it. That is the honest shape: a script that cannot sign
+  // for a PDA should say so, not fail three steps later with a signature error.
+  // ORDER MATTERS AND IT IS THE FINDING. The cluster gate runs FIRST and unconditionally, because
+  // round 6 R6-02 showed the previous order let mainnet through whenever the observed authority
+  // happened to be on-curve, which is exactly the window between the first deploy and step 12.
+  assertPinnedIfMainnet();
+  await refuseOffCurveAuthority();
 
   // ---- 2. does the binary still fit? ----
   step("2", "ProgramData allocation versus the local artifact");
@@ -424,7 +569,16 @@ function readConfig(): Record<string, string> | null {
   }
 }
 
-main().catch((e) => {
-  console.error("upgrade failed:", e instanceof Error ? e.message : e);
-  process.exit(1);
-});
+// ROUND 6 R6-02. `main()` runs ONLY when this file is the entry point.
+//
+// Found by writing the matrix test: `scripts/test-upgrade-gate.ts` imports `decideUpgradeGate` from
+// here, and a bare `main()` at module scope meant importing the decision EXECUTED the upgrade script
+// against whatever cluster the environment happened to name. A test of a refusal that starts the very
+// thing it is refusing is worse than no test. Any module that both exports something and runs
+// something needs this guard.
+if (require.main === module) {
+  main().catch((e) => {
+    console.error("upgrade failed:", e instanceof Error ? e.message : e);
+    process.exit(1);
+  });
+}

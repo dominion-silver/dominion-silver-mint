@@ -44,6 +44,17 @@ pub struct PremintEvent {
     pub amount: u64,
     pub supply_post: u64,
     pub timestamp: i64,
+    /// SOLIDPROOF T-006. The signer that minted. `inventory` is the DESTINATION, and the admin
+    /// chooses it via `set_inventory_wallet`, so without this field the event records where supply
+    /// went but not who sent it.
+    ///
+    /// LAST, after `timestamp`, and that placement is the whole point. The first version of this
+    /// change put `by` between `supply_post` and `timestamp` while its comment claimed an append
+    /// kept the offsets stable. That was false in exactly the way `MintEvent::fee_usdc` above
+    /// documents: a positional decoder would have read the first 8 bytes of this pubkey as the
+    /// timestamp and produced a plausible wrong number rather than an error. Appending for real
+    /// costs nothing here, because the field has never shipped.
+    pub by: Pubkey,
 }
 
 #[event]
@@ -389,5 +400,15 @@ pub struct AdminTransferCancelled {
 pub struct PublicMintEnabledChanged {
     pub old_enabled: bool,
     pub new_enabled: bool,
+    pub by: Pubkey,
+}
+
+/// ROUND 5 P1-04. The mint floor is the availability control on the strict-anti-replay slot, so a
+/// monitor needs the transition: raising it prices small users out, lowering it re-cheapens print
+/// capture. Same old/new/by shape as the other instant setters, for the same LOW #3 reason.
+#[event]
+pub struct MinOperationChanged {
+    pub old_min_usdc: u64,
+    pub new_min_usdc: u64,
     pub by: Pubkey,
 }

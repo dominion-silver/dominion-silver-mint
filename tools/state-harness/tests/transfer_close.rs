@@ -1,4 +1,4 @@
-// On-chain tests for the admin-transfer state machine, the timelock rent sweeper and the two
+// On-chain tests for the admin-transfer state machine, the timelock lifecycle and the two
 // counter subtractions in the guardian path. Every assertion reads an account back OUT of the VM:
 // a handover that reports success and leaves config.admin untouched is invisible to a unit test.
 
@@ -17,7 +17,6 @@ const E_ARITHMETIC_OVERFLOW: u32 = 12018;
 const E_INVALID_PENDING_ADMIN: u32 = 12020;
 const E_PENDING_ADMIN_EXPIRED: u32 = 12021;
 const E_TIMELOCK_NOT_ELAPSED: u32 = 12028;
-const E_TIMELOCK_ACTION_ALREADY_EXECUTED: u32 = 12030;
 const E_NONCE_MISMATCH: u32 = 12042;
 const E_PROPOSAL_NO_OP: u32 = 12043;
 const E_PROPOSAL_ALREADY_ACTIVE: u32 = 12044;
@@ -265,25 +264,6 @@ fn cancel_timelocked_as(
             AccountMeta::new_readonly(program_id(), false),
         ],
         data: ix_data("cancel_timelocked_action", &nonce.to_le_bytes()),
-    };
-    f.send(&[ix], &[signer])
-}
-
-fn close_timelock_as(
-    f: &mut Fixture,
-    signer: &Keypair,
-    nonce: u64,
-    rent_recipient: Pubkey,
-) -> TxOutcome {
-    let ix = Instruction {
-        program_id: program_id(),
-        accounts: vec![
-            AccountMeta::new_readonly(config_pda(), false),
-            AccountMeta::new_readonly(signer.pubkey(), true),
-            AccountMeta::new(timelock_pda(nonce), false),
-            AccountMeta::new(rent_recipient, false),
-        ],
-        data: ix_data("close_timelock_account", &nonce.to_le_bytes()),
     };
     f.send(&[ix], &[signer])
 }
@@ -541,63 +521,31 @@ fn cancel_admin_transfer_is_admin_or_guardian_only() {
     assert_eq!(f.config().pending_admin, None);
 }
 
-// ---------------------------------------------------------------- close_timelock_account
+// ------------------------------------------------- the sweeper that could not sweep
 
+// REVIEW PASS ON 3bf3097. Two tests lived here, for `close_timelock_account`. Both had to FABRICATE
+// their subject with `clone_timelock(.., |tl| tl.cancelled = true)`, under the comment "Cancel closes
+// the account, so that state is placed directly". That comment was the finding, written down and not
+// read: the instruction required `cancelled || executed_at.is_some()`, and every writer of either
+// field closes the account in the same transaction, so no live account could ever satisfy it. The
+// instruction is deleted. What replaces the two tests is the invariant that makes it unnecessary,
+// asserted against real state instead of placed state.
 #[test]
-fn a_live_timelock_account_may_not_be_closed_for_its_rent() {
+fn cancelling_a_proposal_closes_its_account_so_no_orphan_is_left_to_sweep() {
     let mut f = Fixture::new();
     let admin = f.admin.insecure_clone();
     let admin_key = admin.pubkey();
-    let (r, live) = propose_premium_mint(&mut f, 200);
-    expect_ok(r, "propose the live action");
-
-    // Sweeping a LIVE proposal leaves config.pending_premium_mint_nonce armed at a nonce whose
-    // account no longer exists: that action kind can never be proposed or executed again.
-    expect_error(
-        close_timelock_as(&mut f, &admin, live, admin_key),
-        E_TIMELOCK_ACTION_ALREADY_EXECUTED,
-        "close a live timelock account",
-    );
-    assert!(read_timelock(&f, live).is_some(), "the live proposal was closed anyway");
-    assert_eq!(f.config().pending_premium_mint_nonce, Some(live), "the slot moved");
-
-    // Positive control: the sweeper does work on a cancelled-but-still-open account, which is the
-    // only state it exists for. Cancel closes the account, so that state is placed directly.
-    let dead = live + 1;
-    clone_timelock(&mut f, live, dead, |tl| {
-        tl.nonce = dead;
-        tl.cancelled = true;
-    });
-    expect_ok(
-        close_timelock_as(&mut f, &admin, dead, admin_key),
-        "close a cancelled timelock account",
-    );
-    assert!(read_timelock(&f, dead).is_none(), "the sweeper did not close the account");
-}
-
-#[test]
-fn close_timelock_account_is_admin_only() {
-    let mut f = Fixture::new();
-    let admin = f.admin.insecure_clone();
-    let admin_key = admin.pubkey();
-    let stranger = f.stranger.insecure_clone();
-    let (r, live) = propose_premium_mint(&mut f, 200);
+    let (r, nonce) = propose_premium_mint(&mut f, 200);
     expect_ok(r, "propose");
-    let dead = live + 1;
-    clone_timelock(&mut f, live, dead, |tl| {
-        tl.nonce = dead;
-        tl.cancelled = true;
-    });
+    assert!(read_timelock(&f, nonce).is_some(), "the proposal was not created");
 
-    // Permissionless sweeping hands a third party the rent and the timing of every cleanup.
-    expect_error(
-        close_timelock_as(&mut f, &stranger, dead, admin_key),
-        E_CONSTRAINT_HAS_ONE,
-        "close_timelock_account signed by a stranger",
+    expect_ok(cancel_timelocked_as(&mut f, &admin, nonce, admin_key), "cancel");
+
+    // The account is GONE, not merely flagged. This is why a rent sweeper had nothing to reclaim.
+    assert!(
+        read_timelock(&f, nonce).is_none(),
+        "cancel left the account behind: a sweeper is needed again, and so is this test's premise"
     );
-    assert!(read_timelock(&f, dead).is_some(), "a stranger closed the account");
-    expect_ok(close_timelock_as(&mut f, &admin, dead, admin_key), "close by the admin");
-    assert!(read_timelock(&f, dead).is_none());
 }
 
 // ---------------------------------------------------------------- cancel_timelocked_action nonce

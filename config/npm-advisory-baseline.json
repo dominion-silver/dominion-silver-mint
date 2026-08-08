@@ -1,0 +1,66 @@
+{
+  "_note": [
+    "ROUND 6 R6-09. The baseline the npm ratchet compares against: ADVISORY IDS, not counts.",
+    "",
+    "THE DEFECT THIS REPLACES. scripts/verify-npm-audit-policy.sh compared the NUMBER of vulnerable",
+    "packages per severity plus an allowlist of package NAMES. A brand new high-severity advisory on",
+    "`next`, `ws`, `sharp` or `postcss`, all already vulnerable and already allowlisted, changes",
+    "neither the count nor the name, so the gate stayed green. Its own header claimed it 'fails on",
+    "anything worse: a new high, a new critical', and that was simply false.",
+    "",
+    "An advisory ID is an identity. A new ID means something genuinely new arrived, whatever package",
+    "it attaches to and whatever the totals do. Adding an ID here is ACCEPTING a vulnerability and",
+    "belongs in a commit that says why, with the reachability argument in the script's header.",
+    "",
+    "Measured 2026-08-08 with npm audit --omit=dev. Re-measure with scripts/verify-npm-audit-policy.sh",
+    "by re-reading the FAIL output of scripts/verify-npm-audit-policy.sh, which prints every id",
+    "it refused. An earlier note pointed at a --print-baseline flag that was never implemented."
+  ],
+  "measured": "2026-08-08",
+  "workspaces": {
+    ".": [
+      1103747,
+      1119108,
+      1119441,
+      1123259,
+      1123260
+    ],
+    "apps/public": [
+      1103747,
+      1117015,
+      1119108,
+      1119441,
+      1120422,
+      1123259,
+      1123260,
+      1123528,
+      1123944,
+      1124066,
+      1124252,
+      1124288,
+      1130709,
+      1138808,
+      1138809,
+      1138811,
+      1138813
+    ],
+    "apps/admin": [
+      1103747,
+      1117015,
+      1119441,
+      1120422,
+      1123259,
+      1123260,
+      1123528,
+      1123944,
+      1124066,
+      1124252,
+      1124288,
+      1130709,
+      1138808,
+      1138809,
+      1138811,
+      1138813
+    ]
+  }
+}

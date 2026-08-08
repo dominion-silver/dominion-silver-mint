@@ -1,5 +1,5 @@
 {
-  "address": "HXaptAcaXBoEAsNuEv4ZwYrciHbMxSpip2VScRVDjo1Z",
+  "address": "3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ",
   "metadata": {
     "name": "dominion_silver_mint",
     "version": "0.1.0",
@@ -531,81 +531,6 @@
               }
             ]
           }
-        }
-      ],
-      "args": [
-        {
-          "name": "nonce",
-          "type": "u64"
-        }
-      ]
-    },
-    {
-      "name": "close_timelock_account",
-      "discriminator": [
-        157,
-        176,
-        62,
-        226,
-        77,
-        88,
-        128,
-        77
-      ],
-      "accounts": [
-        {
-          "name": "config",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "timelock",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  116,
-                  105,
-                  109,
-                  101,
-                  108,
-                  111,
-                  99,
-                  107
-                ]
-              },
-              {
-                "kind": "arg",
-                "path": "nonce"
-              }
-            ]
-          }
-        },
-        {
-          "name": "rent_recipient",
-          "writable": true
         }
       ],
       "args": [
@@ -1753,7 +1678,7 @@
         },
         {
           "name": "dominion_program",
-          "address": "HXaptAcaXBoEAsNuEv4ZwYrciHbMxSpip2VScRVDjo1Z"
+          "address": "3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ"
         },
         {
           "name": "program_data"
@@ -4222,6 +4147,60 @@
       ]
     },
     {
+      "name": "set_min_operation_usdc",
+      "docs": [
+        "ROUND 5 P1-04. The minimum size of a priced operation, atomic USDC: `amount_usdc` on the mint",
+        "side, the gross USDC value of `amount_silv` on the redeem side. Instant in BOTH directions,",
+        "bounded by `MIN_OPERATION_CEILING_USDC`; zero disables the floor. It is an availability",
+        "control on the strict-anti-replay slot, not a value control, which is why it carries no",
+        "timelock. Full reasoning at `caps::set_min_operation_usdc_handler`."
+      ],
+      "discriminator": [
+        161,
+        213,
+        150,
+        200,
+        28,
+        140,
+        139,
+        90
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        }
+      ],
+      "args": [
+        {
+          "name": "new_min_usdc",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "set_public_mint_enabled",
       "docs": [
         "Instant CLOSE of the public mint. FALSE-ONLY; opening goes through the",
@@ -4882,6 +4861,19 @@
         90,
         189,
         44
+      ]
+    },
+    {
+      "name": "MinOperationChanged",
+      "discriminator": [
+        146,
+        219,
+        156,
+        60,
+        40,
+        165,
+        242,
+        88
       ]
     },
     {
@@ -5683,6 +5675,26 @@
       "code": 12117,
       "name": "KycOperatorMayNotBeAdmin",
       "msg": "the KYC attestor may not be the admin key: the whole hot/cold split depends on them differing"
+    },
+    {
+      "code": 12118,
+      "name": "OperationBelowMinimum",
+      "msg": "operation is below config.min_operation_usdc: read the live floor before retrying"
+    },
+    {
+      "code": 12119,
+      "name": "MinOperationTooHigh",
+      "msg": "the requested minimum operation size exceeds MIN_OPERATION_CEILING_USDC"
+    },
+    {
+      "code": 12120,
+      "name": "MinOperationUnchanged",
+      "msg": "the minimum operation size already holds that value"
+    },
+    {
+      "code": 12121,
+      "name": "LazerReplayed",
+      "msg": "this price envelope was already used: another operation consumed it, retry with a fresh price"
     }
   ],
   "types": [
@@ -6165,11 +6177,37 @@
             "type": "u32"
           },
           {
+            "name": "min_operation_usdc",
+            "docs": [
+              "ROUND 5 P1-04. The MINIMUM SIZE OF A PRICED OPERATION, atomic USDC (6dec). It applies to",
+              "`amount_usdc` on the mint side and to the gross USDC value of `amount_silv` on the redeem side,",
+              "which is why it is not called `min_mint_amount`: it was, for one review cycle, and the name was",
+              "half of why the redeem side went unprotected.",
+              "",
+              "It is an AVAILABILITY control, not a value control, and it exists because D2 made the",
+              "anti-replay STRICT: `last_used_feed_update_timestamp_us` is a single global slot in this",
+              "writable config, written by `mint_silv` AND `redeem_silv`, so the first operation to consume a",
+              "Lazer print blocks every other one until the next print.",
+              "",
+              "Measured cost of capture with no floor, at $58.34/oz:",
+              "mint,   100 bps: `fee_from_amount` ceils, so 60 micro-USDC pays a 1 micro-USDC fee, leaves 59",
+              "net, and `mint_silv_out` floors 59/58.34 to exactly 1 atomic SILV, which",
+              "clears `silv_out > 0`. Cost: 0.00006 USDC.",
+              "redeem, 150 bps: 1 atomic SILV is worth 58 micro-USDC gross, pays a 1 micro-USDC fee and",
+              "returns 57. NET cost: about 0.0000013 USDC, thirty times cheaper still.",
+              "Either one bought a permissionless global denial of the priced path.",
+              "",
+              "Zero DISABLES the floor, which is what an in-place upgrade of an already-initialised config",
+              "decodes out of `reserved`, per THE RULE above. `initialize` writes `DEFAULT_MIN_OPERATION_USDC`."
+            ],
+            "type": "u64"
+          },
+          {
             "name": "reserved",
             "type": {
               "array": [
                 "u8",
-                40
+                32
               ]
             }
           }
@@ -6791,6 +6829,31 @@
       }
     },
     {
+      "name": "MinOperationChanged",
+      "docs": [
+        "ROUND 5 P1-04. The mint floor is the availability control on the strict-anti-replay slot, so a",
+        "monitor needs the transition: raising it prices small users out, lowering it re-cheapens print",
+        "capture. Same old/new/by shape as the other instant setters, for the same LOW #3 reason."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "old_min_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "new_min_usdc",
+            "type": "u64"
+          },
+          {
+            "name": "by",
+            "type": "pubkey"
+          }
+        ]
+      }
+    },
+    {
       "name": "MintEvent",
       "type": {
         "kind": "struct",
@@ -6979,6 +7042,22 @@
           {
             "name": "timestamp",
             "type": "i64"
+          },
+          {
+            "name": "by",
+            "docs": [
+              "SOLIDPROOF T-006. The signer that minted. `inventory` is the DESTINATION, and the admin",
+              "chooses it via `set_inventory_wallet`, so without this field the event records where supply",
+              "went but not who sent it.",
+              "",
+              "LAST, after `timestamp`, and that placement is the whole point. The first version of this",
+              "change put `by` between `supply_post` and `timestamp` while its comment claimed an append",
+              "kept the offsets stable. That was false in exactly the way `MintEvent::fee_usdc` above",
+              "documents: a positional decoder would have read the first 8 bytes of this pubkey as the",
+              "timestamp and produced a plausible wrong number rather than an error. Appending for real",
+              "costs nothing here, because the field has never shipped."
+            ],
+            "type": "pubkey"
           }
         ]
       }

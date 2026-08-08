@@ -789,3 +789,175 @@ fn execute_set_public_mint_refuses_to_land_while_paused() {
     );
     assert!(f.config().public_mint_enabled, "the execute applied nothing");
 }
+
+// ====================================================== round 5 P1-04: the mint availability floor
+
+/// `set_min_operation_usdc`, the instant setter. Same `SetParam` shape as the two switches above.
+fn set_min_operation(f: &mut Fixture, new_min: u64) -> TxOutcome {
+    let admin = f.admin.insecure_clone();
+    let ix = Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(config_pda(), false),
+            AccountMeta::new_readonly(admin.pubkey(), true),
+        ],
+        data: ix_data("set_min_operation_usdc", &new_min.to_le_bytes()),
+    };
+    f.send(&[ix], &[&admin])
+}
+
+#[test]
+fn the_dust_mint_that_captured_a_lazer_print_is_now_refused() {
+    // THE FINDING (round 5 P1-04), driven against the real bytes. 60 micro-USDC was the smallest
+    // amount that minted a non-zero SILV at $58.34/oz, so it was the whole cost of taking the single
+    // global high-water slot D2 created. The floor must stop it.
+    let mut f = live();
+    f.open_public_mint();
+    let holder = f.holder.insecure_clone();
+    f.prepare_mint_accounts(&holder);
+
+    expect_error(
+        f.try_mint_amount(&holder, false, 60),
+        E_OPERATION_BELOW_MINIMUM,
+        "a 60 micro-USDC mint",
+    );
+}
+
+#[test]
+fn the_mint_floor_is_checked_before_the_oracle_read_so_a_refused_call_pays_no_verify_fee() {
+    // ORDERING. The fixture's Lazer program account is deliberately NOT executable, so any call that
+    // reaches step 4 dies with LazerProgramNotExecutable. A dust call must die BEFORE that with
+    // OperationBelowMinimum, and a call at the floor must reach it.
+    //
+    // What this proves is a COMPUTE and FEE property, not a safety one: a reverted transaction rolls
+    // back the Lazer fee and the high-water write wherever the check sits. It is still worth pinning,
+    // because moving the check below the CPI would make every refused dust call pay a verify fee, and
+    // a placement-agnostic test of "dust is refused" would not notice.
+    let mut f = live();
+    f.open_public_mint();
+    let holder = f.holder.insecure_clone();
+    f.prepare_mint_accounts(&holder);
+
+    expect_error(
+        f.try_mint_amount(&holder, false, DEFAULT_MIN_OPERATION_USDC - 1),
+        E_OPERATION_BELOW_MINIMUM,
+        "one micro-USDC under the floor stops before the oracle",
+    );
+    expect_error(
+        f.try_mint_amount(&holder, false, DEFAULT_MIN_OPERATION_USDC),
+        E_LAZER_PROGRAM_NOT_EXECUTABLE,
+        "exactly at the floor, the call proceeds to the oracle read",
+    );
+}
+
+#[test]
+fn the_floor_the_ceremony_ships_is_the_one_the_program_enforces() {
+    // A default that initialize writes but no handler reads would be a comment, not a control. This
+    // is the link between the two, measured off the chain rather than asserted from the constant.
+    let f = live();
+    assert_eq!(
+        f.config().min_operation_usdc,
+        DEFAULT_MIN_OPERATION_USDC,
+        "initialize did not arm the floor"
+    );
+}
+
+#[test]
+fn raising_the_floor_takes_effect_on_the_next_mint() {
+    // The setter is instant in both directions, so the only proof that matters is that a mint which
+    // succeeded at the old value is refused at the new one, read back off the chain.
+    let mut f = live();
+    f.open_public_mint();
+    let holder = f.holder.insecure_clone();
+    f.prepare_mint_accounts(&holder);
+
+    // At the launch floor this amount clears step 3b and dies at the oracle.
+    expect_error(
+        f.try_mint_amount(&holder, false, DEFAULT_MIN_OPERATION_USDC),
+        E_LAZER_PROGRAM_NOT_EXECUTABLE,
+        "before the raise",
+    );
+    expect_ok(
+        set_min_operation(&mut f, DEFAULT_MIN_OPERATION_USDC * 10),
+        "set_min_operation_usdc: raise",
+    );
+    assert_eq!(
+        f.config().min_operation_usdc,
+        DEFAULT_MIN_OPERATION_USDC * 10,
+        "the raise did not persist"
+    );
+    expect_error(
+        f.try_mint_amount(&holder, false, DEFAULT_MIN_OPERATION_USDC),
+        E_OPERATION_BELOW_MINIMUM,
+        "after the raise, the same amount is under the floor",
+    );
+}
+
+#[test]
+fn lowering_the_floor_to_zero_disables_it() {
+    // Zero is a legal state and it must MEAN no floor: it is what an in-place upgrade of an existing
+    // config decodes out of `reserved`, so a program that treated zero as "reject everything" would
+    // brick every deployed instance on upgrade.
+    let mut f = live();
+    f.open_public_mint();
+    let holder = f.holder.insecure_clone();
+    f.prepare_mint_accounts(&holder);
+
+    expect_ok(set_min_operation(&mut f, 0), "set_min_operation_usdc: zero");
+    assert_eq!(f.config().min_operation_usdc, 0, "the write did not persist");
+    expect_error(
+        f.try_mint_amount(&holder, false, 60),
+        E_LAZER_PROGRAM_NOT_EXECUTABLE,
+        "with the floor disabled a dust mint reaches the oracle again",
+    );
+}
+
+#[test]
+fn the_setter_refuses_a_value_above_its_ceiling() {
+    let mut f = live();
+    expect_error(
+        set_min_operation(&mut f, MIN_OPERATION_CEILING_USDC + 1),
+        E_MIN_OPERATION_TOO_HIGH,
+        "one over the ceiling",
+    );
+    expect_ok(
+        set_min_operation(&mut f, MIN_OPERATION_CEILING_USDC),
+        "exactly at the ceiling",
+    );
+    assert_eq!(
+        f.config().min_operation_usdc,
+        MIN_OPERATION_CEILING_USDC,
+        "the boundary value did not persist"
+    );
+}
+
+#[test]
+fn the_setter_refuses_a_no_op_and_a_non_admin() {
+    let mut f = live();
+    expect_error(
+        set_min_operation(&mut f, DEFAULT_MIN_OPERATION_USDC),
+        E_MIN_OPERATION_UNCHANGED,
+        "writing the value already stored",
+    );
+
+    // has_one = admin. A liveness knob a stranger can turn is a liveness knob an attacker can turn.
+    let stranger = f.stranger.insecure_clone();
+    let ix = Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(config_pda(), false),
+            AccountMeta::new_readonly(stranger.pubkey(), true),
+        ],
+        data: ix_data("set_min_operation_usdc", &1_000_000u64.to_le_bytes()),
+    };
+    expect_error(
+        f.send(&[ix], &[&stranger]),
+        E_CONSTRAINT_HAS_ONE,
+        "a stranger setting the mint floor",
+    );
+    assert_eq!(
+        f.config().min_operation_usdc,
+        DEFAULT_MIN_OPERATION_USDC,
+        "the refused calls moved the floor anyway"
+    );
+}

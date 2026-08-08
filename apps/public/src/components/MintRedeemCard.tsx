@@ -23,6 +23,7 @@ import {
   redeemGrossUsdc,
   classifyRedeem,
   parseRedeemError,
+  isBelowMinimumError,
   isStaleOracleError,
   STALE_ORACLE_USER_MESSAGE,
   errorToText,
@@ -358,6 +359,19 @@ export function MintRedeemCard() {
             "Direct mint isn't open yet. You can buy SILV on the DEX.",
           );
         }
+        // ROUND 5 P1-04. The on-chain floor, read from the LIVE config rather than a constant: it is
+        // admin-settable and instant, so a copy here would go stale the first time it moves and send the
+        // user into a OperationBelowMinimum revert. Checked before the envelope is claimed, so a mint
+        // that cannot succeed costs neither a Lazer verify fee nor somebody else's price print.
+        const minMintUsdc = cfg.minOperationUsdc?.toNumber() ?? 0;
+        if (minMintUsdc > 0 && parseUsdcAmount(amount).lt(new BN(minMintUsdc))) {
+          throw new Error(
+            `The minimum mint is ${(minMintUsdc / 1e6).toLocaleString("en-US", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })} USDC.`,
+          );
+        }
         showProgress("Preparing transaction...");
         const r = await fetchAndExecuteLazer(
           connection,
@@ -386,6 +400,24 @@ export function MintRedeemCard() {
         setErrorMsg(null);
         afterTx(r.consumerSig, "Mint");
       } else {
+        // ROUND 5 P1-04, and the review pass caught that this guard existed on the mint side only.
+        // `redeem_silv` compares the GROSS USDC value against the same `config.min_operation_usdc`,
+        // and `redeemGross` above is already exactly that number. Checked before the envelope is
+        // claimed, so a redeem that cannot succeed neither pays a Lazer verify fee nor takes a price
+        // print away from somebody whose transaction would have worked.
+        //
+        // The floor is a WALL for a small holder, not just a floor: a balance worth less than it has
+        // no redeem exit in one call, so the message says the minimum rather than only refusing.
+        const minOpUsdc = cfg.minOperationUsdc?.toNumber() ?? 0;
+        if (minOpUsdc > 0 && redeemGross != null && redeemGross.lt(new BN(minOpUsdc))) {
+          throw new Error(
+            `The minimum redemption is ${(minOpUsdc / 1e6).toLocaleString("en-US", {
+              minimumFractionDigits: 2,
+              maximumFractionDigits: 2,
+            })} USDC of SILV. This redemption is worth less than that.`,
+          );
+        }
+
         // Redeem routing (Option B §4.3).
         const route = redeemRoute;
         if (route === "disabled") {
@@ -453,9 +485,16 @@ export function MintRedeemCard() {
       // as well as the simulation revert that pyth-posting already maps.
       const reroute =
         mode === "redeem" ? parseRedeemError(flat) : null;
+      // REVIEW PASS ON 3bf3097. `isBelowMinimumError` had ZERO call sites, so the on-chain revert it
+      // exists for reached the user as a raw simulation string. It is genuinely reachable: the
+      // pre-flight guards are computed off a client-side quote, so the price can move between quote
+      // and land, and the admin can raise the floor mid-flight. It is checked on BOTH sides, above the
+      // redeem-only reroutes, because mint raises the same error and had no mapping at all.
       const friendly =
         isStaleOracleError(flat)
           ? STALE_ORACLE_USER_MESSAGE
+          : isBelowMinimumError(flat)
+            ? "That amount is below the protocol's minimum operation size. Nothing was charged. Try a larger amount."
           : reroute === "limit"
             ? "The protocol's rolling redemption limit for this window is used up. Your SILV was not touched. Retry after the window rolls, or redeem less."
             : reroute === "kyc"

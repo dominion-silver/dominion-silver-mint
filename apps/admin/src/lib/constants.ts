@@ -3,7 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 // Program ID: fresh devnet deploy 2026-07-25 (wave-0 audit remediation changed the
 // ConfigAccount + GuardianAccount layout, and initialize can only ever run once
 // per program id, so a new id was required). Retired: AX7seVo6..., GDN5ktEm...
-export const PROGRAM_ID = new PublicKey("HXaptAcaXBoEAsNuEv4ZwYrciHbMxSpip2VScRVDjo1Z");
+export const PROGRAM_ID = new PublicKey("3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ");
 
 // Token programs.
 export const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");

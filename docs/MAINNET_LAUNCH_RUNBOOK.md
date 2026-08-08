@@ -70,8 +70,12 @@ needs to be reopened in a hurry.
 # 0a. Authorities, funding, cluster constants. Must be 0 failures.
 npx tsx scripts/verify-mainnet-authorities.ts
 
-# 0b. The build is reproducible and carries no dev hatch.
-scripts/verify-release-artifact.sh
+# 0b. The LOCAL build is a clean default-feature build with no dev hatch.
+#     --local-only is not a shortcut: without it the script also compares against the release pin,
+#     which this machine cannot reproduce (the release artifact is a linux/amd64 container build), so
+#     it exits 3 "NOT ATTESTED" and ends on DO NOT DEPLOY THIS FILE. That is correct and it is not a
+#     failure; it is simply not the question this pre-flight is asking. See step 2a.
+bash scripts/verify-release-artifact.sh --local-only
 
 # 0c. Every hand-copied address agrees with declare_id!.
 scripts/verify-constants-consistency.sh
@@ -109,17 +113,19 @@ solana-keygen pubkey ~/.config/solana/dominion-mainnet-program.json
 Back this file up before continuing. Losing it before step 3 costs nothing; losing it
 after means you cannot upgrade the program ever.
 
-### 2. Point the source at the new id, rebuild, verify
+### 2. Point the source at the new id, let CI build it, pin it
 
-Update `declare_id!` in `programs/dominion_silver_mint_v2/src/lib.rs`, add
-`[programs.mainnet]` to `Anchor.toml`, and set `PROGRAM_ID` in both apps' `constants.ts`.
-Then:
+**MEASURED STATE, 2026-08-08.** The program id `3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ` is
+CREATED and committed: `declare_id!`, `Anchor.toml` (all three clusters), both apps' `PROGRAM_ID` and
+the three IDL copies all carry it. The keypair is at `~/.config/solana/dominion-mainnet-program.json`,
+mode 600, outside the repository.
 
-**NEVER redirect `anchor idl build` stdout into the IDL file.** Use `-o`. Anything else cargo writes to
-stdout lands in the file, and on a registry cache MISS that is `  Downloaded <crate>`, so the JSON is
-corrupt while the command still exits 0. That is the CI P0 of 2026-08-06: the `gate` job had never passed
-in its entire history and none of the steps after it had ever executed. This page instructed the same
-redirect until the re-audit caught it, one step from copying a corrupt file into both clients.
+What is NOT done, and this is the whole of step 2: **the candidate has not been BUILT by CI and not
+been PINNED.** `release_artifact.status` reads `no-candidate`, and until a green run publishes an
+artifact there is nothing to deploy. The remaining halves of 2a are the cluster constants (USDC and
+the Lazer treasury), which the batch that created the id did not touch.
+
+The step is split into 2a (finish the constants and commit), 2b (CI builds it), 2c (pin it), below.
 
 ### Run the readiness gate BEFORE each numbered step, with `--stage`
 
@@ -138,30 +144,33 @@ from "skipped", so a mid-ceremony run reads falsely reassuring.
 **The fee vault is now step 9b below, inside the sequence.** A prerequisite nobody numbers is a prerequisite
 somebody skips.
 
-**THE AUTHORITATIVE BUILD TOOLCHAIN** (audit finding S-07). Three generations of tooling were
-circulating under one "reproducible" label: the Dockerfile header said Solana 1.18.26 / Anchor 0.30.1
-/ Rust 1.79 while its own ARGs said 2.1.20 / 0.31.1 / 1.79, and CI declares 3.1.14 / platform-tools
-1.52 / rustc 1.89.0. None of those is what produced the artifact.
+**THE DEPLOYABLE BYTES COME FROM CI, NOT FROM THIS MACHINE** (audit S-07, and round 5 P0-02).
+
+This section used to tell you to run `cargo build-sbf` and deploy `target/deploy/...`. That is the
+one thing the release doctrine forbids, and it had been forbidden for a commit already when the round
+5 audit found the instruction still here.
+
+Why, measured rather than asserted: **the SBF build is not deterministic across host platforms.** The
+`.so` embeds `/Users/runner/work/platform-tools/...`, the paths of the macOS machine that compiled the
+platform-tools tarball, baked into its prebuilt std. The linux tarball carries `/home/runner/...`, a
+string of different length, which shifts every rodata offset after it. macOS and Linux disagree at
+v1.51 AND at v1.52. Solana's own docs say it outright: *"Solana program builds are not deterministic
+across different systems"*, and *"make sure that you actually deploy the verified build and don't
+accidentally overwrite it with anchor build or cargo build-sbf"*.
+
+So: **the `reproducible-build` CI job produces the bytes that ship.** It builds in the `solana-verify`
+container, takes ownership of the file, runs the 154 on-chain tests against THAT file, scans it,
+hashes it, writes `release-manifest.json`, and only then publishes it. A local build is for devnet and
+for the local gates. It is never a mainnet artifact.
 
 **THE RELEASE HASH IS NOT WRITTEN HERE.** It lives in exactly one place,
-`config/mainnet-authorities.json` under `release_artifact.sha256`, and the way you check it is:
+`config/mainnet-authorities.json` under `release_artifact`. This paragraph used to carry the hash
+inline and it went stale three times, each one blessing a binary that no longer existed. A number
+maintained by hand in two places is a number that will disagree with itself, and a gate now refuses to
+let a bare sha256 reappear in this file.
 
-```bash
-bash scripts/verify-release-artifact.sh
-```
-
-which REBUILDS and compares rather than asking you to read a hash off a page.
-
-This paragraph used to carry the hash inline, and it went stale three times: `799945e4...`, then
-`404dd8da...`, each one blessing a binary that no longer existed. Twice it was stale within the hour, because
-the commit that changed the program was the same commit that should have updated this line and did not. An
-operator hash-checking at the ceremony would either fail on the CORRECT artifact or go hunting for a wrong
-one. A number that must be updated by hand in two places is a number that will disagree with itself, so the
-copy that is checked by a script is the only copy that exists now, and a gate refuses to let a bare sha256
-reappear in this file.
-
-Toolchain that produced it, confirmed on two independent machines (this one and the external auditor's,
-2026-08-06):
+Toolchain of record (`release_artifact.toolchain`, and `[workspace.metadata.cli] solana = "3.0.0"` in
+the root `Cargo.toml` is what selects the container image):
 
 | Component | Version |
 |---|---|
@@ -170,38 +179,90 @@ Toolchain that produced it, confirmed on two independent machines (this one and 
 | SBF rustc | 1.84.1 |
 | host rustc (for `anchor idl build`) | 1.89.0 |
 | anchor-cli | 0.31.1 |
+| solana-verify | pinned in `release_artifact.solana_verify_version` |
 
-Build with `-- --locked`, always. Without it a build may RESOLVE `Cargo.lock` instead of failing when
-a manifest and the lock disagree, which is the opposite of what a release build should do.
+### 2a. Point the source at the new id and commit it
 
-**Known open divergence, deliberately not papered over:** CI declares Solana 3.1.14 / platform-tools
-1.52, so a CI-produced binary is not guaranteed to hash-match the table above. Aligning CI needs a CI
-run to prove it, and the header comment at `.github/workflows/build.yml:15` records that an earlier
-version-bump attempt broke the build (`edition2024` unparseable, `pyth-solana-receiver-sdk` E0782).
-Until that is resolved, **the release artifact is the LOCALLY built one verified by
-`scripts/verify-release-artifact.sh`**, and the `reproducible-build` CI job (now blocking, audit
-S-05) is the independent third-party check via `solana-verify`.
+`declare_id!`, `[programs.mainnet]` and both apps' `PROGRAM_ID` are ALREADY DONE (see above). What
+remains are the two cluster-specific constants that the id change did not touch, and that round 6
+R6-05 found still on devnet values:
+
+- `USDC_MINT` → `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v` in **both** apps
+- `LAZER_TREASURY` → `Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak` in `apps/public`
+
+Regenerate the IDL and copy it to both apps. **NEVER redirect `anchor idl build` stdout into the IDL
+file.** Use `-o`. Anything else cargo writes to stdout lands in the file, and on a registry cache MISS
+that is `  Downloaded <crate>`, so the JSON is corrupt while the command still exits 0. That is the CI
+P0 of 2026-08-06: the `gate` job had never passed in its entire history.
 
 ```bash
+# REBUILD FIRST. Changing declare_id! changes the binary, so the .so on disk is now stale and the
+# verifier below (which compares it against a fresh rebuild) would reject it. This local build is for
+# the LOCAL gates only; it is never the artifact that ships.
 cargo build-sbf --manifest-path programs/dominion_silver_mint_v2/Cargo.toml -- --locked
+
+mkdir -p target/idl
 (cd programs/dominion_silver_mint_v2 && anchor idl build -o ../../target/idl/dominion_silver_mint.json -- --locked)
 printf '\n' >> target/idl/dominion_silver_mint.json   # -o omits it; keeps the committed copies byte-identical
 python3 -c "import json;json.load(open('target/idl/dominion_silver_mint.json'))"  # MUST parse before copying
 cp target/idl/dominion_silver_mint.json apps/admin/src/lib/idl/
 cp target/idl/dominion_silver_mint.json apps/public/src/lib/idl/
-scripts/verify-constants-consistency.sh   # must pass
-scripts/verify-release-artifact.sh        # must print ARTIFACT OK
+bash scripts/verify-constants-consistency.sh   # must pass
+bash scripts/verify-release-artifact.sh --local-only   # must print LOCAL BUILD OK
 ```
 
-Also swap the two cluster-specific constants that are easy to miss:
+`--local-only` is not a shortcut. It asks the one question a local build can answer: is this a clean
+default-feature build of this tree, with no dev hatch and no probe. Without it the script exits **3**
+and says `ARTIFACT NOT ATTESTED`, because this host cannot reproduce the container build. **Exit 3 is
+not a failure and it is not an approval.** Deploying on a 3 is the thing that code exists to stop.
 
-- `USDC_MINT` → `EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v` in **both** apps
-- `LAZER_TREASURY` → `Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak` in `apps/public`
+Commit everything. **The commit you push is the commit the artifact is built from**, so nothing may be
+uncommitted at this point.
 
-### 3. Deploy
+### 2b. Let CI build the candidate, and take the artifact from it
+
+Push, wait for the run to go green, then from the `reproducible-build` job of THAT run:
+
+- download `dominion_silver_mint-verifiable-so` (it contains the `.so` and `release-manifest.json`);
+- check `release-manifest.json`: `program_id` must be your new mainnet id and `source_commit` must be
+  the commit you just pushed.
+
+If the run is red, there is no candidate. Do not deploy from a red run; that was round 5 P1-01, and
+the artifact upload now happens after every check for exactly this reason.
+
+### 2c. Pin the candidate
+
+Copy `sha256`, `normalized_sha256`, `bytes`, `source_commit`, `ci_run_id`, `program_id` and
+`idl_sha256` from `release-manifest.json` into `config/mainnet-authorities.json` under
+`release_artifact`, and set `"status": "pinned"`. Commit that.
+
+**Two hash conventions coexist and mixing them produces a false pin.** `sha256` is `sha256sum` of the
+file. `normalized_sha256` is solana-verify's own hash (trailing zeros stripped, `get_binary_hash`),
+and that is what `verify-from-repo` compares against the chain. On the same file the two numbers
+differ. The manifest carries both, labelled, so neither has to be recomputed by hand.
+
+CI will now compare every future build against this pin and fail on a mismatch. That is the point:
+after 2c, the candidate is immutable.
+
+### 3. Deploy THAT file, without rebuilding
 
 ```bash
-solana program deploy target/deploy/dominion_silver_mint.so \
+# The artifact downloaded in 2b, not a local build.
+ARTIFACT=~/Downloads/dominion_silver_mint.so
+
+# Refuse to continue unless it IS the pinned candidate.
+python3 - "$ARTIFACT" <<'EOF'
+import hashlib, json, sys
+blob = open(sys.argv[1], "rb").read()
+pin = json.load(open("config/mainnet-authorities.json"))["release_artifact"]
+got, want = hashlib.sha256(blob).hexdigest(), pin["sha256"]
+assert pin["status"] == "pinned", f"status is {pin['status']}, there is no candidate to deploy"
+assert got == want, f"NOT the pinned artifact:\n  file  {got}\n  pin   {want}"
+assert len(blob) == pin["bytes"], f"size {len(blob)} != pinned {pin['bytes']}"
+print(f"OK: this file IS the pinned release artifact ({got}, {len(blob)} bytes)")
+EOF
+
+solana program deploy "$ARTIFACT" \
   --program-id ~/.config/solana/dominion-mainnet-program.json \
   -k ~/.config/solana/dominion-dev.json -u mainnet-beta
 ```
@@ -210,11 +271,42 @@ Then verify the bytes actually on chain, which is not optional:
 
 ```bash
 solana program dump <PROGRAM_ID> /tmp/onchain.so -u mainnet-beta
-LEN=$(stat -f%z target/deploy/dominion_silver_mint.so)
+LEN=$(stat -f%z "$ARTIFACT")
 head -c "$LEN" /tmp/onchain.so > /tmp/onchain-trim.so
-shasum -a 256 target/deploy/dominion_silver_mint.so /tmp/onchain-trim.so   # must match
-solana program show <PROGRAM_ID> -u mainnet-beta                            # Authority = deployer
+shasum -a 256 "$ARTIFACT" /tmp/onchain-trim.so   # must match
+solana program show <PROGRAM_ID> -u mainnet-beta # Authority = deployer
 ```
+
+### 3b. Initialise the on-chain IDL account. Do it now, not later.
+
+**Round 5 P2-03.** Nothing else in this sequence created it. `anchor idl upgrade` cannot replace an
+`init` when the account does not exist, so the upgrade script's IDL step would fail on the first
+mainnet upgrade with nothing to fall back on.
+
+```bash
+anchor idl init --provider.cluster mainnet \
+  --filepath target/idl/dominion_silver_mint.json <PROGRAM_ID>
+
+# Read it back and compare it to the attested file, byte for byte.
+anchor idl fetch --provider.cluster mainnet <PROGRAM_ID> > /tmp/onchain-idl.json
+python3 - <<'EOF'
+import hashlib, json
+a = hashlib.sha256(open("target/idl/dominion_silver_mint.json","rb").read()).hexdigest()
+pin = json.load(open("config/mainnet-authorities.json"))["release_artifact"].get("idl_sha256")
+print("local idl :", a)
+print("pinned idl:", pin)
+# ROUND 6 R6-07: this used to read `assert pin is None or a == pin`, which passes for ANY local IDL
+# whenever the pin is null, and the pin was structurally always null because the job that writes it
+# never built an IDL. Both halves are fixed: the job builds one, and a null pin is now a failure here.
+assert pin is not None, "release_artifact.idl_sha256 is null: step 2c did not record it"
+assert a == pin, "the local IDL is not the one CI attested"
+EOF
+diff <(python3 -m json.tool /tmp/onchain-idl.json) \
+     <(python3 -m json.tool target/idl/dominion_silver_mint.json) \
+  && echo "on-chain IDL matches the attested file"
+```
+
+Record the IDL account address. Later versions use `anchor idl upgrade`, never a second `init`.
 
 ### 4 + 5 + 6. T1 hostile bootstrap, which CREATES THE MINT and INITIALISES
 
@@ -297,7 +389,16 @@ has to sign to be set, so there was never a reason to hand-edit this.
 **Those two are still permanent**, fixed at mint creation, and no program upgrade can restore an external
 SPL authority once it is wrong. Check the printed value before confirming.
 
-Expect 17/17. Then record everything:
+**Expect ZERO FAIL lines.** The count is deliberately not written here: this page said `17/17` while
+the audit brief said `18/18` and the script produced its own number, so an operator had two wrong
+targets and no way to tell which. The script prints its own `PASS`/`FAIL` totals on the last line. Any
+`FAIL` stops the ceremony; the total is whatever the script says it is.
+
+T1 also refuses BEFORE the first lamport if the IDL, `declare_id!` and `DOMINION_PROGRAM_ID` disagree,
+or if the loaded keypair is not the on-chain upgrade authority (round 5 P1-07). Those refusals are
+free; the same problems discovered at case 5 cost the funded attacker account and the one-shot mint.
+
+Then record everything:
 
 ```bash
 DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/read-config.ts
@@ -309,13 +410,100 @@ authority = compliance vault, extensions exactly {PermanentDelegate, MetadataPoi
 TokenMetadata}, `paused = true`, `public_mint_enabled = false`,
 `redemptions_enabled = false`, `max_silv_supply = 150000000000` (150,000 oz).
 
+### 6c. Write the REAL mint into both apps. BLOCKING for 6b.
+
+**Round 6 R6-05.** T1 just created the mainnet SILV mint. Until this step runs, both apps carry the
+DEVNET mint `G5zez3JW...` while already carrying the mainnet program id, and nothing catches it: the
+offline gate only proves the two apps agree with each other and that the value is not on a three-entry
+retired list, and the devnet mint passes both. With a mainnet RPC those addresses name accounts that do
+not exist, so the panel and the public card build ATAs and instructions against the wrong mint. The
+program's constraints protect the money; the product simply does not work, and it stops working exactly
+at the ceremony steps that need the panel.
+
+```bash
+# The mint T1 created, read off the chain rather than off the terminal scrollback.
+DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/read-config.ts | grep -i silvMint
+```
+
+Then, in BOTH `apps/public/src/lib/constants.ts` and `apps/admin/src/lib/constants.ts`:
+
+- set `SILV_MINT` to that address;
+- add the devnet mint `G5zez3JWETJMfG3hnCQbdPm7usXMnmKUpajdGJYB5JFF` to `RETIRED_MINTS` in
+  `scripts/verify-constants-consistency.sh`, so it can never come back.
+
+Commit, then prove it against the chain rather than against yourself:
+
+```bash
+bash scripts/verify-constants-consistency.sh
+npx tsx scripts/verify-mainnet-readiness.ts --stage=7   # must NOT report SILV_MINT as due at 6c
+(cd apps/public && npx tsc --noEmit && npx vitest run && npm run build)
+(cd apps/admin  && npx tsc --noEmit && npx vitest run && npm run build)
+```
+
+`--stage=7` is the point: readiness reads the on-chain `config.silv_mint` and requires both apps to
+equal it exactly. Before T1 there is nothing to compare and it says so; from step 7 it blocks.
+
+### 6b. Deploy the admin panel. BLOCKING for steps 7 and 8.
+
+**Round 5 P0-03, decision D3.** This used to be step 11, after the two steps that need it. `config.admin`
+is the Ops Squads vault `65g5nNXTtqtFz3jggKAqyvS6oCoVUXuXqAU9B8jHqPPS`, which is OFF-CURVE: no private
+key exists for it, so `has_one = admin` can never be satisfied by a keypair. The panel is the only
+thing in this repo that wraps a dominion instruction into a Squads vault transaction, collects
+approvals and executes it. Deploying it after steps 7 and 8 left those steps with no executable path
+and forced improvisation on exactly the actions that set the launch posture.
+
+```bash
+# Vercel env for apps/admin:
+#   NEXT_PUBLIC_HELIUS_RPC     = a mainnet RPC
+#   NEXT_PUBLIC_OPS_SQUADS     = 65g5nNXTtqtFz3jggKAqyvS6oCoVUXuXqAU9B8jHqPPS
+#   NEXT_PUBLIC_UPGRADE_SQUADS = FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3
+(cd apps/admin && vercel --prod --yes)
+```
+
+`NEXT_PUBLIC_OPS_SQUADS` is what makes the console admit Squads members. Without it the portal only
+admits `config.admin` (a PDA that cannot connect a wallet) and active guardians (none yet at this
+point), so the panel is inert.
+
+**Confirm before continuing:** connect a Squads member wallet, and check the panel reports the Ops
+multisig as configured and you as an active member. A panel that loads is not a panel that can propose.
+
 ### 7. Propose the public-mint open NOW, so the 24h runs during setup
 
 Do this immediately, not at the end. It costs nothing and saves a day.
 
+The script EMITS the instructions; the panel executes them; the script then reads the result back.
+It cannot send on mainnet and no longer pretends it can.
+
+`DOMINION_ALLOW_MAINNET=i-understand` is on every line, including the read-only ones. RULE 1 is checked
+before the mode branch, so an emit against mainnet is refused without it. That is deliberate: the guard
+also cross-checks the genesis hash, and a ceremony artifact built against the wrong chain is worse than
+no artifact.
+
 ```bash
-# via Squads, since admin is the Ops vault: propose_set_public_mint(true)
+# 1. Emit. No network writes, no keypair needed.
+DOMINION_ALLOW_MAINNET=i-understand \
+DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/ceremony-step7.ts
+#    -> writes ceremony-out/step7.json with the exact instruction, accounts and data
+
+# 2. Execute through the admin panel: propose_set_public_mint(true), approve to threshold, execute.
+#    Diff what the panel is about to propose against ceremony-out/step7.json before approving.
+
+# 3. Read the chain back. This is the only step that proves anything.
+DOMINION_ALLOW_MAINNET=i-understand \
+DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/ceremony-step7.ts --verify
 ```
+
+**`treasury_min_float_usdc` is NOT proposed here, by decision.** D5 (owner, 2026-08-07) sets it to 0
+in full knowledge: no floor opposes an admin withdrawal, so one can drain the whole USDC treasury,
+the balance that backs user redemptions. That is SolidProof LOW #4, open by choice. What still defends
+it: `withdraw_usdc` is 24h-timelocked and a guardian can cancel it inside that window, so a withdrawal
+is announced a day ahead and vetoable. The float was a second belt, not the first. It stays changeable
+at any time via `propose_set_treasury_min_float`.
+
+This page previously called a non-zero float a BLOCKER while the decision said zero, and
+`ceremony-step7.ts` refused to run without one. Round 5 P1-06: two sources of truth giving
+incompatible orders. To propose a float anyway, set `DOMINION_TREASURY_MIN_FLOAT_USDC=<micro-USDC>`
+before step 1 above.
 
 ### 8. Register the guardians, set the inventory wallet, unpause
 
@@ -324,24 +512,25 @@ add_guardian(<guardian 1>)                 # instant
 add_guardian(<guardian 2>)                 # instant
 set_inventory_wallet(EkDhR65JUL8tGhxRhnueaqri6zNzxMEJ82UU35pQ7V56)   # instant
 unpause                                    # instant
-propose_set_treasury_min_float(<non-zero>)  # TIMELOCKED 24h, see below
 ```
 
-Run `scripts/ceremony-step8.ts`, which sends the four instant calls in one pass and reads
-every field back off the chain. Written 2026-08-07, after the devnet rehearsal found this
-step had no script and was four hand-typed instructions.
+Same three-phase shape as step 7, and for the same reason:
 
-**`set_treasury_min_float_usdc` DOES NOT EXIST.** This step used to list it as an instant
-call; the devnet rehearsal of 2026-08-07 found no such instruction in the IDL. The real
-pair is `propose_set_treasury_min_float` / `execute_set_treasury_min_float`, so it carries
-the same 24h delay as the mint open, and it is a BLOCKER before opening redeem (P2 below).
+```bash
+DOMINION_ALLOW_MAINNET=i-understand \
+DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/ceremony-step8.ts
+#    -> ceremony-out/step8.json; execute each through the panel (Squads); then:
+DOMINION_ALLOW_MAINNET=i-understand \
+DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/ceremony-step8.ts --verify
+```
 
-Propose it in the SAME window as the public mint and the redeem open. The program allows
-one active proposal per TYPE, not one in total, so all three clocks run in parallel and
-mature together. Verified on devnet with four coexisting proposals.
+`--verify` compares the EXACT set of registered guardians, not a count and not a floor. Round 5 P2-04:
+the old check was `guardian_count >= guardians.length`, which passes with a guardian nobody chose
+registered alongside the ones you did.
 
-`treasury_min_float_usdc` defaults to 0, which means a withdrawal can drain the whole
-treasury. Propose it before any USDC arrives, so the 24h has elapsed by the time it can matter.
+**`set_treasury_min_float_usdc` DOES NOT EXIST** as an instant call; the devnet rehearsal of
+2026-08-07 found no such instruction in the IDL. The real pair is `propose_set_treasury_min_float` /
+`execute_set_treasury_min_float`, 24h-timelocked. See step 7 for why it is not part of the launch lot.
 
 ### 9. Pre-mint and seed the pool
 
@@ -387,8 +576,12 @@ sequence never reached it and step 10 could open the mint on top of a missing va
 ### 10. Execute the public-mint open (24h after step 7)
 
 ```
-execute_set_public_mint(<nonce>)
+execute_set_public_mint(<nonce>)   # through the admin panel, same Squads path as step 7
 ```
+
+One proposal, not three. This page and both ceremony scripts used to say "the three proposals": the
+redeem open was removed from the launch lot in round 4 (P0-04) and the treasury float is not part of
+it either (D5), so the launch lot is ONE. Round 5 P3-01.
 
 Then prove the priced path works with real money, smallest possible amount:
 
@@ -399,7 +592,20 @@ E2E_ALLOW_MINT_ONLY=1 npx tsx scripts/e2e-lazer-mint.ts
 ```
 
 It simulates before sending, so a failure names the guard that rejected it instead of an
-opaque revert. Confirm the implied premium comes out at 1.500%.
+opaque revert. **Confirm the implied premium comes out at 1.000%**, which is
+`launch_posture.premium_bps_mint = 100`. This page said 1.500% until round 5 P3-01: that was the
+premium from a spec superseded on 2026-07-30, and an operator confirming it would have accepted a
+launch running on the wrong tariff, or rejected a correct one.
+
+**Any priced operation must be worth at least `config.min_operation_usdc`** (round 5 P1-04, shipped at $10). Below it
+the program reverts `OperationBelowMinimum`. The E2E's 10 USDC sits exactly at that floor. The floor
+exists because D2 made one signed Lazer print price exactly ONE operation, and without it a
+60 micro-USDC mint, or a 1-atomic-SILV redeem, could capture every print for essentially nothing. It applies to BOTH sides: `amount_usdc` on mint, the gross USDC value on redeem. Read the live value rather than
+trusting this page:
+
+```bash
+DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/read-config.ts | grep -i minOperation
+```
 
 **ROUND 4 P1-05, lisez ceci avant de lancer le smoke test.** `e2e-lazer-mint.ts` soumet un mint REEL de
 10 USDC, puis sort en code 2 si `redemptions_enabled == false`, ce qui est la posture de lancement. Donc sans
@@ -413,22 +619,35 @@ N ouvrez jamais le redeem pour faire verdir un test.
 Il faut aussi `PYTH_LAZER_KEY` dans l environnement (pour recuperer l enveloppe) et un `DOMINION_KEYPAIR`
 mainnet finance en SOL et en USDC.
 
-### 11. Deploy both apps, pointed at mainnet
+### 11. Deploy the PUBLIC app, pointed at mainnet
+
+The admin panel went live at step 6b, because steps 7 and 8 cannot be executed without it. Only the
+public app is left.
 
 ```bash
-# Vercel env, per app:
+# Vercel env for apps/public:
 #   NEXT_PUBLIC_HELIUS_RPC   = a mainnet RPC (the public endpoint will rate-limit you)
 #   NEXT_PUBLIC_OPS_SQUADS   = 65g5nNXTtqtFz3jggKAqyvS6oCoVUXuXqAU9B8jHqPPS
 #   NEXT_PUBLIC_UPGRADE_SQUADS = FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3
 #   PYTH_LAZER_API_KEY       = the entitled key (public app only)
 (cd apps/public && vercel --prod --yes)
-(cd apps/admin && vercel --prod --yes)
 
 DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/verify-oracle-sync.ts
 ```
 
-`NEXT_PUBLIC_OPS_SQUADS` is what makes the console admit Squads members. Without it the
-portal only admits `config.admin` and active guardians.
+**Then exercise `/api/lazer` with `fresh: true` twice in a row against production.** BOTH must return
+**200**. The first carries `"contended": false`, the second `"contended": true`, because D2 lets one
+signed print price exactly one operation and the proxy marks everyone after the first claimant.
+
+A 409, or anything other than 200, means a build predating the round 5 review pass is deployed. An
+earlier version of this fix REFUSED the contended caller, and refusing turns an unauthenticated
+endpoint into a free denial of the whole mint and redeem UI: one request per second from anywhere
+claims every print. Contention is advisory now, and two 200s is the correct result.
+
+```bash
+curl -s -X POST https://<app>/api/lazer -d '{"fresh":true}' | python3 -c 'import json,sys; d=json.load(sys.stdin); print("contended:", d.get("contended"))'
+curl -s -X POST https://<app>/api/lazer -d '{"fresh":true}' | python3 -c 'import json,sys; d=json.load(sys.stdin); print("contended:", d.get("contended"))'
+```
 
 ### 12. LAST: move the upgrade authority to the multisig
 
@@ -450,6 +669,24 @@ The reason given here until 2026-08-06 was that "redemptions can only ever be op
 That was false (audit D-02): opening redemptions is a `config` change through the 24h-timelocked
 `SetRedeemLimits` action and needs no upgrade authority. The correct reason to avoid `--final` is
 simply that the code is not finished. Immutability is a decision for after the redeem flow ships.
+
+**Read this before you run it: it changes how every future upgrade works.** Once the authority is the
+off-curve vault `FqFNX...`, no private key can sign an upgrade, so `scripts/upgrade-program.ts` REFUSES
+(round 5 P1-08; it used to require `solana address` to BE the authority, which nothing can satisfy
+after this step). The path from here on is:
+
+1. take the `.so` published by the `reproducible-build` job for the target commit, and verify its
+   sha256, size and `program_id` against `release-manifest.json` from that same run;
+2. `solana program write-buffer <that .so>` with any funded keypair;
+3. `solana program set-buffer-authority <buffer> --new-buffer-authority FqFNX...`;
+4. propose `BpfLoaderUpgradeable::Upgrade` from the Upgrade Squads with that buffer;
+5. approve to threshold and execute;
+6. `solana program dump`, truncate to the artifact length, compare sha256 to step 1;
+7. `anchor idl upgrade`, then re-read the IDL account and compare it to the attested file.
+
+Steps 1 and 6 are what make it an upgrade to a KNOWN binary rather than to whatever was on the machine
+that ran it. **This flow has never been rehearsed.** Rehearse it on devnet with a Squads vault as the
+upgrade authority before it is the only way to ship a fix.
 
 ---
 
@@ -504,12 +741,27 @@ Idempotent, one-way and permanent: the vault is a PDA-owned associated token acc
 exists it can never be closed. The admin panel shows a red banner while it is missing, so check
 the dashboard before opening anything.
 
-### P2. Set `treasury_min_float_usdc` to a non-zero value. BLOCKER before opening redeem.
+### P2. `treasury_min_float_usdc` stays 0. ACCEPTED RISK, not a blocker.
 
-It was cosmetic while redeem was closed. It is not any more, and premium revenue no longer
-accumulates inside the treasury to cushion it: mint and redeem now route the premium OUT to the
-fee vault. The float is what stops `withdraw_usdc` from emptying the redemption buffer, and it now
-also gates `withdraw_fees`.
+**Round 5 P1-06.** This section called a non-zero float a BLOCKER before opening redeem, while D5
+(owner, 2026-08-07) sets it to 0 deliberately. `ceremony-step7.ts` refused to run without one and
+`verify-mainnet-readiness.ts` reported it as an unmet human blocker. Following the decision made the
+tools fail; following the tools annulled the decision. The decision wins, and the tools now agree.
+
+**The risk, stated plainly.** No floor opposes an admin withdrawal, so one can drain the whole USDC
+treasury, the same balance that backs user redemptions. That is SolidProof LOW #4, and it is open by
+choice. Premium revenue no longer accumulates inside the treasury to cushion it either: mint and
+redeem route the premium OUT to the fee vault.
+
+**What defends it instead.** `withdraw_usdc` is 24h-timelocked and a guardian can cancel it inside
+that window, so a withdrawal is announced a day ahead and is vetoable. The float was a second belt.
+
+**What that costs you operationally:** somebody has to be watching. The 24h announcement is only a
+defence if a human sees it and a guardian acts. `verify-mainnet-readiness.ts` now asks for that by
+name, in place of the old "set a non-zero float" item.
+
+Reversible at any time with `propose_set_treasury_min_float` / `execute_set_treasury_min_float` (24h).
+If redeem volume grows, set a floor then; nothing here is one-way.
 
 ### P3. Fees are `initialize` ARGUMENTS: 1% mint, 1.5% redeem.
 

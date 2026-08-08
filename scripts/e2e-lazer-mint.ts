@@ -245,7 +245,25 @@ async function main() {
     return live && (flags & 2) !== 0;
   })();
   const premiumBpsRedeem = redeemSideExempt ? 0 : Number(cfg.premiumBpsRedeem);
-  const redeemSilvAmount = 0.05;
+
+  // ROUND 5 P1-04, and this number is DERIVED, never hardcoded. It was 0.05 SILV, about 2.92 USDC at
+  // $58.34/oz, and `redeem_silv` now refuses anything whose gross USDC value is under
+  // `config.min_operation_usdc` (10 USDC at launch). A review pass caught that the fix silently
+  // disabled the only end-to-end redeem gate in the repo: the mint half would pass and the redeem half
+  // would revert OperationBelowMinimum every time, leaving the budget accounting, the fee routing and
+  // the premium check unexercised while the script still looked like it ran.
+  //
+  // Read from the LIVE config so the floor can move without this going stale again, with 20% of
+  // headroom so a price tick between this computation and the transaction cannot drop it under.
+  const minOperationUsdc = Number(cfg.minOperationUsdc ?? 0) / 1e6;
+  const redeemSilvAmount = Math.max(
+    0.05,
+    minOperationUsdc > 0 ? Math.ceil((minOperationUsdc * 1.2 * 1e6) / redeemPrice) / 1e6 : 0,
+  );
+  console.log(
+    `  redeem size: ${redeemSilvAmount} SILV (~${(redeemSilvAmount * redeemPrice).toFixed(2)} USDC gross, ` +
+      `floor is ${minOperationUsdc} USDC)`,
+  );
   const minUsdcOut = Math.floor(
     redeemSilvAmount * redeemPrice * (1 - premiumBpsRedeem / 10_000) * (1 - 50 / 10_000) * 1e6,
   );
@@ -278,7 +296,14 @@ async function main() {
   const redeemMsg = Buffer.from(lazerMessageData(redeemEnv));
   const redeemFlags = await walletFlagAccounts(provider.connection, user);
   const redeemIx = await (program.methods as any)
-    .redeemSilv(new anchor.BN(50_000), new anchor.BN(minUsdcOut), redeemMsg, ED25519_IX_INDEX, 0) // 0.05 SILV
+    .redeemSilv(
+      // Atomic SILV, from the derived amount above. A literal here is what went stale.
+      new anchor.BN(Math.round(redeemSilvAmount * 1e6)),
+      new anchor.BN(minUsdcOut),
+      redeemMsg,
+      ED25519_IX_INDEX,
+      0,
+    )
     .accounts({
       config: configPda, user, usdcMint: USDC_MINT, silvMint: SILV_MINT,
       usdcTreasury: usdcTreasuryAta, userUsdcAta, userSilvAta,

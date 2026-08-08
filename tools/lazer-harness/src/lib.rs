@@ -58,6 +58,10 @@ mod harness {
     const E_FEE_TOO_HIGH: &str = "12074";
     const E_TOO_FEW_PUBLISHERS: &str = "12081";
     const E_CARRIED_FORWARD: &str = "12082";
+    // ROUND 5. Split out of E_CARRIED_FORWARD: a replayed envelope and a feed that republished a
+    // stale print are different events with different fixes, and D2 made the first one the common
+    // case. See the note on map_policy_err in src/oracle.rs.
+    const E_LAZER_REPLAYED: &str = "12121";
 
     fn anchor_disc(preimage: &str) -> [u8; 8] {
         let mut h = Sha256::new();
@@ -167,20 +171,42 @@ mod harness {
         b.push(0); // pending_por_feed_nonce: Option<u64> = None
         b.push(0); // mint_paused
         b.push(0); // redeem_paused
+        // ROUND 5, review pass. THIS TAIL WAS WRONG, and had been since `pending_removal_count` was
+        // added. It wrote `version` where the program reads `pending_removal_count`, then 64 bytes of
+        // "reserved" in place of the real 55-byte tail, so every field after `redeem_paused` was
+        // shifted by one byte and eight bytes too long. It never surfaced because Anchor ignores
+        // trailing bytes and every affected field is zero here, and because the probe reads none of
+        // them. The next field carved out of `reserved` BEFORE the oracle block would have shifted
+        // feed_id / min_publishers / last_used_feed_ts_us and left the whole Lazer suite green while
+        // testing a mis-decoded config.
+        b.push(0); // pending_removal_count
         b.push(0); // version
-        b.extend_from_slice(&[0u8; 64]); // reserved
+        b.push(0); // pending_public_mint_nonce: Option<u64> = None
+        b.push(0); // kyc_scope_flags
+        b.write_u64::<LittleEndian>(0).unwrap(); // instant_used_prev_usdc
+        b.push(0); // fee_routing_disabled
+        b.write_u32::<LittleEndian>(0).unwrap(); // kyc_attestation_count
+        b.write_u64::<LittleEndian>(0).unwrap(); // min_operation_usdc (round 5 P1-04)
+        b.extend_from_slice(&[0u8; 32]); // reserved
 
-        // Drift guard. ConfigAccount::SIZE is 800, but that is the ALLOCATED
-        // budget: it reserves 1+8 for every Option<u64> and 1+32 for the
-        // Option<Pubkey>, while a `None` serializes to a single byte. With all 13
-        // Option<u64> fields and pending_admin set to None, the serialized length
-        // is 800 - 13*8 - 32 = 664. If the program layout changes, this assert
-        // fails loudly here instead of producing a silently mis-decoded account.
+        // Drift guard, with the arithmetic corrected. ConfigAccount::SIZE is 800, but that is the
+        // ALLOCATED budget: it reserves 1+8 for every Option<u64> and 1+32 for the Option<Pubkey>,
+        // while a `None` serializes to a single byte. There are FOURTEEN Option<u64> fields, not the
+        // thirteen the old comment counted, so the serialized length with every Option = None is
+        // 800 - 14*8 - 32 = 656.
+        //
+        // WHAT THIS ASSERT DOES AND DOES NOT DO, stated because the old comment overclaimed: it
+        // measures THIS FUNCTION'S OUTPUT against a number a human derived. It never consults the
+        // program, so it does not "fail loudly if the program layout changes" the way the old comment
+        // said. What catches a real layout change is the state harness, which builds its config
+        // through the REAL `initialize` and decodes it with a mirror that re-serializes byte-exactly.
+        // This assert catches an editing mistake in the block above, which is worth having and is a
+        // smaller claim.
         assert_eq!(
             b.len(),
-            664,
+            656,
             "hand-built ConfigAccount buffer is out of sync with state/config.rs \
-             (expected 664 serialized bytes with every Option = None)"
+             (expected 656 serialized bytes with every Option = None)"
         );
         b
     }
@@ -345,11 +371,20 @@ mod harness {
     }
 
     #[test]
-    fn the_same_envelope_cannot_be_consumed_twice() {
-        // ROUND 4 P0-01, and the on-chain half of the decision. The program went from `fut <` to `fut <=`
-        // against the high-water mark, so one signed envelope prices exactly ONE operation. This test drives
-        // the real deployed bytes: an envelope whose feed timestamp EQUALS the stored high-water mark is
-        // refused, while the same envelope one microsecond newer is accepted.
+    fn an_envelope_at_or_below_the_stored_mark_is_refused_by_the_policy() {
+        // RENAMED in round 5, because the old name was `the_same_envelope_cannot_be_consumed_twice`
+        // and that is NOT what this test does. It pre-writes the high-water mark into a crafted
+        // config and calls the probe ONCE. `probe_oracle_price` is read-only by construction, so this
+        // exercises the COMPARISON in lazer_price.rs and never the WRITE. The two writes live in
+        // mint_silv.rs and redeem_silv.rs, and deleting either left this test green while the
+        // matching path was replayable: round 5 P1-03.
+        //
+        // The persistence half now lives in tools/state-harness/tests/oracle_replay.rs, which drives
+        // real mints and redeems through the mock Lazer and reads the field back off the chain. Both
+        // writes were mutation-verified against it. This test keeps its narrower, honest job.
+        //
+        // ROUND 4 P0-01 is what made the comparison strict: `fut <` became `fut <=`, so one signed
+        // envelope prices exactly ONE operation.
         let ts = NOW_US;
 
         // Already consumed: the config high-water mark is exactly this envelope's timestamp.
@@ -358,9 +393,12 @@ mod harness {
         let mut env = setup(&consumed, 1);
         let err = run_probe(&mut env, &fresh_payload(5_834_000, 100, 3))
             .expect_err("replaying a consumed envelope must be refused");
+        // The EXACT code. The old assertion was `contains("NonMonotonic") || contains("Custom")`, and
+        // the second half made it pass on ANY custom program error: a fixture that broke for an
+        // unrelated reason would have been read as the anti-replay working.
         assert!(
-            err.contains("NonMonotonic") || err.contains("Custom"),
-            "expected a NonMonotonic refusal, got {err}"
+            err.contains(E_LAZER_REPLAYED),
+            "expected DominionError::LazerReplayed ({E_LAZER_REPLAYED}), got {err}"
         );
 
         // One microsecond newer than the mark: accepted. This is what proves the refusal above is about

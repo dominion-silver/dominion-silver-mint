@@ -155,8 +155,32 @@ pub fn handler(
         &user_key,
     )?;
 
-    // 3. Zero-amount guard. The HARD supply cap below is the sole mint-side limit (D2).
+    // 3. Zero-amount guard. The HARD supply cap below is the sole mint-side VALUE limit (D2).
     require!(amount_usdc > 0, DominionError::ZeroAmount);
+
+    // 3b. ROUND 5 P1-04, the AVAILABILITY floor. The redeem side has the matching check at
+    // `redeem_silv.rs` step 4b; one field, `config.min_operation_usdc`, governs both, because the slot
+    // it protects is shared.
+    //
+    // It sits here rather than after the oracle read for one reason and it is NOT a safety one: the
+    // whole transaction reverts either way, so the Lazer fee and the high-water write are rolled back
+    // identically wherever this check lives. It is here because `amount_usdc` is already known, so a
+    // dust caller is refused before the CPI rather than after it, which costs them the verify fee and
+    // costs us the compute. The redeem side cannot do the same, because the size of a redeem is only
+    // known once the price is read.
+    //
+    // D2 made the anti-replay strict, which turned `last_used_feed_update_timestamp_us` into one
+    // global slot in a writable config: whoever consumes a print blocks every other operation until
+    // the next one. Measured with no floor, at $58.34/oz and 100 bps, 60 micro-USDC was enough to
+    // take that slot and still receive SILV, so the invariant that stops a REPLAY was simultaneously
+    // a permissionless denial primitive. The floor is what makes capture cost working capital rather
+    // than dust; the derivation is on `ConfigAccount::min_operation_usdc` and pinned by a unit test.
+    //
+    // Zero disables it, which is what an in-place upgrade of an existing config decodes.
+    require!(
+        amount_usdc >= ctx.accounts.config.min_operation_usdc,
+        DominionError::OperationBelowMinimum
+    );
 
     // 4. Read SILV price from Lazer. The user funds the fee-payer PDA but is NEVER passed to the CPI.
     let lazer_program_ai = ctx.accounts.lazer_program.to_account_info();

@@ -88,6 +88,13 @@ export interface ConfigAccount {
   mintPaused: boolean;
   redeemPaused: boolean;
   version: number;
+  /** ROUND 5 P1-04. The minimum size of a priced operation, atomic USDC: `amount_usdc` on mint, the
+   *  gross USDC value on redeem. Zero means no floor, which
+   *  is what a config initialised before this field existed decodes out of `reserved`, so read it as
+   *  `?? 0` and never assume a non-zero value. It is admin-settable and instant in both directions, so
+   *  the live account is the only source: quoting against a hardcoded copy would send a user into a
+   *  OperationBelowMinimum revert the moment the floor moves. */
+  minOperationUsdc?: BN;
 }
 
 /** Where a redemption lands. "limit" = the rolling window budget is exhausted, retry after it rolls.
@@ -354,6 +361,10 @@ function anchorErr(t: string, name: string, codeDec: number): boolean {
   );
 }
 export function parseRedeemError(errText: string): RedeemRoute | null {
+  // ROUND 5 P1-04. `redeem_silv` gained a minimum operation size, so this became a reachable revert
+  // and had no mapping: the user saw a raw Custom:12118. It is a "too small", not a routing outcome,
+  // so it returns null and the caller surfaces the dedicated message below.
+  if (anchorErr(errText, "OperationBelowMinimum", 12118)) return null;
   if (anchorErr(errText, "RedeemLimitExceeded", 12103)) return "limit";
   if (anchorErr(errText, "KycRequired", 12104)) return "kyc";
   if (anchorErr(errText, "InsufficientTreasury", 12014)) return "otc";
@@ -366,6 +377,12 @@ export function parseRedeemError(errText: string): RedeemRoute | null {
   )
     return "disabled";
   return null;
+}
+
+/** ROUND 5 P1-04. `OperationBelowMinimum` on either side. Both mint and redeem raise it, so this is the
+ *  one place that recognises it and the caller decides the wording. */
+export function isBelowMinimumError(errText: string): boolean {
+  return anchorErr(errText, "OperationBelowMinimum", 12118);
 }
 
 /** StaleOracle = 12004, raised on ANY Pyth-priced path when too much wall-clock passes between fetching the

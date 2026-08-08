@@ -61,6 +61,23 @@ pub const DEFAULT_ADMIN_TIMELOCK_SECONDS: u32 = 86400; // 24 hours
 pub const DEFAULT_MAX_SILV_SUPPLY: u64 = 150_000_000_000; // 150,000 oz at 6 decimals
 
 pub const DEFAULT_PUBLIC_MINT_ENABLED: bool = false; // opening direct mint is 24h-timelocked
+
+// ROUND 5 P1-04, the floor on a single mint, atomic USDC (6dec). See ConfigAccount::min_operation_usdc
+// for why it exists. $10 makes capturing every Lazer print cost 10 USDC of working capital per second
+// AND 0.10 USDC of premium paid to the protocol, against 0.00006 USDC with no floor.
+pub const DEFAULT_MIN_OPERATION_USDC: u64 = 10_000_000; // $10
+
+// Rail on the setter, NOT a target. The floor is a liveness knob, so its abuse direction is locking
+// small users out, and this bounds how far a compromised admin can push that.
+//
+// REVIEW PASS ON 3bf3097, lowered from $1,000 to $100. The setter is instant in both directions, so
+// the ceiling IS the blast radius: at $1,000 one admin transaction removed the redeem exit for every
+// holder whose entire position was worth less than that, and it presented to them as a failed
+// transaction rather than as a visible closed state the way `pause` does. $100 keeps a 10x band above
+// the $10 default, which is all the operational room the floor was ever meant to have, and shrinks
+// the set of holders a compromised admin can strand by an order of magnitude. Raising it further is a
+// deliberate change to this constant, in a commit, in a binary an auditor can diff.
+pub const MIN_OPERATION_CEILING_USDC: u64 = 100_000_000; // $100
 pub const DEFAULT_TREASURY_MIN_FLOAT_USDC: u64 = 0; // Mark sets from panel (D7)
 pub const DEFAULT_LARGE_REDEEM_THRESHOLD_USDC: u64 = 5_000_000_000; // $5k (D10)
 pub const DEFAULT_INSTANT_REDEEM_BUDGET_USDC: u64 = 20_000_000_000; // $20k/window (D10)
@@ -129,7 +146,17 @@ pub struct ConfigAccount {
     // HARD supply cap, atomic SILV (oz * 1e6). TIGHTEN-ONLY: lowering is instant, raising is blocked.
     pub max_silv_supply: u64,
 
-    // Blocks ADMIN withdraw only: redemptions may draw below it and then route OTC. 24h timelock.
+    // Blocks ADMIN withdraw only: a user redemption may draw the treasury below it. 24h timelock.
+    //
+    // ROUND 5 P3-01: this said "and then route OTC". There is no OTC route. The queued path and its
+    // off-chain settlement were deleted on 2026-08-05 (which is also what removed SolidProof MEDIUM
+    // #4); redemption is one instant route that REVERTS when the rolling budget is exhausted. A
+    // comment describing a route that does not exist is how an integrator plans for a fallback that
+    // will never fire.
+    //
+    // Its live value is 0 by decision D5, risk accepted: nothing opposes an admin withdrawal draining
+    // the treasury, and what defends it instead is that `withdraw_usdc` is 24h-timelocked and
+    // guardian-cancellable.
     pub treasury_min_float_usdc: u64,
 
     pub redemptions_enabled: bool, // manual switch, NO auto-expiry (deliberate)
@@ -217,7 +244,30 @@ pub struct ConfigAccount {
     /// Live count of `KycAccount`s (`attest_kyc` creates, `revoke_kyc` closes). `set_kyc_scope` refuses
     /// to arm at zero. Zero at rest holds only while the gate is dormant: else backfill before upgrading.
     pub kyc_attestation_count: u32,
-    pub reserved: [u8; 40],
+
+    /// ROUND 5 P1-04. The MINIMUM SIZE OF A PRICED OPERATION, atomic USDC (6dec). It applies to
+    /// `amount_usdc` on the mint side and to the gross USDC value of `amount_silv` on the redeem side,
+    /// which is why it is not called `min_mint_amount`: it was, for one review cycle, and the name was
+    /// half of why the redeem side went unprotected.
+    ///
+    /// It is an AVAILABILITY control, not a value control, and it exists because D2 made the
+    /// anti-replay STRICT: `last_used_feed_update_timestamp_us` is a single global slot in this
+    /// writable config, written by `mint_silv` AND `redeem_silv`, so the first operation to consume a
+    /// Lazer print blocks every other one until the next print.
+    ///
+    /// Measured cost of capture with no floor, at $58.34/oz:
+    ///   mint,   100 bps: `fee_from_amount` ceils, so 60 micro-USDC pays a 1 micro-USDC fee, leaves 59
+    ///                    net, and `mint_silv_out` floors 59/58.34 to exactly 1 atomic SILV, which
+    ///                    clears `silv_out > 0`. Cost: 0.00006 USDC.
+    ///   redeem, 150 bps: 1 atomic SILV is worth 58 micro-USDC gross, pays a 1 micro-USDC fee and
+    ///                    returns 57. NET cost: about 0.0000013 USDC, thirty times cheaper still.
+    /// Either one bought a permissionless global denial of the priced path.
+    ///
+    /// Zero DISABLES the floor, which is what an in-place upgrade of an already-initialised config
+    /// decodes out of `reserved`, per THE RULE above. `initialize` writes `DEFAULT_MIN_OPERATION_USDC`.
+    pub min_operation_usdc: u64,
+
+    pub reserved: [u8; 32],
 }
 
 impl ConfigAccount {
@@ -259,7 +309,9 @@ impl ConfigAccount {
         + 1                   // kyc_scope_flags (carved out of reserved)
         + 8                   // instant_used_prev_usdc (carved out of reserved)
         + 1                   // fee_routing_disabled (carved out of reserved)
-        + 44; // kyc_attestation_count (4, carved out of reserved) + reserved (40)
+        + 4                   // kyc_attestation_count (carved out of reserved)
+        + 8                   // min_operation_usdc (carved out of reserved, round 5 P1-04)
+        + 32; // reserved
 
     // A POST-write invariant, complementary to the pre-write checks at each mutation site.
     pub fn assert_premium_within_bounds(&self) -> Result<()> {

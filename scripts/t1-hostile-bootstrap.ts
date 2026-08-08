@@ -92,6 +92,78 @@ async function main() {
     ),
   ) as Idl;
 
+  // ROUND 5 P1-07, and it must run HERE: before the first lamport, before the attacker is funded, and
+  // before the one-shot SILV mint keypair is created.
+  //
+  // THE DEFECT. `new Program(idl, provider)` takes its program address from `idl.address`, while every
+  // PDA above and the mint below are derived from `DOMINION_PROGRAM_ID`. Nothing compared the two. A
+  // stale IDL (a rebuild that was not copied, a checkout at the wrong commit) meant the hostile cases
+  // were sent to one program id while the accounts belonged to another: the negative cases then "pass"
+  // for the wrong reason, and case 5's real `initialize` fails AFTER the deploy has been paid for and
+  // after the mint keypair, which is deliberately never persisted, has already been used.
+  //
+  // Three facts are required, not one, because each rules out a different way of being wrong:
+  //   a) idl.address == DOMINION_PROGRAM_ID     the client and the derivations agree
+  //   b) declare_id! == DOMINION_PROGRAM_ID     the SOURCE agrees, so the IDL is not merely
+  //                                             self-consistent with a binary nobody built
+  //   c) the program account exists and is executable, and its ProgramData names an upgrade authority
+  //      DOM-001 binds initialize's signer to that authority, so a mismatch here is a guaranteed
+  //      failure at case 5, and the whole point is to find it before spending.
+  {
+    const wantId = PROGRAM_ID.toBase58();
+    const idlAddress = (idl as unknown as { address?: string }).address;
+    if (idlAddress !== wantId) {
+      throw new Error(
+        `IDL/program mismatch, refusing before the first lamport moves.\n` +
+          `  DOMINION_PROGRAM_ID : ${wantId}\n` +
+          `  target/idl address  : ${idlAddress ?? "(absent)"}\n` +
+          `Regenerate the IDL against the deployed id:\n` +
+          `  (cd programs/dominion_silver_mint_v2 && anchor idl build -o ../../target/idl/dominion_silver_mint.json -- --locked)`,
+      );
+    }
+    const libRs = fs.readFileSync(
+      path.join(__dirname, "..", "programs", "dominion_silver_mint_v2", "src", "lib.rs"),
+      "utf8",
+    );
+    const declared = /declare_id!\("([1-9A-HJ-NP-Za-km-z]+)"\)/.exec(libRs)?.[1];
+    if (declared !== wantId) {
+      throw new Error(
+        `declare_id! does not match the program being bootstrapped.\n` +
+          `  DOMINION_PROGRAM_ID : ${wantId}\n` +
+          `  declare_id!         : ${declared ?? "(not found)"}\n` +
+          `The deployed binary was built from a different id, so every PDA below belongs to a program\n` +
+          `that is not the one at ${wantId}. Fix declare_id!, rebuild, redeploy.`,
+      );
+    }
+    const progInfo = await conn.getAccountInfo(PROGRAM_ID);
+    if (!progInfo || !progInfo.executable) {
+      throw new Error(
+        `${wantId} is ${progInfo ? "not executable" : "not deployed on this cluster"}.\n` +
+          `T1 must run against a DEPLOYED but NOT YET INITIALIZED program.`,
+      );
+    }
+    const pdInfo = await conn.getAccountInfo(programData(PROGRAM_ID));
+    // ProgramData layout: 4-byte enum tag, 8-byte slot, 1-byte Option tag, then the 32-byte authority.
+    if (!pdInfo || pdInfo.data.length < 45 || pdInfo.data[12] !== 1) {
+      throw new Error(
+        `${wantId} has no upgrade authority (immutable, or the ProgramData is unreadable).\n` +
+          `initialize binds its signer to the CURRENT upgrade authority (DOM-001), so it can never\n` +
+          `succeed here.`,
+      );
+    }
+    const upgradeAuthority = new PublicKey(pdInfo.data.subarray(13, 45));
+    if (!upgradeAuthority.equals(authority.publicKey)) {
+      throw new Error(
+        `the loaded keypair is NOT the upgrade authority, so case 5 is guaranteed to fail.\n` +
+          `  keypair           : ${authority.publicKey.toBase58()}\n` +
+          `  upgrade authority : ${upgradeAuthority.toBase58()}\n` +
+          `DOM-001 binds initialize's signer to the BPF loader's upgrade authority. Refusing now costs\n` +
+          `nothing; refusing at case 5 costs the funded attacker account and the one-shot SILV mint.`,
+      );
+    }
+    console.log(`  bound: idl.address == declare_id! == ${wantId}, executable, upgrade authority OK`);
+  }
+
   const [configPda] = PublicKey.findProgramAddressSync(
     [Buffer.from("config")],
     PROGRAM_ID,

@@ -74,9 +74,14 @@ fn map_policy_err(e: LazerPolicyError) -> Error {
         | LazerPolicyError::ConfidenceNonPositive
         | LazerPolicyError::ConfidenceTooWide => error!(DominionError::OracleLowConfidence),
         LazerPolicyError::TooFewPublishers => error!(DominionError::LazerTooFewPublishers),
-        LazerPolicyError::CarriedForward | LazerPolicyError::NonMonotonic => {
-            error!(DominionError::LazerCarriedForward)
-        }
+        // ROUND 5, found while writing the P1-03 persistence tests: these two shared one code. They
+        // are different events with different fixes. CarriedForward means the FEED republished a
+        // stale print, which the caller can do nothing about; NonMonotonic means another transaction
+        // consumed this print first, which is fixed by retrying with a fresh envelope. D2 made the
+        // second one the normal steady state, so the collapse left the most frequent refusal on the
+        // priced path wearing a name that pointed operators at the oracle instead of at the race.
+        LazerPolicyError::CarriedForward => error!(DominionError::LazerCarriedForward),
+        LazerPolicyError::NonMonotonic => error!(DominionError::LazerReplayed),
         LazerPolicyError::Stale | LazerPolicyError::FutureTimestamp => {
             error!(DominionError::StaleOracle)
         }

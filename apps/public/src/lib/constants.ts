@@ -3,7 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 // DEVNET, deployed 2026-07-25. `initialize` runs once per program id, so a config or guardian layout
 // change forces a new id: replace PROGRAM_ID and SILV_MINT in the SAME commit, and list the old id in
 // RETIRED in scripts/verify-constants-consistency.sh.
-export const PROGRAM_ID = new PublicKey("HXaptAcaXBoEAsNuEv4ZwYrciHbMxSpip2VScRVDjo1Z");
+export const PROGRAM_ID = new PublicKey("3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ");
 
 // Token programs.
 export const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA");

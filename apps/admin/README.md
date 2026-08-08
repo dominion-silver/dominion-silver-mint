@@ -77,4 +77,3 @@ src/
 | `propose_set_compliance_mode` → execute | 24h timelock | Atomic auto-pause on execute |
 | `propose_set_pyth_feed` → execute | 24h timelock | Atomic auto-pause on execute |
 | `propose_set_admin_timelock` → execute | 24h timelock | Bounded [1h, 30d] |
-| `close_daily_counter` / `close_hourly_counter` / `close_timelock_account` | Instant | Rent reclaim after retention |
