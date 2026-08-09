@@ -202,7 +202,14 @@ rm -f "$_signers"
 #     every fact above is about a commit and none of them is about the files the rebuild will read.
 #     A dirty worktree is the realistic accident this catches, and it is also the cheapest way to
 #     attest something that was never committed.
-BUILD_INPUTS="programs Cargo.toml Cargo.lock rust-toolchain.toml Anchor.toml config/mainnet-authorities.json scripts/verify-release-artifact.sh scripts/_read-release-pin.py"
+#     The manifest is deliberately NOT in this list, and that is a distinction worth keeping. This
+#     list is what gets REBUILT: sources, lockfile, toolchain, plus the checker itself. The manifest
+#     is the CLAIM being checked. Binding it to HEAD conflates the two and would forbid the one
+#     legitimate reason to hold an uncommitted pin: reading a candidate before recording it. It loses
+#     nothing, because a manifest that lies is caught downstream by its own path: `validate_pinned`
+#     requires the source commit to exist, (d) below requires it to be an ancestor with identical
+#     inputs, and the rebuilt hash is then compared against the pinned one.
+BUILD_INPUTS="programs Cargo.toml Cargo.lock rust-toolchain.toml Anchor.toml scripts/verify-release-artifact.sh scripts/_read-release-pin.py"
 _dirty="$(cd -P "$ROOT" && git status --porcelain -- $BUILD_INPUTS 2>/dev/null || true)"
 if [ -n "$_dirty" ]; then
   echo ""

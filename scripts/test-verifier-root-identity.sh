@@ -116,7 +116,7 @@ run_traced() {
 # The closed list the gate binds, mirrored here so the positive control asserts the SAME set the
 # verifier checks rather than a set this test invented. If the two ever drift, the positive control
 # is testing a property the product does not have.
-POSITIVE_INPUTS="programs Cargo.toml Cargo.lock rust-toolchain.toml Anchor.toml config/mainnet-authorities.json scripts/verify-release-artifact.sh scripts/_read-release-pin.py"
+POSITIVE_INPUTS="programs Cargo.toml Cargo.lock rust-toolchain.toml Anchor.toml scripts/verify-release-artifact.sh scripts/_read-release-pin.py"
 
 real_path() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
 
