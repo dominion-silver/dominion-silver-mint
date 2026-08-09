@@ -271,10 +271,15 @@ else
   # The reference build gets its OWN CARGO_TARGET_DIR. --sbf-out-dir only moves the final .so, so
   # compilation would otherwise reuse the shared target/ that CI restores from a Cargo.lock-keyed
   # cache: a tampered rlib would be linked into both sides and the hashes would agree.
+  # ROUND 8 F-03. Through the shared strict builder, which treats a stack-overflow line as fatal even
+  # when cargo exits 0. This rebuild is the REFERENCE the artifact is compared against: an overflow
+  # here reproduces on both sides, so the hashes would agree and the comparison would bless corrupted
+  # bytes. The previous version captured build.log and only read it when the exit code was non-zero,
+  # which is precisely the case that never happens for this defect.
   if ! CARGO_TARGET_DIR="$TMPDIR_BUILD/target" \
-      cargo build-sbf --manifest-path "$MANIFEST" --sbf-out-dir "$TMPDIR_BUILD" -- --locked >"$TMPDIR_BUILD/build.log" 2>&1; then
-    echo "   FAIL: the default-feature rebuild did not succeed"
-    tail -5 "$TMPDIR_BUILD/build.log" | sed 's/^/     /'
+      bash "$ROOT/scripts/_strict-build-sbf.sh" --manifest-path "$MANIFEST" --sbf-out-dir "$TMPDIR_BUILD" -- --locked >"$TMPDIR_BUILD/build.log" 2>&1; then
+    echo "   FAIL: the default-feature rebuild did not succeed or overflowed the BPF stack"
+    tail -8 "$TMPDIR_BUILD/build.log" | sed 's/^/     /'
     echo "ARTIFACT REJECTED: the reference rebuild failed. DO NOT DEPLOY THIS FILE."
     exit 1
   fi

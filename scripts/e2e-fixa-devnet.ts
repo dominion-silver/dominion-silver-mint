@@ -95,11 +95,9 @@ async function main() {
         config: configPda,
         admin,
         payer: admin,
-        guardianSigner: guardianKey,
         guardianAccount: guardianAcct,
         systemProgram: anchor.web3.SystemProgram.programId,
       })
-      .signers([guardianKp])
       .rpc();
   }
   await program.methods

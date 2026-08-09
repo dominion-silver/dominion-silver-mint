@@ -91,24 +91,6 @@
           "signer": true
         },
         {
-          "name": "guardian_signer",
-          "docs": [
-            "ROUND 8 L1-02. THE APPOINTEE SIGNS ITS OWN APPOINTMENT.",
-            "",
-            "This instruction used to need only the admin. `unpause` demands a guardian distinct from the",
-            "admin, so a compromised Ops could generate its own keypairs, appoint them here alone, fill",
-            "every slot, and present one of them as the \"independent brake\" that every timelock in this",
-            "program assumes somebody else holds. The veto was satisfiable by the hand it exists to stop.",
-            "",
-            "Requiring the named key to sign does NOT prove independence, and nothing on chain can: Ops",
-            "could still hold both keys. What it does is make the set unable to grow without the consent of",
-            "the key being added, so a guardian cannot be conscripted, and an appointment is evidence that",
-            "the holder participated. The launch guardian is anchored earlier still, as an argument of the",
-            "authenticated `initialize`, where it is part of the reviewed ceremony artifact."
-          ],
-          "signer": true
-        },
-        {
           "name": "guardian_account",
           "writable": true,
           "pda": {
@@ -5705,7 +5687,7 @@
     {
       "code": 12085,
       "name": "PublicMintDisabled",
-      "msg": "Public direct mint is disabled (closed at launch; opens with KYC in Phase 1)"
+      "msg": "Public direct mint is disabled. ROUND 8: it ships OPEN and this fires only after an emergency close; reopening is 24h-timelocked"
     },
     {
       "code": 12086,
@@ -5720,7 +5702,7 @@
     {
       "code": 12088,
       "name": "RedemptionsEnableBlocked",
-      "msg": "Enabling redemptions is blocked at launch; it opens with the Phase 1 KYC/redeem upgrade"
+      "msg": "Enabling redemptions on this lane is blocked. ROUND 8: redeem ships OPEN, and REOPENING after a close rides propose/execute_set_redeem_limits and the 24h timelock, not an upgrade"
     },
     {
       "code": 12089,

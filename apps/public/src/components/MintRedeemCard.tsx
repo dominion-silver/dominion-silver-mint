@@ -355,7 +355,8 @@ export function MintRedeemCard() {
     setSubmitting(true);
     try {
       if (mode === "mint") {
-        // Public direct mint is closed at launch (revert PublicMintDisabled).
+        // ROUND 8: public direct mint ships OPEN from `initialize`. This branch is what a user sees
+        // after an EMERGENCY CLOSE, not at launch: reopening rides the 24h timelock.
         if (!cfg.publicMintEnabled) {
           throw new Error(
             "Direct mint isn't open yet. You can buy SILV on the DEX.",

@@ -79,9 +79,13 @@ export interface Step8Input {
   /** Whether the premium fee vault ATA exists. ROUND 8 made this a PRECONDITION of the unpause;
    *  see `FeeVaultMissing` for why the old runbook order no longer holds. */
   feeVaultExists: boolean;
-  /** ROUND 8 L1-04. The rest of the go-live preconditions, gathered by the caller. Omitted only by
-   *  callers that are not about to unpause; when present, `decideLaunchReadiness` gates the unpause. */
-  readiness?: LaunchState;
+  /** ROUND 8 L1-04, made MANDATORY by F-01. It was optional, and `main()` never filled it, so the
+   *  real ceremony emitted the unpause after the inventory and fee-vault checks alone and never
+   *  evaluated the treasury, the feed, the publisher floor, the oracle probe or the public app. The
+   *  repository showed a green readiness suite while the go-live path ran none of it.
+   *
+   *  Optional was the defect. A caller that cannot gather this state cannot be about to unpause. */
+  readiness: LaunchState;
 }
 
 /** Thrown when the chain's pre-mint destination is not the one this ceremony was authorised for. Its
@@ -140,7 +144,7 @@ export async function buildStep8Actions(i: Step8Input): Promise<CeremonyAction[]
   if (i.paused && !i.feeVaultExists) throw new FeeVaultMissing();
   // ROUND 8 L1-04. The full go-live gate, same function the readiness test drives. The fee vault
   // above is one of its blockers and is kept as its own class because it has its own repair.
-  if (i.paused && i.readiness) {
+  if (i.paused) {
     const d = decideLaunchReadiness(i.readiness);
     if (!d.ready) {
       throw new Error(
@@ -162,23 +166,14 @@ export async function buildStep8Actions(i: Step8Input): Promise<CeremonyAction[]
       intent:
         "Registers a guardian: pause, cancel a timelocked action, cancel an admin transfer. Instant, " +
         "and add_guardian refuses config.admin itself. ROUND 8: the FIRST guardian was already " +
-        "appointed by initialize, so these are the additional ones, and each must be CO-SIGNED by " +
-        "the key being appointed.",
+        "appointed by initialize, so these are the additional ones.",
       alreadyDone: exists,
       // P2-04: "the PDA exists" is now stated as what it is. The set comparison in verify() is what
       // actually decides, because presence of the right ones does not exclude presence of a wrong one.
       observed: exists ? `guardian PDA ${pda.toBase58()} already exists` : undefined,
-      // ROUND 8 L1-02: the appointee CO-SIGNS. The emitted instruction therefore carries two
-      // independent signers, and Ops alone cannot execute it. That is deliberate: appointing a
-      // guardian now requires the participation of the key being appointed.
+      // ROUND 8 F-02: single signer again. The co-signature made this unexecutable through Squads.
       ix: await M.addGuardian(pk)
-        .accounts({
-          config: i.configPda,
-          admin: i.admin,
-          payer: i.admin,
-          guardianSigner: pk,
-          guardianAccount: pda,
-        })
+        .accounts({ config: i.configPda, admin: i.admin, payer: i.admin, guardianAccount: pda })
         .instruction(),
     });
   }
@@ -258,6 +253,47 @@ async function main() {
     `  fee vault         : ${feeVaultAta.toBase58()}  ${feeVaultExists ? "exists" : "MISSING (step 9b)"}`,
   );
 
+  // ROUND 8 F-01. The go-live state, GATHERED HERE, on the path that actually emits the unpause.
+  //
+  // Everything here is READ, never asserted. An earlier version carried two booleans set from
+  // environment variables, which measured nothing and are gone; see _launch-readiness.ts.
+  const manifest = JSON.parse(
+    fs.readFileSync(`${__dirname}/../config/mainnet-authorities.json`, "utf8"),
+  );
+  const posture = manifest?.launch_posture ?? {};
+  // Circulating supply, read off the SILV mint. See _launch-readiness.ts for why this replaced a
+  // treasury threshold: at the first unpause the supply is provably zero, so an empty treasury is
+  // harmless, and demanding a decided dollar figure was ceremony rather than safety.
+  let circulatingSilv = 0n;
+  const silvSupply = await conn.getTokenSupply(new PublicKey(c0.silvMint)).catch(() => null);
+  if (silvSupply) circulatingSilv = BigInt(silvSupply.value.amount);
+  // Guardians the PROGRAM would accept: active, and not the current admin.
+  const eligible = (
+    await Promise.all(
+      guardians.map(async (g) => {
+        const info = await conn.getAccountInfo(guardianPda(new PublicKey(g)));
+        if (!info || info.data.length < 56) return false;
+        const cooldown = info.data.readBigInt64LE(48);
+        return cooldown === 0n && !new PublicKey(g).equals(new PublicKey(c0.admin));
+      }),
+    )
+  ).filter(Boolean).length;
+
+  const readiness = {
+    paused: c0.paused === true,
+    publicMintEnabled: c0.publicMintEnabled === true,
+    redemptionsEnabled: c0.redemptionsEnabled === true,
+    boundInventoryWallet: new PublicKey(c0.inventoryWallet),
+    expectedInventoryWallet: new PublicKey(inventoryWallet),
+    feeVaultExists,
+    circulatingSilv,
+    activeIndependentGuardians: eligible,
+    minPublishers: Number(c0.minPublishers),
+    requiredMinPublishers: Number(posture.min_publishers ?? 2),
+    feedId: Number(c0.pythLazerFeedId),
+    expectedFeedId: Number(posture.pyth_lazer_feed_id ?? 3154),
+  };
+
   const actions = await buildStep8Actions({
     program,
     configPda,
@@ -268,6 +304,7 @@ async function main() {
     boundInventoryWallet: new PublicKey(c0.inventoryWallet),
     expectedInventoryWallet: new PublicKey(inventoryWallet),
     feeVaultExists,
+    readiness,
   });
 
   if (MODE === "send") {

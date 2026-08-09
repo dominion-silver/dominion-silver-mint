@@ -808,10 +808,10 @@ impl Fixture {
 
     // ------------------------------------------------------------ guardian and unpause
 
-    /// `add_guardian`, signed by `signer` in BOTH the admin and the payer slot, AND by the appointee.
+    /// `add_guardian`, signed by `signer` in BOTH the admin and the payer slot.
     ///
-    /// ROUND 8 L1-02: the named key signs its own appointment, so the set cannot grow without the
-    /// consent of the key being added. That is why this takes a Keypair and not a Pubkey.
+    /// ROUND 8 F-02: the appointee's co-signature was REMOVED. It bought participation rather than
+    /// independence and made the instruction unexecutable through the Squads ceremony.
     pub fn add_guardian_as(&mut self, signer: &Keypair, guardian: &Keypair) -> TxOutcome {
         let ix = Instruction {
             program_id: program_id(),
@@ -819,13 +819,12 @@ impl Fixture {
                 AccountMeta::new(config_pda(), false),
                 AccountMeta::new_readonly(signer.pubkey(), true),
                 AccountMeta::new(signer.pubkey(), true),
-                AccountMeta::new_readonly(guardian.pubkey(), true),
                 AccountMeta::new(guardian_pda(&guardian.pubkey()), false),
                 AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
             ],
             data: ix_data("add_guardian", guardian.pubkey().as_ref()),
         };
-        self.send(&[ix], &[signer, guardian])
+        self.send(&[ix], &[signer])
     }
 
     pub fn add_guardian(&mut self, guardian: &Keypair) -> TxOutcome {

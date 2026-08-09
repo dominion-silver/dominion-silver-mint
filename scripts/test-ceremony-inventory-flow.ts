@@ -25,6 +25,7 @@ import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import * as anchor from "@coral-xyz/anchor";
 import idl from "../target/idl/dominion_silver_mint.json";
 import { PROGRAM_ID } from "./_program-id";
+import type { LaunchState } from "./_launch-readiness";
 import * as step8 from "./ceremony-step8";
 import {
   buildStep8Actions,
@@ -90,7 +91,30 @@ function input(over: Partial<Step8Input> = {}): Step8Input {
     boundInventoryWallet: INVENTORY,
     expectedInventoryWallet: INVENTORY,
     feeVaultExists: true,
+    // ROUND 8 F-01. This fixture omitted `readiness` and expected the builder to SUCCEED, which made
+    // it a green sentinel of the very bypass Codex found: the field was optional, the real `main()`
+    // never filled it, and this test agreed. It is mandatory now, and the cases below drive the
+    // builder through each missing precondition.
+    readiness: readyState(),
     ...over,
+  };
+}
+
+/** A go-live state in which every precondition holds. Cases break exactly one thing in it. */
+function readyState(): LaunchState {
+  return {
+    paused: true,
+    publicMintEnabled: true,
+    redemptionsEnabled: true,
+    boundInventoryWallet: INVENTORY,
+    expectedInventoryWallet: INVENTORY,
+    feeVaultExists: true,
+    circulatingSilv: 0n,
+    activeIndependentGuardians: 1,
+    minPublishers: 2,
+    requiredMinPublishers: 2,
+    feedId: 3154,
+    expectedFeedId: 3154,
   };
 }
 
@@ -203,6 +227,32 @@ async function main(): Promise<void> {
     "an already-unpaused protocol is not blocked by the fee-vault precondition",
     "a resumed ceremony is blocked by a precondition that no longer applies",
   );
+
+  // ---- 6. F-01. THE BUILDER ITSELF refuses every missing precondition.
+  //
+  // Not decideLaunchReadiness in isolation: that function was already tested and green while the real
+  // ceremony never called it. These drive buildStep8Actions, the thing main() calls, so a future
+  // change that makes readiness optional again fails here.
+  for (const [label, mutate] of [
+    ["SILV already in circulation", (r: LaunchState) => { r.circulatingSilv = 1n; }],
+    ["no active independent guardian", (r: LaunchState) => { r.activeIndependentGuardians = 0; }],
+    ["a publisher floor below the requirement", (r: LaunchState) => { r.minPublishers = 1; }],
+    ["a feed the manifest does not name", (r: LaunchState) => { r.feedId = 3304; }],
+  ] as [string, (r: LaunchState) => void][]) {
+    const r = readyState();
+    mutate(r);
+    let threw = false;
+    try {
+      await buildStep8Actions(input({ readiness: r }));
+    } catch {
+      threw = true;
+    }
+    check(
+      threw,
+      `step 8 REFUSES to go live with ${label}`,
+      `step 8 emitted the unpause with ${label}`,
+    );
+  }
 
   if (failures > 0) {
     console.log(`\nCEREMONY INVENTORY FLOW FAILED: ${failures} check(s)`);

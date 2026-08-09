@@ -240,13 +240,13 @@ fn add_guardian_signed_by(
             AccountMeta::new(config_pda(), false),
             AccountMeta::new_readonly(signer.pubkey(), true),
             AccountMeta::new(signer.pubkey(), true),
-            AccountMeta::new_readonly(co.pubkey(), true),
             AccountMeta::new(guardian_pda(&g.pubkey()), false),
             AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
         ],
         data: ix_data("add_guardian", g.pubkey().as_ref()),
     };
-    f.send(&[ix], &[signer, co])
+    let _ = co;
+    f.send(&[ix], &[signer])
 }
 
 fn add_guardian_as(f: &mut Fixture, signer: &Keypair, g: &Keypair) -> TxOutcome {

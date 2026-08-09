@@ -57,44 +57,10 @@ has_string() {
   rm -f "$tmp"; return 1
 }
 
-# ROUND 8. A BPF STACK OVERFLOW IS A BUILD FAILURE HERE, because it is not one for cargo.
-#
-# `cargo build-sbf` prints, on its own line and prefixed "Error:",
-#   Function ...::try_accounts Stack offset of 4112 exceeded max offset of 4096 by 16 bytes
-# and then EXITS 0 and emits a .so. The overflow is real: adding one account to `initialize` silently
-# zeroed 16 bytes of a neighbouring account's data, so a correct on-chain check rejected a correct
-# input and the failure surfaced as SilvMintAuthorityMismatch, three layers from its cause. The
-# number of corrupted bytes was exactly the number in the message.
-#
-# So the message is treated as fatal. `strict_build` keeps the output, greps it, and refuses to hand
-# a binary with undefined behaviour to a suite whose whole job is to be believed. Boxing the large
-# `Account<'info, T>` payloads is the fix; this is what makes forgetting it loud.
-strict_build() {
-  local log
-  if ! log="$(mktemp)"; then
-    echo "ERROR: mktemp failed, refusing to build unmeasured" >&2; exit 1
-  fi
-  set +e
-  cargo build-sbf "$@" > "$log" 2>&1
-  local rc=$?
-  set -e
-  if [[ "$rc" -ne 0 ]]; then
-    cat "$log" >&2
-    rm -f "$log"
-    echo "ERROR: cargo build-sbf failed ($*)" >&2
-    exit "$rc"
-  fi
-  if grep -q "exceeded max offset" "$log"; then
-    grep -n "exceeded max offset" "$log" >&2
-    rm -f "$log"
-    echo >&2
-    echo "ERROR: the build overflowed the 4KB BPF stack frame. cargo exited 0 and produced a .so" >&2
-    echo "       anyway, and the excess bytes silently corrupt whatever sits next to the frame." >&2
-    echo "       Box the large Account<'info, T> payloads in the offending Accounts struct." >&2
-    exit 1
-  fi
-  rm -f "$log"
-}
+# ROUND 8 F-03. The BPF stack-overflow guard moved to scripts/_strict-build-sbf.sh so that EVERY
+# path which builds, compares or publishes a .so uses the same barrier. It lived only here, and the
+# release paths still called `cargo build-sbf` raw.
+strict_build() { bash scripts/_strict-build-sbf.sh "$@"; }
 
 if [[ "$DO_BUILD" -eq 1 ]]; then
   echo "[1/3] build dominion with the DEFAULT feature set -> $SO"

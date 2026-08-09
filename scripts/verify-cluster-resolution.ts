@@ -282,6 +282,10 @@ for (const rpc of [
     // ROUND 8 L1-04. Pure decision function plus its test: no Connection, no RPC, no signer.
     "_launch-readiness.ts",
     "test-launch-open-readiness.ts",
+    // ROUND 8 F-03 / T8-01. Build and install barriers: they shell out to cargo and curl, never to a
+    // cluster, and they resolve no RPC.
+    "_strict-build-sbf.sh",
+    "test-strict-build-sbf.sh",
   ]);
 
   const files = fs.readdirSync(scriptsDir).filter((x) => x.endsWith(".ts") && !helpers.has(x));

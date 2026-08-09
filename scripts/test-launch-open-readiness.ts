@@ -32,15 +32,12 @@ function ready(): LaunchState {
     boundInventoryWallet: INVENTORY,
     expectedInventoryWallet: INVENTORY,
     feeVaultExists: true,
-    treasuryUsdc: 100_000_000_000n,
-    treasuryMinimumUsdc: 100_000_000_000n,
+    circulatingSilv: 0n,
     activeIndependentGuardians: 1,
     minPublishers: 2,
     requiredMinPublishers: 2,
     feedId: 3154,
     expectedFeedId: 3154,
-    oracleProbePassed: true,
-    publicAppLive: true,
   };
 }
 
@@ -85,10 +82,10 @@ function main(): void {
     },
   );
   refuses(
-    "the ceremony refuses to go live with a treasury under the decided threshold",
-    "treasury-underfunded",
+    "the ceremony refuses to go live with SILV already in circulation",
+    "supply-already-circulating",
     (s) => {
-      s.treasuryUsdc = s.treasuryMinimumUsdc - 1n;
+      s.circulatingSilv = 1n;
     },
   );
   refuses(
@@ -116,31 +113,12 @@ function main(): void {
     },
   );
   refuses(
-    "the ceremony refuses to open the priced path against an unprobed oracle",
-    "oracle-not-probed",
-    (s) => {
-      s.oracleProbePassed = false;
-    },
-  );
-  refuses("the ceremony refuses to go live with no public app", "public-app-not-live", (s) => {
-    s.publicAppLive = false;
-  });
-  refuses(
     "the ceremony refuses a config whose switches are not the round 8 posture",
     "posture-mismatch",
     (s) => {
       s.redemptionsEnabled = false;
     },
   );
-
-  // A treasury exactly ON the threshold is funded. The boundary is the property, not the ballpark.
-  const onThreshold = ready();
-  onThreshold.treasuryUsdc = onThreshold.treasuryMinimumUsdc;
-  if (!decideLaunchReadiness(onThreshold).ready) {
-    bad("a treasury exactly at the decided threshold was refused");
-  } else {
-    ok("a treasury exactly at the threshold is accepted; the comparison is not off by one");
-  }
 
   // An ALREADY LIVE protocol is reported as such rather than re-gated: a re-run of the verification
   // must not read as a go-live refusal.

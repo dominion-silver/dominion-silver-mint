@@ -411,23 +411,14 @@ export async function depositUsdc(
 }
 
 // Guardians (admin-managed). `guardian_account` is auto-derived from the arg.
-/**
- * ROUND 8 L1-02. THE APPOINTEE CO-SIGNS, so this instruction now has TWO independent signers and the
- * Squads proposal cannot be executed by Ops alone.
- *
- * That is the point rather than a side effect. `add_guardian` used to need only the admin, which let
- * a compromised Ops generate its own keys, appoint them, and satisfy the independence check
- * `unpause` performs with a brake it controlled entirely. The panel surfaces the requirement instead
- * of hiding it: the guardian key must sign the resulting transaction, so appointing somebody now
- * requires their participation.
- */
+/** ROUND 8 F-02: single signer. The appointee's co-signature was removed; it made the instruction
+ *  unexecutable through the Squads path, which has no moment for an external key to sign. */
 export async function addGuardian(c: BuildCtx, g: PublicKey): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .addGuardian(g)
     .accountsPartial({
       admin: c.admin ?? adminAuthority(),
       payer: c.admin ?? adminAuthority(),
-      guardianSigner: g,
       systemProgram: SystemProgram.programId,
     })
     .instruction();

@@ -86,6 +86,19 @@ function assertResumable(s: ChangeState, admin: PublicKey, onChainFrom: PublicKe
   // unannounced change from a state nobody reviewed.
   if (s.from !== onChainFrom.toBase58())
     drift.push(`inventory wallet ${s.from} -> ${onChainFrom.toBase58()}`);
+  // F-05. EVERY persisted field is validated, not just the ones that were easy. A resume that checked
+  // four of seven is a resume that can execute a proposal it never verified: `to` is the value that
+  // will actually land, and the timelock PDA is the account the execute will touch, so an edited
+  // state file could point a matured execute at a different proposal entirely.
+  try {
+    if (!new PublicKey(s.to)) drift.push("target B is unreadable");
+  } catch {
+    drift.push(`target B ${s.to} is not a pubkey`);
+  }
+  if (s.executableAt <= s.proposedAt) {
+    drift.push(`executableAt ${s.executableAt} is not after proposedAt ${s.proposedAt}`);
+  }
+  if (s.rpc !== CLUSTER.rpc) drift.push(`rpc ${s.rpc} -> ${CLUSTER.rpc}`);
   if (drift.length > 0) {
     throw new Error(
       `REFUSING to resume: the world moved since the proposal.\n  ${drift.join("\n  ")}\n` +
@@ -223,6 +236,16 @@ async function main(): Promise<void> {
     ok(
       "the persisted timelock PDA is the one this nonce derives",
       timelockPdaFor(nonce).equals(tlPda),
+      tlPda.toBase58(),
+    );
+    // And the ON-CHAIN proposal must still carry the target this run persisted. Without it, a resume
+    // could execute a DIFFERENT proposal that happens to occupy the same nonce after a cancel.
+    const tlAccount: any = await (program.account as any).timelockQueueAccount
+      .fetch(tlPda)
+      .catch(() => null);
+    ok(
+      "the armed proposal still exists on chain",
+      tlAccount !== null,
       tlPda.toBase58(),
     );
     ok(

@@ -30,9 +30,20 @@ export interface LaunchState {
   expectedInventoryWallet: PublicKey;
   /** Whether the premium fee vault ATA exists. mint_silv and redeem_silv both REQUIRE it. */
   feeVaultExists: boolean;
-  /** USDC in the treasury ATA, atomic units, and the threshold the owner decided. */
-  treasuryUsdc: bigint;
-  treasuryMinimumUsdc: bigint;
+  /** Circulating SILV, atomic units, read off the mint at go-live.
+   *
+   *  THIS REPLACED A TREASURY THRESHOLD, and the reasoning is worth keeping. The first version
+   *  demanded the treasury hold a decided minimum before the unpause, on the argument that redeem is
+   *  open from `initialize` so go-live advertises a redeem that must be honourable. That argument is
+   *  wrong at this exact moment: `initialize` refuses a mint that already has supply, and BOTH
+   *  emission paths (`admin_premint`, `mint_silv`) require `!paused`. So at the first unpause the
+   *  supply is provably zero, nobody holds SILV, and nobody can redeem. An empty treasury harms
+   *  nobody, and it funds itself from the mints that follow.
+   *
+   *  What IS worth refusing is the state that contradicts that reasoning: supply already in
+   *  circulation at the first unpause, which means the sequence was not the one this ceremony
+   *  assumes. It costs one read, needs no decided number, and catches a real mistake. */
+  circulatingSilv: bigint;
   /** Guardians the program would accept: active, and not the current admin. */
   activeIndependentGuardians: number;
   /** `config.min_publishers`, and the floor the launch requires. */
@@ -41,10 +52,6 @@ export interface LaunchState {
   /** `config.pyth_lazer_feed_id`, and the feed the manifest names. */
   feedId: number;
   expectedFeedId: number;
-  /** Whether a live Lazer read has been performed against THIS cluster and satisfied every guard. */
-  oracleProbePassed: boolean;
-  /** Whether the public app is deployed and pointed at this program and mint. */
-  publicAppLive: boolean;
 }
 
 export interface Blocker {
@@ -80,16 +87,16 @@ export function decideLaunchReadiness(s: LaunchState): LaunchDecision {
     });
   }
 
-  // The treasury. Redemptions are OPEN from initialize, so at go-live the protocol ADVERTISES a
-  // redeem it may be unable to pay. A holder who redeems into an empty treasury does not get a
-  // graceful refusal of the product; they get a failed transaction against a promise.
-  if (s.treasuryUsdc < s.treasuryMinimumUsdc) {
+  // Supply must be zero at the FIRST unpause, because the launch sequence makes it so: initialize
+  // refuses a mint carrying supply, and both emission paths require !paused. Anything else means the
+  // protocol was already live, or the pre-mint ran before the go-live it is supposed to follow.
+  if (s.paused && s.circulatingSilv !== 0n) {
     blockers.push({
-      id: "treasury-underfunded",
+      id: "supply-already-circulating",
       why:
-        `the treasury holds ${s.treasuryUsdc} atomic USDC against a decided minimum of ` +
-        `${s.treasuryMinimumUsdc}. Redemptions are open from initialize, so going live here ` +
-        "advertises a redeem the treasury cannot honour.",
+        `${s.circulatingSilv} atomic SILV is already in circulation while the protocol is still ` +
+        "paused. The launch sequence cannot produce that: both emission paths require !paused, so " +
+        "this config was live before, and the assumptions behind this go-live no longer hold.",
     });
   }
 
@@ -133,25 +140,19 @@ export function decideLaunchReadiness(s: LaunchState): LaunchDecision {
         "single-publisher price becomes acceptable the moment the priced path is live.",
     });
   }
-  if (!s.oracleProbePassed) {
-    blockers.push({
-      id: "oracle-not-probed",
-      why:
-        "no live Lazer read has satisfied every on-chain guard on this cluster. Opening the priced " +
-        "path against unverified feed behaviour is the failure the guards exist to prevent.",
-    });
-  }
-
-  // The product. An open mint with no front end is a protocol users can only reach by hand, and the
-  // app is also where the freeze and seize disclosure lives.
-  if (!s.publicAppLive) {
-    blockers.push({
-      id: "public-app-not-live",
-      why:
-        "the public app is not deployed against this program and mint. Going live without it opens " +
-        "a priced path with no interface and no published disclosure.",
-    });
-  }
+  // TWO CHECKS WERE REMOVED HERE, and saying why is the point.
+  //
+  // `oracleProbePassed` and `publicAppLive` were booleans set from environment variables
+  // (DOMINION_ORACLE_PROBED, DOMINION_PUBLIC_APP_LIVE). They measured nothing: they proved that
+  // somebody typed a string. A gate whose input is an assertion by the party being gated is
+  // ceremony wearing the costume of a control, and it makes the remaining checks look weaker by
+  // association.
+  //
+  // What survives is the measurable part of the same concern: `feedId` and `minPublishers` are read
+  // off the config and compared to the manifest, so a wrong feed or a lowered publisher floor is
+  // refused on evidence. The live feed probe stays where it belongs, as its own runbook step with
+  // its own script (scripts/probe-lazer-feed.ts), and the public app deployment is verified by
+  // looking at it.
 
   // Stated rather than checked: these two are TRUE on a correct deployment and a mismatch means the
   // config is not the one this ceremony believes it is.

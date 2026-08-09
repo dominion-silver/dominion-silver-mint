@@ -181,13 +181,12 @@ fn add_guardian(f: &mut Fixture, g: &Keypair) -> TxOutcome {
             AccountMeta::new(config_pda(), false),
             AccountMeta::new_readonly(admin.pubkey(), true),
             AccountMeta::new(admin.pubkey(), true),
-            AccountMeta::new_readonly(g.pubkey(), true),
             AccountMeta::new(guardian_pda(&g.pubkey()), false),
             AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
         ],
         data: ix_data("add_guardian", g.pubkey().as_ref()),
     };
-    f.send(&[ix], &[&admin, g])
+    f.send(&[ix], &[&admin])
 }
 
 fn remove_guardian(f: &mut Fixture, g: Pubkey) -> TxOutcome {
