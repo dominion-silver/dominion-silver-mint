@@ -22,6 +22,7 @@
  */
 import { createHash } from "crypto";
 import { decideStateDisposition, classifyResume, planExecuteResume } from "./_run-state";
+import { assertContext as assertContextForTest } from "./e2e-inventory-change-devnet";
 import { collectLaunchState } from "./ceremony-step8";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import * as anchor from "@coral-xyz/anchor";
@@ -474,6 +475,46 @@ async function main(): Promise<void> {
       "no outcome except a completed run is allowed to delete the run record",
       "an incomplete outcome clears the state file, which is the A-06 defect returning",
     );
+  }
+
+  // ROUND 8 PASSA-03. The context checks must run on EVERY branch, including already-landed. The
+  // previous fixture called only the pure classifier, so it could not see that the landed branch
+  // returned before cluster/program/admin were ever established: a record copied from another
+  // cluster whose `to` happened to match would have been "recognised", deleted and exited 0.
+  //
+  // Read from the production source is NOT how this is checked. The source is executed: assertContext
+  // is exported and driven with hostile records.
+  {
+    const good = {
+      cluster: "devnet", rpc: "https://api.devnet.solana.com",
+      program: "3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ",
+      admin: "11111111111111111111111111111111",
+      from: "11111111111111111111111111111111", to: "11111111111111111111111111111111",
+      nonce: 3, proposedAt: 100, executableAt: 100 + 86400,
+    };
+    const BAD: Array<[string, any]> = [
+      ["a record from another cluster", { cluster: "mainnet-beta" }],
+      ["a record from another program", { program: "11111111111111111111111111111111" }],
+      ["a record naming another admin", { admin: "So11111111111111111111111111111111111111112" }],
+      ["a target B that is not a pubkey", { to: "not-a-pubkey" }],
+      ["a chronology that runs backwards", { executableAt: 50 }],
+    ];
+    let ctxFails = 0;
+    for (const [label, patch] of BAD) {
+      let threw = "";
+      try {
+        assertContextForTest({ ...good, ...patch } as any, PublicKey.default);
+      } catch (e) {
+        threw = String(e);
+      }
+      if (threw.includes("does not describe this world")) ctxFails++;
+      check(
+        threw.includes("does not describe this world"),
+        `the context check refuses ${label}, on every branch`,
+        `${label} would have been accepted, then classified, then possibly deleted`,
+      );
+    }
+    check(ctxFails === BAD.length, "all five hostile records were refused", "a hostile record passed");
   }
 
   if (failures > 0) {

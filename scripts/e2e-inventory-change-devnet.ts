@@ -88,11 +88,46 @@ function writeState(s: ChangeState): void {
  * would execute something other than what was proposed, or execute it somewhere else. A resume that
  * "mostly matches" is the failure mode this script exists to remove.
  */
-function assertResumable(s: ChangeState, admin: PublicKey, onChainFrom: PublicKey): void {
+/**
+ * ROUND 8 PASSA-03. THE CONTEXT CHECKS, SPLIT OUT so they run on EVERY branch.
+ *
+ * `already-landed` used to return before all of this: cluster, RPC, program id, admin, the
+ * readability of B and the persisted chronology. A stale file, or one copied from another cluster,
+ * whose `to` happened to match the current inventory wallet would be classified as landed, printed
+ * as a success, DELETED, and exited 0, without ever establishing it described this program, this
+ * admin or this proposal. That destroys the only local record of the original operation.
+ *
+ * Everything here is about whether the FILE describes THIS world. It deliberately excludes the
+ * `from == current wallet` comparison, which is the one check a landed change legitimately fails,
+ * and which `classifyResume` exists to interpret.
+ */
+export function assertContext(s: ChangeState, admin: PublicKey): void {
   const drift: string[] = [];
   if (s.cluster !== CLUSTER.cluster) drift.push(`cluster ${s.cluster} -> ${CLUSTER.cluster}`);
+  if (s.rpc !== CLUSTER.rpc) drift.push(`rpc ${s.rpc} -> ${CLUSTER.rpc}`);
   if (s.program !== PROGRAM_ID.toBase58()) drift.push(`program ${s.program} -> ${PROGRAM_ID.toBase58()}`);
   if (s.admin !== admin.toBase58()) drift.push(`admin ${s.admin} -> ${admin.toBase58()}`);
+  try {
+    // eslint-disable-next-line no-new
+    new PublicKey(s.to);
+  } catch {
+    drift.push(`target B ${s.to} is not a pubkey`);
+  }
+  if (!/^[0-9]+$/.test(String(s.nonce))) drift.push(`nonce ${s.nonce} is not a nonce`);
+  if (s.executableAt <= s.proposedAt) {
+    drift.push(`executableAt ${s.executableAt} is not after proposedAt ${s.proposedAt}`);
+  }
+  if (drift.length > 0) {
+    throw new Error(
+      `REFUSING: the run record does not describe this world:\n  ${drift.join("\n  ")}\n` +
+        `The record is KEPT at ${STATE_PATH}. Investigate before re-running.`,
+    );
+  }
+}
+
+function assertResumable(s: ChangeState, admin: PublicKey, onChainFrom: PublicKey): void {
+  assertContext(s, admin);
+  const drift: string[] = [];
   // The wallet the proposal was made AGAINST. If it already moved, executing would be a second,
   // unannounced change from a state nobody reviewed.
   if (s.from !== onChainFrom.toBase58())
@@ -109,7 +144,6 @@ function assertResumable(s: ChangeState, admin: PublicKey, onChainFrom: PublicKe
   if (s.executableAt <= s.proposedAt) {
     drift.push(`executableAt ${s.executableAt} is not after proposedAt ${s.proposedAt}`);
   }
-  if (s.rpc !== CLUSTER.rpc) drift.push(`rpc ${s.rpc} -> ${CLUSTER.rpc}`);
   if (drift.length > 0) {
     throw new Error(
       `REFUSING to resume: the world moved since the proposal.\n  ${drift.join("\n  ")}\n` +
@@ -243,6 +277,9 @@ async function main(): Promise<void> {
     // was stale, so the record says A while the chain says B. The runner used to print "resume with
     // --execute" for that case, a promise it could not keep.
     const c0 = await cfg();
+    // ROUND 8 PASSA-03. The context is established BEFORE the classification, on every branch, so a
+    // record from another cluster or another program can never be "recognised as landed" and deleted.
+    assertContext(s, admin);
     const plan = planExecuteResume(
       { from: s.from, to: s.to, nonce: s.nonce },
       {
