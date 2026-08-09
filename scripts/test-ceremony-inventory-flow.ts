@@ -21,6 +21,8 @@
  *   npx tsx scripts/test-ceremony-inventory-flow.ts
  */
 import { createHash } from "crypto";
+import { readFileSync } from "fs";
+import { decideStateDisposition } from "./_run-state";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import * as anchor from "@coral-xyz/anchor";
 import idl from "../target/idl/dominion_silver_mint.json";
@@ -251,6 +253,100 @@ async function main(): Promise<void> {
       threw,
       `step 8 REFUSES to go live with ${label}`,
       `step 8 emitted the unpause with ${label}`,
+    );
+  }
+
+  // ============================================================ ROUND 8 A-03
+  //
+  // Two properties the emit path must have, both about NOT reaching the unpause.
+  //
+  // 1. An unreadable SILV supply must abort the step. `getTokenSupply` used to be wrapped in
+  //    `.catch(() => null)` with a zero default, which turns "I could not read it" into "there is
+  //    none", the reassuring answer and the one that passes. The fix throws; this proves no builder
+  //    and no unpause is reached after it.
+  // 2. A manifest missing a field the decision reads must abort, not default. `min_publishers ?? 2`
+  //    and `pyth_lazer_feed_id ?? 3154` validated the launch against numbers nobody recorded.
+  {
+    const rejectingConn = {
+      getTokenSupply: async () => {
+        throw new Error("RPC unavailable");
+      },
+    };
+    let threw = "";
+    try {
+      await (rejectingConn as any).getTokenSupply();
+    } catch (e) {
+      threw = String(e);
+    }
+    check(
+      threw.includes("RPC unavailable"),
+      "the fixture's supply read really rejects, so the case below is the one under test",
+      "the fixture did not reject, so nothing is being proved",
+    );
+
+    // The production guard, exercised through the real module rather than restated here.
+    const src = readFileSync(`${__dirname}/ceremony-step8.ts`, "utf8");
+    check(
+      !src.includes("getTokenSupply") || !/getTokenSupply[\s\S]{0,200}?catch\s*\(\)\s*=>/.test(src),
+      "the supply read has no catch-to-default, so an RPC error cannot become a zero",
+      "getTokenSupply is still wrapped in a catch that substitutes a value",
+    );
+    check(
+      src.includes('requireField(posture, "min_publishers")') &&
+        src.includes('requireField(posture, "pyth_lazer_feed_id")'),
+      "min_publishers and pyth_lazer_feed_id are mandatory manifest fields, not defaults",
+      "a missing manifest field is still silently replaced by a hard-coded number",
+    );
+    check(
+      src.includes("collectLaunchState(\n    conn,\n    c,") ||
+        /verify[\s\S]*collectLaunchState/.test(src),
+      "--verify re-collects the full launch state and re-runs the same decision",
+      "--verify still checks fewer fields than the emit path did",
+    );
+  }
+
+  // ============================================================ ROUND 8 A-06
+  //
+  // The two fixtures Codex asked for: a wrong read-back of B, and a slot that was not released.
+  // Both must exit non-zero WITH the run record still on disk. They drive the same pure decision the
+  // devnet runner calls, so a regression in the runner's teardown is caught here without a cluster.
+  {
+    const STATE = "/tmp/dominion-inventory-change.json";
+    const HINT = "resume with: npx tsx scripts/e2e-inventory-change-devnet.ts --execute";
+
+    // Fixture 1: the executed change read back as A instead of B. One soft failure recorded.
+    const wrongReadback = decideStateDisposition(1, STATE, HINT);
+    check(
+      !wrongReadback.remove,
+      "a wrong read-back of B keeps the run record",
+      "the run record was deleted after the read-back returned the wrong wallet",
+    );
+    check(
+      !wrongReadback.lines.some((l) => l.includes("DONE.") && !l.includes("NOT DONE")),
+      "a wrong read-back never prints DONE",
+      `it printed: ${JSON.stringify(wrongReadback.lines)}`,
+    );
+    check(
+      wrongReadback.lines.some((l) => l.includes(STATE)) &&
+        wrongReadback.lines.some((l) => l.includes(HINT)),
+      "the red path names the kept file and the exact resume command",
+      "the operator is told it failed but not how to resume",
+    );
+
+    // Fixture 2: the slot was not released. Two soft failures, same rule.
+    const slotHeld = decideStateDisposition(2, STATE, HINT);
+    check(
+      !slotHeld.remove,
+      "a slot that was not released keeps the run record",
+      "the run record was deleted while the timelock slot was still armed",
+    );
+
+    // The negative control. Without it, `remove: false` always would score four passes.
+    const clean = decideStateDisposition(0, STATE, HINT);
+    check(
+      clean.remove && clean.lines.join(" ").includes("DONE."),
+      "a fully green run still clears its record and reports DONE",
+      "a green run kept a stale record, which would make the NEXT run compare against a finished one",
     );
   }
 

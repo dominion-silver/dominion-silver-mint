@@ -30,6 +30,7 @@ import path from "path";
 import { PROGRAM_ID } from "./_program-id";
 import { requireSanctionedCluster, assertReversible, intentFromEnv } from "./_guard";
 import { resolveCluster, describeCluster } from "./_cluster";
+import { decideStateDisposition } from "./_run-state";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -49,6 +50,16 @@ interface ChangeState {
   to: string;
   proposedAt: number;
   executableAt: number;
+}
+
+const SCRIPT_PATH = "scripts/e2e-inventory-change-devnet.ts";
+
+/** ROUND 8 A-06. The decision lives in `_run-state.ts` so it can be exercised without a cluster. */
+function keepStateOrClear(resumeHint: string): void {
+  const d = decideStateDisposition(fail, STATE_PATH, resumeHint);
+  if (d.remove) fs.rmSync(STATE_PATH, { force: true });
+  console.log("");
+  for (const l of d.lines) console.log(`  ${l}`);
 }
 
 let pass = 0;
@@ -301,8 +312,14 @@ async function main(): Promise<void> {
       `${new PublicKey(after.inventoryWallet).toBase58()} (expected ${s.to})`,
     );
     ok("the slot was released", after.pendingInventoryWalletNonce === null);
-    fs.rmSync(STATE_PATH);
-    console.log(`\n  DONE. ${s.from} -> ${s.to}, across a real ${s.executableAt - s.proposedAt}s timelock.`);
+    // ROUND 8 A-06. THE STATE FILE AND `DONE` ARE BOTH CONDITIONAL ON A CLEAN READ-BACK.
+    //
+    // These last two checks go through `ok()`, which records a failure and returns. The old code
+    // then deleted STATE_PATH unconditionally and printed DONE, so a stale or unavailable read-back
+    // that still answered A produced: a red line, the word DONE, and the destruction of the only
+    // file that could resume or investigate the run. Exit 1 with the evidence gone is worse than
+    // exit 1, because the operator cannot tell whether the change landed.
+    keepStateOrClear(`resume with: npx tsx ${path.relative(process.cwd(), SCRIPT_PATH)} --execute`);
   }
 
   // ------------------------------------------------------------------ cancel
@@ -327,7 +344,9 @@ async function main(): Promise<void> {
       "the cancel left the wallet where it was",
       new PublicKey(after.inventoryWallet).toBase58() === s.from,
     );
-    fs.rmSync(STATE_PATH);
+    // ROUND 8 A-06, same rule on the cancel branch: a cancel whose read-back is red has not been
+    // proved to have released anything, so its record stays.
+    keepStateOrClear(`re-check with: npx tsx ${path.relative(process.cwd(), SCRIPT_PATH)} --cancel`);
   }
 
   console.log(`\n=== ${pass} passed, ${fail} failed ===`);

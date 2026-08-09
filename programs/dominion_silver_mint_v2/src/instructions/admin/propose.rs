@@ -356,8 +356,9 @@ pub struct ProposeInventoryWallet<'info> {
 
 /// Propose CHANGING the pre-mint destination. Round 7, SolidProof condition 4.
 ///
-/// The payload is the 32-byte destination pubkey. Only a change is proposable: the first binding
-/// takes the instant path, which refuses once the field is set.
+/// The payload is the 32-byte destination pubkey. ROUND 8 A-05: there is no instant path and no
+/// "first binding" here. `initialize` requires a non-zero destination, so the field is never unset
+/// and this pair is the ONLY writer after init. No path returns it to `Pubkey::default()`.
 pub fn propose_set_inventory_wallet_handler(
     ctx: Context<ProposeInventoryWallet>,
     new_wallet: Pubkey,

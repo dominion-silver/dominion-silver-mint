@@ -75,6 +75,22 @@ pub fn unpause_handler(ctx: Context<Unpause>) -> Result<()> {
         DominionError::GuardianNotIndependent
     );
 
+    // ROUND 8 A-03. THE GAP BETWEEN EMITTING AN UNPAUSE AND EXECUTING IT.
+    //
+    // `scripts/_launch-readiness.ts` decides go/no-go from the config, the feed, the publisher floor,
+    // the treasury and the supply. It runs when the ceremony BUILDS the unpause. The unpause is a
+    // Squads proposal, so it executes later, and between those two moments a timelocked action that
+    // was already mature can execute against a paused config. Auto-pause is idempotent there, so
+    // nothing invalidates the approved unpause, and it lands on a config the decision never saw.
+    //
+    // Binding the instruction to a config fingerprint would need the caller to carry one and would
+    // grow this account struct, which is 120 bytes from the BPF frame limit on the hot paths. This
+    // is the same property for one comparison: if no action is armed, nothing can execute in the gap.
+    require!(
+        ctx.accounts.config.active_proposal_count == 0,
+        DominionError::UnpauseWithArmedProposal
+    );
+
     let config = &mut ctx.accounts.config;
     config.paused = false;
     emit!(Unpaused {

@@ -14,6 +14,7 @@ use solana_sdk::signature::{Keypair, Signer};
 
 // ---------------------------------------------------------------- codes and constants
 
+const E_UNPAUSE_WITH_ARMED_PROPOSAL: u32 = 12126;
 const E_TIMELOCK_TOO_SHORT: u32 = 12037;
 const E_TIMELOCK_TOO_LONG: u32 = 12038;
 const E_NONCE_MISMATCH: u32 = 12042;
@@ -206,6 +207,27 @@ fn pause(f: &mut Fixture) -> TxOutcome {
 
 /// ROUND 8: routed through the common helper, which installs the independent guardian that
 /// `unpause` now demands.
+/// ROUND 8 A-03. Cancel a queued action as the admin, so a test can reach the state the new
+/// `unpause` requires: no armed slot. The instruction is `cancel_timelocked_action(nonce)`.
+fn cancel_as_admin(f: &mut Fixture, nonce: u64) -> TxOutcome {
+    let admin = f.admin.insecure_clone();
+    let tl = timelock_pda(nonce);
+    let ix = Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(config_pda(), false),
+            AccountMeta::new(tl, false),
+            AccountMeta::new(admin.pubkey(), false),
+            AccountMeta::new_readonly(admin.pubkey(), true),
+            // The guardian slot is optional; Anchor 0.31 expects the PROGRAM ID in the position of
+            // an absent optional account, not an omitted key. Admin-signed cancels pass no guardian.
+            AccountMeta::new_readonly(program_id(), false),
+        ],
+        data: ix_data("cancel_timelocked_action", &nonce.to_le_bytes()),
+    };
+    f.send(&[ix], &[&admin])
+}
+
 fn unpause(f: &mut Fixture) -> TxOutcome {
     f.unpause()
 }
@@ -421,10 +443,28 @@ fn execute_set_redeem_limits_refuses_to_land_while_paused() {
         "the slot was disarmed by the refused execute"
     );
 
-    expect_ok(unpause(&mut f), "unpause");
+    // ROUND 8 A-03. Same rule, same reason: unpausing with a matured loosening still armed is the
+    // exact gap between the readiness decision (taken when the unpause is built) and its execution.
+    expect_error(
+        unpause(&mut f),
+        E_UNPAUSE_WITH_ARMED_PROPOSAL,
+        "unpause while a matured redeem-limits loosening is armed",
+    );
+    assert!(f.config().paused, "the refused unpause resumed the protocol");
+
+    expect_ok(cancel_as_admin(&mut f, nonce), "cancel the armed loosening");
+    assert_eq!(f.config().pending_redeem_limits_nonce, None, "the cancel left the slot armed");
+    expect_ok(unpause(&mut f), "unpause once nothing is armed");
+
+    let (r2, nonce2) = propose_limits(
+        &mut f,
+        Limits { enabled: Some(true), ..Default::default() },
+    );
+    expect_ok(r2, "re-propose after resuming");
+    warp_past_the_window(&mut f);
     expect_ok(
-        execute(&mut f, "execute_set_redeem_limits", nonce),
-        "execute after unpausing",
+        execute(&mut f, "execute_set_redeem_limits", nonce2),
+        "execute against a running protocol",
     );
     assert!(f.config().redemptions_enabled, "the execute applied nothing");
 }
@@ -807,10 +847,31 @@ fn execute_set_public_mint_refuses_to_land_while_paused() {
         "the refused execute disarmed the slot"
     );
 
-    expect_ok(unpause(&mut f), "unpause");
+    // ROUND 8 A-03. Unpausing with that slot STILL ARMED is now refused on-chain. This test used to
+    // unpause here and watch the matured open land immediately after, which is precisely the gap the
+    // finding describes: the readiness decision runs when the unpause is BUILT, and a matured action
+    // executing in between changes the config it approved.
+    expect_error(
+        unpause(&mut f),
+        E_UNPAUSE_WITH_ARMED_PROPOSAL,
+        "unpause while a matured open is armed",
+    );
+    assert!(f.config().paused, "the refused unpause resumed the protocol");
+
+    // The way out is to disarm first, which is also the operationally correct order: decide about the
+    // queued action while still paused, THEN resume.
+    expect_ok(cancel_as_admin(&mut f, nonce), "cancel the armed open");
+    assert_eq!(f.config().pending_public_mint_nonce, None, "the cancel left the slot armed");
+    expect_ok(unpause(&mut f), "unpause once nothing is armed");
+
+    // The original property is kept: the action still applies when it is proposed and executed
+    // against a running protocol.
+    let (r2, nonce2) = propose(&mut f, "propose_set_public_mint", &[1]);
+    expect_ok(r2, "re-propose after resuming");
+    warp_past_the_window(&mut f);
     expect_ok(
-        execute(&mut f, "execute_set_public_mint", nonce),
-        "execute after unpausing",
+        execute(&mut f, "execute_set_public_mint", nonce2),
+        "execute against a running protocol",
     );
     assert!(f.config().public_mint_enabled, "the execute applied nothing");
 }

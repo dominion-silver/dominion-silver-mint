@@ -26,12 +26,19 @@ import sys
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 B58 = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
-# ROUND 8 T8-04. The convention this project actually uses, MEASURED rather than invented: the
-# manifest and the CI job both carry a bare semver ("0.5.1"). A first version of this rule demanded
-# "solana-verify <semver>" and rejected the real fixture, which is the same mistake as asserting a
-# format without looking at the one in use. A leading "solana-verify " is tolerated because it is the
-# tool's own `--version` output and an operator may paste it.
-APPROVED_VERIFY = re.compile(r"^(solana-verify )?\d+\.\d+\.\d+$")
+# ROUND 8 A-04. A BARE semver, and an EXACT allowlist, not a shape.
+#
+# Two defects were folded into the old rule. First it accepted any shape-matching string, including
+# `999999.999999.999999`, so "approved" named nothing. Second, and worse operationally, CI wrote this
+# field from `solana-verify --version`, which prints "solana-verify 0.5.1", while the install step
+# feeds the field verbatim to `cargo install --version`, which needs a bare semver. The runbook told
+# the operator to copy one into the other, so the FIRST ci run after any pin failed to install its
+# own pinned tool. The producer now emits the bare token and this is the consumer-side gate.
+#
+# The allowlist is exact. Adding a version is a deliberate commit, which is the point: the tool that
+# decides which bytes are reproducible is not a thing to leave floating.
+APPROVED_VERIFY_VERSIONS = frozenset({"0.5.1"})
+_BARE_SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 def validate_pinned(rel: dict, root: str) -> list[str]:
@@ -72,13 +79,16 @@ def validate_pinned(rel: dict, root: str) -> list[str]:
     tool = rel.get("solana_verify_version")
     if not tool:
         bad.append("solana_verify_version is missing")
-    elif not APPROVED_VERIFY.match(str(tool)):
-        # An allowlist by SHAPE, not by exact string: the point is that the field names the tool and a
-        # version, so a reader can tell which build convention produced the hashes. Free text could
-        # say anything, and did.
+    elif not _BARE_SEMVER.match(str(tool)):
         bad.append(
-            f"solana_verify_version {tool!r} is not an approved solana-verify version "
-            "(expected e.g. 'solana-verify 0.4.7')"
+            f"solana_verify_version {tool!r} is not a bare semver. This value is passed verbatim to "
+            "`cargo install solana-verify --version`, so 'solana-verify 0.5.1' pins a version CI "
+            "cannot install. Record the token alone, e.g. '0.5.1'."
+        )
+    elif str(tool) not in APPROVED_VERIFY_VERSIONS:
+        bad.append(
+            f"solana_verify_version {tool!r} is not in the approved set "
+            f"{sorted(APPROVED_VERIFY_VERSIONS)}. Adding one is a deliberate commit."
         )
 
     # THE ATTESTED COMMIT MUST EXIST IN THIS TREE. Forty hex characters is a shape; a commit is a

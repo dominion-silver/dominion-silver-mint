@@ -253,6 +253,46 @@ async function main() {
     `  fee vault         : ${feeVaultAta.toBase58()}  ${feeVaultExists ? "exists" : "MISSING (step 9b)"}`,
   );
 
+  const readiness = await collectLaunchState(conn, c0, guardians, inventoryWallet, feeVaultExists);
+
+  const actions = await buildStep8Actions({
+    program,
+    configPda,
+    admin,
+    guardians,
+    guardianExists: (pda) => existing.has(pda.toBase58()),
+    paused: c0.paused === true,
+    boundInventoryWallet: new PublicKey(c0.inventoryWallet),
+    expectedInventoryWallet: new PublicKey(inventoryWallet),
+    feeVaultExists,
+    readiness,
+  });
+
+  if (MODE === "send") {
+    await sendAll(conn, signer!, actions);
+    return verify(conn, await cfg(), guardians, inventoryWallet);
+  }
+  emit("step8", describeCluster(CLUSTER), actions);
+  console.log(`\n  After the Squads executions land, run:  npx tsx scripts/ceremony-step8.ts --verify`);
+}
+
+/**
+ * ROUND 8 A-03. THE GO-LIVE STATE, COLLECTED IN ONE PLACE so `--verify` cannot check less than the
+ * emit path did.
+ *
+ * This block used to live inline in the emit path only. `--verify` returned before reaching it, so
+ * the command the runbook tells the operator to run AFTER the multisig execution re-read `paused`
+ * and the fee vault and nothing else: not the supply, not the feed, not the publisher floor, not
+ * whether a guardian is still eligible. Every field the decision depends on could have moved between
+ * emission and execution and the verification would still have reported success.
+ */
+async function collectLaunchState(
+  conn: Connection,
+  c0: any,
+  guardians: string[],
+  inventoryWallet: string,
+  feeVaultExists: boolean,
+): Promise<LaunchState> {
   // ROUND 8 F-01. The go-live state, GATHERED HERE, on the path that actually emits the unpause.
   //
   // Everything here is READ, never asserted. An earlier version carried two booleans set from
@@ -289,7 +329,7 @@ async function main() {
     )
   ).filter(Boolean).length;
 
-  const readiness = {
+  return {
     paused: c0.paused === true,
     publicMintEnabled: c0.publicMintEnabled === true,
     redemptionsEnabled: c0.redemptionsEnabled === true,
@@ -299,30 +339,30 @@ async function main() {
     circulatingSilv,
     activeIndependentGuardians: eligible,
     minPublishers: Number(c0.minPublishers),
-    requiredMinPublishers: Number(posture.min_publishers ?? 2),
+    requiredMinPublishers: Number(requireField(posture, "min_publishers")),
     feedId: Number(c0.pythLazerFeedId),
-    expectedFeedId: Number(posture.pyth_lazer_feed_id ?? 3154),
-  };
-
-  const actions = await buildStep8Actions({
-    program,
-    configPda,
-    admin,
-    guardians,
-    guardianExists: (pda) => existing.has(pda.toBase58()),
-    paused: c0.paused === true,
-    boundInventoryWallet: new PublicKey(c0.inventoryWallet),
-    expectedInventoryWallet: new PublicKey(inventoryWallet),
-    feeVaultExists,
-    readiness,
-  });
-
-  if (MODE === "send") {
-    await sendAll(conn, signer!, actions);
-    return verify(conn, await cfg(), guardians, inventoryWallet);
+    expectedFeedId: Number(requireField(posture, "pyth_lazer_feed_id")),
   }
-  emit("step8", describeCluster(CLUSTER), actions);
-  console.log(`\n  After the Squads executions land, run:  npx tsx scripts/ceremony-step8.ts --verify`);
+}
+
+/**
+ * ROUND 8 A-03. A manifest field the decision depends on is MANDATORY, not defaulted.
+ *
+ * `posture.min_publishers ?? 2` and `posture.pyth_lazer_feed_id ?? 3154` silently substituted the
+ * values a reader would expect to see, so a manifest that had lost either field produced a green
+ * readiness against numbers nobody recorded. An absent field means the manifest is incomplete, and
+ * an incomplete manifest is exactly the state that must stop a launch.
+ */
+function requireField(posture: any, name: string): number | string {
+  const v = posture?.[name];
+  if (v === undefined || v === null || v === "") {
+    throw new Error(
+      `REFUSING step 8: config/mainnet-authorities.json launch_posture.${name} is missing. ` +
+        "The go-live decision reads it, and defaulting it would validate the launch against a " +
+        "number nobody recorded.",
+    );
+  }
+  return v;
 }
 
 async function verify(
@@ -383,6 +423,35 @@ async function verify(
   ck.eq("redemptions open (round 8 launch posture)", c.redemptionsEnabled, true);
   // D5: a value, not a verdict.
   ck.note("treasury_min_float_usdc", `${c.treasuryMinFloatUsdc} (D5 ships 0, risk accepted)`);
+  // ROUND 8 A-03. RE-RUN THE SAME DECISION, from the same collector, on the state AS EXECUTED.
+  //
+  // The unpause is a Squads proposal: it is built at one moment and executed at another. Everything
+  // above re-reads individual fields; none of it re-ran the go-live DECISION, and the decision is
+  // what the operator was told the launch depended on. Between emission and execution a matured
+  // timelocked action could land, the feed or the publisher floor could move, or a guardian could
+  // enter cooldown, and this command would still print a clean list.
+  //
+  // The on-chain `unpause` now refuses while any slot is armed, which closes the mechanism. This
+  // closes the REPORT: after the fact, the same function that authorised the launch says whether the
+  // state that actually went live is the state it approved.
+  const executedState = await collectLaunchState(
+    conn,
+    c,
+    guardians,
+    inventoryWallet,
+    vaultExists === true,
+  );
+  const executedDecision = decideLaunchReadiness({ ...executedState, paused: false });
+  ck.eq(
+    "the executed state still satisfies the same go-live decision",
+    executedDecision.blockers.length,
+    0,
+  );
+  for (const b of executedDecision.blockers) {
+    console.log(`        blocker after execution: ${b.id}: ${b.why}`);
+  }
+  ck.eq("no timelocked action is armed", Number(c.activeProposalCount ?? 0), 0);
+
   console.log("\n  Next: step 9 (pre-mint, D11: the operational tranche only) and 9b (fee vault).");
   ck.finish("step 8");
 }

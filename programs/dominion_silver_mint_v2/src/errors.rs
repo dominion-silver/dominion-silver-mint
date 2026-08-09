@@ -352,4 +352,18 @@ pub enum DominionError {
     /// A guardian slot held by the current admin is a brake wired to the same lever.
     #[msg("the supplied guardian is the current admin, so it is not an independent brake")]
     GuardianNotIndependent,
+
+    /// ROUND 8 A-03. `unpause` is the go-live, and it is emitted BEFORE it executes: a Squads
+    /// proposal is approved and executed later, sometimes much later. In that gap a timelocked
+    /// action that was already mature can execute while the protocol is still paused. Its auto-pause
+    /// is idempotent on an already-paused config, so the OLD unpause stays valid and lands on a
+    /// config that no longer matches the one the launch-readiness decision approved: a different
+    /// oracle feed, a different publisher floor, different guards.
+    ///
+    /// The off-chain readiness check cannot close that gap, because it runs at emission. This can:
+    /// the only thing that can silently change the config between emission and execution is an armed
+    /// timelocked action executing, so an unpause is refused while ANY slot is armed. Cancel or
+    /// execute the pending actions first, re-run the readiness collection, then go live.
+    #[msg("cannot unpause while a timelocked action is armed: it could execute after this unpause was approved and change the config the readiness decision validated")]
+    UnpauseWithArmedProposal,
 }
