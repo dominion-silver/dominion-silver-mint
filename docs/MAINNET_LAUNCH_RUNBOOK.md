@@ -302,8 +302,14 @@ print("pinned idl:", pin)
 assert pin is not None, "release_artifact.idl_sha256 is null: step 2c did not record it"
 assert a == pin, "the local IDL is not the one CI attested"
 EOF
-diff <(python3 -m json.tool /tmp/onchain-idl.json) \
-     <(python3 -m json.tool target/idl/dominion_silver_mint.json) \
+# --sort-keys IS REQUIRED, measured on the devnet rehearsal 2026-08-10. `anchor idl fetch` returns
+# the SAME bytes count and the same content, but with the top-level keys in a different ORDER than
+# the file on disk (it leads with `accounts`, the file leads with `address`). Without --sort-keys
+# this diff reports a 67-line mismatch on a perfectly correct upload, and the ceremony stops on a
+# false alarm at the step right after the irreversible deploy. Content equality is what is being
+# asserted here; byte-for-byte equality of the serialised form is not a property anchor offers.
+diff <(python3 -m json.tool --sort-keys /tmp/onchain-idl.json) \
+     <(python3 -m json.tool --sort-keys target/idl/dominion_silver_mint.json) \
   && echo "on-chain IDL matches the attested file"
 ```
 
