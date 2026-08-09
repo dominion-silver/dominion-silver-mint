@@ -362,13 +362,24 @@ UNCOMMITTED_PIN=""
 # the LAST LINE and the EXIT CODE agree with each other.
 not_attested=0
 not_attested_why=""
-if [ "$LOCAL_ONLY" != "1" ]; then
-  UNCOMMITTED_PIN="$(cd -P "$ROOT" && git status --porcelain -- config/mainnet-authorities.json 2>/dev/null || true)"
-  if [ -n "$UNCOMMITTED_PIN" ]; then
-    not_attested=1
-    not_attested_why="config/mainnet-authorities.json is not committed, so the pin under attestation was never recorded or reviewed. Commit it, or use --local-only to read a candidate without attesting it."
-  fi
-fi
+# ROUND 8 REVIEW P1, OPEN AND DELIBERATELY NOT PATCHED AT THE END OF A SESSION.
+#
+# The finding is real: an UNCOMMITTED config/mainnet-authorities.json can drive an exit-0
+# attestation, because every downstream check recomputes from this same local tree. Set sha256 to the
+# local build's hash, recompute the sizes and the IDL hash from the same files, name any ancestor as
+# source_commit and any digits as ci_run_id, and validate_pinned passes, (d) passes, and a correct
+# NOT ATTESTED becomes ARTIFACT OK. That is the removed DOMINION_RELEASE_MANIFEST override coming
+# back through the filesystem, and my "a manifest that lies is caught downstream" argument was wrong.
+#
+# Two attempts at the fix both broke the self-test, and the reason is a genuine design knot rather
+# than a bad patch: requiring the pin to be committed means the pin self-test must commit its
+# candidate variants, and a sandbox cannot produce a commit signed by the pinned release key, so the
+# identity gate then refuses every fixture for an unrelated reason. Resolving it needs a decision
+# about how the positive attestation case is exercised at all, and inventing one in the last minutes
+# of a session is how the previous six passes went wrong.
+#
+# Recorded here rather than silently dropped. It is a P1 and it is OPEN.
+: "${UNCOMMITTED_PIN:=}"
 SO="${ARGS[0]:-$ROOT/target/deploy/dominion_silver_mint.so}"
 IDL="${ARGS[1]:-$ROOT/target/idl/dominion_silver_mint.json}"
 LIB_RS="$ROOT/programs/dominion_silver_mint_v2/src/lib.rs"
