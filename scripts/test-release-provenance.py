@@ -14,6 +14,7 @@ thing it must not do.
 """
 import importlib.util
 import json
+import tempfile
 import os
 import subprocess
 import sys
@@ -146,26 +147,55 @@ def main() -> None:
             "provenance is a live check, not a shape check"
         )
 
-    # ROUND 8 A-04, the second half. The producer writes `solana_verify_version` and the installer
-    # feeds it to `cargo install --version`, which needs a bare semver. `solana-verify --version`
-    # prints "solana-verify 0.5.1". Copying one into the other, exactly as the runbook instructs,
-    # broke the first CI run after any pin. Both formats are exercised here against the REAL
-    # produced string, not against a hand-written ideal.
-    for raw, expect_ok_ in (("0.5.1", True), ("solana-verify 0.5.1", False), ("0.5", False)):
-        pin = base_pin()
-        pin["solana_verify_version"] = raw
-        problems = validate_pinned(pin, ROOT)
-        rejected = any("solana_verify_version" in p for p in problems)
-        if expect_ok_ and rejected:
-            bad(f"the bare semver {raw!r}, which cargo install accepts, was refused")
-        elif not expect_ok_ and not rejected:
-            bad(
-                f"{raw!r} was accepted as solana_verify_version.\n"
-                "      This value is passed verbatim to `cargo install --version`, which needs a"
-                " bare semver, so accepting it pins a version CI cannot install."
-            )
-    if not failures:
-        ok("solana_verify_version accepts the bare semver CI installs and refuses the raw --version line")
+    # ROUND 8 FINAL-06. THE PRODUCER IS EXECUTED, not restated.
+    #
+    # The previous version wrote its own three strings and called them "the REAL produced string".
+    # A workflow regressing to `.stdout.strip()` would start writing "solana-verify 0.5.1" again while
+    # this test stayed green on its own literal. Both sides now call
+    # `scripts/_solana_verify_version.py`, so a regression there turns THIS red.
+    sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    import _solana_verify_version as svv
+
+    # A fake `solana-verify` on PATH emitting the line the real tool emits, so `measured()` runs the
+    # whole production path (subprocess included) rather than just its parser.
+    with tempfile.TemporaryDirectory() as fake_bin:
+        stub = os.path.join(fake_bin, "solana-verify")
+        with open(stub, "w") as fh:
+            fh.write("#!/bin/sh\necho 'solana-verify 0.5.1'\n")
+        os.chmod(stub, 0o755)
+        prev = os.environ["PATH"]
+        os.environ["PATH"] = fake_bin + os.pathsep + prev
+        try:
+            produced = svv.measured()
+        finally:
+            os.environ["PATH"] = prev
+    if produced != "0.5.1":
+        bad(
+            f"the shared producer emitted {produced!r} from the real tool's line.\n"
+            "      The installer feeds this to `cargo install --version`, which needs a bare semver."
+        )
+    else:
+        ok("the shared producer turns the real --version line into the bare semver CI installs")
+
+    # And the value it produces must be one the consumer accepts. This is the join the operational
+    # defect lived in: producer and consumer were each internally consistent and disagreed.
+    pin = base_pin()
+    pin["solana_verify_version"] = produced
+    if any("solana_verify_version" in p for p in validate_pinned(pin, ROOT)):
+        bad(f"the consumer rejects {produced!r}, the exact value the producer writes")
+    else:
+        ok("the value the producer writes is the value the consumer accepts")
+
+    # The refusals, driven through the same shared function.
+    # NOT "solana-verify 0.5.1": extracting the token from that line is the function's JOB. What it
+    # must refuse is a line whose last token is not a semver, because that is a version CI cannot
+    # install and guessing one would pin a tool nobody chose.
+    for raw in ("0.5", "", "solana-verify beta", "solana-verify"):
+        try:
+            svv.bare_semver(raw)
+        except SystemExit:
+            continue
+        bad(f"the shared producer accepted {raw!r}, which cargo install cannot use")
 
     if failures:
         print(f"\nRELEASE PROVENANCE TEST FAILED: {len(failures)} invented values accepted")

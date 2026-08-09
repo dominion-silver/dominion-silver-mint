@@ -21,8 +21,8 @@
  *   npx tsx scripts/test-ceremony-inventory-flow.ts
  */
 import { createHash } from "crypto";
-import { readFileSync } from "fs";
 import { decideStateDisposition } from "./_run-state";
+import { collectLaunchState } from "./ceremony-step8";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import * as anchor from "@coral-xyz/anchor";
 import idl from "../target/idl/dominion_silver_mint.json";
@@ -256,52 +256,109 @@ async function main(): Promise<void> {
     );
   }
 
-  // ============================================================ ROUND 8 A-03
+  // ============================================================ ROUND 8 FINAL-04
   //
-  // Two properties the emit path must have, both about NOT reaching the unpause.
-  //
-  // 1. An unreadable SILV supply must abort the step. `getTokenSupply` used to be wrapped in
-  //    `.catch(() => null)` with a zero default, which turns "I could not read it" into "there is
-  //    none", the reassuring answer and the one that passes. The fix throws; this proves no builder
-  //    and no unpause is reached after it.
-  // 2. A manifest missing a field the decision reads must abort, not default. `min_publishers ?? 2`
-  //    and `pyth_lazer_feed_id ?? 3154` validated the launch against numbers nobody recorded.
+  // These fixtures CALL the production collector. The previous version read `ceremony-step8.ts` as
+  // text and matched three regexes against it, while claiming to exercise the module. That is the
+  // over-claiming label that reopened T8-02 and T8-04, and it hid a real defect: `requireField`
+  // refused only null/undefined/"", so "not-a-number" became NaN and every comparison against NaN is
+  // false, which made the publisher-floor blocker vanish.
   {
-    const rejectingConn = {
-      getTokenSupply: async () => {
-        throw new Error("RPC unavailable");
-      },
+    const okConf = {
+      getTokenSupply: async () => ({ value: { amount: "0" } }),
+      getAccountInfo: async () => null,
+    } as any;
+    const c0 = {
+      paused: true,
+      publicMintEnabled: true,
+      redemptionsEnabled: true,
+      inventoryWallet: PublicKey.default,
+      admin: PublicKey.default,
+      silvMint: PublicKey.default,
+      minPublishers: 2,
+      pythLazerFeedId: 3154,
     };
-    let threw = "";
+    const GUARDS: string[] = [];
+    const WALLET = PublicKey.default.toBase58();
+    const good = { launch_posture: { min_publishers: 2, pyth_lazer_feed_id: 3154 } };
+
+    const call = async (manifest: any, conn: any = okConf) =>
+      collectLaunchState(conn, c0, GUARDS, WALLET, true, manifest);
+
+    // The positive control FIRST, so every refusal below means something.
+    let baseline = "";
     try {
-      await (rejectingConn as any).getTokenSupply();
+      await call(good);
     } catch (e) {
-      threw = String(e);
+      baseline = String(e);
     }
     check(
-      threw.includes("RPC unavailable"),
-      "the fixture's supply read really rejects, so the case below is the one under test",
-      "the fixture did not reject, so nothing is being proved",
+      baseline === "",
+      "a well-formed manifest is accepted by the real collector",
+      `the collector refused a valid manifest: ${baseline.slice(0, 140)}`,
     );
 
-    // The production guard, exercised through the real module rather than restated here.
-    const src = readFileSync(`${__dirname}/ceremony-step8.ts`, "utf8");
+    // Every way min_publishers can be wrong. Each must REACH the collector and make it throw.
+    const BAD: Array<[string, any]> = [
+      ["absent", {}],
+      ["empty string", { min_publishers: "" }],
+      ["non-numeric string", { min_publishers: "not-a-number" }],
+      ["NaN literal", { min_publishers: NaN }],
+      ["fraction", { min_publishers: 1.5 }],
+      ["negative", { min_publishers: -1 }],
+      ["zero, below the floor", { min_publishers: 0 }],
+      ["out of range", { min_publishers: 99999 }],
+    ];
+    for (const [label, patch] of BAD) {
+      let threw = "";
+      try {
+        await call({ launch_posture: { pyth_lazer_feed_id: 3154, ...patch } });
+      } catch (e) {
+        threw = String(e);
+      }
+      check(
+        threw.includes("min_publishers"),
+        `the collector refuses min_publishers: ${label}`,
+        `min_publishers ${label} reached the readiness decision (threw: ${threw.slice(0, 90) || "nothing"})`,
+      );
+    }
+
+    // The same guarantee on the other field the decision reads.
+    for (const [label, patch] of [
+      ["absent", {}],
+      ["non-numeric string", { pyth_lazer_feed_id: "feed" }],
+      ["negative", { pyth_lazer_feed_id: -1 }],
+    ] as Array<[string, any]>) {
+      let threw = "";
+      try {
+        await call({ launch_posture: { min_publishers: 2, ...patch } });
+      } catch (e) {
+        threw = String(e);
+      }
+      check(
+        threw.includes("pyth_lazer_feed_id"),
+        `the collector refuses pyth_lazer_feed_id: ${label}`,
+        `pyth_lazer_feed_id ${label} reached the readiness decision`,
+      );
+    }
+
+    // An RPC error must ABORT, not become a zero supply. Driven through the real collector with a
+    // rejecting connection, not by calling the fake and asserting the fake rejected.
+    let supplyThrew = "";
+    try {
+      await call(good, {
+        getTokenSupply: async () => {
+          throw new Error("RPC unavailable");
+        },
+        getAccountInfo: async () => null,
+      });
+    } catch (e) {
+      supplyThrew = String(e);
+    }
     check(
-      !src.includes("getTokenSupply") || !/getTokenSupply[\s\S]{0,200}?catch\s*\(\)\s*=>/.test(src),
-      "the supply read has no catch-to-default, so an RPC error cannot become a zero",
-      "getTokenSupply is still wrapped in a catch that substitutes a value",
-    );
-    check(
-      src.includes('requireField(posture, "min_publishers")') &&
-        src.includes('requireField(posture, "pyth_lazer_feed_id")'),
-      "min_publishers and pyth_lazer_feed_id are mandatory manifest fields, not defaults",
-      "a missing manifest field is still silently replaced by a hard-coded number",
-    );
-    check(
-      src.includes("collectLaunchState(\n    conn,\n    c,") ||
-        /verify[\s\S]*collectLaunchState/.test(src),
-      "--verify re-collects the full launch state and re-runs the same decision",
-      "--verify still checks fewer fields than the emit path did",
+      supplyThrew.includes("could not read the SILV supply"),
+      "an unreadable SILV supply aborts the collector before any builder is reached",
+      `an RPC failure did not abort the collector (threw: ${supplyThrew.slice(0, 90) || "nothing"})`,
     );
   }
 

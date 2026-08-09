@@ -286,20 +286,25 @@ async function main() {
  * whether a guardian is still eligible. Every field the decision depends on could have moved between
  * emission and execution and the verification would still have reported success.
  */
-async function collectLaunchState(
-  conn: Connection,
+export async function collectLaunchState(
+  conn: Pick<Connection, "getTokenSupply" | "getAccountInfo">,
   c0: any,
   guardians: string[],
   inventoryWallet: string,
   feeVaultExists: boolean,
+  // ROUND 8 FINAL-04. INJECTED, so a fixture can drive this function with a hostile manifest and a
+  // rejecting RPC instead of reading the source file and matching regexes against it. The previous
+  // test claimed to exercise the production module and in fact grepped its text, which is the same
+  // over-claiming label that reopened T8-02 and T8-04.
+  manifestOverride?: any,
 ): Promise<LaunchState> {
   // ROUND 8 F-01. The go-live state, GATHERED HERE, on the path that actually emits the unpause.
   //
   // Everything here is READ, never asserted. An earlier version carried two booleans set from
   // environment variables, which measured nothing and are gone; see _launch-readiness.ts.
-  const manifest = JSON.parse(
-    fs.readFileSync(`${__dirname}/../config/mainnet-authorities.json`, "utf8"),
-  );
+  const manifest =
+    manifestOverride ??
+    JSON.parse(fs.readFileSync(`${__dirname}/../config/mainnet-authorities.json`, "utf8"));
   const posture = manifest?.launch_posture ?? {};
   // Circulating supply, read off the SILV mint. See _launch-readiness.ts for why this replaced a
   // treasury threshold: at the first unpause the supply is provably zero, so an empty treasury is
@@ -339,30 +344,58 @@ async function collectLaunchState(
     circulatingSilv,
     activeIndependentGuardians: eligible,
     minPublishers: Number(c0.minPublishers),
-    requiredMinPublishers: Number(requireField(posture, "min_publishers")),
+    requiredMinPublishers: requireNumberInRange(posture, "min_publishers", 1, 64),
     feedId: Number(c0.pythLazerFeedId),
-    expectedFeedId: Number(requireField(posture, "pyth_lazer_feed_id")),
+    expectedFeedId: requireNumberInRange(posture, "pyth_lazer_feed_id", 0, 0xffffffff),
   }
 }
 
 /**
- * ROUND 8 A-03. A manifest field the decision depends on is MANDATORY, not defaulted.
+ * ROUND 8 FINAL-04. A manifest field the decision depends on must be a NUMBER IN RANGE, not merely
+ * present.
  *
- * `posture.min_publishers ?? 2` and `posture.pyth_lazer_feed_id ?? 3154` silently substituted the
- * values a reader would expect to see, so a manifest that had lost either field produced a green
- * readiness against numbers nobody recorded. An absent field means the manifest is incomplete, and
- * an incomplete manifest is exactly the state that must stop a launch.
+ * The first version refused only `undefined`, `null` and `""`, returned everything else, and the
+ * caller wrapped it in `Number(...)`. `"not-a-number"` therefore became `NaN`, and every comparison
+ * against `NaN` is false, so the publisher-floor blocker silently disappeared. Measured against the
+ * unchanged production decision:
+ *
+ *     min_publishers=2      ready=false  blockers=publisher-floor-too-low
+ *     min_publishers=NaN    ready=true   blockers=
+ *
+ * A corrupt manifest could therefore authorise an unpause with no effective publisher floor. This is
+ * worse than the default it replaced, which at least substituted a number that blocks.
  */
-function requireField(posture: any, name: string): number | string {
-  const v = posture?.[name];
-  if (v === undefined || v === null || v === "") {
+function requireNumberInRange(
+  posture: any,
+  name: string,
+  min: number,
+  max: number,
+): number {
+  const raw = posture?.[name];
+  if (raw === undefined || raw === null || raw === "") {
     throw new Error(
       `REFUSING step 8: config/mainnet-authorities.json launch_posture.${name} is missing. ` +
         "The go-live decision reads it, and defaulting it would validate the launch against a " +
         "number nobody recorded.",
     );
   }
-  return v;
+  const n = typeof raw === "number" ? raw : Number(String(raw).trim());
+  if (!Number.isFinite(n)) {
+    throw new Error(
+      `REFUSING step 8: launch_posture.${name} is ${JSON.stringify(raw)}, which is not a finite ` +
+        "number. Number() turns it into NaN, and every comparison against NaN is false, so the " +
+        "check that reads it would silently pass.",
+    );
+  }
+  if (!Number.isInteger(n)) {
+    throw new Error(`REFUSING step 8: launch_posture.${name} is ${n}, which is not an integer.`);
+  }
+  if (n < min || n > max) {
+    throw new Error(
+      `REFUSING step 8: launch_posture.${name} is ${n}, outside its accepted range [${min}, ${max}].`,
+    );
+  }
+  return n;
 }
 
 async function verify(

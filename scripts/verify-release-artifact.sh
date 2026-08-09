@@ -173,6 +173,15 @@ if ! (cd -P "$ROOT" && git merge-base --is-ancestor "$ANCHOR_COMMIT" HEAD 2>/dev
   exit 1
 fi
 
+# THE CLOSED LIST, declared HERE because (b) below compares it across a merge and (c) compares it
+# against HEAD. Declaring it after its first use made the merge path silently compare NOTHING.
+BUILD_INPUTS="programs Cargo.toml Cargo.lock rust-toolchain.toml Anchor.toml scripts/verify-release-artifact.sh scripts/_read-release-pin.py scripts/_strict-build-sbf.sh"
+#     ROUND 8 FINAL-02. `scripts/_strict-build-sbf.sh` was missing, and it is the script that
+#     actually RUNS the rebuild (line ~326). A hand-written list is a list someone forgets to update,
+#     so `scripts/test-verifier-root-identity.sh` now DERIVES the set of repo scripts this file
+#     invokes and fails if any of them is absent from the line above. The list stays literal here
+#     because it must be readable at a glance in an audited file; the derivation is the guard.
+
 # (b) HEAD IS SIGNED BY A PINNED KEY. A commit hash is public; a signing key is not. This is the only
 #     fact here an attacker cannot obtain by cloning. The allowed-signers file is written from a key
 #     pinned BELOW rather than read from the user's git config, because a check that depends on the
@@ -185,18 +194,54 @@ RELEASE_SIGNER_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKz73pnCUcRB2YNuMQFWQZb4
 RELEASE_SIGNER_ID="toblanc34@gmail.com"
 _signers="$(mktemp)"
 printf '%s %s\n' "$RELEASE_SIGNER_ID" "$RELEASE_SIGNER_KEY" > "$_signers"
-if ! (cd -P "$ROOT" && git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$_signers" \
-        verify-commit HEAD >/dev/null 2>&1); then
-  rm -f "$_signers"
+_verify_commit() {
+  (cd -P "$ROOT" && git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$_signers" \
+      verify-commit "$1" >/dev/null 2>&1)
+}
+
+# ROUND 8 FINAL-01. A MERGE IS NOT SIGNED BY US, AND DEMANDING THAT IT IS MADE CI IMPOSSIBLE.
+#
+# The first version required HEAD itself to carry the pinned signature. The file even said "a merge
+# commit created by the forge is signed by the FORGE, not by this key", and then refused it. Since
+# branch protection delivers through pull requests, `actions/checkout` puts HEAD on GitHub's
+# synthetic merge on `pull_request` and on the real merge on `push` to main. The required checks
+# therefore could not all go green on the only delivery shape the protection allows. Measured:
+#
+#     57de5e43 (owner commit, SSH-signed) : exit 0
+#     1314be41 (real GitHub merge)        : exit 1   Commit: GitHub <noreply@github.com>, RSA
+#
+# WHAT IS ACTUALLY BEING AUTHENTICATED IS THE BYTES, NOT THE TIP. So a merge is accepted when one of
+# its parents carries the pinned signature AND the BUILD INPUTS are byte-identical between that
+# parent and HEAD. Everything outside the closed list may differ, which is what a merge legitimately
+# does. GitHub's own key is deliberately NOT trusted: this needs no third-party identity, it needs
+# the reviewed bytes to be the built bytes.
+_identity_ok=no
+_identity_via=""
+if _verify_commit HEAD; then
+  _identity_ok=yes
+  _identity_via="HEAD is signed by the pinned release key"
+else
+  for _p in $( (cd -P "$ROOT" && git rev-list --parents -n 1 HEAD 2>/dev/null) | cut -d' ' -f2- ); do
+    if _verify_commit "$_p" && (cd -P "$ROOT" && git diff --quiet "$_p" HEAD -- $BUILD_INPUTS 2>/dev/null); then
+      _identity_ok=yes
+      _identity_via="HEAD is a merge whose build inputs are identical to signed parent ${_p:0:12}"
+      break
+    fi
+  done
+fi
+rm -f "$_signers"
+if [ "$_identity_ok" != "yes" ]; then
   echo ""
-  echo "REFUSING TO RUN: HEAD in $ROOT is not signed by the pinned release key"
-  echo "($RELEASE_SIGNER_ID). Every commit that can be attested is signed."
-  echo "A merge commit created by the forge is signed by the FORGE, not by this key, so attest from"
-  echo "a signed commit rather than from a merge."
+  echo "REFUSING TO RUN: neither HEAD nor a parent whose build inputs match HEAD is signed by the"
+  echo "pinned release key ($RELEASE_SIGNER_ID)."
+  echo ""
+  echo "A merge is accepted when a parent carries the signature AND the build inputs are unchanged"
+  echo "across the merge, because what is attested is the reviewed BYTES and not the tip. A merge"
+  echo "that CHANGED a build input is refused on purpose: nobody signed those bytes."
   echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
   exit 1
 fi
-rm -f "$_signers"
+echo "  identity   : $_identity_via"
 
 # (c) THE BYTES ON DISK ARE HEAD'S BYTES, for everything that gets rebuilt or attested. Without this,
 #     every fact above is about a commit and none of them is about the files the rebuild will read.
@@ -209,12 +254,6 @@ rm -f "$_signers"
 #     nothing, because a manifest that lies is caught downstream by its own path: `validate_pinned`
 #     requires the source commit to exist, (d) below requires it to be an ancestor with identical
 #     inputs, and the rebuilt hash is then compared against the pinned one.
-BUILD_INPUTS="programs Cargo.toml Cargo.lock rust-toolchain.toml Anchor.toml scripts/verify-release-artifact.sh scripts/_read-release-pin.py scripts/_strict-build-sbf.sh"
-#     ROUND 8 FINAL-02. `scripts/_strict-build-sbf.sh` was missing, and it is the script that
-#     actually RUNS the rebuild (line ~326). A hand-written list is a list someone forgets to update,
-#     so `scripts/test-verifier-root-identity.sh` now DERIVES the set of repo scripts this file
-#     invokes and fails if any of them is absent from the line above. The list stays literal here
-#     because it must be readable at a glance in an audited file; the derivation is the guard.
 _dirty="$(cd -P "$ROOT" && git status --porcelain -- $BUILD_INPUTS 2>/dev/null || true)"
 if [ -n "$_dirty" ]; then
   echo ""

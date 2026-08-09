@@ -718,16 +718,12 @@ jobs:
           SO=target/deploy/dominion_silver_mint.so
           python3 - "$SO" > release-manifest.json <<'PY'
           import hashlib, json, os, re, subprocess, sys
+          sys.path.insert(0, "scripts")
+          import _solana_verify_version as _svv
           so = sys.argv[1]
           blob = open(so, "rb").read()
           # solana-verify's convention: trailing zero bytes stripped, then sha256.
           stripped = blob.rstrip(b"\x00")
-          def _bare_semver(raw):
-              """Last whitespace token of `<tool> X.Y.Z`, refused unless it IS a bare semver."""
-              tok = raw.strip().split()[-1] if raw.strip() else ""
-              if not re.fullmatch(r"\d+\.\d+\.\d+", tok):
-                  raise SystemExit(f"solana-verify --version is not a bare semver: {raw.strip()!r}")
-              return tok
 
           src = open("programs/dominion_silver_mint_v2/src/lib.rs").read()
           program_id = re.search(r'declare_id!\("([1-9A-HJ-NP-Za-km-z]+)"\)', src).group(1)
@@ -745,8 +741,9 @@ jobs:
               # config/mainnet-authorities.json, and the install step feeds that value straight to
               # `cargo install --version`, which needs a bare semver constraint. Emitting the prefixed
               # string meant the FIRST ci run after a pin could not install its own pinned tool.
-              "solana_verify_version": _bare_semver(subprocess.run(
-                  ["solana-verify", "--version"], capture_output=True, text=True).stdout),
+              # ROUND 8 FINAL-06. The SHARED producer, so the proof and the production path cannot
+              # drift. A local helper here was invisible to the test, which hard-coded its strings.
+              "solana_verify_version": _svv.measured(),
               "idl_sha256": hashlib.sha256(open(idl, "rb").read()).hexdigest()
                             if os.path.exists(idl) else None,
           }, indent=2))
