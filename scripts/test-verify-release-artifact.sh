@@ -114,6 +114,25 @@ run_case "--skip-rebuild exits 2 and the verdict is the final line" 2 \
 run_case "a missing .so is rejected" 1 \
   "ARTIFACT REJECTED" -- bash "$VERIFY" "$TMP/does-not-exist.so"
 
+# 2b. ROUND 7 R7-02. A HARD LINK of the verifier into another tree makes it attest THAT tree, while
+#     being byte-identical to the audited script because it is the same inode. `realpath` cannot see
+#     it: there is no target to resolve. The auditor reproduced ARTIFACT OK for foreign bytes this
+#     way. st_nlink is the only signal, so this case exists to keep the guard honest.
+HL="$TMP/hardlink-tree"
+mkdir -p "$HL/scripts" "$HL/target/deploy" "$HL/target/idl" "$HL/config"
+if ln "$REPO/$VERIFY" "$HL/scripts/verify-release-artifact.sh" 2>/dev/null; then
+  run_case "a hard link of the verifier is refused before it can pick a root" 1 \
+    "ARTIFACT REJECTED" -- bash "$HL/scripts/verify-release-artifact.sh" --local-only
+  # REMOVE IT IMMEDIATELY. st_nlink is a property of the INODE, so while this alias exists the
+  # canonical script also reports 2 links and refuses to run. The first version of this case left it
+  # in place and turned every later case red, which is the guard behaving exactly as specified and
+  # the test forgetting that the guard cannot tell which name is the original. It cannot, and that is
+  # the point.
+  rm -f "$HL/scripts/verify-release-artifact.sh"
+else
+  echo "  SKIP: this filesystem refused to create a hard link"
+fi
+
 echo
 echo "-- full cases (each rebuilds; about 35s apiece) --"
 
@@ -173,43 +192,30 @@ run_case "--local-only exits 0 and the verdict is the final line" 0 \
 #     What is actually under test is not a number: it is that the env var changes NOTHING. So run the
 #     verifier twice, with and without it, and require both runs to agree. That property holds in
 #     every manifest state, before and after the pin.
-#     REVIEW OF FIXES ON 993e628, P1. Comparing the two runs is right, but the sandbox was pinned to
-#     THIS HOST'S build, which makes the case vacuous in exactly the state it was rewritten to survive.
-#     Once runbook step 2c pins the committed manifest to the container hash, on a linux runner that
-#     reproduces it, the plain run answers 0/ARTIFACT OK and a sandbox pinned to the same bytes answers
-#     0/ARTIFACT OK too: identical, so the case would PASS with the override restored.
+#     ROUND 7 R7-07. Comparing two runs was right, and both previous discriminators were wrong.
+#     Pinning the sandbox to this host's build collided once the committed manifest was pinned and
+#     reproduced (both 0/ARTIFACT OK). Pinning it to the OPPOSITE status collides on a host that
+#     cannot reproduce the container build, where both runs answer 3/ARTIFACT NOT ATTESTED, and the
+#     comment claimed a universality it did not have.
 #
-#     The sandbox must be pinned to whatever the committed manifest is NOT, so an honoured override
-#     always yields a different verdict. no-candidate answers 3, a pin to the local build answers 0,
-#     and they cannot collide in either state.
+#     Neither exit codes nor verdict lines can discriminate on every platform and every manifest
+#     state, because the space of (code, verdict) pairs is small and both runs live in it. A SENTINEL
+#     can: the sandbox manifest carries a hash that appears nowhere else on earth, and the verifier
+#     prints the pin it compared against. If the override is honoured, that string appears in the
+#     output. If it is not, it cannot. That holds on any host, before or after pinning.
 echo "-- the removed override --"
-committed_status="$(python3 -c '
-import json
-d = json.load(open("config/mainnet-authorities.json"))
-print(d.get("release_artifact", {}).get("status", "unknown"))
-')"
-if [[ "$committed_status" == "no-candidate" ]]; then
-  sandbox_manifest pinned "$LOCAL_SHA" "$LOCAL_BYTES"
-  echo "  (committed manifest is no-candidate, so the sandbox is pinned to this host's build)"
-else
-  sandbox_manifest no-candidate "$LOCAL_SHA" "$LOCAL_BYTES"
-  echo "  (committed manifest is $committed_status, so the sandbox is set to no-candidate)"
-fi
-plain_out="$TMP/override-plain.log"; ovr_out="$TMP/override-set.log"
-bash "$VERIFY" >"$plain_out" 2>&1; plain_code=$?
-env DOMINION_RELEASE_MANIFEST="$SANDBOX/config/mainnet-authorities.json" bash "$VERIFY" >"$ovr_out" 2>&1
-ovr_code=$?
-plain_last="$(grep -v '^[[:space:]]*$' "$plain_out" | tail -1)"
-ovr_last="$(grep -v '^[[:space:]]*$' "$ovr_out" | tail -1)"
-if [[ "$plain_code" == "$ovr_code" && "$plain_last" == "$ovr_last" ]]; then
-  echo "  ok  : DOMINION_RELEASE_MANIFEST changes nothing (both runs: exit $plain_code, same verdict)"
-  pass=$((pass + 1))
-else
-  echo "  FAIL: DOMINION_RELEASE_MANIFEST changed the answer."
-  echo "        without: exit $plain_code | $plain_last"
-  echo "        with   : exit $ovr_code | $ovr_last"
+SENTINEL="aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000deadbeef"
+sandbox_manifest pinned "$SENTINEL" 424242
+ovr_out="$TMP/override-set.log"
+env DOMINION_RELEASE_MANIFEST="$SANDBOX/config/mainnet-authorities.json" bash "$VERIFY" --skip-rebuild >"$ovr_out" 2>&1
+if grep -q "$SENTINEL" "$ovr_out"; then
+  echo "  FAIL: DOMINION_RELEASE_MANIFEST was honoured. The verifier read the sandbox pin."
   echo "        The override was restored, or something else reads that variable."
+  echo "        full output: $ovr_out"
   fail=$((fail + 1))
+else
+  echo "  ok  : DOMINION_RELEASE_MANIFEST is ignored (the sandbox pin never reaches the verifier)"
+  pass=$((pass + 1))
 fi
 
 # 9. The COMMITTED manifest, whatever state it is in, must produce a verdict this script recognises and
@@ -237,5 +243,5 @@ if [[ "$fail" -ne 0 ]]; then
   trap - EXIT
   exit 1
 fi
-echo "SELF-TEST OK: $pass cases. Nine assert BOTH an exit code and the final line; case 10 asserts"
-echo "that two runs AGREE, the only form of that property that survives the manifest being pinned."
+echo "SELF-TEST OK: $pass cases. All but one assert BOTH an exit code and the final line; the"
+echo "override case asserts that a sentinel pin never reaches the verifier, which is portable."

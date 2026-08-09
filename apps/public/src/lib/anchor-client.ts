@@ -385,6 +385,25 @@ export function isBelowMinimumError(errText: string): boolean {
   return anchorErr(errText, "OperationBelowMinimum", 12118);
 }
 
+/** ROUND 7 R7-08. The program splits `LazerReplayed` (12121) from `LazerCarriedForward` (12082)
+ *  precisely because the two have OPPOSITE remediations, and the UI mapped neither: both landed on
+ *  the generic "Transaction reverted on-chain".
+ *
+ *  REPLAYED means another operation consumed the same signed print. Under strict anti-replay (D2) one
+ *  envelope prices exactly one operation, so this is normal contention and the answer is RETRY with a
+ *  fresh price. Telling the user nothing here makes a working protocol look like a broken feed.
+ */
+export function isLazerReplayedError(errText: string): boolean {
+  return anchorErr(errText, "LazerReplayed", 12121);
+}
+
+/** CARRIED FORWARD means the publisher repeated a previous price rather than producing a new one, so
+ *  the feed itself is not advancing. Retrying immediately is the WRONG move: it burns the Lazer verify
+ *  fee against a print that will be refused again. */
+export function isLazerCarriedForwardError(errText: string): boolean {
+  return anchorErr(errText, "LazerCarriedForward", 12082);
+}
+
 /** StaleOracle = 12004, raised on ANY Pyth-priced path when too much wall-clock passes between fetching the
  *  signed price and the tx landing. max_staleness is 15s on devnet, so a slow wallet approval trips it. */
 export function isStaleOracleError(errText: string): boolean {

@@ -10,7 +10,11 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { resolveCluster } from "./_cluster";
+import { resolveCluster,
+  readMainnetConfigFrom,
+  mainnetAddressFrom,
+  mainnetConfig,
+} from "./_cluster";
 import { guardConsentOnly } from "./_guard";
 
 const DEVNET_USDC = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU";
@@ -354,9 +358,15 @@ for (const rpc of [
 }
 
 // 4. MUTATION: drop a mainnet constant and require a throw, not a devnet fallback. Without this the
-//    gate could pass while `_cluster.ts` quietly defaulted. The mutation goes to a TEMP COPY and
-//    `DOMINION_MAINNET_CONFIG` points resolution at it: a gate must never write to
-//    config/mainnet-authorities.json and restore it in a `finally`, which does not run on SIGINT.
+//    gate could pass while `_cluster.ts` quietly defaulted. The mutation goes to a TEMP COPY: a gate
+//    must never write to config/mainnet-authorities.json and restore it in a `finally`, which does not
+//    run on SIGINT.
+//
+//    ROUND 7 R7-03. This used to point the PRODUCTION reader at the copy with `DOMINION_MAINNET_CONFIG`
+//    (plus, briefly, a second variable pretending to be an authority check). The seam is now in the
+//    signature: `readMainnetConfigFrom(path)` and `mainnetAddressFrom(cfg, field)` are pure, this test
+//    hands them what it built, and `mainnetConfig()` in production reads one path with no way to be
+//    redirected. The property under test is unchanged; the hole it needed is gone.
 const original = fs.readFileSync(SOT, "utf8");
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dominion-sot-"));
 const tmpSot = path.join(tmpDir, "mainnet-authorities.json");
@@ -364,29 +374,40 @@ try {
   const mutated = JSON.parse(original) as Record<string, Record<string, unknown>>;
   delete mutated.cluster_constants.usdc_mint;
   fs.writeFileSync(tmpSot, JSON.stringify(mutated, null, 2) + "\n");
-  process.env.DOMINION_MAINNET_CONFIG = tmpSot;
-  // REVIEW PASS ON 3bf3097: the override now requires this second variable, so that setting the
-  // path alone (an operator, a stale shell) is a refusal rather than a silent redirect.
-  process.env.DOMINION_CLUSTER_SELFTEST = "1";
+
   let threw = false;
   let message = "";
-  withRpc("https://api.mainnet-beta.solana.com", () => {
-    try {
-      resolveCluster();
-    } catch (e) {
-      threw = true;
-      message = e instanceof Error ? e.message : String(e);
-    }
-  });
+  try {
+    mainnetAddressFrom(readMainnetConfigFrom(tmpSot), "usdc_mint");
+  } catch (e) {
+    threw = true;
+    message = e instanceof Error ? e.message : String(e);
+  }
   ok("a MISSING mainnet constant throws instead of falling back", threw);
   ok(
     "and the error names the file to fix",
     threw && message.includes("mainnet-authorities.json"),
     threw ? message.split("\n")[0].slice(0, 60) : "(no throw)",
   );
+
+  // The seam must not have grown back. If any env var can redirect the production reader, the file
+  // it returns would be the mutated copy and this address would be missing.
+  process.env.DOMINION_MAINNET_CONFIG = tmpSot;
+  process.env.DOMINION_CLUSTER_SELFTEST = "1";
+  let prodStillReadsTheCommittedFile = false;
+  try {
+    prodStillReadsTheCommittedFile = !!mainnetAddressFrom(mainnetConfig(), "usdc_mint");
+  } catch {
+    prodStillReadsTheCommittedFile = false;
+  } finally {
+    delete process.env.DOMINION_MAINNET_CONFIG;
+    delete process.env.DOMINION_CLUSTER_SELFTEST;
+  }
+  ok(
+    "NO environment variable redirects the production manifest reader (R7-03)",
+    prodStillReadsTheCommittedFile,
+  );
 } finally {
-  delete process.env.DOMINION_MAINNET_CONFIG;
-  delete process.env.DOMINION_CLUSTER_SELFTEST;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 }
 // The strongest form of the property: the file was never written, so there is nothing to restore.
