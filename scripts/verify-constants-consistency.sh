@@ -318,6 +318,15 @@ _RULES = {
     "removal_schedule_expired": ["instructions/admin/guardian.rs"],
     "active_not_pending": ["state/guardian.rs"],
     "roll_window": ["instructions/redeem_silv.rs"],
+    # ---- go-live readiness ----
+    # ROUND 8 FINAL-03. The fingerprint of the config fields the go-live decision read when the
+    # unpause was BUILT. The unpause handler recomputes it and refuses on a mismatch
+    # (StaleReadinessDigest), so a config that moved between build and send cannot be unpaused on a
+    # stale decision. ONE call site, and it is the whole point: if this call disappears from
+    # pause.rs, unpause silently accepts any digest and the gate becomes decorative.
+    # Registered 2026-08-10: the rule shipped in the readiness-digest batch without a manifest
+    # entry, so the completeness sweep failed the deploy gate. It caught it, which is its job.
+    "readiness_digest": ["instructions/emergency/pause.rs"],
     # A post-write invariant at every premium mutation site.
     "assert_premium_within_bounds": [
         "instructions/initialize.rs",
