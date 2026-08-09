@@ -38,3 +38,46 @@ export function decideStateDisposition(
     ],
   };
 }
+
+/**
+ * ROUND 8 FINAL-05. WHAT A RESUMED RUN IS LOOKING AT.
+ *
+ * Keeping the file on red was only half the fix. The line printed next promised `--execute` would
+ * resume, and it could not: if the transaction actually LANDED but the first read-back was stale,
+ * the file still says `from = A` while the chain says B, so `assertResumable` refuses immediately
+ * and the run can never be finalised. The operator holds a record nothing can consume.
+ *
+ * Classifying the three real situations is what makes the printed command truthful.
+ */
+export type ResumeVerdict =
+  | { kind: "execute"; message: string }
+  | { kind: "already-landed"; message: string }
+  | { kind: "investigate"; message: string };
+
+export function classifyResume(
+  state: { from: string; to: string; nonce: number | string },
+  onChain: { inventoryWallet: string; pendingNonce: number | string | null },
+): ResumeVerdict {
+  // A + the exact proposal still armed: the timelock never executed. Resume normally.
+  if (onChain.inventoryWallet === state.from && String(onChain.pendingNonce) === String(state.nonce)) {
+    return {
+      kind: "execute",
+      message: `the change is still queued as nonce ${state.nonce}; resume with --execute`,
+    };
+  }
+  // B + slot released: it DID land, and only the read-back was stale. Finish the proof and clear.
+  if (onChain.inventoryWallet === state.to && onChain.pendingNonce === null) {
+    return {
+      kind: "already-landed",
+      message: `the change to ${state.to} already landed and the slot is free; closing the record`,
+    };
+  }
+  // Anything else is a state nobody predicted, and guessing here is how evidence gets destroyed.
+  return {
+    kind: "investigate",
+    message:
+      `unexpected on-chain state: wallet=${onChain.inventoryWallet}, ` +
+      `pending=${onChain.pendingNonce ?? "none"}, expected A=${state.from} B=${state.to} ` +
+      `nonce=${state.nonce}. The record is kept; investigate before re-running.`,
+  };
+}

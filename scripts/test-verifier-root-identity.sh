@@ -418,6 +418,64 @@ else
   bad "could not create a worktree for the dirty-input case"
 fi
 
+# ================================================================ 4e. a MERGE, signed by nobody we pinned
+#
+# ROUND 8 FINAL-01. Branch protection delivers through pull requests, so CI runs with HEAD on a merge
+# that the FORGE signed, not us. The previous gate demanded the pinned signature on HEAD itself and
+# therefore made the required checks impossible on the only delivery shape allowed. Measured by
+# Codex: 1314be41, the repository's real GitHub merge, exit 1.
+#
+# What is authenticated is the BYTES, so a merge is accepted when a parent carries the signature AND
+# the build inputs are identical across the merge. Both halves are exercised here, in one sandbox:
+# the accepted merge, and the merge that CHANGED a build input, which must still be refused. Without
+# the second case "accept any merge" would score a pass.
+merge_dir="$TMP/merge"
+if git clone -q "$REPO" "$merge_dir" >/dev/null 2>&1; then
+  mkdir -p "$merge_dir/target/deploy" "$merge_dir/target/idl"
+  cp "$REPO/$SO_REL" "$merge_dir/$SO_REL" 2>/dev/null || true
+  cp "$REPO/target/idl/dominion_silver_mint.json" "$merge_dir/target/idl/" 2>/dev/null || true
+  signed_parent="$(cd "$merge_dir" && git rev-parse HEAD)"
+  # A side branch touching NOTHING in the closed list, then a merge committed by a foreign identity.
+  ( cd "$merge_dir" \
+    && git checkout -q -b side >/dev/null 2>&1 \
+    && mkdir -p docs && printf '\n' >> docs/REPO_PROTECTION.md \
+    && git -c user.email=f@f -c user.name=forge -c commit.gpgsign=false add -A >/dev/null 2>&1 \
+    && git -c user.email=f@f -c user.name=forge -c commit.gpgsign=false commit -qm "docs only" >/dev/null 2>&1 \
+    && git checkout -q - >/dev/null 2>&1 \
+    && git -c user.email=noreply@github.com -c user.name=GitHub -c commit.gpgsign=false \
+         merge --no-ff -q -m "Merge pull request #99" side >/dev/null 2>&1 ) || true
+
+  is_merge="$( (cd "$merge_dir" && git rev-list --parents -n 1 HEAD | wc -w) )"
+  if [[ "${is_merge// /}" -lt 3 ]]; then
+    bad "the sandbox HEAD is not a merge commit, so this case is not the one under test"
+  elif ( cd "$merge_dir" && git -c gpg.format=ssh verify-commit HEAD >/dev/null 2>&1 ); then
+    bad "the sandbox merge verified as signed, so it does not exercise the forge-signed shape"
+  else
+    run_traced "$merge_dir/scripts/verify-release-artifact.sh" "$TMP/merge.trace"
+    if grep -q "cannot establish which tree it belongs to" "$TMP/merge.trace"; then
+      bad "a merge whose build inputs match its signed parent was refused, which is the CI deadlock"
+      echo "     trace  : $TMP/merge.trace"
+    else
+      ok "merge signed by nobody pinned, build inputs identical to its signed parent, accepted"
+    fi
+
+    # The other half: a merge that CHANGED a build input carries bytes nobody signed.
+    ( cd "$merge_dir" \
+      && printf '\n# unreviewed\n' >> Cargo.toml \
+      && git -c user.email=noreply@github.com -c user.name=GitHub -c commit.gpgsign=false \
+           commit -qam "merge that edits a build input" >/dev/null 2>&1 ) || true
+    run_traced "$merge_dir/scripts/verify-release-artifact.sh" "$TMP/merge2.trace"
+    if ! grep -q "cannot establish which tree it belongs to" "$TMP/merge2.trace"; then
+      bad "a merge that CHANGED a build input was accepted: nobody signed those bytes"
+      echo "     trace  : $TMP/merge2.trace"
+    else
+      ok "merge that changed a build input refused, so 'accept any merge' cannot pass this suite"
+    fi
+  fi
+else
+  bad "could not clone the repository for the merge-identity case"
+fi
+
 # ================================================================ 5. the genuine checkout
 #
 # The negative control, and the reason the four cases above are not simply "refuse everything". A

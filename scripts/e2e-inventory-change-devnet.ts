@@ -30,7 +30,7 @@ import path from "path";
 import { PROGRAM_ID } from "./_program-id";
 import { requireSanctionedCluster, assertReversible, intentFromEnv } from "./_guard";
 import { resolveCluster, describeCluster } from "./_cluster";
-import { decideStateDisposition } from "./_run-state";
+import { decideStateDisposition, classifyResume } from "./_run-state";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -237,6 +237,33 @@ async function main(): Promise<void> {
   else if (mode === "--execute") {
     const s = readState();
     if (!s) throw new Error(`no tracked change at ${STATE_PATH}; nothing to execute`);
+
+    // ROUND 8 FINAL-05. Classify BEFORE asserting resumability, because the state that could never
+    // finalise is exactly the one `assertResumable` refuses: the change landed, the first read-back
+    // was stale, so the record says A while the chain says B. The runner used to print "resume with
+    // --execute" for that case, a promise it could not keep.
+    const c0 = await cfg();
+    const verdict = classifyResume(
+      { from: s.from, to: s.to, nonce: s.nonce },
+      {
+        inventoryWallet: new PublicKey(c0.inventoryWallet).toBase58(),
+        pendingNonce:
+          c0.pendingInventoryWalletNonce === null
+            ? null
+            : Number(c0.pendingInventoryWalletNonce),
+      },
+    );
+    console.log(`  resume verdict : ${verdict.kind} (${verdict.message})`);
+    if (verdict.kind === "already-landed") {
+      ok("the change already landed and the slot is free", true);
+      keepStateOrClear(`nothing to resume: ${verdict.message}`);
+      console.log(`\n=== ${pass} passed, ${fail} failed ===`);
+      process.exit(fail === 0 ? 0 : 1);
+    }
+    if (verdict.kind === "investigate") {
+      throw new Error(`REFUSING to execute. ${verdict.message}`);
+    }
+
     assertResumable(s, admin, onChainFrom);
     assertReversible("execute_set_inventory_wallet", intentFromEnv());
 

@@ -21,7 +21,7 @@
  *   npx tsx scripts/test-ceremony-inventory-flow.ts
  */
 import { createHash } from "crypto";
-import { decideStateDisposition } from "./_run-state";
+import { decideStateDisposition, classifyResume } from "./_run-state";
 import { collectLaunchState } from "./ceremony-step8";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import * as anchor from "@coral-xyz/anchor";
@@ -405,6 +405,36 @@ async function main(): Promise<void> {
       "a fully green run still clears its record and reports DONE",
       "a green run kept a stale record, which would make the NEXT run compare against a finished one",
     );
+  }
+
+  // ============================================================ ROUND 8 FINAL-05
+  //
+  // The three states a resumed run can actually be in. The middle one is the finding: a landed
+  // transaction with a stale first read-back left a record that `assertResumable` would refuse
+  // forever, so the printed "resume with --execute" was a promise the runner could not keep.
+  {
+    const st = { from: "AAA", to: "BBB", nonce: 7 };
+    check(
+      classifyResume(st, { inventoryWallet: "AAA", pendingNonce: 7 }).kind === "execute",
+      "A with the exact proposal armed resumes with --execute",
+      "a still-queued change was not recognised as resumable",
+    );
+    check(
+      classifyResume(st, { inventoryWallet: "BBB", pendingNonce: null }).kind === "already-landed",
+      "B with the slot released is recognised as already landed, so the record can be closed",
+      "a landed change still reports as resumable, which is the state that could never finalise",
+    );
+    for (const [label, oc] of [
+      ["B but the slot is still armed", { inventoryWallet: "BBB", pendingNonce: 7 }],
+      ["A but a different nonce is armed", { inventoryWallet: "AAA", pendingNonce: 9 }],
+      ["a third wallet entirely", { inventoryWallet: "CCC", pendingNonce: null }],
+    ] as Array<[string, any]>) {
+      check(
+        classifyResume(st, oc).kind === "investigate",
+        `${label} keeps the record and asks for investigation`,
+        `${label} was classified as safe to resume`,
+      );
+    }
   }
 
   if (failures > 0) {
