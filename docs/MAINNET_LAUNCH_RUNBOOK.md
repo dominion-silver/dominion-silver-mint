@@ -423,8 +423,15 @@ spl-token display <SILV_MINT> -u mainnet-beta
 
 Check by eye: decimals 6, mint authority = the `silv_mint_authority` PDA, freeze
 authority = compliance vault, extensions exactly {PermanentDelegate, MetadataPointer,
-TokenMetadata}, `paused = true`, `public_mint_enabled = false`,
-`redemptions_enabled = false`, `max_silv_supply = 150000000000` (150,000 oz).
+TokenMetadata}, `paused = true`, **`public_mint_enabled = true`**,
+**`redemptions_enabled = true`**, `max_silv_supply = 150000000000` (150,000 oz).
+
+**Those two flags read `false` on this page until 2026-08-10 and that was wrong.** Round 8
+inverted the launch posture: `initialize` writes both TRUE, `config/mainnet-authorities.json`
+`launch_posture` says true, and the devnet rehearsal confirmed the chain writes true. An
+operator checking this list verbatim would have seen a mismatch on the one step designed to
+catch a botched `initialize`, and the only available conclusion would have been to re-run a
+one-shot instruction. What holds the launch is the PAUSE, not these flags.
 
 ### 6c. Write the REAL mint into both apps. BLOCKING for 6b.
 

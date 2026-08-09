@@ -85,6 +85,52 @@ function section(t: string) {
   console.log(`\n${t}`);
 }
 
+/** The metadata URI baked into the mint at creation, from the manifest rather than a second copy. */
+function metadataUri(): string {
+  const m = JSON.parse(
+    fs.readFileSync(path.join(ROOT, "config", "mainnet-authorities.json"), "utf8"),
+  );
+  return m?.mint_creation_ceremony?.uri ?? "";
+}
+
+/**
+ * Is the metadata JSON actually THERE. A status code cannot answer this on an SPA origin, so the
+ * test is differential: fetch the real URI and a path that cannot exist, and demand they differ AND
+ * that the real one parses as JSON. Either half alone is foolable.
+ */
+async function checkMetadataUri(): Promise<void> {
+  const uri = metadataUri();
+  if (!uri) {
+    no("mint_creation_ceremony.uri is missing from the manifest");
+    return;
+  }
+  const control = new URL(uri);
+  control.pathname = control.pathname.replace(/[^/]+$/, "dominion-readiness-control-404.json");
+  try {
+    const [real, ctl] = await Promise.all([fetch(uri), fetch(control.toString())]);
+    const [realBody, ctlBody] = await Promise.all([real.text(), ctl.text()]);
+    if (realBody === ctlBody) {
+      no(
+        `${uri} returns the SAME body as a nonexistent path`,
+        `HTTP ${real.status}, ${realBody.length} bytes, catch-all origin: the JSON is ABSENT and a ` +
+          `status-code check will pass anyway. This URI is baked into the mint FOREVER at creation.`,
+      );
+      return;
+    }
+    try {
+      const parsed = JSON.parse(realBody);
+      ok(
+        `${uri} serves parseable JSON and differs from a nonexistent path`,
+        `name=${JSON.stringify((parsed as Record<string, unknown>)?.name ?? "?")}`,
+      );
+    } catch {
+      no(`${uri} does not parse as JSON`, `content-type ${real.headers.get("content-type")}`);
+    }
+  } catch (e) {
+    no(`${uri} could not be fetched`, String(e).slice(0, 120));
+  }
+}
+
 function grep(rel: string, re: RegExp): string | null {
   const p = path.join(ROOT, rel);
   if (!fs.existsSync(p)) return null;
@@ -433,7 +479,15 @@ async function main() {
   section("F. Only a human can clear these");
   byHand("Sunrise confirmed they accept freeze authority + permanent delegate");
   byHand("the Vercel PROD Pyth key has the pyth-indices entitlement");
-  byHand("https://dominion.market/silv-metadata.json resolves (baked into the mint forever)");
+  // MEASURED 2026-08-10, and this used to be a `byHand` reading "…resolves". A human clearing it by
+  // curling the URL and seeing 200 gets a GUARANTEED false pass: dominion.market is an SPA catch-all
+  // that answers 200 with the same 5,228-byte HTML document for EVERY path, including
+  // /definitely-does-not-exist.json. The file is simply absent. The URI is written into the mint at
+  // creation, so a launch on this state bakes a URI serving HTML and SILV renders broken in every
+  // wallet; the repair is propose_/execute_update_metadata, a 24h timelock, i.e. not on launch day.
+  // "Resolves" is therefore the wrong question. The check is: does it parse as JSON, and does it
+  // differ from what a nonsense path returns.
+  await checkMetadataUri();
   byHand("site copy discloses the freeze and seize powers");
   byHand("at least 2 independent guardian keys exist, on hardware");
   // ROUND 5 P1-06. Was "treasury_min_float_usdc will be set NON-ZERO before any USDC arrives", which

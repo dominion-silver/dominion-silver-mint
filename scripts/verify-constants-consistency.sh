@@ -140,6 +140,14 @@ if "SILV_MINT" in a and "SILV_MINT" in p_:
         "9jM14E8kV6asGw2FwNhKk3gXQNzGhoLrJGyFZ8U7gMoF",  # gc5TW era, program closed
         "5i13gz6vGKTYhpWbMuQfiBAApfNHCxxJu2GtDGM1A2Li",  # AX7se era, program closed
         "62dTkSN7FF2HH8tENWL1mXmrCm8ouqX1bditK71yfxPr",  # 6bgSnXYg era, program closed 2026-08-07
+        # Both apps still carried this on 2026-08-10, hours after T1 created the live mint on the
+        # 3ucji6 deploy. It is not from a closed program: it is a LIVE devnet mint with supply 0 whose
+        # mint authority is not this program's silv_mint_authority PDA, so every instruction the apps
+        # built against it would have been rejected. Runbook step 6c is marked BLOCKING and was
+        # skipped. The list is the only thing that makes this gate able to say so, and it did not
+        # contain the value, so the gate printed `ok` on a broken config. That is the failure mode the
+        # comment above predicts, observed.
+        "G5zez3JWETJMfG3hnCQbdPm7usXMnmKUpajdGJYB5JFF",  # pre-3ucji6 devnet mint, retired 2026-08-10
     }
     check(a["SILV_MINT"] not in RETIRED_MINTS,
           "SILV_MINT is not a known-retired mint")

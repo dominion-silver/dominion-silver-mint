@@ -15,7 +15,7 @@ export const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJD
 
 // The SILV mint created by the DEVNET init above. Read it back with scripts/read-config.ts after every
 // fresh init.
-export const SILV_MINT = new PublicKey("G5zez3JWETJMfG3hnCQbdPm7usXMnmKUpajdGJYB5JFF");
+export const SILV_MINT = new PublicKey("CebhMovXRM5hEhFDTyq7Y1ez8h11UzFSGjELbyQeJExv");
 
 // Pyth Lazer (Pyth Pro) accounts, passed by the dominion oracle ix. No Pyth Core / Hermes XAG feed id
 // belongs here: the program prices from Lazer 3154 alone, and a second live-looking price source is how

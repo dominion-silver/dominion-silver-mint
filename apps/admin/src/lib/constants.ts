@@ -16,7 +16,7 @@ export const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJD
 
 // SILV mint - created by the 2026-07-25 init (scripts/t1-hostile-bootstrap.ts case 5).
 // Must be updated after every fresh init: read it back with scripts/read-config.ts.
-export const SILV_MINT = new PublicKey("G5zez3JWETJMfG3hnCQbdPm7usXMnmKUpajdGJYB5JFF");
+export const SILV_MINT = new PublicKey("CebhMovXRM5hEhFDTyq7Y1ez8h11UzFSGjELbyQeJExv");
 
 // AUDIT FINDING P-06: `PYTH_XAG_USD_FEED_ID` (the retired Pyth Core XAG/USD feed) was exported here
 // with zero call sites. The program reads Pyth LAZER feed 3154 via a signed message; there is no Core
