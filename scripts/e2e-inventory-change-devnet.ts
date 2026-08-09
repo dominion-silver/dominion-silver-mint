@@ -415,7 +415,15 @@ async function main(): Promise<void> {
   process.exit(fail === 0 ? 0 : 1);
 }
 
-main().catch((e) => {
+// ROUND 8 REVIEW P0. GUARDED, because `scripts/test-ceremony-inventory-flow.ts` imports
+// `assertContext` from this module and a BLOCKING CI gate runs that test. Without this guard the
+// import DIALS DEVNET, loads a signing keypair, and then decides the test's exit code: measured
+// exit 1 with every check green, and on a host where the account resolves it would have reported
+// exit 0 over the suite's own failures. `scripts/ceremony-step8.ts` has carried this guard for the
+// same reason since round 7 and its header says so; I imported from a module that did not.
+if (require.main === module) {
+  main().catch((e) => {
   console.error("inventory change E2E failed:", e instanceof Error ? e.message : e);
   process.exit(1);
 });
+}

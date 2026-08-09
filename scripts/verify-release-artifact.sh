@@ -230,7 +230,13 @@ if _verify_commit HEAD; then
   _identity_ok=yes
   _identity_via="HEAD is signed by the pinned release key"
 else
-  for _p in $( (cd -P "$ROOT" && git rev-list --parents -n 1 HEAD 2>/dev/null) | cut -d' ' -f2- ); do
+  # ROUND 8 REVIEW P1. IT MUST ACTUALLY BE A MERGE. Without this, `rev-list --parents` yields the
+  # parent of ANY commit, so an unsigned attacker-authored commit sitting on top of a signed one, and
+  # touching nothing in the closed list, was accepted while the script printed "HEAD is a merge whose
+  # build inputs are identical to signed parent" - a false statement about its own input. The
+  # negative fixture already asserted a parent count the production code never checked.
+  _parent_words="$( (cd -P "$ROOT" && git rev-list --parents -n 1 HEAD 2>/dev/null) | wc -w )"
+  for _p in $( [ "${_parent_words// /}" -ge 3 ] && (cd -P "$ROOT" && git rev-list --parents -n 1 HEAD 2>/dev/null) | cut -d' ' -f2- ); do
     if _verify_commit "$_p" && (cd -P "$ROOT" && git diff --quiet "$_p" HEAD -- $BUILD_INPUTS 2>/dev/null); then
       _identity_ok=yes
       _identity_via="HEAD is a merge whose build inputs are identical to signed parent ${_p:0:12}"
@@ -335,6 +341,32 @@ for a in "$@"; do
     *)              ARGS+=("$a") ;;
   esac
 done
+# (c bis) THE PIN ITSELF MUST BE COMMITTED, unless this is an explicitly local read.
+#
+# ROUND 8 REVIEW P1. Excluding the manifest from the rebuilt set was right; letting an UNCOMMITTED
+# manifest drive an exit-0 attestation was not. The argument that "a manifest that lies is caught
+# downstream" fails, because every downstream check recomputes from this same local tree: set sha256
+# to the local build's hash, recompute the sizes and the IDL hash from the same files, name any
+# ancestor as source_commit and any digits as ci_run_id, and `validate_pinned` passes, (d) passes,
+# and a correct NOT ATTESTED (exit 3) becomes ARTIFACT OK (exit 0). That is the removed
+# DOMINION_RELEASE_MANIFEST override reinstated through the filesystem.
+#
+# Reading an unrecorded candidate is exactly what `--local-only` is for, so it keeps working.
+if [ "$LOCAL_ONLY" != "1" ]; then
+  _pin_dirty="$(cd -P "$ROOT" && git status --porcelain -- config/mainnet-authorities.json 2>/dev/null || true)"
+  if [ -n "$_pin_dirty" ]; then
+    echo ""
+    echo "REFUSING TO RUN: config/mainnet-authorities.json is not committed."
+    echo "$_pin_dirty"
+    echo ""
+    echo "This file IS the claim being attested. An uncommitted one lets a verdict be produced from"
+    echo "numbers nobody reviewed, all of them recomputable from this same tree."
+    echo "Commit the pin, or use --local-only to read a candidate without attesting it."
+    echo "ARTIFACT REJECTED: the pin under attestation is not recorded."
+    exit 1
+  fi
+fi
+
 # Set by check 1b when the pin could not be evaluated. Read at the very bottom, and it is what makes
 # the LAST LINE and the EXIT CODE agree with each other.
 not_attested=0

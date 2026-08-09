@@ -157,7 +157,18 @@ async function main(): Promise<void> {
   );
 
   // ---- 2. every emitted instruction is one the program still dispatches
-  const expected = ["add_guardian", "add_guardian", "unpause"];
+  // ROUND 8 REVIEW P0. THE ORDER THIS ONCE ASSERTED WAS THE BUG.
+  //
+  // It required ["add_guardian", "add_guardian", "unpause"] in ONE batch. `add_guardian` increments
+  // config.guardian_count, guardian_count is inside the readiness digest, and the digest is taken
+  // BEFORE the batch. So the asserted sequence guarantees the unpause reverts with
+  // StaleReadinessDigest, after the registrations have landed, on the one instruction that takes the
+  // protocol live. A blocking CI gate was encoding the broken ordering as the spec.
+  //
+  // The batch now stops before the unpause whenever a registration is pending, and the operator
+  // re-runs step 8 against a re-read config. Both shapes are asserted below, because "stops early"
+  // and "still emits the unpause once nothing is pending" are two different properties.
+  const expected = ["add_guardian", "add_guardian"];
   const names = actions.map((a) => {
     const d = Buffer.from(a.ix.data.subarray(0, 8));
     return (
@@ -172,18 +183,41 @@ async function main(): Promise<void> {
     `step 8 emits ${names.join(" -> ")}, expected ${expected.join(" -> ")}`,
   );
 
-  // ---- 3. the unpause carries the guardian the round-8 handler demands
-  const unpause = actions[actions.length - 1];
-  const unpauseAccounts = (idl as any).instructions.find(
-    (i: any) => i.name === "unpause",
-  ).accounts;
-  const slot = unpauseAccounts.findIndex((a: any) => a.name === "guardian");
+  // ---- 3. ROUND 8 REVIEW P0. TWO shapes, because "stops early" and "still emits the unpause once
+  // nothing is pending" are different properties and asserting only one hides the other.
+  //
+  // When a registration is pending, the unpause MUST NOT be in the batch: add_guardian moves
+  // config.guardian_count, guardian_count is inside the readiness digest, and the digest was taken
+  // before the batch. Emitting both guarantees StaleReadinessDigest after the registrations landed.
   check(
-    slot >= 0 &&
-      unpause.ix.keys.length === unpauseAccounts.length &&
-      unpause.ix.keys[slot].pubkey.equals(guardianPda(GUARDIAN_A)),
-    "unpause presents the PDA of a guardian this same step registers",
-    "unpause does not present a registered guardian, so it will fail on chain mid-ceremony",
+    !names.includes("unpause"),
+    "a batch with pending guardian registrations stops BEFORE the unpause",
+    "the unpause is emitted in the same batch as an add_guardian, so it will revert StaleReadinessDigest",
+  );
+
+  // And once every guardian is registered, the unpause IS emitted and presents a registered PDA.
+  const settled = await buildStep8Actions(input({ guardianExists: () => true }));
+  const settledNames = settled.map((a) => {
+    const d = Buffer.from(a.ix.data.subarray(0, 8));
+    return (
+      (idl as any).instructions.find((x: any) =>
+        Buffer.from(x.discriminator).equals(d),
+      )?.name ?? "UNKNOWN"
+    );
+  });
+  check(
+    settledNames[settledNames.length - 1] === "unpause",
+    "with every guardian already registered, the batch does emit the unpause",
+    "the builder never emits an unpause, so the ceremony can never go live",
+  );
+  const settledUnpause = settled[settled.length - 1];
+  const gslot = settledUnpause.ix.keys.findIndex((k2: any) =>
+    k2.pubkey.equals(guardianPda(GUARDIAN_A)),
+  );
+  check(
+    gslot >= 0,
+    "the emitted unpause presents the PDA of a registered guardian",
+    "unpause does not present a registered guardian, so it will fail on chain",
   );
 
   // ---- 4. the refusal, which is what replaced the setter
@@ -223,8 +257,11 @@ async function main(): Promise<void> {
   );
   // A ceremony being RESUMED is already live, so the vault question is settled and re-asking it
   // would block a re-run that emits nothing new.
+  // ROUND 8 REVIEW P0. `guardianExists: () => true` is now part of the fixture, because with a
+  // registration pending the batch stops before the unpause and the last action is an add_guardian,
+  // so this check would be reading the wrong action.
   const resumed = await buildStep8Actions(
-    input({ paused: false, feeVaultExists: false }),
+    input({ paused: false, feeVaultExists: false, guardianExists: () => true }),
   );
   check(
     resumed[resumed.length - 1].alreadyDone === true,

@@ -254,6 +254,12 @@ for (const rpc of [
   const READ_ONLY_CLI = new Set(["verify-mainnet-authorities.ts", "verify-mainnet-readiness.ts"]);
   // Everything else. Listed by name so ADDING a script is recorded, not silently blessed by a regex.
   const NON_SENDERS = new Set([
+    // ROUND 8 REVIEW. Three files this gate had never seen. `_readiness-digest.ts` and
+    // `_run-state.ts` are pure: no Connection, no keypair, no send. `test-security-posture-docs.ts`
+    // shells out to the litesvm harness and reads files, and touches no cluster.
+    "_readiness-digest.ts",
+    "_run-state.ts",
+    "test-security-posture-docs.ts",
     "check-onchain.ts",
     "check-onchain2.ts",
     "check-pda.ts",

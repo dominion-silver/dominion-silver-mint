@@ -25,10 +25,14 @@
  */
 import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync } from "node:fs";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
-const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// ROUND 8 REVIEW P0. `__dirname`, not `import.meta.url`. `tsconfig.scripts.json` sets
+// `"module": "CommonJS"`, so `import.meta` is a hard TS1343 error, and the BLOCKING CI step
+// `npx --no-install tsc -p tsconfig.scripts.json` dies on it before reaching anything else. The
+// file ran fine under tsx, which is why it was never noticed: tsx and the project typecheck do not
+// agree, and only one of them gates the merge.
+const ROOT = resolve(__dirname, "..");
 const CAPS = "tools/state-harness/tests/caps.rs";
 const LIMITS = "tools/state-harness/tests/limits_and_mint.rs";
 const TIMELOCK = "tools/state-harness/tests/timelock_guardian.rs";

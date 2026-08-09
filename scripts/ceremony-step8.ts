@@ -183,10 +183,37 @@ export async function buildStep8Actions(i: Step8Input): Promise<CeremonyAction[]
     });
   }
 
-  // ROUND 8: `unpause` carries a guardian account and the handler refuses one whose key is the
-  // current admin. The FIRST entry of the expected set is the one `initialize` appointed, so it is
-  // already registered and is the safe presenter: an additional guardian whose add_guardian has not
-  // been executed yet would make the unpause fail on a missing account.
+  // ROUND 8 REVIEW P0. THE UNPAUSE IS NOT EMITTED IN THE SAME BATCH AS AN add_guardian.
+  //
+  // The digest `i.readinessDigest` describes the config as read BEFORE this batch. `add_guardian`
+  // increments `config.guardian_count`, and `guardian_count` is INSIDE the digest: the harness test
+  // `launch_open_posture.rs` asserts exactly that. So a batch that registers a guardian and then
+  // unpauses carries a digest for N guardians while the chain holds N+k, and the unpause reverts
+  // with StaleReadinessDigest, mid-ceremony, after the registrations already landed, on the one
+  // instruction that takes the protocol live. Through Squads that is a 3-of-5 approval spent on an
+  // instruction that cannot succeed.
+  //
+  // I wrote the test proving add_guardian moves the digest and then built the sequence it forbids.
+  // Fixing it by "projecting" the future guardian count would be guessing at the state instead of
+  // reading it, which is the whole defect FINAL-03 exists to stop. So the batch STOPS here, and the
+  // operator re-runs step 8 once the registrations have landed: the guardians then read as
+  // alreadyDone, the config is re-read, and the digest describes the state the unpause will meet.
+  const pendingRegistrations = actions.filter((a) => !a.alreadyDone).length;
+  if (pendingRegistrations > 0) {
+    console.log(
+      `\n  STOPPING BEFORE unpause: ${pendingRegistrations} guardian registration(s) are in this ` +
+        "batch,\n  and each one changes config.guardian_count, which the unpause digest commits to." +
+        "\n  Execute this batch, then RE-RUN step 8: the registrations will read as already done," +
+        "\n  the config is re-read, and the unpause will carry a digest describing the state it" +
+        "\n  actually meets. Emitting both at once produces an unpause that reverts with" +
+        "\n  StaleReadinessDigest, after the registrations have already landed.\n",
+    );
+    return actions;
+  }
+
+  // `unpause` carries a guardian account and the handler refuses one whose key is the current admin.
+  // The FIRST entry of the expected set is the one `initialize` appointed, so it is already
+  // registered and is the safe presenter.
   const presenter = new PublicKey(i.guardians[0]);
   actions.push({
     label: "unpause()",

@@ -818,3 +818,51 @@ fn the_readiness_digest_moves_on_every_config_field_the_decision_reads() {
          built unpause and the ceremony could never complete"
     );
 }
+
+/// ROUND 8 REVIEW P1. THE FROZEN VECTOR that pins every implementation of the digest to one another.
+///
+/// There are four: this program, the harness mirror in `common/mod.rs`, `scripts/_readiness-digest.ts`
+/// and its copy in the admin app. Only the harness mirror was proven, and only transitively: it
+/// submits its digests to the real program, so a drift there fails 180 tests loudly.
+///
+/// The TypeScript pair was proven by NOTHING. Its only assertion was that the output is 32 bytes
+/// long, which is true of any hash of anything. Adding a field to `readiness_digest()` regenerates
+/// a byte-identical IDL (`[u8; 32]` does not change), keeps the args-parity test at 40 bytes, and
+/// leaves both TypeScript copies silently wrong. The failure would have surfaced for the first time
+/// as a reverted mainnet go-live transaction.
+///
+/// This is the same constant asserted in `apps/admin/src/lib/__tests__/instruction-args-parity.test.ts`.
+/// Changing the digest breaks BOTH, in two languages, which is the point: a field added on one side
+/// cannot pass unnoticed on the other.
+#[test]
+fn the_readiness_digest_matches_the_frozen_cross_language_vector() {
+    use solana_sdk::pubkey::Pubkey;
+    // A fixed, meaningless-on-purpose input. Real config values would drift with the manifest and
+    // turn this into a test of the manifest rather than of the encoding.
+    let admin = Pubkey::new_from_array([1u8; 32]);
+    let silv_mint = Pubkey::new_from_array([2u8; 32]);
+    let inventory = Pubkey::new_from_array([3u8; 32]);
+
+    let mut buf = Vec::with_capacity(128);
+    buf.extend_from_slice(admin.as_ref());
+    buf.extend_from_slice(silv_mint.as_ref());
+    buf.extend_from_slice(inventory.as_ref());
+    buf.push(1u8); // public_mint_enabled
+    buf.push(1u8); // redemptions_enabled
+    buf.push(2u8); // guardian_count
+    buf.extend_from_slice(&3u16.to_le_bytes()); // min_publishers
+    buf.extend_from_slice(&3154u32.to_le_bytes()); // pyth_lazer_feed_id
+    assert_eq!(buf.len(), 105, "the preimage width changed, so the digest layout changed");
+
+    let got = solana_sdk::hash::hash(&buf).to_bytes();
+    let hex: String = got.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(
+        hex, FROZEN_DIGEST_HEX,
+        "the digest layout moved. Update BOTH this vector and the identical one in \
+         apps/admin/src/lib/__tests__/instruction-args-parity.test.ts, and check every TypeScript \
+         copy of the encoder, or the ceremony will build an unpause the chain always rejects."
+    );
+}
+
+/// Kept next to the test so a reader sees the constant and the layout together.
+const FROZEN_DIGEST_HEX: &str = "911edf183b2728a122607a9e70341dfc58a49c1f3391ef8f846429e6b945e33a";

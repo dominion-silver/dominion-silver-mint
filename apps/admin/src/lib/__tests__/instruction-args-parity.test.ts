@@ -97,6 +97,33 @@ describe("built instructions carry the arguments the IDL declares", () => {
     });
   }
 
+  /**
+   * ROUND 8 REVIEW P1. THE SAME FROZEN VECTOR the Rust test asserts, in
+   * tools/state-harness/tests/launch_open_posture.rs. This is the ONLY thing tying the TypeScript
+   * encoder to the on-chain one. Before it, the only TS assertion was "the output is 32 bytes",
+   * which is true of any hash of anything: a field added to `readiness_digest()` regenerates an
+   * identical IDL, leaves this suite at 40 bytes, and makes the ceremony build an unpause the chain
+   * always rejects. That would have surfaced first at the mainnet go-live.
+   */
+  it("matches the frozen digest vector the on-chain test asserts", () => {
+    const d = readinessDigest({
+      admin: new PublicKey(new Uint8Array(32).fill(1)),
+      silvMint: new PublicKey(new Uint8Array(32).fill(2)),
+      inventoryWallet: new PublicKey(new Uint8Array(32).fill(3)),
+      publicMintEnabled: true,
+      redemptionsEnabled: true,
+      guardianCount: 2,
+      minPublishers: 3,
+      pythLazerFeedId: 3154,
+    });
+    expect(
+      d.toString("hex"),
+      "the TypeScript digest no longer matches the on-chain one. Both this and the Rust test " +
+        "the_readiness_digest_matches_the_frozen_cross_language_vector must be updated together, " +
+        "and BOTH TypeScript copies of the encoder checked.",
+    ).toBe("911edf183b2728a122607a9e70341dfc58a49c1f3391ef8f846429e6b945e33a");
+  });
+
   it("the digest helper produces exactly 32 bytes, the width the IDL declares", () => {
     const d = readinessDigest({
       admin, silvMint: admin, inventoryWallet: admin,
