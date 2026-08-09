@@ -10,7 +10,7 @@
  *
  *   npx tsx scripts/test-premint-args.ts
  */
-import { parseArgs, decideResume, type RunRecord } from "./premint";
+import { parseArgs, decideResume, reconcileInFlight, type RunRecord } from "./premint";
 
 let pass = 0;
 let fail = 0;
@@ -116,6 +116,33 @@ for (const [field, drifted] of [
 ok(
   "a completed record cannot be resumed",
   decideResume(rec(3), { tranches: [], resume: true }, NOW).kind === "refuse",
+);
+
+console.log("\nin-flight reconciliation (the crash window)");
+
+// The record says the ATA held 1000 before a send of 500. Only two balances are unambiguous.
+const IF = { atomic: "500", ataBefore: "1000" };
+eq("exactly before + amount means it LANDED", reconcileInFlight(IF, 1500n).kind, "landed");
+eq("exactly before means it did NOT land", reconcileInFlight(IF, 1000n).kind, "not-landed");
+// Everything else refuses. An inbound SILV transfer or a permanent-delegate move lands here, and
+// guessing either way is a double-mint or a silently skipped tranche.
+for (const [label, bal] of [
+  ["a partial move", 1200n],
+  ["more than the tranche", 2000n],
+  ["less than before", 900n],
+  ["zero", 0n],
+] as const) {
+  eq(`${label} is ambiguous and refuses`, reconcileInFlight(IF, bal).kind, "ambiguous");
+}
+ok(
+  "the ambiguous message says it refuses to guess",
+  /REFUSING to guess/.test(reconcileInFlight(IF, 1200n).message),
+);
+// A zero-size window: before === before + amount only if amount is 0, which parseArgs already rejects.
+eq(
+  "a landed verdict names both balances",
+  /1000 -> 1500/.test(reconcileInFlight(IF, 1500n).message),
+  true,
 );
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===`);

@@ -132,7 +132,49 @@ export type RunRecord = {
   inventoryWallet: string;
   plan: string[];
   landed: { index: number; atomic: string; sig: string }[];
+  /**
+   * THE CRASH WINDOW. Writing the record only AFTER `.rpc()` returns leaves a gap: kill the process
+   * in between (SIGKILL, a closed laptop, a dropped connection after the transaction was already
+   * accepted) and the record UNDERCOUNTS. `--resume` would then re-send a tranche that landed, which
+   * is the exact double-mint the record exists to prevent, just moved.
+   *
+   * So the intent is written BEFORE the send, with the inventory ATA balance measured at that moment,
+   * and cleared after. A resume that finds this present reconciles against the chain.
+   */
+  inFlight?: { index: number; atomic: string; ataBefore: string };
 };
+
+/**
+ * Did the in-flight tranche land? Decided on the inventory ATA balance, NOT on the supply: supply
+ * moves for other reasons once public mint is open, the ATA is credited only by premint.
+ *
+ * The two exact matches are unambiguous. ANYTHING ELSE REFUSES, because the balance can also move by
+ * an inbound SILV transfer or a permanent-delegate action, and guessing wrong here either
+ * double-mints or silently skips a tranche.
+ */
+export function reconcileInFlight(
+  inFlight: { atomic: string; ataBefore: string },
+  ataNow: bigint,
+): { kind: "landed" | "not-landed" | "ambiguous"; message: string } {
+  const before = BigInt(inFlight.ataBefore);
+  const amt = BigInt(inFlight.atomic);
+  if (ataNow === before + amt) {
+    return { kind: "landed", message: `the in-flight tranche ${amt} LANDED (ATA ${before} -> ${ataNow})` };
+  }
+  if (ataNow === before) {
+    return { kind: "not-landed", message: `the in-flight tranche ${amt} did NOT land (ATA still ${before})` };
+  }
+  return {
+    kind: "ambiguous",
+    message:
+      `cannot tell whether the in-flight tranche of ${amt} landed.\n` +
+      `  inventory ATA was ${before} before the send, and is ${ataNow} now.\n` +
+      `  Expected ${before + amt} if it landed, ${before} if it did not. Neither matches, so something\n` +
+      `  else moved this account (an inbound transfer, or the permanent delegate).\n` +
+      `  Find the transaction by hand, then edit ${STATE_PATH}: move the tranche into "landed" if it\n` +
+      `  landed, or delete "inFlight" if it did not. REFUSING to guess: one way double-mints.`,
+  };
+}
 
 /**
  * What a pre-existing record means for the run being started. Pure, so the decision is testable
@@ -302,9 +344,37 @@ async function main() {
   }
   console.log(`  manifest : ${declared ? (declared === inventoryWallet.toBase58() ? "matches" : "MISMATCH") : "unreadable"}`);
 
+  // ---- the crash window: settle any in-flight tranche BEFORE deciding what is left ----
+
+  const ataAddr = getAssociatedTokenAddressSync(silvMint, inventoryWallet, true, TOKEN_2022_PROGRAM_ID);
+  let existing = readRecord();
+  if (existing?.inFlight && resume) {
+    const bal = (await getAccount(conn, ataAddr, "confirmed", TOKEN_2022_PROGRAM_ID)).amount;
+    const verdict = reconcileInFlight(existing.inFlight, bal);
+    console.log(`  in-flight: ${verdict.message}`);
+    if (verdict.kind === "ambiguous") throw new Error(verdict.message);
+    if (verdict.kind === "landed") {
+      // Recorded WITHOUT a signature: the process died before it could learn one. The tranche is
+      // still counted, which is the only thing that keeps --resume from sending it again.
+      existing.landed.push({
+        index: existing.landed.length,
+        atomic: existing.inFlight.atomic,
+        sig: "recovered-from-chain (the run died before recording the signature)",
+      });
+    }
+    delete existing.inFlight;
+    writeRecord(existing);
+  } else if (existing?.inFlight && !resume) {
+    throw new Error(
+      `a run record at ${STATE_PATH} has an IN-FLIGHT tranche: the process died between sending and ` +
+        `recording, so whether it landed is unknown.\nRun with --resume, which reconciles it against ` +
+        `the inventory ATA balance before doing anything.`,
+    );
+  }
+
   // ---- the plan, and what a pre-existing record says about it ----
 
-  const decision = decideResume(readRecord(), { tranches, resume }, {
+  const decision = decideResume(existing, { tranches, resume }, {
     cluster: RPC,
     program: PROGRAM_ID.toBase58(),
     inventoryWallet: inventoryWallet.toBase58(),
@@ -379,6 +449,10 @@ async function main() {
     for (const [i, amt] of plan.entries()) {
       const supplyBefore = (await getMint(conn, silvMint, "confirmed", TOKEN_2022_PROGRAM_ID)).supply;
       const balBefore = (await getAccount(conn, invAta, "confirmed", TOKEN_2022_PROGRAM_ID)).amount;
+      // THE INTENT, WRITTEN BEFORE THE SEND. If the process dies at any point from here until the
+      // signature is recorded, this is what tells the next run that a tranche may already be on chain.
+      record.inFlight = { index: record.landed.length, atomic: amt.toString(), ataBefore: balBefore.toString() };
+      writeRecord(record);
       const sig = await program.methods
         .adminPremint(new BN(amt.toString()))
         .accounts({
@@ -391,6 +465,7 @@ async function main() {
         })
         .rpc();
       record.landed.push({ index: record.landed.length, atomic: amt.toString(), sig });
+      delete record.inFlight;
       writeRecord(record);
 
       const supplyAfter = (await getMint(conn, silvMint, "confirmed", TOKEN_2022_PROGRAM_ID)).supply;
