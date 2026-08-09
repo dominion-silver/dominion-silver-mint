@@ -492,7 +492,16 @@ paragraph and fails if this text and those tests ever stop agreeing.
 **What holds the launch instead is THE PAUSE, and the pause is now guarded.** `unpause` requires an
 ACTIVE guardian distinct from the admin, so the transition to live cannot happen before an
 independent party can pause and can cancel a timelocked action. That is why step 8 registers the
-guardians BEFORE it unpauses, in that order, in one step.
+guardians BEFORE it unpauses, in that order.
+
+**ROUND 8 REVIEW: THIS IS NO LONGER ONE STEP, AND RUNNING IT AS ONE PRODUCES A REVERT.**
+`add_guardian` increments `config.guardian_count`, and the unpause commits to a digest that includes
+it, so a batch carrying both builds an unpause the chain refuses with `StaleReadinessDigest`, after
+the registrations have already landed. Step 8 therefore registers the guardians and STOPS, printing
+why. **Re-run step 8**: the registrations then read as already done, the config is re-read, and the
+unpause is emitted with a digest that matches the state it will meet. Do NOT run `--verify` between
+the two runs: the protocol is still paused, which is correct, and `--verify` would report that
+correct state as a failure.
 
 **The number is kept deliberately.** `verify-mainnet-readiness.ts --stage=N` and several checks in
 this page are keyed to these numbers; renumbering would silently move every `dueStep` deadline. A

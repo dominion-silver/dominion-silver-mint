@@ -306,11 +306,37 @@ async function main() {
     readinessDigest: readinessDigestFromConfig(c0),
   });
 
+  // ROUND 8 REVIEW P1. A BATCH THAT STOPPED EARLY IS NOT A FAILED BATCH.
+  //
+  // The builder deliberately omits the unpause while a guardian registration is pending. `verify()`
+  // then asserts `paused === false`, fails, and exits 1 on a run where every instruction succeeded.
+  // The devnet rehearsal is the only end-to-end exercise of this step and it would have reported red
+  // on a correct run, which is the fastest way to make an operator distrust a green/red signal.
+  const stoppedEarly = !actions.some((a) => a.label === "unpause()");
+
   if (MODE === "send") {
     await sendAll(conn, signer!, actions);
+    if (stoppedEarly) {
+      console.log(
+        "\n  BATCH COMPLETE, AND THE PROTOCOL IS STILL PAUSED ON PURPOSE." +
+          "\n  The guardian registrations landed. The unpause was deliberately NOT in this batch," +
+          "\n  because add_guardian moves config.guardian_count and the unpause commits to a digest" +
+          "\n  of it. RE-RUN THIS EXACT COMMAND: the registrations will read as already done, the" +
+          "\n  config is re-read, and the unpause is emitted with a digest that matches.\n",
+      );
+      return;
+    }
     return verify(conn, await cfg(), guardians, inventoryWallet);
   }
   emit("step8", describeCluster(CLUSTER), actions);
+  if (stoppedEarly) {
+    console.log(
+      "\n  This batch stops BEFORE the unpause on purpose. Execute it, then RE-RUN step 8 to emit" +
+        "\n  the unpause against a re-read config. Do NOT run --verify yet: the protocol is still" +
+        "\n  paused and --verify would report that correct state as a failure.\n",
+    );
+    return;
+  }
   console.log(`\n  After the Squads executions land, run:  npx tsx scripts/ceremony-step8.ts --verify`);
 }
 

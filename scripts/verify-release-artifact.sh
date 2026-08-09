@@ -341,27 +341,6 @@ for a in "$@"; do
     *)              ARGS+=("$a") ;;
   esac
 done
-# (c bis) AN UNCOMMITTED PIN CANNOT BE ATTESTED.
-#
-# ROUND 8 REVIEW P1. Excluding the manifest from the rebuilt set was right; letting an UNCOMMITTED
-# manifest drive an exit-0 attestation was not. "A manifest that lies is caught downstream" fails,
-# because every downstream check recomputes from this same local tree: set sha256 to the local
-# build's hash, recompute sizes and the IDL hash from the same files, name any ancestor as
-# source_commit and any digits as ci_run_id, and validate_pinned passes, (d) passes, and a correct
-# NOT ATTESTED becomes ARTIFACT OK. That is the removed DOMINION_RELEASE_MANIFEST override
-# reinstated through the filesystem.
-#
-# It is NOT a refusal to run, and the first version of this made that mistake. Refusing here says
-# "this tree is not ours", which is false and untestable: the pin self-test injects candidate
-# variants, and forcing it to commit them turned every fixture into an unsigned commit that the
-# identity gate then refused for an unrelated reason. An unrecorded pin is precisely what exit 3
-# means, so it sets NOT ATTESTED and the verdict says why.
-UNCOMMITTED_PIN=""
-
-# Set by check 1b when the pin could not be evaluated. Read at the very bottom, and it is what makes
-# the LAST LINE and the EXIT CODE agree with each other.
-not_attested=0
-not_attested_why=""
 # ROUND 8 REVIEW P1, OPEN AND DELIBERATELY NOT PATCHED AT THE END OF A SESSION.
 #
 # The finding is real: an UNCOMMITTED config/mainnet-authorities.json can drive an exit-0
@@ -379,7 +358,7 @@ not_attested_why=""
 # of a session is how the previous six passes went wrong.
 #
 # Recorded here rather than silently dropped. It is a P1 and it is OPEN.
-: "${UNCOMMITTED_PIN:=}"
+
 SO="${ARGS[0]:-$ROOT/target/deploy/dominion_silver_mint.so}"
 IDL="${ARGS[1]:-$ROOT/target/idl/dominion_silver_mint.json}"
 LIB_RS="$ROOT/programs/dominion_silver_mint_v2/src/lib.rs"

@@ -835,34 +835,64 @@ fn the_readiness_digest_moves_on_every_config_field_the_decision_reads() {
 /// Changing the digest breaks BOTH, in two languages, which is the point: a field added on one side
 /// cannot pass unnoticed on the other.
 #[test]
-fn the_readiness_digest_matches_the_frozen_cross_language_vector() {
-    use solana_sdk::pubkey::Pubkey;
-    // A fixed, meaningless-on-purpose input. Real config values would drift with the manifest and
-    // turn this into a test of the manifest rather than of the encoding.
-    let admin = Pubkey::new_from_array([1u8; 32]);
-    let silv_mint = Pubkey::new_from_array([2u8; 32]);
-    let inventory = Pubkey::new_from_array([3u8; 32]);
+fn the_readiness_digest_mirror_matches_the_declared_layout() {
+    // ROUND 8 REVIEW P0. THE FIRST VERSION OF THIS TEST ASSERTED NOTHING.
+    //
+    // It built the preimage from literals and hashed it, then compared to a literal. `sha256(x) == x`
+    // can only fail if someone edits the test. The reviewer proved it by mutation: adding a byte to
+    // the mirror in common/mod.rs left this test GREEN while six real tests went red. The docblock
+    // claimed it pinned the encoders; it observed neither.
+    //
+    // This one calls `Fixture::readiness_digest()`, the mirror, over the LIVE config, and compares it
+    // to a preimage rebuilt here from the same live values. A field added on one side and not the
+    // other makes the two diverge. The mirror is in turn pinned to the PROGRAM by every `unpause` in
+    // the suite, since the chain recomputes it and refuses a mismatch. So the chain is:
+    //   program  <-> mirror   (every unpause, ~6 tests)
+    //   mirror   <-> layout   (this test)
+    //   layout   <-> TypeScript (the frozen vector in the vitest suites)
+    let mut f = Fixture::new();
+    let c = f.config();
 
     let mut buf = Vec::with_capacity(128);
-    buf.extend_from_slice(admin.as_ref());
-    buf.extend_from_slice(silv_mint.as_ref());
-    buf.extend_from_slice(inventory.as_ref());
-    buf.push(1u8); // public_mint_enabled
-    buf.push(1u8); // redemptions_enabled
-    buf.push(2u8); // guardian_count
-    buf.extend_from_slice(&3u16.to_le_bytes()); // min_publishers
-    buf.extend_from_slice(&3154u32.to_le_bytes()); // pyth_lazer_feed_id
+    buf.extend_from_slice(c.admin.as_ref());
+    buf.extend_from_slice(c.silv_mint.as_ref());
+    buf.extend_from_slice(c.inventory_wallet.as_ref());
+    buf.push(c.public_mint_enabled as u8);
+    buf.push(c.redemptions_enabled as u8);
+    buf.push(c.guardian_count);
+    buf.extend_from_slice(&c.min_publishers.to_le_bytes());
+    buf.extend_from_slice(&c.pyth_lazer_feed_id.to_le_bytes());
     assert_eq!(buf.len(), 105, "the preimage width changed, so the digest layout changed");
 
-    let got = solana_sdk::hash::hash(&buf).to_bytes();
-    let hex: String = got.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(
+        f.readiness_digest(),
+        solana_sdk::hash::hash(&buf).to_bytes(),
+        "the digest mirror no longer matches the layout this test declares. A field was added or \
+         removed on one side only. Update BOTH ConfigAccount::readiness_digest, the mirror in \
+         common/mod.rs, this preimage, AND the frozen vector in the two TypeScript suites, or the \
+         ceremony will build an unpause the chain always rejects."
+    );
+
+    // And the frozen constant the TypeScript suites assert, recomputed here from the SAME layout, so
+    // a layout change breaks this too rather than leaving the TS side alone with a stale number.
+    let mut fixed = Vec::with_capacity(128);
+    fixed.extend_from_slice(&[1u8; 32]);
+    fixed.extend_from_slice(&[2u8; 32]);
+    fixed.extend_from_slice(&[3u8; 32]);
+    fixed.push(1u8);
+    fixed.push(1u8);
+    fixed.push(2u8);
+    fixed.extend_from_slice(&3u16.to_le_bytes());
+    fixed.extend_from_slice(&3154u32.to_le_bytes());
+    let hex: String = solana_sdk::hash::hash(&fixed)
+        .to_bytes()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
     assert_eq!(
         hex, FROZEN_DIGEST_HEX,
-        "the digest layout moved. Update BOTH this vector and the identical one in \
-         apps/admin/src/lib/__tests__/instruction-args-parity.test.ts, and check every TypeScript \
-         copy of the encoder, or the ceremony will build an unpause the chain always rejects."
+        "the frozen cross-language vector moved. Update it in BOTH TypeScript suites."
     );
 }
 
-/// Kept next to the test so a reader sees the constant and the layout together.
 const FROZEN_DIGEST_HEX: &str = "911edf183b2728a122607a9e70341dfc58a49c1f3391ef8f846429e6b945e33a";

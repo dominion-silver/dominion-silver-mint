@@ -22,6 +22,7 @@
  */
 import { createHash } from "crypto";
 import { decideStateDisposition, classifyResume, planExecuteResume } from "./_run-state";
+import { readinessDigest as readinessDigestForTest } from "./_readiness-digest";
 import { assertContext as assertContextForTest } from "./e2e-inventory-change-devnet";
 import { collectLaunchState } from "./ceremony-step8";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
@@ -552,6 +553,29 @@ async function main(): Promise<void> {
       );
     }
     check(ctxFails === BAD.length, "all five hostile records were refused", "a hostile record passed");
+  }
+
+  // ROUND 8 REVIEW P0. THE FROZEN VECTOR OVER THE COPY THE CEREMONY USES.
+  //
+  // The vitest suite pins apps/admin/src/lib/readiness-digest.ts. The ceremony imports
+  // scripts/_readiness-digest.ts. Editing the scripts copy alone turned zero tests red while the
+  // mainnet ceremony would have built the wrong digest. Same constant, both copies, both asserted.
+  {
+    const d = readinessDigestForTest({
+      admin: new PublicKey(new Uint8Array(32).fill(1)),
+      silvMint: new PublicKey(new Uint8Array(32).fill(2)),
+      inventoryWallet: new PublicKey(new Uint8Array(32).fill(3)),
+      publicMintEnabled: true,
+      redemptionsEnabled: true,
+      guardianCount: 2,
+      minPublishers: 3,
+      pythLazerFeedId: 3154,
+    });
+    check(
+      d.toString("hex") === "911edf183b2728a122607a9e70341dfc58a49c1f3391ef8f846429e6b945e33a",
+      "the ceremony's digest encoder matches the frozen cross-language vector",
+      `the ceremony's encoder produced ${d.toString("hex")}, so the unpause it builds would be rejected`,
+    );
   }
 
   if (failures > 0) {
