@@ -3,13 +3,15 @@
 // oracle, a 1:1 mint against the physical allocation the cap represents. Public
 // direct mint is closed at launch, so this is the only mint path.
 
-// ACCEPTED TRUST, which is why both instructions are admin-only and instant: a
-// compromised admin can set_inventory_wallet(redirect) then admin_premint the
-// remaining cap headroom in one block. Bounded by the 100k oz hard cap, which
-// cannot be raised (SupplyCapRaiseBlocked), and unable to drain the treasury
-// because re-enabling redemptions is blocked on chain (RedemptionsEnableBlocked).
-// Phase 1 should timelock the setter. admin_premint also does not yet gate on the
-// dormant `mint_paused` field; whoever wires it must include this mint path.
+// ROUND 7: the redirect-then-premint pair is CLOSED. This header used to say "Phase 1 should
+// timelock the setter", and both auditors independently said phase 1 was now. Changing an
+// already-bound inventory wallet goes through propose_set_inventory_wallet + 24h + execute, so a
+// guardian sees a redirect a day before any supply can land in the new wallet. The FIRST binding is
+// still instant, deliberately: with the field unset `admin_premint` refuses, so there is nothing to
+// redirect. See set_inventory_wallet_handler below.
+//
+// admin_premint still does not gate on the dormant `mint_paused` field; whoever wires it must
+// include this mint path.
 
 use crate::assertions::assert_silv_mint_invariants;
 use crate::cpi::silv_mint_to;
@@ -109,8 +111,20 @@ pub struct SetInventoryWallet<'info> {
     pub admin: Signer<'info>,
 }
 
-/// Admin sets the pre-mint destination owner (instant, late-binding). Required
-/// before the first admin_premint.
+/// Admin BINDS the pre-mint destination owner, once. Required before the first `admin_premint`.
+///
+/// ROUND 7, SolidProof condition 4 and Codex condition 3. This used to be instant in both directions,
+/// which made the pair `set_inventory_wallet(attacker)` + `admin_premint(remaining headroom)` a single
+/// block with no delay and no veto. Both auditors called that untenable for mainnet while a premint
+/// capability exists. The hard cap bounds the size of the theft; it provides no window in which anyone
+/// could see it coming.
+///
+/// WHY THE FIRST BINDING STAYS INSTANT, and why that is not the same hole. The attack is a REDIRECT:
+/// it needs a wallet already bound and supply worth diverting. While the field is still the default,
+/// `admin_premint` refuses outright (`InventoryWalletNotSet`), so there is nothing to redirect and
+/// nothing to steal. Making the first bind wait 24h would add a dead day to a ceremony that moves real
+/// funds, and a longer ceremony is one with more room for mistakes. This is a deliberate deviation
+/// from the letter of the condition, and it is disclosed as one.
 pub fn set_inventory_wallet_handler(
     ctx: Context<SetInventoryWallet>,
     wallet: Pubkey,
@@ -118,6 +132,10 @@ pub fn set_inventory_wallet_handler(
     require!(
         wallet != Pubkey::default(),
         DominionError::InventoryWalletNotSet
+    );
+    require!(
+        ctx.accounts.config.inventory_wallet == Pubkey::default(),
+        DominionError::InventoryWalletChangeRequiresTimelock
     );
     let old_wallet = ctx.accounts.config.inventory_wallet;
     ctx.accounts.config.inventory_wallet = wallet;

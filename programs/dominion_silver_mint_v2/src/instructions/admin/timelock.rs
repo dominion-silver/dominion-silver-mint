@@ -69,6 +69,18 @@ pub fn cancel_handler(ctx: Context<CancelTimelocked>, nonce: u64) -> Result<()> 
         x if x == TimelockAction::SetAdminTimelock as u8 => Some(TimelockAction::SetAdminTimelock),
         x if x == TimelockAction::SetRedeemLimits as u8 => Some(TimelockAction::SetRedeemLimits),
         x if x == TimelockAction::SetPublicMint as u8 => Some(TimelockAction::SetPublicMint),
+        x if x == TimelockAction::SetInventoryWallet as u8 => {
+            Some(TimelockAction::SetInventoryWallet)
+        }
+        // ROUND 7 HAZARD, found by a test rather than by reading. This `_ => None` silently swallows
+        // any discriminant not listed above, so a NEW action added to the enum cancels its account and
+        // leaves its `pending_*_nonce` slot armed forever: no further proposal of that kind can ever
+        // be made, and the guardian's veto looks like it worked. The disarm `match` below is
+        // exhaustive and forced the second half of this change; this half has a catch-all and did not.
+        //
+        // WHOEVER ADDS AN ACTION: add it HERE too, and write the cancel test. `cancelling_a_change_
+        // releases_the_slot_and_leaves_the_wallet_alone` in tools/state-harness is the one that
+        // caught it, by asserting the slot is None afterwards rather than that the call succeeded.
         _ => None,
     };
 
@@ -105,6 +117,7 @@ pub fn cancel_handler(ctx: Context<CancelTimelocked>, nonce: u64) -> Result<()> 
             TimelockAction::SetAdminTimelock => disarm_if_mine!(pending_admin_timelock_nonce),
             TimelockAction::SetRedeemLimits => disarm_if_mine!(pending_redeem_limits_nonce),
             TimelockAction::SetPublicMint => disarm_if_mine!(pending_public_mint_nonce),
+            TimelockAction::SetInventoryWallet => disarm_if_mine!(pending_inventory_wallet_nonce),
         }
     }
 

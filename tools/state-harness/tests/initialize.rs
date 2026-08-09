@@ -617,7 +617,13 @@ fn initialize_writes_every_config_field_and_the_values_read_back_on_chain() {
         c.min_operation_usdc, DEFAULT_MIN_OPERATION_USDC,
         "config.min_operation_usdc must be the shipped default, not zero"
     );
-    assert_eq!(c.reserved, [0u8; 32], "config.reserved");
+    assert_eq!(c.reserved, [0u8; 23], "config.reserved");
+    // ROUND 7: initialize must leave the new slot empty. A non-None here would mean a proposal
+    // existed before the program did, which is the shape a mis-decoded layout produces.
+    assert_eq!(
+        c.pending_inventory_wallet_nonce, None,
+        "config.pending_inventory_wallet_nonce"
+    );
 }
 
 #[test]

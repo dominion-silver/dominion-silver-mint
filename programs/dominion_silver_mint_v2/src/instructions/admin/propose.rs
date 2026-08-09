@@ -335,6 +335,88 @@ pub fn propose_set_public_mint_handler(
 }
 
 #[derive(Accounts)]
+pub struct ProposeInventoryWallet<'info> {
+    #[account(mut, seeds = [CONFIG_SEED], bump, has_one = admin)]
+    pub config: Account<'info, ConfigAccount>,
+
+    #[account(mut)]
+    pub admin: Signer<'info>,
+
+    #[account(
+        init,
+        payer = admin,
+        space = TimelockQueueAccount::SIZE,
+        seeds = [TIMELOCK_SEED, &config.next_timelock_nonce.to_le_bytes()],
+        bump,
+    )]
+    pub timelock: Account<'info, TimelockQueueAccount>,
+
+    pub system_program: Program<'info, System>,
+}
+
+/// Propose CHANGING the pre-mint destination. Round 7, SolidProof condition 4.
+///
+/// The payload is the 32-byte destination pubkey. Only a change is proposable: the first binding
+/// takes the instant path, which refuses once the field is set.
+pub fn propose_set_inventory_wallet_handler(
+    ctx: Context<ProposeInventoryWallet>,
+    new_wallet: Pubkey,
+) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+    let now = Clock::get()?.unix_timestamp;
+
+    require!(
+        new_wallet != Pubkey::default(),
+        DominionError::InventoryWalletNotSet
+    );
+    require!(
+        new_wallet != config.inventory_wallet,
+        DominionError::InventoryWalletUnchanged
+    );
+    require!(
+        config.pending_inventory_wallet_nonce.is_none(),
+        DominionError::ProposalAlreadyActive
+    );
+    require!(
+        config.active_proposal_count < MAX_ACTIVE_PROPOSALS,
+        DominionError::TooManyActiveProposals
+    );
+
+    let nonce = config.next_timelock_nonce;
+    let executable_at = now
+        .checked_add(config.admin_timelock_seconds as i64)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
+
+    let tl = &mut ctx.accounts.timelock;
+    tl.nonce = nonce;
+    tl.action_disc = TimelockAction::SetInventoryWallet as u8;
+    tl.action_data = new_wallet.to_bytes().to_vec();
+    tl.scheduled_at = now;
+    tl.executable_at = executable_at;
+    tl.executed_at = None;
+    tl.cancelled = false;
+    tl.proposer = ctx.accounts.admin.key();
+    tl.rent_payer = ctx.accounts.admin.key();
+
+    config.next_timelock_nonce = nonce
+        .checked_add(1)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
+    config.active_proposal_count = config
+        .active_proposal_count
+        .checked_add(1)
+        .ok_or(error!(DominionError::ArithmeticOverflow))?;
+    config.pending_inventory_wallet_nonce = Some(nonce);
+
+    emit!(AdminActionProposed {
+        nonce,
+        action_disc: tl.action_disc,
+        executable_at,
+        proposer: ctx.accounts.admin.key(),
+    });
+    Ok(())
+}
+
+#[derive(Accounts)]
 pub struct ProposeCompliance<'info> {
     #[account(mut, seeds = [CONFIG_SEED], bump, has_one = admin)]
     pub config: Account<'info, ConfigAccount>,

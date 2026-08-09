@@ -257,7 +257,11 @@ pub struct Config {
     /// caught the layout change when the field was added: the harness read 10_000_000 LE bleeding
     /// into `reserved` and the initialize test failed rather than silently mis-decoding.
     pub min_operation_usdc: u64,
-    pub reserved: [u8; 32],
+    /// ROUND 7, carved out of `reserved` per THE RULE. Same story as the field above: if the program
+    /// and this mirror disagree, the initialize test fails on a decoded value rather than passing on a
+    /// silently mis-parsed one.
+    pub pending_inventory_wallet_nonce: Option<u64>,
+    pub reserved: [u8; 23],
 }
 
 impl Config {

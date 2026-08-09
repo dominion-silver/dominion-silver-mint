@@ -804,6 +804,82 @@
       ]
     },
     {
+      "name": "execute_set_inventory_wallet",
+      "discriminator": [
+        173,
+        71,
+        173,
+        178,
+        116,
+        28,
+        51,
+        230
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "nonce"
+              }
+            ]
+          }
+        },
+        {
+          "name": "rent_recipient",
+          "writable": true
+        }
+      ],
+      "args": [
+        {
+          "name": "nonce",
+          "type": "u64"
+        }
+      ]
+    },
+    {
       "name": "execute_set_oracle_guards",
       "discriminator": [
         158,
@@ -2466,6 +2542,87 @@
       ]
     },
     {
+      "name": "propose_set_inventory_wallet",
+      "docs": [
+        "ROUND 7. Propose a CHANGE of the pre-mint destination. 24h, guardian-cancellable."
+      ],
+      "discriminator": [
+        148,
+        68,
+        160,
+        146,
+        126,
+        45,
+        129,
+        7
+      ],
+      "accounts": [
+        {
+          "name": "config",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "admin",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "config"
+          ]
+        },
+        {
+          "name": "timelock",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  105,
+                  109,
+                  101,
+                  108,
+                  111,
+                  99,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "config.next_timelock_nonce",
+                "account": "ConfigAccount"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "new_wallet",
+          "type": "pubkey"
+        }
+      ]
+    },
+    {
       "name": "propose_set_oracle_guards",
       "discriminator": [
         60,
@@ -3949,6 +4106,9 @@
     },
     {
       "name": "set_inventory_wallet",
+      "docs": [
+        "Binds the pre-mint destination ONCE. Refuses if one is already set: use the two above."
+      ],
       "discriminator": [
         145,
         245,
@@ -5695,6 +5855,16 @@
       "code": 12121,
       "name": "LazerReplayed",
       "msg": "this price envelope was already used: another operation consumed it, retry with a fresh price"
+    },
+    {
+      "code": 12122,
+      "name": "InventoryWalletChangeRequiresTimelock",
+      "msg": "the inventory wallet is already set: changing it requires propose_set_inventory_wallet and the 24h timelock"
+    },
+    {
+      "code": 12123,
+      "name": "InventoryWalletUnchanged",
+      "msg": "the proposed inventory wallet is the one already configured"
     }
   ],
   "types": [
@@ -6203,11 +6373,25 @@
             "type": "u64"
           },
           {
+            "name": "pending_inventory_wallet_nonce",
+            "docs": [
+              "ROUND 7. The active `SetInventoryWallet` proposal, or None. Carved out of `reserved` per THE",
+              "RULE above, so an in-place upgrade decodes None, which is the correct \"no proposal pending\".",
+              "",
+              "WHY THIS FIELD EXISTS AT ALL, rather than relying on MAX_ACTIVE_PROPOSALS: one armed proposal",
+              "per action kind is what makes a guardian's job tractable. Without it an admin could queue five",
+              "redirects to five wallets and the guardian would have to cancel all five within the window."
+            ],
+            "type": {
+              "option": "u64"
+            }
+          },
+          {
             "name": "reserved",
             "type": {
               "array": [
                 "u8",
-                32
+                23
               ]
             }
           }

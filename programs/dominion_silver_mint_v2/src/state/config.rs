@@ -267,7 +267,15 @@ pub struct ConfigAccount {
     /// decodes out of `reserved`, per THE RULE above. `initialize` writes `DEFAULT_MIN_OPERATION_USDC`.
     pub min_operation_usdc: u64,
 
-    pub reserved: [u8; 32],
+    /// ROUND 7. The active `SetInventoryWallet` proposal, or None. Carved out of `reserved` per THE
+    /// RULE above, so an in-place upgrade decodes None, which is the correct "no proposal pending".
+    ///
+    /// WHY THIS FIELD EXISTS AT ALL, rather than relying on MAX_ACTIVE_PROPOSALS: one armed proposal
+    /// per action kind is what makes a guardian's job tractable. Without it an admin could queue five
+    /// redirects to five wallets and the guardian would have to cancel all five within the window.
+    pub pending_inventory_wallet_nonce: Option<u64>,
+
+    pub reserved: [u8; 23],
 }
 
 impl ConfigAccount {
@@ -311,7 +319,8 @@ impl ConfigAccount {
         + 1                   // fee_routing_disabled (carved out of reserved)
         + 4                   // kyc_attestation_count (carved out of reserved)
         + 8                   // min_operation_usdc (carved out of reserved, round 5 P1-04)
-        + 32; // reserved
+        + (1 + 8)             // pending_inventory_wallet_nonce (carved out of reserved, round 7)
+        + 23; // reserved
 
     // A POST-write invariant, complementary to the pre-write checks at each mutation site.
     pub fn assert_premium_within_bounds(&self) -> Result<()> {

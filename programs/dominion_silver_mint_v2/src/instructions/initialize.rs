@@ -396,7 +396,9 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     // of whoever types the ceremony command, and the ceremony is exactly where a wrong number is
     // hardest to notice. Change it here, rebuild, re-audit. The instant setter tunes it afterwards.
     config.min_operation_usdc = DEFAULT_MIN_OPERATION_USDC;
-    config.reserved = [0u8; 32];
+    // ROUND 7. No proposal can exist before the program does.
+    config.pending_inventory_wallet_nonce = None;
+    config.reserved = [0u8; 23];
 
     msg!("dominion_silver_mint initialized");
     Ok(())
