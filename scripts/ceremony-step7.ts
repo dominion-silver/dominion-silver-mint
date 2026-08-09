@@ -106,7 +106,7 @@ async function main() {
   }
   console.log(`  nonce         : ${c0.nextTimelockNonce}, active proposals: ${c0.activeProposalCount}`);
 
-  if (MODE === "verify") return verify(c0);
+  if (MODE === "verify") return await verify(c0, conn);
 
   if (MODE === "send") assertSendable(c0.admin, signer!.publicKey, "step 7");
 
@@ -209,7 +209,7 @@ async function main() {
 
   if (MODE === "send") {
     await sendAll(conn, signer!, actions);
-    return verify(await cfg());
+    return await verify(await cfg(), conn);
   }
   emit("step7", describeCluster(CLUSTER), actions);
   console.log(
@@ -224,11 +224,31 @@ async function main() {
  * account, so a proposal of the right TYPE carrying the WRONG VALUE was reported as "already pending".
  * Decoding the payload is what turns that from a presence check into a content check.
  */
-function verify(c: any): void {
+async function verify(c: any, conn: Connection): Promise<void> {
   const ck = new Checks();
   console.log("\n  reading the chain back:");
   ck.eq("public mint still closed (opens on execute)", c.publicMintEnabled, false);
   ck.eq("a public-mint proposal is queued", c.pendingPublicMintNonce != null, true);
+
+  // ROUND 7 R7-05. This branch used to stop at "a nonce is non-null", which is a PRESENCE check, and
+  // it is recommended after execution as the ceremony's proof. The emit and resume paths already
+  // decode the account with `queuedActionMatches`; verify bifurcated before them and inherited none of
+  // it, so it asserted a property weaker than the one it reported. Same defect R6-10 fixed on the
+  // emit path, left standing on the path an operator runs LAST.
+  if (c.pendingPublicMintNonce != null) {
+    const mismatch = await queuedActionMatches(
+      conn,
+      PROGRAM_ID,
+      BigInt(c.pendingPublicMintNonce.toString()),
+      11,
+      Buffer.from([1]),
+    );
+    ck.eq(
+      "and its payload is SetPublicMint(true), decoded from the account",
+      mismatch ?? "matches",
+      "matches",
+    );
+  }
 
   // P0-04: the launch posture is redemptions CLOSED. A stray proposal here would open the only path
   // that pays out principal USDC, so it is a hard failure and not a note.
@@ -246,11 +266,28 @@ function verify(c: any): void {
   if (c.pendingTreasuryFloatNonce == null) {
     ck.note("treasury-float proposal", "none queued (expected under D5)");
   } else {
-    ck.note(
-      "treasury-float proposal",
-      `QUEUED at nonce ${c.pendingTreasuryFloatNonce}. D5 ships 0, so somebody proposed one on ` +
-        `purpose. Decode it before executing: npx tsx scripts/read-config.ts`,
-    );
+    // ROUND 7 R7-05. Under D5 no float proposal is expected, and the float payload is an arbitrary
+    // u64, so a divergence here is real rather than theoretical. This was a note that told the
+    // operator to go and decode the account themselves later; the script can decode it now, and a
+    // proposal nobody chose is a verification FAILURE, not a remark.
+    const want = process.env.DOMINION_TREASURY_MIN_FLOAT_USDC;
+    const nonce = BigInt(c.pendingTreasuryFloatNonce.toString());
+    if (want === undefined) {
+      ck.eq(
+        `no treasury-float proposal is queued (D5 ships 0), but nonce ${nonce} holds one`,
+        false,
+        true,
+      );
+    } else {
+      const payload = Buffer.alloc(8);
+      payload.writeBigUInt64LE(BigInt(want));
+      const mismatch = await queuedActionMatches(conn, PROGRAM_ID, nonce, 4, payload);
+      ck.eq(
+        `the queued treasury float at nonce ${nonce} is the ${want} this ceremony asked for`,
+        mismatch ?? "matches",
+        "matches",
+      );
+    }
   }
 
   const eta = new Date(Date.now() + Number(c.adminTimelockSeconds) * 1000);

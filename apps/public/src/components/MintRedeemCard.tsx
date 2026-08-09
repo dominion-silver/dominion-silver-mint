@@ -24,6 +24,8 @@ import {
   classifyRedeem,
   parseRedeemError,
   isBelowMinimumError,
+  isLazerReplayedError,
+  isLazerCarriedForwardError,
   isStaleOracleError,
   STALE_ORACLE_USER_MESSAGE,
   errorToText,
@@ -493,6 +495,12 @@ export function MintRedeemCard() {
       const friendly =
         isStaleOracleError(flat)
           ? STALE_ORACLE_USER_MESSAGE
+          // ROUND 7 R7-08. Both sides, above the redeem-only reroutes, because mint raises them too.
+          // Two codes, two messages, because the correct next action differs: retry now versus wait.
+          : isLazerReplayedError(flat)
+            ? "Another transaction used the same price update a moment before yours. Nothing was charged. Try again, and a fresh price will be fetched."
+          : isLazerCarriedForwardError(flat)
+            ? "The silver price feed has not published a new value yet. Nothing was charged. Wait a few seconds rather than retrying immediately."
           : isBelowMinimumError(flat)
             ? "That amount is below the protocol's minimum operation size. Nothing was charged. Try a larger amount."
           : reroute === "limit"

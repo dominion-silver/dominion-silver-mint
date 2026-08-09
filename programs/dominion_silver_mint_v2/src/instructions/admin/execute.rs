@@ -946,6 +946,87 @@ pub struct ExecutePublicMint<'info> {
     pub rent_recipient: AccountInfo<'info>,
 }
 
+#[derive(Accounts)]
+#[instruction(nonce: u64)]
+pub struct ExecuteInventoryWallet<'info> {
+    #[account(mut, seeds = [CONFIG_SEED], bump, has_one = admin)]
+    pub config: Account<'info, ConfigAccount>,
+    pub admin: Signer<'info>,
+    #[account(
+        mut, close = rent_recipient,
+        seeds = [TIMELOCK_SEED, &nonce.to_le_bytes()], bump,
+        constraint = !timelock.cancelled @ DominionError::TimelockActionCancelled,
+        constraint = timelock.executed_at.is_none() @ DominionError::TimelockActionAlreadyExecuted,
+    )]
+    pub timelock: Account<'info, TimelockQueueAccount>,
+    /// CHECK: rent recipient.
+    #[account(mut, address = timelock.rent_payer)]
+    pub rent_recipient: AccountInfo<'info>,
+}
+
+/// ROUND 7. Apply an announced change of the pre-mint destination.
+pub fn execute_set_inventory_wallet_handler(
+    ctx: Context<ExecuteInventoryWallet>,
+    nonce: u64,
+) -> Result<()> {
+    let config = &mut ctx.accounts.config;
+    let tl = &mut ctx.accounts.timelock;
+    let now = Clock::get()?.unix_timestamp;
+
+    require!(tl.nonce == nonce, DominionError::NonceMismatch);
+    require!(
+        tl.action_disc == TimelockAction::SetInventoryWallet as u8,
+        DominionError::NonceMismatch
+    );
+    // Bind to the config's ACTIVE slot, so cancelling really stops the proposal.
+    require!(
+        config.pending_inventory_wallet_nonce == Some(nonce),
+        DominionError::NonceMismatch
+    );
+    require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
+    // A redirect must not land while the protocol is paused: it would take effect the instant
+    // somebody unpauses, which is exactly when nobody is watching this field.
+    require!(!config.paused, DominionError::Paused);
+
+    require!(
+        tl.action_data.len() == 32,
+        DominionError::MalformedActionData
+    );
+    let mut raw = [0u8; 32];
+    raw.copy_from_slice(&tl.action_data);
+    let new_wallet = Pubkey::new_from_array(raw);
+
+    // Re-validated at execute, not only at propose: 24 hours is long enough for the stored value to
+    // have become the current one by another route.
+    require!(
+        new_wallet != Pubkey::default(),
+        DominionError::InventoryWalletNotSet
+    );
+    require!(
+        new_wallet != config.inventory_wallet,
+        DominionError::InventoryWalletUnchanged
+    );
+
+    let old_wallet = config.inventory_wallet;
+    config.inventory_wallet = new_wallet;
+
+    config.pending_inventory_wallet_nonce = None;
+    config.active_proposal_count = config.active_proposal_count.saturating_sub(1);
+    tl.executed_at = Some(now);
+
+    emit!(crate::events::InventoryWalletChanged {
+        old_wallet,
+        new_wallet,
+        by: ctx.accounts.admin.key(),
+    });
+    emit!(AdminActionExecuted {
+        nonce,
+        action_disc: tl.action_disc,
+        executor: ctx.accounts.admin.key(),
+    });
+    Ok(())
+}
+
 pub fn execute_set_public_mint_handler(ctx: Context<ExecutePublicMint>, nonce: u64) -> Result<()> {
     let config = &mut ctx.accounts.config;
     let tl = &mut ctx.accounts.timelock;

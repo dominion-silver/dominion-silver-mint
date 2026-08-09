@@ -99,9 +99,36 @@ export function decideUpgradeGate(i: UpgradeGateInput): string | null {
 }
 
 function assertPinnedIfMainnet(): void {
-  const manifestPath = path.join(__dirname, "..", "config", "mainnet-authorities.json");
+  const root = path.join(__dirname, "..");
+  const manifestPath = path.join(root, "config", "mainnet-authorities.json");
   const rel = JSON.parse(fs.readFileSync(manifestPath, "utf8")).release_artifact ?? {};
   if (!fs.existsSync(SO)) return; // the existence check below reports this properly.
+
+  // ROUND 7 R7-06. This used to read three fields, `status`, `sha256` and `bytes`, and hand them to
+  // the gate. The CI writes EIGHT, and R6-07 built a closed-schema reader for exactly that reason:
+  // `program_id`, `source_commit`, `idl_sha256`, `normalized_sha256`, `ci_run_id` and
+  // `solana_verify_version` are the provenance. A manifest truncated or assembled from a different
+  // release keeps the right `.so` hash and size while its metadata says nothing, and the upgrade was
+  // allowed. The bytes were still the pinned bytes, which is why this is a provenance defect rather
+  // than a byte-substitution one, and provenance is the whole product of a release manifest.
+  //
+  // The verifier and this script now consume the SAME validator, so there is one definition of a
+  // valid pin instead of two that can drift.
+  if (CLUSTER.cluster === "mainnet-beta") {
+    const out = execFileSync("python3", [path.join(root, "scripts", "_read-release-pin.py"), manifestPath, root], {
+      encoding: "utf8",
+    }).trim();
+    const problems = out.split(/\s+/).slice(3).join(" ");
+    if (problems && problems !== "-") {
+      die(
+        `The release manifest does not validate against the closed pin schema.\n` +
+          `  ${problems.split(",").join("\n  ")}\n\n` +
+          `The .so hash alone is not a release. Regenerate the manifest from the reproducible-build\n` +
+          `run that produced this artifact, with every field it emits.`,
+      );
+    }
+  }
+
   const localHash = sha256(SO);
   const localBytes = fs.statSync(SO).size;
   const reason = decideUpgradeGate({

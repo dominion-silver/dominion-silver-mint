@@ -72,6 +72,26 @@ const GENESIS: Record<Cluster, string | null> = {
   localnet: null, // a fresh validator has a random genesis hash; nothing to pin.
 };
 
+/** ROUND 7 R7-04. EVERY public cluster, including the ones we do not support.
+ *
+ *  The localnet negative check used to be built from `GENESIS`, which is keyed on the `Cluster` type,
+ *  and `Cluster` has no testnet member because these scripts refuse testnet by hostname. So a tunnel
+ *  from 127.0.0.1 to `api.testnet.solana.com` reached the chain, matched nothing in `GENESIS`, and was
+ *  accepted as an unknown local validator. Reproduced by the auditor through a local HTTP proxy.
+ *
+ *  The list a denylist needs is "public chains", not "chains we have a Cluster variant for". Tying it
+ *  to the type was the defect. Anything reachable and publicly known belongs here. */
+const PUBLIC_GENESIS: Record<string, string> = {
+  devnet: "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
+  "mainnet-beta": "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d",
+  testnet: "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY",
+};
+
+/** Which public cluster a genesis hash belongs to, or null if it is not a public chain we know. */
+export function publicClusterOfGenesis(genesis: string): string | null {
+  return Object.keys(PUBLIC_GENESIS).find((k) => PUBLIC_GENESIS[k] === genesis) ?? null;
+}
+
 /** Confirm the CHAIN agrees with the hostname before anything irreversible happens. A hostname is a claim
  *  by whoever set the env var; the genesis hash is what the cluster IS. Any proxy, tunnel or typo pointing
  *  a devnet-looking URL at mainnet is caught here and nowhere else, for one RPC call. */
@@ -91,9 +111,7 @@ export async function assertClusterMatchesChain(ctx: ClusterContext): Promise<vo
   // enough, because the attack needs the tunnel to terminate on a real cluster, and a real cluster has
   // a known hash.
   if (expected === null) {
-    const reached = (Object.keys(GENESIS) as Cluster[]).find(
-      (k) => k !== "localnet" && GENESIS[k] === actual,
-    );
+    const reached = publicClusterOfGenesis(actual);
     if (reached) {
       throw new Error(
         `CLUSTER MISMATCH. ${ctx.rpc} classifies as localnet by hostname, but its genesis hash is\n` +
@@ -122,34 +140,35 @@ export async function assertClusterMatchesChain(ctx: ClusterContext): Promise<vo
 /** Read a ceremony value out of `config/mainnet-authorities.json`, the source of truth. Ceremony values are
  *  READ, never retyped into a script, so there is exactly one place to be wrong (audit D-01). */
 export function mainnetConfig(): Record<string, unknown> {
-  // `DOMINION_MAINNET_CONFIG` lets the cluster gate test against a TEMP COPY.
+  // ROUND 7 R7-03. THERE IS NO OVERRIDE. Not an env var, not a pair of env vars.
   //
-  // REVIEW PASS ON 3bf3097. R6-03 deleted `DOMINION_RELEASE_MANIFEST` because an env var that
-  // redirects which file a gate trusts is not a test seam, it is the hole the gate exists to close.
-  // This sibling survived one file over, and it redirects `usdc_mint`, `lazer_treasury` and
-  // `foreign_upgradeable_program` for mainnet. The release PIN was never reachable through it, which
-  // is why it is narrower, not why it is acceptable.
+  // R6-03 deleted `DOMINION_RELEASE_MANIFEST` for redirecting which file a gate trusts. This sibling
+  // survived one file over, and the previous fix gated it behind a SECOND variable,
+  // `DOMINION_CLUSTER_SELFTEST=1`. That was wrong in principle and the audit said so plainly: both
+  // variables come from the same environment, so the second one is a textual marker, not a separation
+  // of authority and not proof the caller is the test harness. A leftover `.env`, a ceremony shell or
+  // a copied command carries both, `t1-hostile-bootstrap.ts` then reads authorities, launch posture,
+  // the Lazer treasury and the USDC mint from the redirected file, the consent and genesis checks all
+  // pass, and the single irreversible `initialize` writes the wrong values.
   //
-  // It now takes TWO variables, and the second one says out loud that this is a self-test. Production
-  // sets neither; an operator who sets only the path gets a refusal instead of a redirect.
-  const override = process.env.DOMINION_MAINNET_CONFIG;
-  if (override && process.env.DOMINION_CLUSTER_SELFTEST !== "1") {
-    throw new Error(
-      `DOMINION_MAINNET_CONFIG is set (${override}) but DOMINION_CLUSTER_SELFTEST is not "1".\n` +
-        `Refusing to read the source of truth from an alternate path. This override exists only for\n` +
-        `scripts/verify-cluster-resolution.ts, which sets both. If you are trying to test against a\n` +
-        `modified manifest, set both; if you are not, unset this and let the committed file be read.`,
-    );
-  }
-  const p = override || path.join(__dirname, "..", "config", "mainnet-authorities.json");
+  // The test seam moved into the type system instead: `readMainnetConfigFrom` below takes a path, and
+  // `mainnetAddressFrom` takes an already-parsed object. The self-test calls those with what it built.
+  // Production calls this, which reads one path and cannot be pointed anywhere else.
+  return readMainnetConfigFrom(path.join(__dirname, "..", "config", "mainnet-authorities.json"));
+}
+
+/** Parse a manifest from an EXPLICIT path. Exported for `verify-cluster-resolution.ts`, which builds a
+ *  mutated temp copy and passes it here directly rather than redirecting the production reader. */
+export function readMainnetConfigFrom(p: string): Record<string, unknown> {
   if (!fs.existsSync(p)) {
     throw new Error(`missing source of truth: ${p}`);
   }
   return JSON.parse(fs.readFileSync(p, "utf8")) as Record<string, unknown>;
 }
 
-function requiredMainnetAddress(field: string): PublicKey {
-  const cfg = mainnetConfig();
+/** The pure half of `requiredMainnetAddress`: same validation, on an object the caller supplies. The
+ *  mutation test drives THIS, so the production path keeps exactly one source and no seam. */
+export function mainnetAddressFrom(cfg: Record<string, unknown>, field: string): PublicKey {
   const cc = (cfg.cluster_constants ?? {}) as Record<string, string | undefined>;
   const raw = cc[field];
   if (!raw) {
@@ -162,6 +181,10 @@ function requiredMainnetAddress(field: string): PublicKey {
     );
   }
   return new PublicKey(raw);
+}
+
+function requiredMainnetAddress(field: string): PublicKey {
+  return mainnetAddressFrom(mainnetConfig(), field);
 }
 
 /** Resolve the cluster from the environment: `DOMINION_RPC` wins, otherwise devnet, so a bare run is safe. */

@@ -325,4 +325,14 @@ pub enum DominionError {
     /// Appended at the END of the enum, so no existing error number moves.
     #[msg("this price envelope was already used: another operation consumed it, retry with a fresh price")]
     LazerReplayed,
+
+    /// ROUND 7. `set_inventory_wallet` is instant ONLY for the first binding, when the field is still
+    /// the default. Any CHANGE is a redirect of where pre-minted supply lands, and goes through the
+    /// 24h timelock so a guardian can cancel it.
+    #[msg("the inventory wallet is already set: changing it requires propose_set_inventory_wallet and the 24h timelock")]
+    InventoryWalletChangeRequiresTimelock,
+
+    /// Proposing the value already stored: a 24h window and a guardian's attention for a no-op.
+    #[msg("the proposed inventory wallet is the one already configured")]
+    InventoryWalletUnchanged,
 }

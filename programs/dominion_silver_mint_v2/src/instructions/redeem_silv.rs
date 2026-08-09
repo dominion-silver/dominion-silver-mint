@@ -203,7 +203,7 @@ pub fn handler(
     // floor pays the mint premium, so the resulting SILV is worth slightly LESS than the floor and
     // cannot be redeemed in one call. Any holder whose ENTIRE balance is worth less than
     // `min_operation_usdc` gross has no redeem exit until they acquire more, and an admin can put
-    // every position under MIN_OPERATION_CEILING_USDC (1000 USDC) in that state instantly. That is a
+    // every position under MIN_OPERATION_CEILING_USDC in that state instantly. That is a
     // real cost of closing the capture primitive, it is not hypothetical, and it is why the ceiling
     // exists and why the setter emits an event carrying the old and new values.
     //

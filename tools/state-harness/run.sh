@@ -127,7 +127,7 @@ rm -f "$tmp_out"
 # number, so this runner exited 1 in TWO blocking jobs (gate, reproducible-build). The commit
 # message quoted 154, measured with `cargo test` directly, which is precisely the path that does
 # not go through the check whose error text says to update this in the SAME commit.
-EXPECTED_STATE_TESTS=154
+EXPECTED_STATE_TESTS=164
 if [[ "$executed" -ne 0 && "$executed" -ne "$EXPECTED_STATE_TESTS" && ${#ARGS[@]} -eq 0 ]]; then
   echo >&2
   echo "FAIL: $executed test(s) executes, $EXPECTED_STATE_TESTS attendus (sans filtre)." >&2

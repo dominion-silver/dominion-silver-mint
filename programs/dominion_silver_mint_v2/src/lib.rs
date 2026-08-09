@@ -204,6 +204,22 @@ pub mod dominion_silver_mint {
 
     // Pre-mint supply model: admin_premint mints SILV against the hard cap into the inventory wallet
     // with no USDC and no oracle read; set_inventory_wallet sets the destination (late-binding).
+    /// ROUND 7. Propose a CHANGE of the pre-mint destination. 24h, guardian-cancellable.
+    pub fn propose_set_inventory_wallet(
+        ctx: Context<ProposeInventoryWallet>,
+        new_wallet: Pubkey,
+    ) -> Result<()> {
+        instructions::admin::propose::propose_set_inventory_wallet_handler(ctx, new_wallet)
+    }
+
+    pub fn execute_set_inventory_wallet(
+        ctx: Context<ExecuteInventoryWallet>,
+        nonce: u64,
+    ) -> Result<()> {
+        instructions::admin::execute::execute_set_inventory_wallet_handler(ctx, nonce)
+    }
+
+    /// Binds the pre-mint destination ONCE. Refuses if one is already set: use the two above.
     pub fn set_inventory_wallet(ctx: Context<SetInventoryWallet>, wallet: Pubkey) -> Result<()> {
         instructions::admin::premint::set_inventory_wallet_handler(ctx, wallet)
     }

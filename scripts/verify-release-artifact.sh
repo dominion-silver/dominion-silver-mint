@@ -53,7 +53,36 @@ set -euo pipefail
 # The second shape is the natural one, and it still read a prepared tree's manifest, lib.rs and
 # target/. Resolving BASH_SOURCE ITSELF is what closes both. `readlink -f` is not portable to older
 # macOS, and this script already depends on python3.
+#
+# ROUND 7 R7-01 [sic, R7-02]. Symlinks were two of THREE shapes. A HARD LINK carries no target to
+# resolve: the alias and the original share one inode, `realpath` returns the alias's own path, and
+# ROOT becomes the directory holding the alias. The auditor reproduced it: a hard link dropped into a
+# prepared tree made this script attest that tree's `.so` against that tree's manifest and print
+# ARTIFACT OK, while looking byte-identical to the audited script because it IS the same inode.
+#
+# `st_nlink` is what distinguishes them, and it is the only thing that does. A file reachable under
+# more than one name cannot tell you which tree it belongs to, so it must not try to guess.
 _self="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")"
+_nlink="$(python3 -c 'import os,sys; print(os.stat(sys.argv[1]).st_nlink)' "$_self")"
+if [ "$_nlink" != "1" ]; then
+  echo ""
+  echo "REFUSING TO RUN: this script has $_nlink hard links, so its location does not identify a"
+  echo "repository. ROOT is derived from where the script sits, and it selects the manifest, the"
+  echo "sources and target/ that get attested. An alias in another tree would make this attest that"
+  echo "tree while appearing to be this exact file."
+  echo ""
+  echo "  resolved path : $_self"
+  echo "  inode         : $(python3 -c 'import os,sys; print(os.stat(sys.argv[1]).st_ino)' "$_self")"
+  echo ""
+  echo 'This also fires on a link nobody meant to create: a stale temp tree, a backup tool, a cp -l.'
+  echo "The guard cannot tell which name is the original, so it refuses rather than guess. Find the"
+  echo "other names and remove the ones you do not want:"
+  echo "  find / -xdev -inum <inode above> 2>/dev/null"
+  echo ""
+  echo "Run the script from its own checkout. To copy it elsewhere, copy the repository, not the file."
+  echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+  exit 1
+fi
 ROOT="$(cd -P "$(dirname "$_self")/.." && pwd)"
 _stray=$(grep -rnoE --include="*.md" "\b[0-9a-f]{64}\b" "$ROOT/docs" 2>/dev/null || true)
 if [ -n "$_stray" ]; then
