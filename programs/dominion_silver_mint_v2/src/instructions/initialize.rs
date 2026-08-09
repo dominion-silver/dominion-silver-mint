@@ -31,6 +31,19 @@ pub struct InitializeArgs {
     // Optional overrides (else defaults)
     pub admin_timelock_seconds: u32, // default 86400, bounds [86400, 604800] (24h..7d)
     pub max_guardian_count: u8,      // default 3
+
+    /// ROUND 8 T8-03, option A. The pre-mint DESTINATION, bound ATOMICALLY with the rest of the
+    /// configuration, and the instant setter that used to bind it is DELETED.
+    ///
+    /// The round-7 shape kept a one-shot instant binding on the argument that with the field unset
+    /// there was "nothing to steal". That argument was wrong, and the refutation is clean: compromise
+    /// the Ops key DURING the ceremony, BEFORE the legitimate binding. The attacker binds their own
+    /// wallet, unpauses, and issues up to the whole hard cap into their ATA, with no delay and no
+    /// guardian veto. It confused supply already minted with issuance power still available.
+    ///
+    /// Appended LAST, so the 142-byte prefix of the previous layout is untouched and the only
+    /// difference on the wire is 32 more bytes.
+    pub inventory_wallet: Pubkey,
 }
 
 #[derive(Accounts)]
@@ -326,7 +339,11 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.max_silv_supply = DEFAULT_MAX_SILV_SUPPLY;
     config.treasury_min_float_usdc = DEFAULT_TREASURY_MIN_FLOAT_USDC;
     // Public direct redeem is CLOSED at launch: users exit by selling on the DEX.
-    config.redemptions_enabled = false;
+    // ROUND 8, launch posture decided by Thomas 2026-08-09: mint AND redeem OPEN at initialize, so
+    // no base setting costs a 24h wait during the ceremony. Closing stays instant (the emergency
+    // direction); re-opening after a close goes through the timelocked SetRedeemLimits, which is the
+    // same asymmetry the public mint already has.
+    config.redemptions_enabled = true;
     config.large_redeem_threshold_usdc = DEFAULT_LARGE_REDEEM_THRESHOLD_USDC;
     config.instant_redeem_budget_usdc = DEFAULT_INSTANT_REDEEM_BUDGET_USDC;
     config.instant_redeem_window_seconds = DEFAULT_INSTANT_REDEEM_WINDOW_SECONDS;
@@ -360,9 +377,14 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.pending_admin_eta = 0;
     config.pending_max_supply_nonce = None;
     config.pending_redeem_limits_nonce = None;
-    // Inventory wallet is set via set_inventory_wallet before the first pre-mint.
-    config.inventory_wallet = Pubkey::default();
-    config.public_mint_enabled = DEFAULT_PUBLIC_MINT_ENABLED;
+    // ROUND 8 T8-03. Bound here, once, atomically. There is no instruction that can set this from
+    // the default afterwards: the only remaining writer is the 24h-timelocked change.
+    require!(
+        args.inventory_wallet != Pubkey::default(),
+        DominionError::InventoryWalletNotSet
+    );
+    config.inventory_wallet = args.inventory_wallet;
+    config.public_mint_enabled = true;
     // KYC gate: on-chain but DORMANT. `kyc_operator` unset is what BLOCKS enabling: set_kyc_scope
     // refuses to arm with no attestor, since a gate that can approve nobody locks out every holder.
     config.kyc_operator = Pubkey::default();

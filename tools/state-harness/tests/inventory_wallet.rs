@@ -342,3 +342,66 @@ fn a_change_cannot_be_executed_through_the_wrong_action_slot() {
     assert_eq!(inventory(&f), before, "a stray nonce moved the wallet");
     let _ = E_NONCE_MISMATCH;
 }
+
+// ================================================================ OPTION A (T8-03)
+//
+// RED PHASE FIRST. These scenarios are written against `1314be4`, WITHOUT the production fix, and
+// they must fail on their RESULT rather than on a missing symbol. Codex's common proof rule is
+// explicit: "une erreur de compilation causee seulement par un import de symbole qui n existe pas
+// n est pas suffisante". So neither test names a field or an instruction that does not exist yet.
+//
+// Both build raw instruction data and send it to the REAL `.so` through LiteSVM, then read
+// `ConfigAccount` back. That is the only way to prove what the dispatcher does, and Codex says so:
+// "un simple `rg` n est pas la preuve rouge principale".
+
+/// Anchor's 8-byte discriminator for a global instruction, `sha256("global:<name>")[..8]`. Written
+/// out here rather than imported so this test keeps working after the instruction is deleted: the
+/// whole point is to send bytes the program should no longer answer.
+fn legacy_set_inventory_disc() -> [u8; 8] {
+    anchor_disc("global:set_inventory_wallet")
+}
+
+#[test]
+fn option_a_the_removed_instant_setter_discriminator_is_not_dispatched() {
+    let mut f = Fixture::new();
+    let admin = f.admin.insecure_clone();
+    let target = Pubkey::new_unique();
+    let before = inventory(&f);
+
+    // The historical 8 bytes, plus a 32-byte pubkey argument, straight at the dispatcher.
+    let mut data = legacy_set_inventory_disc().to_vec();
+    data.extend_from_slice(target.as_ref());
+    let ix = Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(config_pda(), false),
+            AccountMeta::new_readonly(admin.pubkey(), true),
+        ],
+        data,
+    };
+    let outcome = f.send(&[ix], &[&admin]);
+
+    assert!(
+        outcome.is_err(),
+        "FAIL: the legacy set_inventory_wallet discriminator is still dispatched successfully"
+    );
+    assert_eq!(
+        inventory(&f),
+        before,
+        "FAIL: the legacy discriminator mutated ConfigAccount"
+    );
+}
+
+#[test]
+fn option_a_initialize_binds_the_inventory_wallet_atomically() {
+    // A fixture is already initialized, so the question this asks is simply: after the one and only
+    // `initialize`, is a non-default inventory wallet bound? Under option A it is, because the
+    // address is an argument. Today it is not, because the field is only reachable through the
+    // instant setter that option A deletes.
+    let f = Fixture::new();
+    assert_ne!(
+        inventory(&f),
+        Pubkey::default(),
+        "FAIL: initialize did not atomically bind the requested inventory wallet"
+    );
+}

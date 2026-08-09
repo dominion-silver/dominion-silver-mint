@@ -460,6 +460,9 @@ pub struct Fixture {
     pub permanent_delegate: Pubkey,
     pub usdc_mint: Pubkey,
     pub silv_mint: Pubkey,
+    /// ROUND 8 T8-03. Bound at `initialize` and never settable afterwards, so the fixture has to
+    /// carry it: tests that assert on the pre-mint destination read this rather than a default.
+    pub inventory_wallet: Pubkey,
 }
 
 impl Fixture {
@@ -483,6 +486,7 @@ impl Fixture {
         let holder = Keypair::new();
         let holder2 = Keypair::new();
         let stranger = Keypair::new();
+        let inventory_wallet = Pubkey::new_unique();
         for k in [&deployer, &admin, &attestor, &holder, &holder2, &stranger] {
             svm.airdrop(&k.pubkey(), 100_000_000_000).unwrap();
         }
@@ -562,6 +566,7 @@ impl Fixture {
             permanent_delegate,
             usdc_mint,
             silv_mint,
+            inventory_wallet,
         };
         f.initialize();
         f
@@ -589,6 +594,9 @@ impl Fixture {
         args.extend_from_slice(&3154u32.to_le_bytes()); // pyth_lazer_feed_id
         args.extend_from_slice(&ADMIN_TIMELOCK_SECONDS.to_le_bytes());
         args.push(3); // max_guardian_count
+        // ROUND 8 T8-03: the pre-mint destination is now bound ATOMICALLY here. There is no
+        // instruction that can set it afterwards, only the 24h-timelocked change.
+        args.extend_from_slice(self.inventory_wallet.as_ref());
 
         let usdc_treasury = ata(
             &self.usdc_mint,
@@ -629,9 +637,25 @@ impl Fixture {
             "config.admin_timelock_seconds"
         );
         assert_eq!(c.max_guardian_count, 3, "config.max_guardian_count");
+        // ROUND 8, launch posture decided 2026-08-09. Mint and redeem are OPEN in the initial
+        // configuration so that no base setting costs a 24h wait during the ceremony. What still
+        // guards the launch is the PAUSE: nothing flows until somebody unpauses, and `unpause` now
+        // demands an active guardian distinct from the admin. The two flags being open is not the
+        // same thing as the protocol being live, and this trio asserts exactly that distinction.
         assert!(c.paused, "a fresh deploy must be PAUSED");
-        assert!(!c.redemptions_enabled, "redemptions must be CLOSED at launch");
-        assert!(!c.public_mint_enabled, "public mint must be CLOSED at launch");
+        assert!(
+            c.redemptions_enabled,
+            "redemptions must be OPEN at initialize (round 8 posture)"
+        );
+        assert!(
+            c.public_mint_enabled,
+            "public mint must be OPEN at initialize (round 8 posture)"
+        );
+        assert_ne!(
+            Pubkey::new_from_array(c.inventory_wallet),
+            Pubkey::default(),
+            "T8-03: initialize must bind the inventory wallet atomically"
+        );
         assert_eq!(c.kyc_scope_flags, 0, "the KYC gate must be DORMANT at launch");
         assert!(!c.kyc_enforced, "kyc_enforced must be false at launch");
         assert_eq!(c.kyc_attestation_count, 0, "the roster must be empty at launch");

@@ -49,9 +49,32 @@ pub struct Unpause<'info> {
     pub config: Account<'info, ConfigAccount>,
 
     pub admin: Signer<'info>,
+
+    /// ROUND 8, the conditional P2 that comes with the open launch posture. `unpause` used to check
+    /// the admin signature and nothing else, while `initialize` leaves `guardian_count = 0`. With
+    /// mint and redeem now OPEN in the initial state, that sequence lets a ceremony slip or a
+    /// compromised admin switch every flow on before any independent party can pause or cancel. The
+    /// timelocks and the emergency response both assume that party exists.
+    #[account(
+        seeds = [GUARDIAN_SEED, guardian.guardian.as_ref()], bump,
+        constraint = guardian.cooldown_until == 0 @ DominionError::GuardianInCooldown,
+    )]
+    pub guardian: Account<'info, GuardianAccount>,
 }
 
 pub fn unpause_handler(ctx: Context<Unpause>) -> Result<()> {
+    // Counting is not enough, and neither is passing any registered account: the brake has to be held
+    // by someone who is not the hand being braked. A guardian slot occupied by the current admin is a
+    // brake wired to the same lever.
+    require!(
+        ctx.accounts.config.guardian_count > 0,
+        DominionError::NoActiveGuardian
+    );
+    require!(
+        ctx.accounts.guardian.guardian != ctx.accounts.config.admin,
+        DominionError::GuardianNotIndependent
+    );
+
     let config = &mut ctx.accounts.config;
     config.paused = false;
     emit!(Unpaused {

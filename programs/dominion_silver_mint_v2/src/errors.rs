@@ -335,4 +335,13 @@ pub enum DominionError {
     /// Proposing the value already stored: a 24h window and a guardian's attention for a no-op.
     #[msg("the proposed inventory wallet is the one already configured")]
     InventoryWalletUnchanged,
+
+    /// ROUND 8. Unpausing with no registered guardian would switch on every flow before the
+    /// independent brake exists. Every timelock in this program assumes someone can cancel.
+    #[msg("no active guardian is registered: unpause would enable every flow with no independent brake")]
+    NoActiveGuardian,
+
+    /// A guardian slot held by the current admin is a brake wired to the same lever.
+    #[msg("the supplied guardian is the current admin, so it is not an independent brake")]
+    GuardianNotIndependent,
 }

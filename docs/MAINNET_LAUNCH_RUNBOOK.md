@@ -546,15 +546,47 @@ At $58.34 spot that is **~115,705 oz**, i.e. `admin_premint(115705029311)`, and 
 150,000 oz cap. The script prints the atomic value (an off-by-1e6 there is a 1,000,000x
 error) and refuses if the cap could not absorb it.
 
-**Two consequences to hold in mind:**
+**D11, 2026-08-09: PRE-MINT THE OPERATIONAL TRANCHE ONLY. This is now a rule, not advice.**
 
-- It leaves ~34,300 oz of headroom, and `mint_silv` draws on the SAME cap. So site sales
-  are hard-capped at roughly **$2.03M** before `SupplyCapExceeded`, and raising the cap
-  then needs a program upgrade.
-- Only ~1,750 oz (~$100k) goes into the Sunrise pool. The other ~114,000 oz (~$6.65M)
-  would sit in the inventory wallet, which is a **single-signer key**. Consider
-  pre-minting in tranches instead: `admin_premint` is callable as often as you like, so
-  there is no need to create supply before it has a use.
+The paragraph below used to say "consider pre-minting in tranches instead". Opening
+redemptions at launch turned that suggestion into a requirement, because it changed what
+the inventory key is worth.
+
+While `redemptions_enabled` was false, whoever held `EkDhR65J...` held SILV and nothing
+else. With redemptions open they hold a **direct claim on treasury USDC**: they sign
+`redeem_silv` themselves, with no admin instruction, no redirection of the inventory
+wallet, and **no timelock**. Fixing the binding at `initialize` closes the Ops path to
+that wallet; it does nothing about the tokens once they are in it. Blocking the inventory
+address inside `redeem_silv` would not help either: SILV is fungible and can be moved to
+another address first.
+
+The only code bound on the drain is the rolling window, and cite the REAL one:
+`redeem_window.rs` documents and tests that an adversarial alignment lets nearly **2x the
+budget** out in one window-length slice, i.e. about **40,000 USDC in 24h** at the default,
+then about 20,000 per day for as long as nobody pauses. Pause is a human reaction, not an
+automatic stop.
+
+**So:**
+
+- Pre-mint **only what the pool needs now**, and re-run `admin_premint` later when there
+  is a new use. It is callable as often as you like, and the cap is a ceiling rather than
+  a target.
+- The **reserve does not go to the hot key**. It goes to a Squads vault, or it is not
+  minted at all.
+- The size of the operational tranche must be compatible with the maximum loss you accept
+  over your detection-and-reaction SLA, computed with the **2x** bound. **That number is
+  Thomas's input and is not fixed yet.** The natural starting point is the pool
+  requirement itself, ~1,750 oz (~$100k) below, which is 1.5% of what the old plan would
+  have left exposed.
+
+Full rationale, including what this decision does NOT close, is recorded in
+`config/mainnet-authorities.json` under `launch_posture._premint_custody_note`.
+
+**One consequence to hold in mind either way:**
+
+- The full plan leaves ~34,300 oz of headroom, and `mint_silv` draws on the SAME cap. So
+  site sales are hard-capped at roughly **$2.03M** before `SupplyCapExceeded`, and raising
+  the cap then needs a program upgrade.
 
 Then from the inventory wallet, create the Sunrise SILV/USDC pool with the SILV and your
 100,000 USDC. The inventory wallet is a **plain single-signer wallet** and will hold the

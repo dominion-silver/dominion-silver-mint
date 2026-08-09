@@ -219,10 +219,8 @@ pub mod dominion_silver_mint {
         instructions::admin::execute::execute_set_inventory_wallet_handler(ctx, nonce)
     }
 
-    /// Binds the pre-mint destination ONCE. Refuses if one is already set: use the two above.
-    pub fn set_inventory_wallet(ctx: Context<SetInventoryWallet>, wallet: Pubkey) -> Result<()> {
-        instructions::admin::premint::set_inventory_wallet_handler(ctx, wallet)
-    }
+    // ROUND 8 T8-03: `set_inventory_wallet` is REMOVED from the program surface. The destination is
+    // an `initialize` argument, and the only post-initialize writer is the timelocked pair above.
 
     pub fn admin_premint(ctx: Context<AdminPremint>, amount: u64) -> Result<()> {
         instructions::admin::premint::premint_handler(ctx, amount)
