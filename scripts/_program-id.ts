@@ -48,6 +48,13 @@ export const PROGRAM_ID: PublicKey = resolve();
 
 /** Load the generated IDL, with its address forced to the resolved program id. */
 export function loadIdl(): Record<string, unknown> {
+  if (!fs.existsSync(IDL_PATH)) {
+    throw new Error(
+      `no IDL at ${IDL_PATH}. Build it first:\n` +
+        `  cd programs/dominion_silver_mint_v2 && anchor idl build\n` +
+        `A raw ENOENT here reads like a missing dependency; it is a missing build step.`,
+    );
+  }
   const idl = JSON.parse(fs.readFileSync(IDL_PATH, "utf8"));
   idl.address = PROGRAM_ID.toBase58();
   return idl;

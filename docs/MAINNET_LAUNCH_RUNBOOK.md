@@ -620,10 +620,10 @@ Then SEND it with the tranche script, which takes the atomic figure the sizing p
 
 ```bash
 DOMINION_ALLOW_MAINNET=i-understand DOMINION_RPC=<mainnet> \
-  DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json DOMINION_INTENT=admin_premint \
+  DOMINION_KEYPAIR=<the key that IS config.admin> DOMINION_INTENT=admin_premint \
   npx tsx scripts/premint.ts --atomic <tranche1> --dry-run   # resolve, send nothing
 DOMINION_ALLOW_MAINNET=i-understand DOMINION_RPC=<mainnet> \
-  DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json DOMINION_INTENT=admin_premint \
+  DOMINION_KEYPAIR=<the key that IS config.admin> DOMINION_INTENT=admin_premint \
   npx tsx scripts/premint.ts --atomic <tranche1>
 ```
 
@@ -653,6 +653,20 @@ the tranches that landed and the ones that did not, and a plain re-run REFUSES. 
 with `--resume`. Never re-issue the original command: the cap catches a duplicated 106,115
 oz plan, but it does NOT catch a duplicated ~1,750 oz operational tranche, which would
 silently double-mint into the hot wallet.
+
+Three things about that record an operator meets at the worst moment, so read them now:
+
+- **A tranche can be IN FLIGHT**, if the process died between sending and recording the
+  signature. `--resume` reconciles it against the inventory ATA balance before sending
+  anything: `before + amount` means it landed, `before` exactly means it did not.
+- **Any other balance REFUSES and asks you to decide.** Something else moved the account
+  (an inbound transfer, or the permanent delegate). Find the transaction, then hand-edit
+  `ceremony-out/premint-state.json`: move the tranche into `landed` if it landed, or delete
+  `inFlight` if it did not. The script will not guess, because one guess double-mints and
+  the other silently skips a tranche.
+- **A completed run is ARCHIVED, not deleted**, to `premint-<timestamp>.done.json`, and
+  re-running the SAME plan within 30 minutes refuses. That is the up-arrow-enter guard. A
+  deliberate second pre-mint passes `--again`.
 
 The script exists because this step had NO tooling until the devnet rehearsal of
 2026-08-10: the runbook said "run admin_premint" and the only senders in the repo were a

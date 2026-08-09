@@ -54,12 +54,15 @@ const STATE_PATH = path.join(ROOT, "ceremony-out", "premint-state.json");
 /** 6 decimals, fixed at mint creation and not negotiable. An off-by-1e6 here is a 1,000,000x error. */
 const DECIMALS = 6n;
 
-const KNOWN_FLAGS = new Set(["--oz", "--atomic", "--dry-run", "--resume"]);
+const KNOWN_FLAGS = new Set(["--oz", "--atomic", "--dry-run", "--resume", "--again"]);
+/** How recently an identical completed plan counts as a double-submit rather than a new decision. */
+const DUPLICATE_WINDOW_MS = 30 * 60 * 1000;
 
 export type ParsedArgs = {
   tranches: bigint[];
   dryRun: boolean;
   resume: boolean;
+  again: boolean;
 };
 
 /**
@@ -77,6 +80,7 @@ export function parseArgs(argv: string[]): ParsedArgs {
   const tranches: bigint[] = [];
   let dryRun = false;
   let resume = false;
+  let again = false;
   for (let i = 0; i < argv.length; i++) {
     const flag = argv[i];
     if (flag === "--dry-run") {
@@ -85,6 +89,10 @@ export function parseArgs(argv: string[]): ParsedArgs {
     }
     if (flag === "--resume") {
       resume = true;
+      continue;
+    }
+    if (flag === "--again") {
+      again = true;
       continue;
     }
     if (flag !== "--oz" && flag !== "--atomic") {
@@ -121,7 +129,15 @@ export function parseArgs(argv: string[]): ParsedArgs {
     if (atomic > 2n ** 64n - 1n) throw new Error(`${flag} ${raw} exceeds u64`);
     tranches.push(atomic);
   }
-  return { tranches, dryRun, resume };
+  // A resume mints what the RECORD says, so tranches typed alongside it are silently discarded and
+  // the operator believes they controlled the amount. Refuse rather than ignore.
+  if (resume && tranches.length > 0) {
+    throw new Error(
+      "--resume mints the tranches recorded in the run file, so --oz/--atomic alongside it would be " +
+        "IGNORED. Pass --resume alone, or delete the record and start a fresh plan.",
+    );
+  }
+  return { tranches, dryRun, resume, again };
 }
 
 export type RunRecord = {
@@ -231,12 +247,86 @@ export function decideResume(
 
 function readRecord(): RunRecord | null {
   if (!fs.existsSync(STATE_PATH)) return null;
-  return JSON.parse(fs.readFileSync(STATE_PATH, "utf8")) as RunRecord;
+  const raw = fs.readFileSync(STATE_PATH, "utf8");
+  try {
+    return JSON.parse(raw) as RunRecord;
+  } catch {
+    // A bare `Unexpected end of JSON input` names nothing. The operator is standing at the step with
+    // no undo, holding the only file that says what landed.
+    throw new Error(
+      `the run record at ${STATE_PATH} is not valid JSON (${raw.length} bytes). It was probably\n` +
+        `truncated by a kill mid-write. Read it, compare it to the chain's inventory ATA balance, and\n` +
+        `either repair it by hand or delete it once you know what landed. Do NOT just re-run.`,
+    );
+  }
 }
 
+/**
+ * ATOMIC. The plain writeFileSync it replaces was called twice per tranche, both times INSIDE the
+ * crash window it exists to close, so a kill during either left a truncated file and the next run
+ * died on a parse error instead of resuming.
+ */
 function writeRecord(r: RunRecord): void {
   fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
-  fs.writeFileSync(STATE_PATH, JSON.stringify(r, null, 2));
+  const tmp = `${STATE_PATH}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(r, null, 2));
+  fs.renameSync(tmp, STATE_PATH);
+}
+
+/** Completed runs are ARCHIVED, never deleted. See archiveRecord's caller for why. */
+function doneRecords(): { file: string; record: RunRecord; mtimeMs: number }[] {
+  const dir = path.dirname(STATE_PATH);
+  if (!fs.existsSync(dir)) return [];
+  return fs
+    .readdirSync(dir)
+    .filter((f) => /^premint-.*\.done\.json$/.test(f))
+    .map((f) => {
+      const full = path.join(dir, f);
+      try {
+        return {
+          file: full,
+          record: JSON.parse(fs.readFileSync(full, "utf8")) as RunRecord,
+          mtimeMs: fs.statSync(full).mtimeMs,
+        };
+      } catch {
+        return null;
+      }
+    })
+    .filter((x): x is { file: string; record: RunRecord; mtimeMs: number } => x !== null);
+}
+
+/**
+ * THE UP-ARROW GUARD, and the reason the record is archived rather than removed.
+ *
+ * Review-of-fixes finding. Deleting the record on success restored the exact reflex the run record
+ * was added to stop: a completed run leaves nothing behind, so up-arrow-enter mints the same plan a
+ * second time, unrefused. The cap catches a duplicated 106,115 oz plan and does NOT catch a
+ * duplicated ~1,750 oz operational tranche, which is the size D11 mandates.
+ *
+ * It cannot refuse unconditionally: D11 makes repeated premints legitimate, "re-run admin_premint
+ * later when there is a new use". So it refuses only an IDENTICAL plan seen recently, which is what
+ * a double-submit looks like and what a deliberate second tranche does not.
+ */
+export function decideDuplicate(
+  plan: bigint[],
+  archives: { file: string; record: RunRecord; mtimeMs: number }[],
+  nowMs: number,
+  windowMs: number,
+): { refuse: boolean; message: string } {
+  const wanted = plan.map((t) => t.toString()).join(",");
+  for (const a of archives) {
+    if (nowMs - a.mtimeMs > windowMs) continue;
+    if (a.record.plan.join(",") !== wanted) continue;
+    const mins = Math.round((nowMs - a.mtimeMs) / 60000);
+    return {
+      refuse: true,
+      message:
+        `this EXACT plan (${wanted}) completed ${mins} minute(s) ago: ${a.file}\n` +
+        `Re-running it now mints it AGAIN, and the cap does not catch that for an operational-size\n` +
+        `tranche. If this is a deliberate second pre-mint, pass --again.`,
+    };
+  }
+  return { refuse: false, message: "" };
 }
 
 function loadAdmin(): Keypair {
@@ -273,7 +363,7 @@ function manifestInventoryWallet(): string | null {
 }
 
 async function main() {
-  const { tranches, dryRun, resume } = parseArgs(process.argv.slice(2));
+  const { tranches, dryRun, resume, again } = parseArgs(process.argv.slice(2));
   if (tranches.length === 0 && !resume) {
     throw new Error("no tranche given. Use --oz <n> or --atomic <n>, repeatable.");
   }
@@ -319,7 +409,19 @@ async function main() {
   //
   // Until premint has an emit mode, this is the honest failure: it stops before the ATA-creation
   // transaction instead of dying on an opaque ConstraintHasOne after spending mainnet SOL.
-  assertSendable(new PublicKey(cfg.admin), kp.publicKey, "premint");
+  try {
+    assertSendable(new PublicKey(cfg.admin), kp.publicKey, "premint");
+  } catch (e) {
+    // assertSendable's message ends with "run without --send to EMIT the instructions". That is true
+    // of the ceremony steps it was written for and FALSE here: premint has no --send and no emit
+    // mode, so an operator following that sentence gets "unrecognised argument --send".
+    throw new Error(
+      `${e instanceof Error ? e.message : String(e)}\n` +
+        `  NOTE, specific to premint: this script has NO --send and NO emit mode. If config.admin is\n` +
+        `  a Squads vault, the pre-mint must be built and executed through the admin panel, which is\n` +
+        `  the only thing that wraps a dominion instruction in a vault transaction. See runbook step 9.`,
+    );
+  }
   // `admin_premint` requires !paused (premint.rs). Discovering that from a raw Anchor code AFTER
   // paying for an ATA is exactly the confusion the 2026-08-10 rehearsal hit.
   if (cfg.paused) {
@@ -383,6 +485,13 @@ async function main() {
   if (decision.message) console.log(`  ${decision.message}`);
   const plan = decision.remaining;
 
+  // The up-arrow guard for the SUCCESS path: a completed run leaves an archive, and an identical
+  // plan repeated within the window is a double-submit until the operator says otherwise.
+  if (decision.kind === "fresh" && !again) {
+    const dup = decideDuplicate(plan, doneRecords(), Date.now(), DUPLICATE_WINDOW_MS);
+    if (dup.refuse) throw new Error(dup.message);
+  }
+
   const supply0 = (await getMint(conn, silvMint, "confirmed", TOKEN_2022_PROGRAM_ID)).supply;
   const total = plan.reduce((a, b) => a + b, 0n);
   console.log(`  cap      : ${cap} (${fmtOz(cap)} oz)`);
@@ -429,20 +538,26 @@ async function main() {
   );
   console.log("  inv ATA  :", invAta.toBase58());
 
-  const record: RunRecord =
-    decision.kind === "resume"
-      ? (readRecord() as RunRecord)
-      : {
-          cluster: RPC,
-          program: PROGRAM_ID.toBase58(),
-          admin: kp.publicKey.toBase58(),
-          silvMint: silvMint.toBase58(),
-          inventoryWallet: inventoryWallet.toBase58(),
-          plan: plan.map((t) => t.toString()),
-          landed: [],
-        };
-  // WRITTEN BEFORE THE FIRST SEND. A record created after the fact cannot describe the failure that
-  // stopped it from being created.
+  const reread = decision.kind === "resume" ? readRecord() : null;
+  if (decision.kind === "resume" && !reread) {
+    // The file existed a moment ago. Something deleted or replaced it: a second premint process, or
+    // the hand-edit the ambiguous verdict asks for, done while this run was already deciding.
+    throw new Error(
+      `the run record at ${STATE_PATH} disappeared between reading the plan and starting to send. ` +
+        `Another premint process, or an edit mid-run. Re-check the chain and start again.`,
+    );
+  }
+  const record: RunRecord = reread ?? {
+    cluster: RPC,
+    program: PROGRAM_ID.toBase58(),
+    admin: kp.publicKey.toBase58(),
+    silvMint: silvMint.toBase58(),
+    inventoryWallet: inventoryWallet.toBase58(),
+    plan: plan.map((t) => t.toString()),
+    landed: [],
+  };
+  // WRITTEN BEFORE THE FIRST admin_premint. Not before the first lamport: the ATA-creation
+  // transaction above already spent, and it is idempotent and cheap, which is why it sits outside.
   writeRecord(record);
 
   try {
@@ -470,7 +585,10 @@ async function main() {
 
       const supplyAfter = (await getMint(conn, silvMint, "confirmed", TOKEN_2022_PROGRAM_ID)).supply;
       const balAfter = (await getAccount(conn, invAta, "confirmed", TOKEN_2022_PROGRAM_ID)).amount;
-      console.log(`\n  tranche ${i + 1}/${plan.length}: ${amt} (${fmtOz(amt)} oz)  tx ${sig}`);
+      // Numbered against the WHOLE recorded plan, not the remaining slice: on a resume the two
+      // differ, and the operator is holding a checklist that counts from the original.
+      const n = record.landed.length;
+      console.log(`\n  tranche ${n}/${record.plan.length}: ${amt} (${fmtOz(amt)} oz)  tx ${sig}`);
       console.log(`    supply  ${supplyBefore} -> ${supplyAfter}`);
       console.log(`    inv ATA ${balBefore} -> ${balAfter}`);
       // ASYMMETRIC ON PURPOSE. Premint now runs AFTER the go-live unpause, with public_mint_enabled
@@ -480,20 +598,21 @@ async function main() {
       // the buyer and fees go to the fee vault, so nothing else touches this account.
       if (balAfter - balBefore !== amt) {
         throw new Error(
-          `tranche ${i + 1} did not credit the inventory ATA by exactly ${amt} ` +
+          `tranche ${n} did not credit the inventory ATA by exactly ${amt} ` +
             `(delta=${balAfter - balBefore}). STOPPING.`,
         );
       }
-      if (supplyAfter - supplyBefore < amt) {
-        throw new Error(
-          `tranche ${i + 1} moved supply by ${supplyAfter - supplyBefore}, less than the ${amt} minted. ` +
-            `A burn or a stale read; either way STOPPING.`,
-        );
-      }
-      if (supplyAfter - supplyBefore > amt) {
+      // The supply delta is REPORTED, never asserted. Both directions have a legitimate cause at
+      // this exact moment: public mint is open, so a stranger's mint_silv enlarges it, and
+      // redemptions are open too, so a redeem_silv burn shrinks it. Asserting either way stops a
+      // correct tranche and routes the operator into the resume path for nothing. The ATA check
+      // above already detects wrong destination, wrong amount and wrong mint.
+      const supplyDelta = supplyAfter - supplyBefore;
+      if (supplyDelta !== amt) {
         console.log(
-          `    note: supply moved ${supplyAfter - supplyBefore}, more than this tranche. Concurrent ` +
-            `mint_silv activity, which is expected once public mint is open.`,
+          `    note: supply moved ${supplyDelta}, not ${amt}. Expected once mint and redeem are open ` +
+            `(a concurrent mint_silv enlarges it, a redeem_silv burn shrinks it). The inventory ATA ` +
+            `delta is the check that binds, and it passed.`,
         );
       }
       console.log("    OK: the inventory ATA moved by exactly the tranche");
@@ -505,11 +624,24 @@ async function main() {
     console.error(`  Landed: ${record.landed.map((l) => l.atomic).join(", ") || "none"}`);
     console.error(`  NOT sent: ${left.join(", ") || "none"}`);
     console.error(`  The run record is KEPT at ${STATE_PATH}.`);
+    if (record.inFlight) {
+      console.error(
+        `  One tranche was IN FLIGHT when this stopped, so whether it landed is unknown. --resume\n` +
+          `  reconciles it against the inventory ATA balance before sending anything.`,
+      );
+    }
     console.error(`  Check the chain, then finish with:  npx tsx scripts/premint.ts --resume`);
     throw e;
   }
 
-  fs.rmSync(STATE_PATH, { force: true });
+  // ARCHIVED, NOT DELETED. Deleting it restored the up-arrow-enter double-mint on the success path,
+  // which is the common path: a completed run left nothing behind to refuse against.
+  const archive = path.join(
+    path.dirname(STATE_PATH),
+    `premint-${new Date().toISOString().replace(/[:.]/g, "-")}.done.json`,
+  );
+  fs.renameSync(STATE_PATH, archive);
+  console.log(`\n  run archived: ${archive}`);
   const finalSupply = (await getMint(conn, silvMint, "confirmed", TOKEN_2022_PROGRAM_ID)).supply;
   console.log(`\n  final supply : ${finalSupply} (${fmtOz(finalSupply)} oz)`);
   console.log(`  headroom left: ${cap - finalSupply} (${fmtOz(cap - finalSupply)} oz)`);

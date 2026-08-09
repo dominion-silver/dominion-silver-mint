@@ -318,6 +318,18 @@ jobs:
       - name: L1-04 launch-open readiness refuses every unready state (BLOCKING)
         run: npx --no-install tsx scripts/test-launch-open-readiness.ts
 
+      # ADDED 2026-08-10, and the reason is that a gate nobody runs is a gate that can sit RED. The
+      # devnet rehearsal added scripts/premint.ts, which left verify-cluster-resolution.ts failing
+      # (an unclassified sender) and NOTHING noticed, because that gate was referenced only in prose.
+      # Two things are wired here: the classification gate itself, and the unit tests over premint's
+      # two pure decisions, which guard the boundary between the rehearsal flag and the irreversible
+      # mint of the entire launch supply.
+      - name: Every script is classified for cluster resolution (BLOCKING)
+        run: npx --no-install tsx scripts/verify-cluster-resolution.ts
+
+      - name: Pre-mint argument and resume decisions (BLOCKING)
+        run: npx --no-install tsx scripts/test-premint-args.ts
+
       - name: Public app (BLOCKING - typecheck, tests, production build)
         working-directory: apps/public
         run: |

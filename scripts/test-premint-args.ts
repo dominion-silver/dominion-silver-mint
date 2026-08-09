@@ -10,7 +10,13 @@
  *
  *   npx tsx scripts/test-premint-args.ts
  */
-import { parseArgs, decideResume, reconcileInFlight, type RunRecord } from "./premint";
+import {
+  parseArgs,
+  decideResume,
+  decideDuplicate,
+  reconcileInFlight,
+  type RunRecord,
+} from "./premint";
 
 let pass = 0;
 let fail = 0;
@@ -55,6 +61,13 @@ eq(
 
 // --- THE MINT-VS-REHEARSAL BOUNDARY. Every one of these used to silently mint. ---
 eq("--dry-run is recognised", parseArgs(["--oz", "1", "--dry-run"]).dryRun, true);
+// These two were never asserted, so flipping their defaults left the whole suite green.
+eq("--resume is recognised", parseArgs(["--resume"]).resume, true);
+eq("--resume is false when absent", parseArgs(["--oz", "1"]).resume, false);
+eq("--again is recognised", parseArgs(["--oz", "1", "--again"]).again, true);
+eq("--again is false when absent", parseArgs(["--oz", "1"]).again, false);
+// A resume mints the RECORD's tranches, so amounts typed alongside would be silently discarded.
+throws("--resume with tranches is refused, not ignored", ["--resume", "--oz", "1"], /would be IGNORED/);
 for (const typo of ["--dry-runn", "--dryrun", "--dry_run", "-dry-run", "--dry run"]) {
   throws(`a mistyped ${JSON.stringify(typo)} REFUSES rather than minting`, ["--oz", "1", typo], /unrecognised argument/);
 }
@@ -87,10 +100,10 @@ const rec = (landed: number, plan: string[] = ["100", "200", "300"]): RunRecord 
   landed: plan.slice(0, landed).map((atomic, index) => ({ index, atomic, sig: `sig${index}` })),
 });
 
-ok(
-  "no record, no --resume: a fresh plan runs",
-  decideResume(null, { tranches: [5n], resume: false }, NOW).kind === "fresh",
-);
+const fresh = decideResume(null, { tranches: [5n, 7n], resume: false }, NOW);
+ok("no record, no --resume: a fresh plan runs", fresh.kind === "fresh");
+// The plan it hands back, not just the verdict: returning [] here used to leave the suite green.
+eq("and it hands back exactly what was asked", fresh.remaining, [5n, 7n]);
 ok(
   "--resume with no record is refused",
   decideResume(null, { tranches: [], resume: true }, NOW).kind === "refuse",
@@ -117,6 +130,39 @@ ok(
   "a completed record cannot be resumed",
   decideResume(rec(3), { tranches: [], resume: true }, NOW).kind === "refuse",
 );
+
+console.log("\nduplicate-plan guard (the up-arrow reflex on the SUCCESS path)");
+
+const HOUR = 3600_000;
+const WINDOW = 30 * 60 * 1000;
+const T = 1_000_000_000_000;
+const done = (plan: string[], ageMs: number) => ({
+  file: `/tmp/premint-${ageMs}.done.json`,
+  record: { ...rec(0, plan), landed: [] } as RunRecord,
+  mtimeMs: T - ageMs,
+});
+
+ok(
+  "an identical plan minutes after a completed one REFUSES",
+  decideDuplicate([100n, 200n], [done(["100", "200"], 5 * 60_000)], T, WINDOW).refuse,
+);
+ok(
+  "and the refusal names --again",
+  /--again/.test(decideDuplicate([100n, 200n], [done(["100", "200"], 5 * 60_000)], T, WINDOW).message),
+);
+ok(
+  "the SAME plan long afterwards is allowed: D11 makes repeated premints legitimate",
+  !decideDuplicate([100n, 200n], [done(["100", "200"], 2 * HOUR)], T, WINDOW).refuse,
+);
+ok(
+  "a DIFFERENT plan right after is allowed",
+  !decideDuplicate([100n, 300n], [done(["100", "200"], 60_000)], T, WINDOW).refuse,
+);
+ok(
+  "order matters: the same amounts in another order is a different plan",
+  !decideDuplicate([200n, 100n], [done(["100", "200"], 60_000)], T, WINDOW).refuse,
+);
+ok("no archives, nothing to refuse", !decideDuplicate([100n], [], T, WINDOW).refuse);
 
 console.log("\nin-flight reconciliation (the crash window)");
 
