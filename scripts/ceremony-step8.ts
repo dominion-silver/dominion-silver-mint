@@ -42,6 +42,7 @@ import { modeFromArgv, assertSendable, emit, sendAll, Checks, type CeremonyActio
 // ROUND 8 L1-04: the go-live preconditions live in ONE decision function, shared with
 // scripts/test-launch-open-readiness.ts, so the rule the test exercises is the rule that gates here.
 import { decideLaunchReadiness, type LaunchState } from "./_launch-readiness";
+import { readinessDigestFromConfig } from "./_readiness-digest";
 import idl from "../target/idl/dominion_silver_mint.json";
 
 export function ceremony(): { guardians: string[]; inventoryWallet: string } {
@@ -86,6 +87,10 @@ export interface Step8Input {
    *
    *  Optional was the defect. A caller that cannot gather this state cannot be about to unpause. */
   readiness: LaunchState;
+  /** ROUND 8 P1. `unpause` carries the digest of the config the decision above approved. It is an
+   *  INPUT rather than a fetch, because this builder is pure and because the digest must be the one
+   *  taken at the same moment as the decision, not a fresher one. */
+  readinessDigest: number[];
 }
 
 /** Thrown when the chain's pre-mint destination is not the one this ceremony was authorised for. Its
@@ -191,7 +196,10 @@ export async function buildStep8Actions(i: Step8Input): Promise<CeremonyAction[]
       "independent brake the handler now demands. Instant in both directions.",
     alreadyDone: i.paused === false,
     observed: i.paused === false ? "already unpaused" : undefined,
-    ix: await M.unpause()
+    // ROUND 8 P1. The digest of the state the readiness decision just approved. Without it the
+    // instruction encodes 8 bytes instead of 40 and is rejected before the handler, on the one
+    // instruction that takes the protocol live.
+    ix: await M.unpause(i.readinessDigest)
       .accounts({ config: i.configPda, admin: i.admin, guardian: guardianPda(presenter) })
       .instruction(),
   });
@@ -266,6 +274,9 @@ async function main() {
     expectedInventoryWallet: new PublicKey(inventoryWallet),
     feeVaultExists,
     readiness,
+    // ROUND 8 P1. The digest of the SAME chain read the decision above was taken on, so the
+    // instruction and the decision cannot describe two different states.
+    readinessDigest: readinessDigestFromConfig(c0),
   });
 
   if (MODE === "send") {
@@ -483,7 +494,16 @@ async function verify(
   for (const b of executedDecision.blockers) {
     console.log(`        blocker after execution: ${b.id}: ${b.why}`);
   }
-  ck.eq("no timelocked action is armed", Number(c.activeProposalCount ?? 0), 0);
+  // ROUND 8 PASSA-04. REMOVED, and removed rather than relaxed. FINAL-03 replaced the armed-slot
+  // guard with the readiness digest precisely so an incident pause can be lifted with actions still
+  // queued. Keeping the assertion here contradicted the program: an unpause the chain accepts as
+  // valid would have been reported as a failed verification. If zero queued actions ever becomes a
+  // first-launch requirement, it belongs in the readiness DECISION, before the unpause is built,
+  // not in the verification that runs after it landed.
+  ck.note(
+    "timelocked actions armed",
+    `${Number(c.activeProposalCount ?? 0)} (informational: the digest, not this count, binds the unpause)`,
+  );
 
   console.log("\n  Next: step 9 (pre-mint, D11: the operational tranche only) and 9b (fee vault).");
   ck.finish("step 8");

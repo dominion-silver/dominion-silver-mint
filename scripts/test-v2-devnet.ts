@@ -30,6 +30,7 @@ if (!process.env.DOMINION_RUN_SUPERSEDED) {
  *
  * Run: DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json npx tsx scripts/test-v2-devnet.ts
  */
+import { readinessDigestFromConfig } from "./_readiness-digest";
 import {
   Connection,
   PublicKey,
@@ -337,7 +338,7 @@ async function main() {
   // the pause/unpause pair cannot be a mirror image of the pause above any more.
   const unpauseGuardian = await requireEligibleGuardian(c, PROGRAM_ID, admin.publicKey);
   await m
-    .unpause()
+    .unpause(readinessDigestFromConfig(await cfgAcc()))
     .accounts({ config: configPda, admin: admin.publicKey, guardian: unpauseGuardian.account })
     .rpc();
   ok("unpaused (paused == false)", (await cfgAcc()).paused === false);

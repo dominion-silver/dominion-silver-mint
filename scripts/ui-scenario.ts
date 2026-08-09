@@ -30,6 +30,7 @@ if (!process.env.DOMINION_RUN_SUPERSEDED) {
  *   redemptions-off | redemptions-on | pause | unpause
  *   restore-all      §6 defaults for every param above, redemptions on, unpaused
  */
+import { readinessDigestFromConfig } from "./_readiness-digest";
 import { createRequire } from "module";
 import * as fs from "fs";
 import * as os from "os";
@@ -191,7 +192,7 @@ async function main() {
     const g = await requireEligibleGuardian(conn, PID, admin.publicKey);
     await send(
       await m
-        .unpause()
+        .unpause(readinessDigestFromConfig(await cfg()))
         .accounts({ config: CFG, admin: admin.publicKey, guardian: g.account })
         .instruction(),
       [admin],
@@ -228,7 +229,7 @@ async function main() {
       const g = await requireEligibleGuardian(conn, PID, admin.publicKey);
       await send(
         await m
-          .unpause()
+          .unpause(readinessDigestFromConfig(await cfg()))
           .accounts({ config: CFG, admin: admin.publicKey, guardian: g.account })
           .instruction(),
         [admin],

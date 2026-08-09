@@ -4,6 +4,7 @@
  * timelock, no dev-hatch bypass in the release build); propose + cancel of that path are.
  * Run: DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json npx tsx scripts/e2e-fixa-devnet.ts
  */
+import { readinessDigestFromConfig } from "./_readiness-digest";
 import * as anchor from "@coral-xyz/anchor";
 import { AnchorProvider, Program, BN, Wallet, Idl } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
@@ -101,7 +102,7 @@ async function main() {
       .rpc();
   }
   await program.methods
-    .unpause()
+    .unpause(readinessDigestFromConfig(await acct.fetch(configPda)))
     .accounts({ config: configPda, admin, guardian: guardianAcct })
     .rpc();
   cfg = await acct.fetch(configPda);

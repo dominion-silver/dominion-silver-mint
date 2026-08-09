@@ -464,11 +464,26 @@ if git clone -q "$REPO" "$merge_dir" >/dev/null 2>&1; then
       ok "merge signed by nobody pinned, build inputs identical to its signed parent, accepted"
     fi
 
-    # The other half: a merge that CHANGED a build input carries bytes nobody signed.
+    # The other half, and the first version of it was NOT a merge at all: it edited Cargo.toml after
+    # the merge and committed, producing a single-parent commit refused for an unrelated reason
+    # (its only parent was the unsigned merge). Codex measured it: parent_words=2, single-parent.
+    # A negative control refused for the wrong reason proves nothing about the case it names.
+    #
+    # This builds a REAL second merge whose side branch touches a BUILD INPUT, so the merge carries
+    # bytes no signed parent contains, which is the property under test.
     ( cd "$merge_dir" \
+      && git checkout -q -b side2 "$signed_parent" >/dev/null 2>&1 \
       && printf '\n# unreviewed\n' >> Cargo.toml \
+      && git -c user.email=f@f -c user.name=forge -c commit.gpgsign=false add -A >/dev/null 2>&1 \
+      && git -c user.email=f@f -c user.name=forge -c commit.gpgsign=false commit -qm "edit a build input" >/dev/null 2>&1 \
+      && git checkout -q - >/dev/null 2>&1 \
       && git -c user.email=noreply@github.com -c user.name=GitHub -c commit.gpgsign=false \
-           commit -qam "merge that edits a build input" >/dev/null 2>&1 ) || true
+           merge --no-ff -q -m "Merge pull request #100" side2 >/dev/null 2>&1 ) || true
+    neg_parents="$( (cd "$merge_dir" && git rev-list --parents -n 1 HEAD | wc -w) )"
+    if [[ "${neg_parents// /}" -lt 3 ]]; then
+      bad "the negative fixture HEAD is not a merge, so it cannot test what its name claims"
+      echo "     parent words: ${neg_parents// /} (a merge has 3 or more)"
+    fi
     run_traced "$merge_dir/scripts/verify-release-artifact.sh" "$TMP/merge2.trace"
     if ! grep -q "cannot establish which tree it belongs to" "$TMP/merge2.trace"; then
       bad "a merge that CHANGED a build input was accepted: nobody signed those bytes"

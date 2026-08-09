@@ -90,6 +90,7 @@ function input(over: Partial<Step8Input> = {}): Step8Input {
     guardians: [GUARDIAN_A.toBase58(), GUARDIAN_B.toBase58()],
     guardianExists: () => false,
     paused: true,
+    readinessDigest: new Array(32).fill(7),
     boundInventoryWallet: INVENTORY,
     expectedInventoryWallet: INVENTORY,
     feeVaultExists: true,

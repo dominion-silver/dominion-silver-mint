@@ -4,6 +4,7 @@
 // The `timelock` PDA seed is `[b"timelock", nonce_u64_le]`, account-data-dependent, so it is derived
 // and passed EXPLICITLY, as is the OPTIONAL `guardian` on pause/cancel (Anchor 0.31 skips optionals).
 
+import { readinessDigestFromConfig } from "./readiness-digest";
 import { AnchorProvider, BN, Program } from "@coral-xyz/anchor";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import {
@@ -514,8 +515,11 @@ export async function unpause(c: BuildCtx, guardian?: PublicKey): Ix {
     }
     present = eligible[0].guardian;
   }
+  // ROUND 8 P1. `unpause` takes the digest of the config it is unpausing; read it here, from the
+  // same chain read this action is built against.
+  const digest = readinessDigestFromConfig(await fetchConfig(c.connection));
   const ix = await (getProgram(c.connection).methods as any)
-    .unpause()
+    .unpause(digest)
     .accountsPartial({
       admin: c.admin ?? adminAuthority(),
       guardian: guardianPda(present),

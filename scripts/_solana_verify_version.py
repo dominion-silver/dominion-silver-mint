@@ -39,6 +39,15 @@ def bare_semver(raw: str) -> str:
 def measured() -> str:
     """Run the real tool. Kept apart from `bare_semver` so the parse is testable without the tool."""
     r = subprocess.run(["solana-verify", "--version"], capture_output=True, text=True)
+    # ROUND 8 PASSA-05. THE EXIT CODE IS PART OF THE MEASUREMENT. Reading stdout alone accepted a
+    # tool that printed a plausible line and then failed: measured with a stub exiting 9, the
+    # producer still returned "0.5.1" and exited 0. A version read from a failed process is not a
+    # measurement, it is a leftover buffer.
+    if r.returncode != 0:
+        raise SystemExit(
+            f"solana-verify --version exited {r.returncode}. Its stdout is not a measurement.\n"
+            f"stderr: {r.stderr.strip()[:200]}"
+        )
     return bare_semver(r.stdout)
 
 

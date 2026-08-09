@@ -2,6 +2,7 @@
 // Lazer signed envelope (the real verify_message + signature + fee on chain).
 //
 // Run: PYTH_LAZER_KEY=... npx tsx scripts/e2e-lazer-mint.ts
+import { readinessDigestFromConfig } from "./_readiness-digest";
 import {
   Connection, Keypair, PublicKey, Transaction, ComputeBudgetProgram,
   SystemProgram, SYSVAR_INSTRUCTIONS_PUBKEY,
@@ -125,7 +126,7 @@ async function main() {
     // ROUND 8 L1-03: the mandatory guardian account, discovered rather than derived.
     const g = await requireEligibleGuardian(conn, PROGRAM_ID, user);
     const sig = await (program.methods as any)
-      .unpause()
+      .unpause(readinessDigestFromConfig(await (program.account as any).configAccount.fetch(configPda)))
       .accounts({ config: configPda, admin: user, guardian: g.account })
       .rpc();
     console.log("unpaused:", sig);

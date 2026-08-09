@@ -4441,6 +4441,10 @@
     },
     {
       "name": "unpause",
+      "docs": [
+        "ROUND 8 FINAL-03. `expected_readiness_digest` is the digest of the config fields the go-live",
+        "decision read WHEN THIS INSTRUCTION WAS BUILT. See `ConfigAccount::readiness_digest`."
+      ],
       "discriminator": [
         169,
         144,
@@ -4511,7 +4515,17 @@
           }
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "expected_readiness_digest",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "withdraw_fees",
@@ -5888,6 +5902,11 @@
       "code": 12125,
       "name": "GuardianNotIndependent",
       "msg": "the supplied guardian is the current admin, so it is not an independent brake"
+    },
+    {
+      "code": 12126,
+      "name": "StaleReadinessDigest",
+      "msg": "the config changed after this unpause was built: the launch-readiness decision that authorised it is stale, so re-read the chain and rebuild it"
     }
   ],
   "types": [
