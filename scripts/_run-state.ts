@@ -81,3 +81,38 @@ export function classifyResume(
       `nonce=${state.nonce}. The record is kept; investigate before re-running.`,
   };
 }
+
+/**
+ * ROUND 8, self-hunt. WHAT THE RUNNER DOES with a verdict, separated from the runner.
+ *
+ * `classifyResume` was tested; the branch that CONSUMES it was not, because consuming it lives in a
+ * script that needs a cluster and a funded admin. That is the same reason the original A-06 defect
+ * survived, so leaving the branch untested would have been repeating the finding one layer up.
+ *
+ * Three outcomes, and the difference between them is what an operator loses if it is wrong:
+ *   execute   proceed to the irreversible send.
+ *   finish    the change already landed; close the record and exit clean. Sending again here would
+ *             submit a second execute against a released slot.
+ *   abort     refuse before the send and KEEP the record. Guessing here is how evidence is lost.
+ */
+export type ResumePlan = {
+  action: "execute" | "finish" | "abort";
+  /** Only ever true on `finish`: a run that did not complete must never delete its own record. */
+  clearState: boolean;
+  exitCode: number | null;
+  message: string;
+};
+
+export function planExecuteResume(
+  state: { from: string; to: string; nonce: number | string },
+  onChain: { inventoryWallet: string; pendingNonce: number | string | null },
+): ResumePlan {
+  const v = classifyResume(state, onChain);
+  if (v.kind === "execute") {
+    return { action: "execute", clearState: false, exitCode: null, message: v.message };
+  }
+  if (v.kind === "already-landed") {
+    return { action: "finish", clearState: true, exitCode: 0, message: v.message };
+  }
+  return { action: "abort", clearState: false, exitCode: 1, message: v.message };
+}

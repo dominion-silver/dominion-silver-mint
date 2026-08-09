@@ -30,7 +30,7 @@ import path from "path";
 import { PROGRAM_ID } from "./_program-id";
 import { requireSanctionedCluster, assertReversible, intentFromEnv } from "./_guard";
 import { resolveCluster, describeCluster } from "./_cluster";
-import { decideStateDisposition, classifyResume } from "./_run-state";
+import { decideStateDisposition, planExecuteResume } from "./_run-state";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -243,7 +243,7 @@ async function main(): Promise<void> {
     // was stale, so the record says A while the chain says B. The runner used to print "resume with
     // --execute" for that case, a promise it could not keep.
     const c0 = await cfg();
-    const verdict = classifyResume(
+    const plan = planExecuteResume(
       { from: s.from, to: s.to, nonce: s.nonce },
       {
         inventoryWallet: new PublicKey(c0.inventoryWallet).toBase58(),
@@ -253,15 +253,13 @@ async function main(): Promise<void> {
             : Number(c0.pendingInventoryWalletNonce),
       },
     );
-    console.log(`  resume verdict : ${verdict.kind} (${verdict.message})`);
-    if (verdict.kind === "already-landed") {
-      ok("the change already landed and the slot is free", true);
-      keepStateOrClear(`nothing to resume: ${verdict.message}`);
+    console.log(`  resume plan    : ${plan.action} (${plan.message})`);
+    if (plan.action !== "execute") {
+      if (plan.action === "finish") ok("the change already landed and the slot is free", true);
+      if (plan.clearState) fs.rmSync(STATE_PATH, { force: true });
+      else console.log(`  the run record is KEPT at ${STATE_PATH}`);
       console.log(`\n=== ${pass} passed, ${fail} failed ===`);
-      process.exit(fail === 0 ? 0 : 1);
-    }
-    if (verdict.kind === "investigate") {
-      throw new Error(`REFUSING to execute. ${verdict.message}`);
+      process.exit(plan.exitCode ?? 1);
     }
 
     assertResumable(s, admin, onChainFrom);

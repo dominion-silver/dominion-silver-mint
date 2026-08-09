@@ -21,7 +21,7 @@
  *   npx tsx scripts/test-ceremony-inventory-flow.ts
  */
 import { createHash } from "crypto";
-import { decideStateDisposition, classifyResume } from "./_run-state";
+import { decideStateDisposition, classifyResume, planExecuteResume } from "./_run-state";
 import { collectLaunchState } from "./ceremony-step8";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import * as anchor from "@coral-xyz/anchor";
@@ -435,6 +435,44 @@ async function main(): Promise<void> {
         `${label} was classified as safe to resume`,
       );
     }
+  }
+
+  // The branch that CONSUMES the verdict, which the previous version left untested because it lives
+  // in a script needing a cluster. That is exactly why the original A-06 defect survived, so the
+  // decision was pulled out instead of trusted.
+  {
+    const st = { from: "AAA", to: "BBB", nonce: 7 };
+    const plans = {
+      queued: planExecuteResume(st, { inventoryWallet: "AAA", pendingNonce: 7 }),
+      landed: planExecuteResume(st, { inventoryWallet: "BBB", pendingNonce: null }),
+      weird: planExecuteResume(st, { inventoryWallet: "CCC", pendingNonce: null }),
+    };
+    check(
+      plans.queued.action === "execute" && plans.queued.clearState === false,
+      "a still-queued change proceeds to the send and keeps its record",
+      "the runner would have skipped or cleared a change that never executed",
+    );
+    check(
+      plans.landed.action === "finish" &&
+        plans.landed.clearState === true &&
+        plans.landed.exitCode === 0,
+      "an already-landed change closes clean and clears its record",
+      "the runner would have re-sent an execute against a released slot",
+    );
+    check(
+      plans.weird.action === "abort" &&
+        plans.weird.clearState === false &&
+        plans.weird.exitCode === 1,
+      "an unrecognised state aborts before the send and KEEPS the record",
+      "the runner would have sent, or destroyed the evidence, on a state nobody predicted",
+    );
+    // The invariant that matters more than the three rows: nothing but a completed run may delete
+    // the record. Stated once, so a fourth outcome added later cannot quietly opt out of it.
+    check(
+      Object.values(plans).every((p) => !p.clearState || p.action === "finish"),
+      "no outcome except a completed run is allowed to delete the run record",
+      "an incomplete outcome clears the state file, which is the A-06 defect returning",
+    );
   }
 
   if (failures > 0) {

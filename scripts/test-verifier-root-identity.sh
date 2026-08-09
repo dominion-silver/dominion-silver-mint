@@ -135,7 +135,12 @@ derived_inputs_are_declared() {
     return
   fi
   # Every `"$ROOT"/scripts/x` or `$ROOT/scripts/x` the verifier executes, comment lines excluded.
-  invoked="$(grep -vE '^\s*#' "$VERIFY"     | grep -oE '\$\{?ROOT\}?"?/scripts/[A-Za-z0-9_.-]+'     | sed -E 's|.*/scripts/|scripts/|' | sort -u || true)"
+  # BOTH shapes, because deriving only one is the same omission wearing a different name: the first
+  # version matched `$ROOT/scripts/x` only, so a future `bash scripts/x.sh` written relatively would
+  # have slipped past the guard built to stop exactly that.
+  # `echo` lines are excluded: the verifier PRINTS `bash scripts/verify-release-artifact.sh` as a
+  # hint to the operator, and a hint is not an invocation.
+  invoked="$(grep -vE '^[[:space:]]*(#|echo )' "$VERIFY" | grep -oE '(bash|sh|python3|npx tsx) +"?(\$\{?ROOT\}?"?/)?scripts/[A-Za-z0-9_.-]+' | sed -E 's|.*(scripts/[A-Za-z0-9_.-]+)$|\1|' | sort -u || true)"
   if [[ -z "$invoked" ]]; then
     bad "no invoked script was derived from the verifier, so this check is vacuous"
     return

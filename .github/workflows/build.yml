@@ -758,7 +758,11 @@ jobs:
           SO=target/deploy/dominion_silver_mint.so
           python3 - "$SO" > release-manifest.json <<'PY'
           import hashlib, json, os, re, subprocess, sys
-          sys.path.insert(0, "scripts")
+          # ROUND 8 self-hunt. ABSOLUTE, not relative. `sys.path.insert(0, "scripts")` resolved
+          # against the step's CWD, so adding a `working-directory:` to this step later would break
+          # the import. It would fail loudly rather than silently, but a release job that dies on an
+          # ImportError is still a release job that does not run.
+          sys.path.insert(0, os.path.join(os.environ.get("GITHUB_WORKSPACE", "."), "scripts"))
           import _solana_verify_version as _svv
           so = sys.argv[1]
           blob = open(so, "rb").read()

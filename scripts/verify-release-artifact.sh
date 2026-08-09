@@ -215,6 +215,15 @@ _verify_commit() {
 # parent and HEAD. Everything outside the closed list may differ, which is what a merge legitimately
 # does. GitHub's own key is deliberately NOT trusted: this needs no third-party identity, it needs
 # the reviewed bytes to be the built bytes.
+# THE OPERATIONAL EDGE, measured on this repository rather than assumed: both merges in history
+# (1314be4, 3a4af1c) are true merge commits, committed by the forge, whose second parent is a
+# branch tip we signed. That is the shape this accepts. Two shapes it does NOT accept, on purpose:
+#   - a SQUASH merge, which has one unsigned parent whose build inputs differ, so nobody signed the
+#     squashed bytes. If this repository ever switches to squash merging, this gate must change with
+#     it, deliberately.
+#   - a merge that pulled main forward THROUGH a build input. Then the merged bytes are genuinely
+#     not the reviewed bytes, and re-signing the merge, or attesting from the branch tip, is the
+#     correct answer rather than widening this.
 _identity_ok=no
 _identity_via=""
 if _verify_commit HEAD; then
