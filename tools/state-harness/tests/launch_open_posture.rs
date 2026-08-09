@@ -589,10 +589,15 @@ fn launch_open_adversarial_alignment_approaches_two_budgets_in_one_trailing_wind
     // Strictly more than one budget inside a trailing window of one window's length. The exact figure
     // depends on the premium, so the assertion is the RATIO, which is what the risk note quotes when
     // it says the real bound is close to 2x and not 1x.
+    // F-09. `out > budget` was too weak to carry this test's own name: 1.01x satisfies it while the
+    // risk note claims something close to 2x. Two drains at 90% put ~1.8 budgets through the window
+    // before premium, so the floor is 1.5x. Strictly stronger, and it fails if the counter is ever
+    // tightened toward the naive 1x the note explicitly says it does NOT provide.
+    let floor = TEST_BUDGET_USDC / 2 * 3;
     assert!(
-        out > TEST_BUDGET_USDC,
-        "only {out} USDC left inside one trailing window against a {TEST_BUDGET_USDC} budget; the \
-         ~2x alignment the risk note cites did not reproduce, so that note must be re-derived"
+        out > floor,
+        "only {out} USDC left inside one trailing window against a {TEST_BUDGET_USDC} budget, below \
+         the {floor} this test requires. The note cites a bound close to 2x, not merely above 1x"
     );
     let _ = DEFAULT_INSTANT_REDEEM_BUDGET_USDC;
 }

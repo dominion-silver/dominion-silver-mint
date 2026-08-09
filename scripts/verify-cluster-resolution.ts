@@ -286,6 +286,8 @@ for (const rpc of [
     // cluster, and they resolve no RPC.
     "_strict-build-sbf.sh",
     "test-strict-build-sbf.sh",
+    // ROUND 8 T8-04. Drives the real validate_pinned offline; no Connection, no RPC.
+    "test-release-provenance.py",
   ]);
 
   const files = fs.readdirSync(scriptsDir).filter((x) => x.endsWith(".ts") && !helpers.has(x));

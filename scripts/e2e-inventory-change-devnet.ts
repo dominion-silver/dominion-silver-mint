@@ -254,6 +254,31 @@ async function main(): Promise<void> {
       `armed nonce ${c0.pendingInventoryWalletNonce?.toString?.() ?? "none"}`,
     );
 
+    // THE CHECKS ABOVE ARE GATES, NOT NOTES. They recorded failures with ok() and execution carried
+    // on regardless, so a resume whose PDA or armed nonce did not match still reached the execute.
+    // Every red check now stops the run before anything is sent.
+    if (fail > 0) {
+      console.log(`\n  REFUSING to execute: ${fail} precondition(s) above are red.`);
+      process.exit(1);
+    }
+    // The proposal on chain must carry the TARGET this run persisted, and the timestamps must be the
+    // ones it recorded. Without this a resume executes a proposal it has only identified by nonce.
+    const onChainTo = tlAccount ? new PublicKey(tlAccount.actionData ?? new Uint8Array(32)) : null;
+    ok(
+      "the armed proposal's schedule matches the one this run recorded",
+      tlAccount !== null &&
+        Number(tlAccount.executableAt) === s.executableAt &&
+        Number(tlAccount.scheduledAt) === s.proposedAt,
+      `on chain ${tlAccount ? tlAccount.executableAt : "?"} vs recorded ${s.executableAt}`,
+    );
+    if (onChainTo && !onChainTo.equals(new PublicKey(s.to))) {
+      ok("the armed proposal targets the B this run recorded", false, onChainTo.toBase58());
+    }
+    if (fail > 0) {
+      console.log(`\n  REFUSING to execute: the armed proposal is not the one this run tracks.`);
+      process.exit(1);
+    }
+
     const nowSecs = Math.floor(Date.now() / 1000);
     if (nowSecs < s.executableAt) {
       console.log(

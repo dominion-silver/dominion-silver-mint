@@ -247,6 +247,37 @@ if [[ -z "${copy_reached:-}" && -z "${move_reached:-}" ]]; then
   ok "copied/moved verifier in a foreign Git repository rejected before manifest read"
 fi
 
+# ================================================================ 4b. a COMMITTED copy in a foreign repo
+#
+# THE CASE ROUND 8 FOUND, and the reason the tracked/blob heuristics were replaced by a history
+# anchor. An attacker preparing a tree does not leave the script untracked: they `git init`, they
+# `git add -A`, they commit. The copy is then tracked, its blob matches that tree's HEAD, and every
+# check based on "is it tracked here" says yes. Only history separates the two, and history is the
+# one thing a fabricated tree cannot produce.
+committed_dir="$TMP/committed"
+if make_foreign "$committed_dir"; then
+  cp "$VERIFY" "$committed_dir/scripts/verify-release-artifact.sh"
+  chmod +x "$committed_dir/scripts/verify-release-artifact.sh"
+  ( cd "$committed_dir" \
+    && git -c user.email=f@f -c user.name=f add -A >/dev/null 2>&1 \
+    && git -c user.email=f@f -c user.name=f commit -qm "tracked here too" >/dev/null 2>&1 ) || true
+  # Asserted, not assumed: if the copy is not actually tracked, this case is not the one under test.
+  if ! ( cd "$committed_dir" && git ls-files --error-unmatch -- scripts/verify-release-artifact.sh >/dev/null 2>&1 ); then
+    bad "the copy is not tracked in the foreign repository, so this case is not the one under test"
+  fi
+  run_traced "$committed_dir/scripts/verify-release-artifact.sh" "$TMP/committed.trace"
+  committed_reached="$(what_was_reached "$committed_dir" "$TMP/committed.trace")"
+  if [[ -n "$committed_reached" ]]; then
+    bad "a COMMITTED copy in a foreign Git repository selected that repository's root"
+    echo "     reached: $committed_reached"
+    echo "     trace  : $TMP/committed.trace"
+  else
+    ok "committed copy in a prepared foreign repository rejected: it lacks our history"
+  fi
+else
+  bad "could not build the foreign repository for the committed-copy case"
+fi
+
 # ================================================================ 5. the genuine checkout
 #
 # The negative control, and the reason the four cases above are not simply "refuse everything". A

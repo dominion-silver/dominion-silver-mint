@@ -264,9 +264,19 @@ async function main() {
   // Circulating supply, read off the SILV mint. See _launch-readiness.ts for why this replaced a
   // treasury threshold: at the first unpause the supply is provably zero, so an empty treasury is
   // harmless, and demanding a decided dollar figure was ceremony rather than safety.
-  let circulatingSilv = 0n;
-  const silvSupply = await conn.getTokenSupply(new PublicKey(c0.silvMint)).catch(() => null);
-  if (silvSupply) circulatingSilv = BigInt(silvSupply.value.amount);
+  // FAILS CLOSED. `.catch(() => null)` with a 0 default turned an RPC ERROR into "no supply", which
+  // is the reassuring answer and the one that lets the check pass. A helper that cannot tell "no"
+  // from "do not know" must not answer, so an unreadable supply aborts the step.
+  let circulatingSilv: bigint;
+  try {
+    const silvSupply = await conn.getTokenSupply(new PublicKey(c0.silvMint));
+    circulatingSilv = BigInt(silvSupply.value.amount);
+  } catch (e) {
+    throw new Error(
+      `REFUSING step 8: could not read the SILV supply (${String(e).slice(0, 120)}). The go-live ` +
+        "check needs to know it is zero, and an unreadable value is not a zero.",
+    );
+  }
   // Guardians the PROGRAM would accept: active, and not the current admin.
   const eligible = (
     await Promise.all(

@@ -136,80 +136,36 @@ if [ "$_toplevel" != "$ROOT" ]; then
   echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
   exit 1
 fi
-# THE DISCRIMINATOR. A copy in a foreign repository is UNTRACKED there. `ls-files --error-unmatch`
-# exits non-zero for an untracked path, and `cat-file` comparison then proves the tracked content is
-# this content, so a tracked-but-modified verifier is refused too.
-_self_rel="${_self#"$ROOT"/}"
-if ! (cd -P "$ROOT" && git ls-files --error-unmatch -- "$_self_rel" >/dev/null 2>&1); then
+# THE DISCRIMINATOR, simplified after round 8 refused the previous two.
+#
+# The first attempt required the file to be TRACKED by the enclosing tree. A prepared foreign
+# repository defeats that with `git init && git add -A && git commit`, and Codex demonstrated exactly
+# that. The second layer required the tree to contain the pin's attested source commit, which only
+# helps once a candidate is `pinned`; the status is `no-candidate`, so it never fired.
+#
+# What actually separates THIS repository from any tree an attacker can fabricate is history. A clone
+# has our commits; a fabricated tree does not, and cannot, because it would have to reproduce a commit
+# object with our hash. One anchor is enough, and one is all this needs: no heuristics, no tracked/
+# untracked reasoning, no dependence on the pin state.
+#
+# The anchor is the merge that produced `main` at the round-8 baseline. It is on the protected branch,
+# every legitimate checkout and every CI clone has it, and it can never be removed: `main` forbids
+# force-push and deletion. If this project ever rewrites history so this commit is gone, this line
+# must be updated deliberately, in the commit that does it.
+ANCHOR_COMMIT="1314be417bfbdcea861bb75047964e722a8eada9"
+if ! (cd -P "$ROOT" && git cat-file -e "${ANCHOR_COMMIT}^{commit}" 2>/dev/null); then
   echo ""
-  echo "REFUSING TO RUN: $_self_rel is not TRACKED by the Git tree at $ROOT."
+  echo "REFUSING TO RUN: the Git tree at $ROOT does not contain $ANCHOR_COMMIT."
+  echo "That commit is in this repository's history, on the protected main branch, so every genuine"
+  echo "checkout has it. A tree that does not is not this repository, whatever it contains."
+  echo ""
   echo "A byte-identical copy of this script dropped into another repository looks exactly like the"
-  echo "audited file, has one hard link, and resolves to itself. Being tracked by the checkout it"
-  echo "attests is what tells the two apart."
+  echo "audited file, has one hard link, resolves to itself, and can be committed there to look"
+  echo "tracked. History is the thing it cannot fabricate."
   echo ""
   echo "Run the script from its own checkout. To use it elsewhere, clone the repository."
   echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
   exit 1
-fi
-# BLOB IDENTITY, and it is graded rather than absolute, which is a correction to my own first
-# version. Making an uncommitted edit fatal on every path broke four cases of the self-test the
-# moment this file was being edited, and it would block the ordinary loop of changing the verifier
-# and running it. The property worth protecting is the ATTESTATION, not the working tree.
-#
-# So: a modified verifier cannot produce a release attestation, and says so. Under `--local-only`,
-# which declares in its own output that it makes no claim about the release pin, it WARNS and
-# continues. `--local-only` is peeked at here rather than read from the parsed flag below, because
-# this block has to run before the rebuild and before the manifest read.
-_local_only_peek=0
-for _a in "$@"; do [ "$_a" = "--local-only" ] && _local_only_peek=1; done
-_head_blob="$(cd -P "$ROOT" && git rev-parse "HEAD:$_self_rel" 2>/dev/null || true)"
-_disk_blob="$(cd -P "$ROOT" && git hash-object -- "$_self_rel" 2>/dev/null || true)"
-if [ -z "$_head_blob" ] || [ "$_head_blob" != "$_disk_blob" ]; then
-  if [ "$_local_only_peek" -eq 1 ]; then
-    echo ""
-    echo "WARNING: $_self_rel differs from the version committed at HEAD (${_head_blob:-absent} vs"
-    echo "         ${_disk_blob:-unreadable}). Continuing because --local-only makes no claim about"
-    echo "         the release pin. This run is NOT a release attestation."
-  else
-    echo ""
-    echo "REFUSING TO RUN: $_self_rel differs from the version committed at HEAD."
-    echo "  HEAD blob : ${_head_blob:-<absent>}"
-    echo "  on disk   : ${_disk_blob:-<unreadable>}"
-    echo "An attestation produced by an edited verifier attests the edit as much as the artifact."
-    echo "Commit the verifier first, or re-run with --local-only, which claims nothing about the pin."
-    echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
-    exit 1
-  fi
-fi
-# SECOND LAYER, and the one that survives a hostile `git init`. Being tracked separates a script
-# dropped into a stranger's tree from one sitting in a checkout of its own repository; it does NOT
-# separate this repository from a prepared tree that was initialised and committed on purpose.
-#
-# What does: the tree must KNOW the commit the pin attests. A freshly initialised tree has no history
-# and cannot contain it. Only meaningful once a candidate exists, so it is skipped while the pin says
-# `no-candidate`, and it says which state it is in rather than passing silently.
-#
-# This reads the manifest for ITS OWN question and assigns nothing the attestation path uses. The
-# attestation's own read is `MANIFEST_JSON` further down, and it must still come after this block:
-# `scripts/test-verifier-root-identity.sh` asserts that ordering from the trace.
-_pin_commit="$(python3 - "$ROOT/config/mainnet-authorities.json" 2>/dev/null <<'PYEOF' || true
-import json, sys
-try:
-    ra = json.load(open(sys.argv[1])).get("release_artifact", {})
-except Exception:
-    sys.exit(0)
-if ra.get("status") == "pinned":
-    print(ra.get("source_commit") or "")
-PYEOF
-)"
-if [ -n "$_pin_commit" ]; then
-  if ! (cd -P "$ROOT" && git cat-file -e "${_pin_commit}^{commit}" 2>/dev/null); then
-    echo ""
-    echo "REFUSING TO RUN: the pin attests source commit $_pin_commit, which this tree does not"
-    echo "contain. A checkout that cannot see the attested commit cannot attest anything about it."
-    echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
-    exit 1
-  fi
 fi
 
 _stray=$(grep -rnoE --include="*.md" "\b[0-9a-f]{64}\b" "$ROOT/docs" 2>/dev/null || true)

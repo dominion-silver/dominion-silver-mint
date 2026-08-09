@@ -21,10 +21,17 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 B58 = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
+# ROUND 8 T8-04. The convention this project actually uses, MEASURED rather than invented: the
+# manifest and the CI job both carry a bare semver ("0.5.1"). A first version of this rule demanded
+# "solana-verify <semver>" and rejected the real fixture, which is the same mistake as asserting a
+# format without looking at the one in use. A leading "solana-verify " is tolerated because it is the
+# tool's own `--version` output and an operator may paste it.
+APPROVED_VERIFY = re.compile(r"^(solana-verify )?\d+\.\d+\.\d+$")
 
 
 def validate_pinned(rel: dict, root: str) -> list[str]:
@@ -48,9 +55,50 @@ def validate_pinned(rel: dict, root: str) -> list[str]:
     n = rel.get("bytes")
     if not isinstance(n, int) or n <= 0:
         bad.append("bytes is not a positive integer")
-    for field in ("ci_run_id", "solana_verify_version"):
-        if not rel.get(field):
-            bad.append(f"{field} is missing")
+    # ROUND 8 T8-04. SHAPE IS NOT PROVENANCE, and these three fields only had shapes.
+    #
+    # `ci_run_id` and `solana_verify_version` were checked non-empty, so "invented-run" and
+    # "invented-tool" passed. `source_commit` was checked as 40 hex characters, so a string of forty
+    # zeros passed while naming no commit. A pin can therefore have described a build that never
+    # happened, on a runner that never ran, with a tool that does not exist, and satisfy every gate.
+    run_id = rel.get("ci_run_id")
+    if not run_id:
+        bad.append("ci_run_id is missing")
+    elif not (isinstance(run_id, (str, int)) and str(run_id).isdigit()):
+        # A GitHub Actions run id is a decimal number, and it is the handle the live verifier uses to
+        # fetch the run and its artifact. A non-numeric value is unfetchable by construction.
+        bad.append(f"ci_run_id {run_id!r} is not a numeric GitHub run id")
+
+    tool = rel.get("solana_verify_version")
+    if not tool:
+        bad.append("solana_verify_version is missing")
+    elif not APPROVED_VERIFY.match(str(tool)):
+        # An allowlist by SHAPE, not by exact string: the point is that the field names the tool and a
+        # version, so a reader can tell which build convention produced the hashes. Free text could
+        # say anything, and did.
+        bad.append(
+            f"solana_verify_version {tool!r} is not an approved solana-verify version "
+            "(expected e.g. 'solana-verify 0.4.7')"
+        )
+
+    # THE ATTESTED COMMIT MUST EXIST IN THIS TREE. Forty hex characters is a shape; a commit is a
+    # fact. `git cat-file -e` answers it without a network call, and a checkout that cannot see the
+    # commit the pin attests cannot attest anything about it. Skipped only when git is unavailable,
+    # and that is reported rather than passed over.
+    commit = rel.get("source_commit")
+    if commit and re.match(r"^[0-9a-f]{40}$", str(commit)):
+        try:
+            r = subprocess.run(
+                ["git", "-C", root, "cat-file", "-e", f"{commit}^{{commit}}"],
+                capture_output=True,
+            )
+            if r.returncode != 0:
+                bad.append(
+                    f"source_commit {commit} is not a commit in this repository, so the pin names a "
+                    "build this tree cannot locate"
+                )
+        except FileNotFoundError:
+            bad.append("git is unavailable, so source_commit could not be verified to exist")
 
     # THE TWO CROSS-CHECKS. Both are recomputable from this checkout, so a pin that disagrees with the
     # source it claims to describe is caught without a network call.

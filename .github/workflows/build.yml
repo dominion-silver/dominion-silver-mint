@@ -279,6 +279,12 @@ jobs:
       # the same shape. `--no-build` because the release artifact was built above and the whole point
       # is to test THOSE bytes; it also re-reads the three IDL copies and the client parity gate, so it
       # must sit after the regenerate and parity steps.
+      # ROUND 8 T8-04, local half. Shape is not provenance: a pin naming a commit that does not
+      # exist, a non-numeric run id or an invented tool version must be refused before anything
+      # downstream trusts the tuple.
+      - name: T8-04 the release pin refuses invented provenance (BLOCKING)
+        run: python3 scripts/test-release-provenance.py
+
       - name: F-03 a BPF stack overflow fails the build even when cargo exits 0 (BLOCKING)
         run: bash scripts/test-strict-build-sbf.sh
 
@@ -589,7 +595,21 @@ jobs:
         run: |
           set -euo pipefail
           rm -f target/deploy/dominion_silver_mint.so
-          solana-verify build --library-name dominion_silver_mint
+          # ROUND 8, F-03 remainder. THESE are the bytes that ship, and this was the last build path
+          # that did not apply the BPF stack-overflow rule. `solana-verify build` runs cargo inside a
+          # container, so it cannot go through scripts/_strict-build-sbf.sh, but the rule is the same
+          # and the message is the same: the toolchain prints it and exits 0. Capturing the output and
+          # refusing on that line is what makes the published artifact obey the barrier the harness
+          # already obeys. Without it, an overflow would ship AND reproduce identically on both sides
+          # of the reproducibility comparison, so the comparison would bless corrupted bytes.
+          set -o pipefail
+          solana-verify build --library-name dominion_silver_mint 2>&1 | tee /tmp/verifiable-build.log
+          if grep -q "exceeded max offset" /tmp/verifiable-build.log; then
+            grep -n "exceeded max offset" /tmp/verifiable-build.log
+            echo "::error::the verifiable build overflowed the 4KB BPF stack frame. These are the"
+            echo "bytes that ship, and the excess silently corrupts whatever sits next to the frame."
+            exit 1
+          fi
           test -f target/deploy/dominion_silver_mint.so
           echo "container build sha256:"
           sha256sum target/deploy/dominion_silver_mint.so
