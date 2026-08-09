@@ -41,6 +41,15 @@ SANDBOX="$TMP/repo"
 mkdir -p "$SANDBOX"
 rsync -a --exclude='.git' --exclude='node_modules' --exclude='.next' --exclude='target/' \
       "$REPO/" "$SANDBOX/" || { echo "FAIL: could not build the sandbox copy"; exit 1; }
+# ROUND 8 T8-02. The sandbox is now a real Git repository, because the verifier refuses to attest a
+# tree that cannot authenticate it. That is not a concession to the test: the sandbox is a COPY OF
+# THIS REPOSITORY, and a repository has a .git. Copying the sources without it produced something no
+# real deployment ever looks like, which is why the omission went unnoticed for six rounds.
+( cd "$SANDBOX" \
+  && git init -q \
+  && git -c user.email=s@s -c user.name=s add -A >/dev/null 2>&1 \
+  && git -c user.email=s@s -c user.name=s commit -qm "self-test sandbox" >/dev/null 2>&1 ) \
+  || { echo "FAIL: could not make the sandbox a Git repository"; exit 1; }
 mkdir -p "$SANDBOX/target/deploy" "$SANDBOX/target/idl"
 cp "$REPO/target/deploy/dominion_silver_mint.so" "$SANDBOX/target/deploy/" 2>/dev/null || true
 cp "$REPO/target/idl/dominion_silver_mint.json" "$SANDBOX/target/idl/" 2>/dev/null || true

@@ -84,6 +84,134 @@ if [ "$_nlink" != "1" ]; then
   exit 1
 fi
 ROOT="$(cd -P "$(dirname "$_self")/.." && pwd)"
+
+# ================================================================ ROUND 8 T8-02: WHOSE TREE IS THIS?
+#
+# THE THIRD ALIASING SHAPE. ROOT comes from where this file sits, and ROOT selects the manifest that
+# is read, the sources that are rebuilt and the target/ that is attested. Round 7 closed two of the
+# three ways a file can sit somewhere it does not belong: a SYMLINK is resolved by `realpath` above,
+# and a HARD LINK is refused by the `st_nlink` guard above. A COPY, or a MOVE, defeats both. It has
+# exactly one link and it resolves to itself, so the guards see nothing, and the verifier proceeds to
+# attest a foreign repository while being byte-identical to the audited script.
+#
+# That is not a hypothetical: reviewing the FILE cannot distinguish the two, because it is the same
+# file. What distinguishes them is whether the checkout it sits in is the authenticated one.
+#
+# WHAT THIS ESTABLISHES, and deliberately no more:
+#   1. ROOT is the top level of a Git working tree, and it is the SAME tree this file lives in.
+#   2. This exact file is TRACKED in that tree, and its blob matches HEAD. A copy dropped into a
+#      foreign repository is untracked there, which is the cheap and decisive discriminator.
+#   3. The tree knows the commit the release pin attests, so the pin can be compared against real
+#      history rather than against a string.
+#
+# WHAT IT DELIBERATELY DOES NOT DO: require `HEAD == release_artifact.source_commit`. The commit that
+# RECORDS a pin necessarily comes after the run that produced the candidate, so that equality would
+# make committing a pin impossible. The identity that matters is the checkout's, not the tip's.
+#
+# It runs HERE, before the docs scan, before the rebuild at `cargo build-sbf` and before
+# `MANIFEST_JSON` is even assigned, so a foreign tree is refused before anything reads or rebuilds it.
+# `scripts/test-verifier-root-identity.sh` asserts that ordering from a `bash -x` trace rather than
+# from the exit code, because "refused" and "refused for the right reason" are different facts.
+if ! command -v git >/dev/null 2>&1; then
+  echo ""
+  echo "REFUSING TO RUN: git is not available, so this script cannot establish which repository it"
+  echo "belongs to. ROOT selects the manifest, the sources and the target/ that get attested."
+  echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+  exit 1
+fi
+_toplevel="$(cd -P "$ROOT" && git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$_toplevel" ]; then
+  echo ""
+  echo "REFUSING TO RUN: $ROOT is not inside a Git working tree, so nothing authenticates the sources"
+  echo "this script would rebuild and attest."
+  echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+  exit 1
+fi
+# Compare RESOLVED paths: ROOT went through `cd -P`, and on macOS /var is a symlink to /private/var,
+# so a raw string comparison fails on a perfectly correct checkout.
+_toplevel="$(cd -P "$_toplevel" && pwd)"
+if [ "$_toplevel" != "$ROOT" ]; then
+  echo ""
+  echo "REFUSING TO RUN: this script sits at $ROOT but the enclosing Git tree is $_toplevel."
+  echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+  exit 1
+fi
+# THE DISCRIMINATOR. A copy in a foreign repository is UNTRACKED there. `ls-files --error-unmatch`
+# exits non-zero for an untracked path, and `cat-file` comparison then proves the tracked content is
+# this content, so a tracked-but-modified verifier is refused too.
+_self_rel="${_self#"$ROOT"/}"
+if ! (cd -P "$ROOT" && git ls-files --error-unmatch -- "$_self_rel" >/dev/null 2>&1); then
+  echo ""
+  echo "REFUSING TO RUN: $_self_rel is not TRACKED by the Git tree at $ROOT."
+  echo "A byte-identical copy of this script dropped into another repository looks exactly like the"
+  echo "audited file, has one hard link, and resolves to itself. Being tracked by the checkout it"
+  echo "attests is what tells the two apart."
+  echo ""
+  echo "Run the script from its own checkout. To use it elsewhere, clone the repository."
+  echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+  exit 1
+fi
+# BLOB IDENTITY, and it is graded rather than absolute, which is a correction to my own first
+# version. Making an uncommitted edit fatal on every path broke four cases of the self-test the
+# moment this file was being edited, and it would block the ordinary loop of changing the verifier
+# and running it. The property worth protecting is the ATTESTATION, not the working tree.
+#
+# So: a modified verifier cannot produce a release attestation, and says so. Under `--local-only`,
+# which declares in its own output that it makes no claim about the release pin, it WARNS and
+# continues. `--local-only` is peeked at here rather than read from the parsed flag below, because
+# this block has to run before the rebuild and before the manifest read.
+_local_only_peek=0
+for _a in "$@"; do [ "$_a" = "--local-only" ] && _local_only_peek=1; done
+_head_blob="$(cd -P "$ROOT" && git rev-parse "HEAD:$_self_rel" 2>/dev/null || true)"
+_disk_blob="$(cd -P "$ROOT" && git hash-object -- "$_self_rel" 2>/dev/null || true)"
+if [ -z "$_head_blob" ] || [ "$_head_blob" != "$_disk_blob" ]; then
+  if [ "$_local_only_peek" -eq 1 ]; then
+    echo ""
+    echo "WARNING: $_self_rel differs from the version committed at HEAD (${_head_blob:-absent} vs"
+    echo "         ${_disk_blob:-unreadable}). Continuing because --local-only makes no claim about"
+    echo "         the release pin. This run is NOT a release attestation."
+  else
+    echo ""
+    echo "REFUSING TO RUN: $_self_rel differs from the version committed at HEAD."
+    echo "  HEAD blob : ${_head_blob:-<absent>}"
+    echo "  on disk   : ${_disk_blob:-<unreadable>}"
+    echo "An attestation produced by an edited verifier attests the edit as much as the artifact."
+    echo "Commit the verifier first, or re-run with --local-only, which claims nothing about the pin."
+    echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+    exit 1
+  fi
+fi
+# SECOND LAYER, and the one that survives a hostile `git init`. Being tracked separates a script
+# dropped into a stranger's tree from one sitting in a checkout of its own repository; it does NOT
+# separate this repository from a prepared tree that was initialised and committed on purpose.
+#
+# What does: the tree must KNOW the commit the pin attests. A freshly initialised tree has no history
+# and cannot contain it. Only meaningful once a candidate exists, so it is skipped while the pin says
+# `no-candidate`, and it says which state it is in rather than passing silently.
+#
+# This reads the manifest for ITS OWN question and assigns nothing the attestation path uses. The
+# attestation's own read is `MANIFEST_JSON` further down, and it must still come after this block:
+# `scripts/test-verifier-root-identity.sh` asserts that ordering from the trace.
+_pin_commit="$(python3 - "$ROOT/config/mainnet-authorities.json" 2>/dev/null <<'PYEOF' || true
+import json, sys
+try:
+    ra = json.load(open(sys.argv[1])).get("release_artifact", {})
+except Exception:
+    sys.exit(0)
+if ra.get("status") == "pinned":
+    print(ra.get("source_commit") or "")
+PYEOF
+)"
+if [ -n "$_pin_commit" ]; then
+  if ! (cd -P "$ROOT" && git cat-file -e "${_pin_commit}^{commit}" 2>/dev/null); then
+    echo ""
+    echo "REFUSING TO RUN: the pin attests source commit $_pin_commit, which this tree does not"
+    echo "contain. A checkout that cannot see the attested commit cannot attest anything about it."
+    echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+    exit 1
+  fi
+fi
+
 _stray=$(grep -rnoE --include="*.md" "\b[0-9a-f]{64}\b" "$ROOT/docs" 2>/dev/null || true)
 if [ -n "$_stray" ]; then
   echo ""
