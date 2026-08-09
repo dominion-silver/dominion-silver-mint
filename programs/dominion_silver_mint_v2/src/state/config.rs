@@ -60,7 +60,10 @@ pub const DEFAULT_ADMIN_TIMELOCK_SECONDS: u32 = 86400; // 24 hours
 // The ONLY bound on unbacked SILV, NOT an initialize arg (get it right pre-mainnet), ONE-WAY RATCHET.
 pub const DEFAULT_MAX_SILV_SUPPLY: u64 = 150_000_000_000; // 150,000 oz at 6 decimals
 
-pub const DEFAULT_PUBLIC_MINT_ENABLED: bool = false; // opening direct mint is 24h-timelocked
+// ROUND 8, posture decided 2026-08-09. UNUSED at launch and kept as the shape of the CLOSED state:
+// `initialize` writes `public_mint_enabled = true` directly. Reopening after an emergency close is
+// still 24h-timelocked, which is the asymmetry this constant used to describe.
+pub const DEFAULT_PUBLIC_MINT_ENABLED: bool = false;
 
 // ROUND 5 P1-04, the floor on a single mint, atomic USDC (6dec). See ConfigAccount::min_operation_usdc
 // for why it exists. $10 makes capturing every Lazer print cost 10 USDC of working capital per second
@@ -204,8 +207,8 @@ pub struct ConfigAccount {
     // The ONLY way to LOOSEN the redeem throttles; instant tightening is emergency_tighten_redeem_limits.
     pub pending_redeem_limits_nonce: Option<u64>,
 
-    pub inventory_wallet: Pubkey, // the admin pre-mints against the cap into this wallet
-    pub public_mint_enabled: bool, // CLOSED at launch, opens with KYC
+    pub inventory_wallet: Pubkey, // pre-mint destination, bound by initialize, changed only via the 24h timelock
+    pub public_mint_enabled: bool, // ROUND 8: OPEN at launch; closing is instant, reopening is 24h
 
     pub kyc_operator: Pubkey,
     pub kyc_enforced: bool,

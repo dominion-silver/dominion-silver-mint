@@ -192,6 +192,11 @@ for (const rpc of [
     "_program-id.ts",
     // Called BY t1, which guards. It resolves no cluster of its own and takes an open Connection.
     "_t1-mint-helper.ts",
+    // ROUND 8 L1-03. Read-only guardian discovery for the callers of `unpause`. It resolves no
+    // cluster, takes an open Connection, and its only RPC is getProgramAccounts. Exempt on the same
+    // terms as _t1-mint-helper: a helper that contained a send primitive would NOT belong here, and
+    // the check below verifies that claim rather than trusting this comment.
+    "_guardian.ts",
     "verify-cluster-resolution.ts",
   ]);
 
@@ -216,6 +221,8 @@ for (const rpc of [
     "create-fee-vault.ts",
     "dev-set-premiums.ts",
     "e2e-fixa-devnet.ts",
+    // ROUND 8 L1-05. The two-phase inventory change across the real 24h timelock.
+    "e2e-inventory-change-devnet.ts",
     "e2e-guardian-devnet.ts",
     "e2e-lazer-mint.ts",
     "e2e-public-mint-devnet.ts",
@@ -268,6 +275,13 @@ for (const rpc of [
     // imports guards `main()` behind `require.main === module` for the same reason test-upgrade-gate
     // needed that guard: importing a decision must not start a ceremony.
     "test-ceremony-inventory-flow.ts",
+    // ROUND 8 L1-01. Imports `buildT1InitializeArgs` from t1-hostile-bootstrap.ts and encodes it
+    // offline with the IDL coder. That module's `main()` is behind `require.main === module` for
+    // exactly this reason; importing the ceremony's argument builder must not start a ceremony.
+    "test-t1-initialize-args.ts",
+    // ROUND 8 L1-04. Pure decision function plus its test: no Connection, no RPC, no signer.
+    "_launch-readiness.ts",
+    "test-launch-open-readiness.ts",
   ]);
 
   const files = fs.readdirSync(scriptsDir).filter((x) => x.endsWith(".ts") && !helpers.has(x));

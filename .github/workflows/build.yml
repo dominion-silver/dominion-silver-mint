@@ -280,6 +280,18 @@ jobs:
       - name: T8-06 ceremony emits no instant inventory setter (BLOCKING)
         run: npx --no-install tsx scripts/test-ceremony-inventory-flow.ts
 
+      # ROUND 8 L1-01. The ceremony that actually initialises mainnet must send the manifest's
+      # pre-mint destination and its first guardian. It encodes with the real IDL coder and reads the
+      # bytes, because the omission it pins was invisible to the type system: Anchor encodes an
+      # absent Pubkey as 32 zero bytes.
+      - name: L1-01 the mainnet initialiser sends the manifest's bindings (BLOCKING)
+        run: npx --no-install tsx scripts/test-t1-initialize-args.ts
+
+      # ROUND 8 L1-04. Every refusal between a deployed program and a live one, driven through the
+      # same decision function ceremony-step8 calls before it emits the unpause.
+      - name: L1-04 launch-open readiness refuses every unready state (BLOCKING)
+        run: npx --no-install tsx scripts/test-launch-open-readiness.ts
+
       - name: Public app (BLOCKING - typecheck, tests, production build)
         working-directory: apps/public
         run: |

@@ -468,6 +468,10 @@ pub struct Fixture {
     /// ROUND 8 T8-03. Bound at `initialize` and never settable afterwards, so the fixture has to
     /// carry it: tests that assert on the pre-mint destination read this rather than a default.
     pub inventory_wallet: Pubkey,
+    /// ROUND 8 L1-02 / the P1 custody finding. The KEY behind `inventory_wallet`, because the
+    /// conditional P1 is precisely that its holder can sign `redeem_silv` itself, with no admin
+    /// instruction and no timelock. A test that could not sign as this key could not demonstrate it.
+    pub inventory: Keypair,
 }
 
 impl Fixture {
@@ -492,7 +496,8 @@ impl Fixture {
         let holder2 = Keypair::new();
         let stranger = Keypair::new();
         let guardian = Keypair::new();
-        let inventory_wallet = Pubkey::new_unique();
+        let inventory = Keypair::new();
+        let inventory_wallet = inventory.pubkey();
         for k in [
             &deployer,
             &admin,
@@ -501,6 +506,7 @@ impl Fixture {
             &holder2,
             &stranger,
             &guardian,
+            &inventory,
         ] {
             svm.airdrop(&k.pubkey(), 100_000_000_000).unwrap();
         }
@@ -582,6 +588,7 @@ impl Fixture {
             usdc_mint,
             silv_mint,
             inventory_wallet,
+            inventory,
         };
         f.initialize();
         f
@@ -612,6 +619,10 @@ impl Fixture {
         // ROUND 8 T8-03: the pre-mint destination is now bound ATOMICALLY here. There is no
         // instruction that can set it afterwards, only the 24h-timelocked change.
         args.extend_from_slice(self.inventory_wallet.as_ref());
+        // ROUND 8 L1-02: the FIRST guardian, appointed in this same transaction. The fixture
+        // therefore starts with guardian_count = 1 and an active brake, which is the state a real
+        // deployment is in the instant `initialize` returns.
+        args.extend_from_slice(self.guardian.pubkey().as_ref());
 
         let usdc_treasury = ata(
             &self.usdc_mint,
@@ -632,6 +643,7 @@ impl Fixture {
                 AccountMeta::new_readonly(pk(CLASSIC_TOKEN_PROGRAM), false),
                 AccountMeta::new_readonly(pk(TOKEN_2022_PROGRAM), false),
                 AccountMeta::new_readonly(pk(ASSOCIATED_TOKEN_PROGRAM), false),
+                AccountMeta::new(guardian_pda(&self.guardian.pubkey()), false),
                 AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
             ],
             data: ix_data("initialize", &args),
@@ -796,24 +808,27 @@ impl Fixture {
 
     // ------------------------------------------------------------ guardian and unpause
 
-    /// `add_guardian`, signed by `signer` in BOTH the admin and the payer slot. Every caller here
-    /// appoints from the admin key, and the instruction wants that key funded anyway.
-    pub fn add_guardian_as(&mut self, signer: &Keypair, guardian: Pubkey) -> TxOutcome {
+    /// `add_guardian`, signed by `signer` in BOTH the admin and the payer slot, AND by the appointee.
+    ///
+    /// ROUND 8 L1-02: the named key signs its own appointment, so the set cannot grow without the
+    /// consent of the key being added. That is why this takes a Keypair and not a Pubkey.
+    pub fn add_guardian_as(&mut self, signer: &Keypair, guardian: &Keypair) -> TxOutcome {
         let ix = Instruction {
             program_id: program_id(),
             accounts: vec![
                 AccountMeta::new(config_pda(), false),
                 AccountMeta::new_readonly(signer.pubkey(), true),
                 AccountMeta::new(signer.pubkey(), true),
-                AccountMeta::new(guardian_pda(&guardian), false),
+                AccountMeta::new_readonly(guardian.pubkey(), true),
+                AccountMeta::new(guardian_pda(&guardian.pubkey()), false),
                 AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
             ],
-            data: ix_data("add_guardian", guardian.as_ref()),
+            data: ix_data("add_guardian", guardian.pubkey().as_ref()),
         };
-        self.send(&[ix], &[signer])
+        self.send(&[ix], &[signer, guardian])
     }
 
-    pub fn add_guardian(&mut self, guardian: Pubkey) -> TxOutcome {
+    pub fn add_guardian(&mut self, guardian: &Keypair) -> TxOutcome {
         let admin = self.admin.insecure_clone();
         self.add_guardian_as(&admin, guardian)
     }
@@ -834,14 +849,14 @@ impl Fixture {
     /// `signer` is the CURRENT admin: `add_guardian` is `has_one = admin`, and `self.admin` goes
     /// stale the moment a test moves admin-ship.
     pub fn ensure_unpause_guardian_as(&mut self, signer: &Keypair) -> Pubkey {
-        let g = self.guardian.pubkey();
-        if !self.guardian_registered(&g) {
+        let g = self.guardian.insecure_clone();
+        if !self.guardian_registered(&g.pubkey()) {
             expect_ok(
-                self.add_guardian_as(signer, g),
+                self.add_guardian_as(signer, &g),
                 "ensure_unpause_guardian: add_guardian",
             );
         }
-        g
+        g.pubkey()
     }
 
     pub fn ensure_unpause_guardian(&mut self) -> Pubkey {

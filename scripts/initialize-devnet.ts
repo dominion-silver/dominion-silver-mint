@@ -316,6 +316,15 @@ async function main() {
 
   console.log("\n== Step 2: Call program.initialize() (Lazer args) ==");
 
+  // ROUND 8 L1-02: a distinct key for the first guardian. DOMINION_DEVNET_GUARDIAN when the operator
+  // has one to keep; otherwise a fresh one, whose private key is discarded. That is acceptable on
+  // devnet, where nothing needs to be paused, and it is exactly what must NOT happen on mainnet:
+  // there the guardian is a real independent holder, read from the manifest by T1.
+  const devnetGuardian = process.env.DOMINION_DEVNET_GUARDIAN
+    ? new PublicKey(process.env.DOMINION_DEVNET_GUARDIAN)
+    : Keypair.generate().publicKey;
+  console.log("  first guardian (devnet stand-in):", devnetGuardian.toBase58());
+
   // Lazer InitializeArgs: one numeric pyth_lazer_feed_id replaces the Core feed id plus
   // receiver account. Every economic param below is admin-tunable after deploy.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -333,6 +342,16 @@ async function main() {
       pythLazerFeedId: 3154,
       adminTimelockSeconds: 24 * 3600, // 24h
       maxGuardianCount: 5,
+      // ROUND 8 L1-01. REQUIRED, and the omission was invisible: Anchor's client coder encodes an
+      // absent Pubkey as 32 zero bytes, so the transaction is well-formed and the program reverts
+      // InventoryWalletNotSet. On devnet the admin stands in for the inventory wallet, exactly as it
+      // stands in for every other ceremony authority here.
+      inventoryWallet: admin,
+      // ROUND 8 L1-02. The first guardian, appointed by initialize. On devnet a throwaway key stands
+      // in, exactly as the admin stands in for every other ceremony authority here. It must NOT be
+      // the admin: the program refuses that, because a guardian slot held by the admin is a brake
+      // wired to the same lever.
+      guardian: devnetGuardian,
     })
     .accounts({
       deployer: deployer.publicKey,
@@ -349,6 +368,11 @@ async function main() {
       classicTokenProgram: TOKEN_PROGRAM_ID,
       token2022Program: TOKEN_2022_PROGRAM_ID,
       associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
+      // ROUND 8 L1-02: initialize creates the first GuardianAccount.
+      firstGuardian: PublicKey.findProgramAddressSync(
+        [Buffer.from("guardian"), devnetGuardian.toBuffer()],
+        PROGRAM_ID,
+      )[0],
       systemProgram: SystemProgram.programId,
     })
     .instruction();

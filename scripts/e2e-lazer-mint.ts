@@ -20,6 +20,7 @@ import { assembleLazerOracleIxs, ED25519_IX_INDEX } from "../apps/public/src/lib
 import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 import { requireSanctionedCluster, assertReversible, intentFromEnv } from "./_guard";
 import { resolveCluster, describeCluster } from "./_cluster";
+import { requireEligibleGuardian } from "./_guardian";
 
 // RPC, program id, USDC mint and Lazer treasury are RESOLVED, never hardcoded: this script sends, so
 // a devnet literal would sign devnet transactions with a mainnet key while looking like a mainnet test.
@@ -121,7 +122,12 @@ async function main() {
 
   // 2. Unpause if needed.
   if (cfg.paused) {
-    const sig = await (program.methods as any).unpause().accounts({ config: configPda, admin: user }).rpc();
+    // ROUND 8 L1-03: the mandatory guardian account, discovered rather than derived.
+    const g = await requireEligibleGuardian(conn, PROGRAM_ID, user);
+    const sig = await (program.methods as any)
+      .unpause()
+      .accounts({ config: configPda, admin: user, guardian: g.account })
+      .rpc();
     console.log("unpaused:", sig);
   }
 

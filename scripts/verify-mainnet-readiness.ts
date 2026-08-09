@@ -344,12 +344,14 @@ async function main() {
   atStep(
     "runbook steps 7-9",
     "2. pre-mint freely to the inventory wallet, seed a Sunrise pool",
-    "admin_premint runs at step 7; the pool is seeded off-chain afterwards.",
+    "admin_premint runs at step 9, AFTER the unpause (it requires !paused); the pool is seeded off-chain afterwards.",
     9,
   );
-  byHand(
+  ok(
     "3. public mint with no KYC",
-    "works, but opening it costs a 24h timelock (propose at step 7, execute at step 10)",
+    "ROUND 8: OPEN from initialize, so there is nothing to propose and nothing to execute. Runbook " +
+      "steps 7 and 10 are retired. What holds the launch is the PAUSE, and `unpause` refuses to run " +
+      "without an ACTIVE guardian distinct from the admin, appointed by initialize itself",
   );
   ok(
     "3b. enable KYC LATER",
@@ -392,20 +394,25 @@ async function main() {
       ok("3c. the MAINNET fee vault exists", vault.toBase58());
     } else {
       atStep(
-        "9b, BEFORE step 10",
+        "9b, BEFORE step 8's UNPAUSE",
         "3c. the MAINNET fee vault does not exist yet",
-        `${vault.toBase58()} -- run scripts/create-fee-vault.ts AFTER the deploy and BEFORE opening ` +
-          `mint or redeem, or every mint and every redeem reverts AccountNotInitialized`,
-        // Due at 9b: it MUST exist before step 10 opens the public mint.
-        9,
+        `${vault.toBase58()} -- run scripts/create-fee-vault.ts AFTER the deploy and BEFORE the ` +
+          `unpause, or every mint and every redeem reverts AccountNotInitialized`,
+        // ROUND 8 L1-04. Due at 8, NOT 9. The deadline moved with the posture: the unpause is now
+        // the go-live, because initialize leaves mint and redeem open, so a vault that is merely
+        // "due at 9b" is reported on time by this gate and missing in production. `dueStep < STAGE`
+        // means 8 here makes `--stage=8` report it OVERDUE, which is the whole point of the flag.
+        8,
       );
     }
   }
 
   ok(
-    "4. redeem: closed now, open later WITHOUT an upgrade",
-    "set_redemptions_enabled still refuses true, but the 24h-timelocked SetRedeemLimits action " +
-      "now carries the switch (propose_set_redeem_limits with redemptionsEnabled=true). " +
+    "4. redeem: OPEN at launch (round 8), and reopening after a close needs no upgrade",
+    "ROUND 8: redemptions_enabled is true from initialize. set_redemptions_enabled still refuses " +
+      "true, so the asymmetry is unchanged: closing is instant on both lanes and REOPENING rides " +
+      "the 24h-timelocked SetRedeemLimits action (propose_set_redeem_limits with " +
+      "redemptionsEnabled=true). The path did not change; the starting point did. " +
       // ROUND 5 P1-06. This used to list "treasury_min_float_usdc must be non-zero" as a
       // precondition, which contradicts D5. Two sources of truth gave incompatible orders: following
       // the decision made this gate report a blocker, following the gate annulled the decision. The

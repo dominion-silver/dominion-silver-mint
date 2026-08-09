@@ -49,6 +49,7 @@ import path from "path";
 import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 import { requireSanctionedCluster } from "./_guard";
 import { resolveCluster, describeCluster } from "./_cluster";
+import { requireEligibleGuardian } from "./_guardian";
 
 // This script sends, so the cluster must come from the environment and pass the one guard.
 // See the note on CLUSTER in scripts/initialize-devnet.ts.
@@ -332,9 +333,12 @@ async function main() {
     })
     .rpc();
   ok("paused == true", (await cfgAcc()).paused === true);
+  // ROUND 8 L1-03: `unpause` now demands an ACTIVE guardian distinct from the admin, so this leg of
+  // the pause/unpause pair cannot be a mirror image of the pause above any more.
+  const unpauseGuardian = await requireEligibleGuardian(c, PROGRAM_ID, admin.publicKey);
   await m
     .unpause()
-    .accounts({ config: configPda, admin: admin.publicKey })
+    .accounts({ config: configPda, admin: admin.publicKey, guardian: unpauseGuardian.account })
     .rpc();
   ok("unpaused (paused == false)", (await cfgAcc()).paused === false);
 

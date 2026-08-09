@@ -57,10 +57,49 @@ has_string() {
   rm -f "$tmp"; return 1
 }
 
+# ROUND 8. A BPF STACK OVERFLOW IS A BUILD FAILURE HERE, because it is not one for cargo.
+#
+# `cargo build-sbf` prints, on its own line and prefixed "Error:",
+#   Function ...::try_accounts Stack offset of 4112 exceeded max offset of 4096 by 16 bytes
+# and then EXITS 0 and emits a .so. The overflow is real: adding one account to `initialize` silently
+# zeroed 16 bytes of a neighbouring account's data, so a correct on-chain check rejected a correct
+# input and the failure surfaced as SilvMintAuthorityMismatch, three layers from its cause. The
+# number of corrupted bytes was exactly the number in the message.
+#
+# So the message is treated as fatal. `strict_build` keeps the output, greps it, and refuses to hand
+# a binary with undefined behaviour to a suite whose whole job is to be believed. Boxing the large
+# `Account<'info, T>` payloads is the fix; this is what makes forgetting it loud.
+strict_build() {
+  local log
+  if ! log="$(mktemp)"; then
+    echo "ERROR: mktemp failed, refusing to build unmeasured" >&2; exit 1
+  fi
+  set +e
+  cargo build-sbf "$@" > "$log" 2>&1
+  local rc=$?
+  set -e
+  if [[ "$rc" -ne 0 ]]; then
+    cat "$log" >&2
+    rm -f "$log"
+    echo "ERROR: cargo build-sbf failed ($*)" >&2
+    exit "$rc"
+  fi
+  if grep -q "exceeded max offset" "$log"; then
+    grep -n "exceeded max offset" "$log" >&2
+    rm -f "$log"
+    echo >&2
+    echo "ERROR: the build overflowed the 4KB BPF stack frame. cargo exited 0 and produced a .so" >&2
+    echo "       anyway, and the excess bytes silently corrupt whatever sits next to the frame." >&2
+    echo "       Box the large Account<'info, T> payloads in the offending Accounts struct." >&2
+    exit 1
+  fi
+  rm -f "$log"
+}
+
 if [[ "$DO_BUILD" -eq 1 ]]; then
   echo "[1/3] build dominion with the DEFAULT feature set -> $SO"
   # `anchor build` is broken in this repo; --locked is mandatory.
-  cargo build-sbf --manifest-path "$MANIFEST" -- --locked
+  strict_build --manifest-path "$MANIFEST" -- --locked
 else
   echo "[1/3] build SKIPPED (--no-build): testing whatever artifact is already at $SO"
 fi
@@ -71,7 +110,7 @@ fi
 # never target/deploy, for the same reason tools/lazer-harness/run.sh does it: nothing that is not the
 # release artifact may land on the path `solana program deploy` reads.
 echo "      + mock-lazer -> target/harness (the anti-replay persistence tests need a Lazer that runs)"
-cargo build-sbf --manifest-path tools/mock-lazer/Cargo.toml --sbf-out-dir target/harness
+strict_build --manifest-path tools/mock-lazer/Cargo.toml --sbf-out-dir target/harness
 # A missing mock is a hard failure and not a skip. The tests that need it would otherwise panic on a
 # read, or worse, a future refactor could make them skip silently, which is the exact false-green
 # class this harness exists to close.
@@ -127,10 +166,12 @@ rm -f "$tmp_out"
 # number, so this runner exited 1 in TWO blocking jobs (gate, reproducible-build). The commit
 # message quoted 154, measured with `cargo test` directly, which is precisely the path that does
 # not go through the check whose error text says to update this in the SAME commit.
-# ROUND 8 lot 1. 164 -> 166. Two `option_a_` scenarios and `initialize_refuses_a_zero_inventory_wallet`
-# and `a_closed_redeem_switch_can_only_be_reopened_through_the_24h_timelock` were added; the two tests
-# of the deleted `set_inventory_wallet` first-binding were removed with the instruction.
-EXPECTED_STATE_TESTS=166
+# ROUND 8 lot 1. 164 -> 166: two `option_a_` scenarios plus the zero-inventory and timelocked-reopen
+# tests, minus the two tests of the deleted `set_inventory_wallet` first binding.
+# ROUND 8 lot 1 FIX PACK. 166 -> 178: tools/state-harness/tests/launch_open_posture.rs, the twelve
+# scenarios that qualify the open posture (Codex L1-04). They were the gap that let the posture ship
+# with no test of the posture.
+EXPECTED_STATE_TESTS=178
 if [[ "$executed" -ne 0 && "$executed" -ne "$EXPECTED_STATE_TESTS" && ${#ARGS[@]} -eq 0 ]]; then
   echo >&2
   echo "FAIL: $executed test(s) executes, $EXPECTED_STATE_TESTS attendus (sans filtre)." >&2

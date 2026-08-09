@@ -187,7 +187,7 @@ pub enum DominionError {
     // Launch spec 2026-07 (pre-mint + hard cap, KYC/PoR deferred). APPEND ONLY.
     #[msg("Supply cap can only be lowered instantly; raising it is not available at launch")]
     SupplyCapRaiseBlocked,
-    #[msg("Public direct mint is disabled (closed at launch; opens with KYC in Phase 1)")]
+    #[msg("Public direct mint is disabled. ROUND 8: it ships OPEN and this fires only after an emergency close; reopening is 24h-timelocked")]
     PublicMintDisabled,
     /// ROUND 8 T8-03: `set_inventory_wallet` no longer exists, so this is now raised by `initialize`
     /// (which refuses to bind the default) and by the readers that refuse to act on an unset field.
@@ -198,7 +198,7 @@ pub enum DominionError {
     #[msg("Pre-mint destination is not owned by the configured inventory wallet")]
     InvalidInventoryDestination,
     #[msg(
-        "Enabling redemptions is blocked at launch; it opens with the Phase 1 KYC/redeem upgrade"
+        "Enabling redemptions on this lane is blocked. ROUND 8: redeem ships OPEN, and REOPENING after a close rides propose/execute_set_redeem_limits and the 24h timelock, not an upgrade"
     )]
     RedemptionsEnableBlocked,
     #[msg("SILV mint freeze_authority does not match config.freeze_authority_expected")]

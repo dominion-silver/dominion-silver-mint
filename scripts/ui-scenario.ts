@@ -36,6 +36,7 @@ import * as os from "os";
 import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 import { requireSanctionedCluster } from "./_guard";
 import { resolveCluster, describeCluster } from "./_cluster";
+import { requireEligibleGuardian } from "./_guardian";
 
 // This script sends via conn.sendRawTransaction, so it resolves its cluster from the environment and
 // passes through the one guard. verify-cluster-resolution.ts asserts that it still does.
@@ -185,10 +186,13 @@ async function main() {
       [admin],
     );
   } else if (cmd === "unpause") {
+    // ROUND 8 L1-03: `unpause` takes a mandatory guardian account. Discovered, because its PDA seed
+    // is the guardian's own key and nothing on chain enumerates them.
+    const g = await requireEligibleGuardian(conn, PID, admin.publicKey);
     await send(
       await m
         .unpause()
-        .accounts({ config: CFG, admin: admin.publicKey })
+        .accounts({ config: CFG, admin: admin.publicKey, guardian: g.account })
         .instruction(),
       [admin],
     );
@@ -220,14 +224,16 @@ async function main() {
         await m.setRedemptionsEnabled(true).accounts(A).instruction(),
         [admin],
       );
-    if (c.paused)
+    if (c.paused) {
+      const g = await requireEligibleGuardian(conn, PID, admin.publicKey);
       await send(
         await m
           .unpause()
-          .accounts({ config: CFG, admin: admin.publicKey })
+          .accounts({ config: CFG, admin: admin.publicKey, guardian: g.account })
           .instruction(),
         [admin],
       );
+    }
   } else {
     console.error("unknown cmd:", cmd);
     process.exit(1);

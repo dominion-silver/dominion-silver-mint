@@ -76,9 +76,13 @@ async function main() {
   // refuses the admin itself, so the guardian is a separate key: DOMINION_E2E_GUARDIAN when the
   // operator has one, otherwise a throwaway that only ever occupies the account slot (a guardian
   // never signs anything here; unpause only READS the account).
-  const guardianKey = process.env.DOMINION_E2E_GUARDIAN
-    ? new PublicKey(process.env.DOMINION_E2E_GUARDIAN)
-    : Keypair.generate().publicKey;
+  // ROUND 8 L1-02: the appointee CO-SIGNS its own appointment, so this needs the KEYPAIR and not just
+  // a pubkey. DOMINION_E2E_GUARDIAN_KEYPAIR points at a keypair file when the operator has one to
+  // keep; otherwise a fresh one, held for the length of this run.
+  const guardianKp = process.env.DOMINION_E2E_GUARDIAN_KEYPAIR
+    ? loadKp(process.env.DOMINION_E2E_GUARDIAN_KEYPAIR)
+    : Keypair.generate();
+  const guardianKey = guardianKp.publicKey;
   const [guardianAcct] = PublicKey.findProgramAddressSync(
     [Buffer.from("guardian"), guardianKey.toBuffer()],
     PROGRAM_ID,
@@ -87,7 +91,15 @@ async function main() {
     assertReversible("add_guardian", INTENT);
     await program.methods
       .addGuardian(guardianKey)
-      .accounts({ config: configPda, admin, payer: admin, guardianAccount: guardianAcct, systemProgram: anchor.web3.SystemProgram.programId })
+      .accounts({
+        config: configPda,
+        admin,
+        payer: admin,
+        guardianSigner: guardianKey,
+        guardianAccount: guardianAcct,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .signers([guardianKp])
       .rpc();
   }
   await program.methods
@@ -255,13 +267,16 @@ async function main() {
   // is the recovery path an operator would actually use for a key rotation: propose, observe that
   // nothing moved, watch the early execute be refused, and cancel.
   //
-  // HONEST LIMIT, stated rather than papered over: `admin_timelock_seconds` has a hard floor of
-  // 86400 in the program, so a single run of a live-cluster script CANNOT reach the post-delay
-  // execute. This run proves everything before the wait and then CANCELS, which also leaves the live
-  // devnet config exactly as it found it. The matured execute and the read-back of B are proven in
-  // tools/state-harness/tests/inventory_wallet.rs, which warps the clock:
-  // `a_change_takes_a_proposal_the_full_delay_and_an_execute`. To exercise it here instead, run with
-  // DOMINION_E2E_INVENTORY_KEEP=1 and come back after 24h with the nonce this step prints.
+  // HONEST LIMIT: `admin_timelock_seconds` has a hard floor of 86400, so a single run cannot reach
+  // the post-delay execute. This run proves everything before the wait and then CANCELS, leaving the
+  // live config exactly as it found it.
+  //
+  // ROUND 8 L1-05. The matured execute and the read-back of B are NOT claimed here. They belong to
+  // `scripts/e2e-inventory-change-devnet.ts`, which persists {cluster, program, admin, nonce,
+  // timelock PDA, A, B, proposed_at}, refuses to resume against anything that drifted, and executes
+  // on a second run a real day later. An earlier version of this file offered
+  // DOMINION_E2E_INVENTORY_KEEP=1 and called it a resume path; it only left the proposal armed and
+  // printed a command, and a second run started a fresh proposal. That claim was withdrawn.
   const targetB = process.env.DOMINION_E2E_INVENTORY_B
     ? new PublicKey(process.env.DOMINION_E2E_INVENTORY_B)
     : Keypair.generate().publicKey;
@@ -299,8 +314,10 @@ async function main() {
 
   if (process.env.DOMINION_E2E_INVENTORY_KEEP === "1") {
     console.log(
-      `\n  LEFT ARMED on purpose: nonce ${invNonce.toString()} -> ${targetB.toBase58()}.\n` +
-        `  After 24h: executeSetInventoryWallet(${invNonce.toString()}) with timelock ${invTlPda.toBase58()}.`,
+      `\n  LEFT ARMED: nonce ${invNonce.toString()} -> ${targetB.toBase58()}.\n` +
+        `  This script cannot resume it. Use the two-phase runner for the full A -> B:\n` +
+        `    npx tsx scripts/e2e-inventory-change-devnet.ts --propose --to <B>\n` +
+        `    npx tsx scripts/e2e-inventory-change-devnet.ts --execute   # >= 24h later`,
     );
   } else {
     await program.methods

@@ -39,6 +39,9 @@ import { resolveCluster, describeCluster } from "./_cluster";
 import { requireSanctionedCluster, assertReversible, intentFromEnv } from "./_guard";
 import { PROGRAM_ID } from "./_program-id";
 import { modeFromArgv, assertSendable, emit, sendAll, Checks, type CeremonyAction } from "./_ceremony-emit";
+// ROUND 8 L1-04: the go-live preconditions live in ONE decision function, shared with
+// scripts/test-launch-open-readiness.ts, so the rule the test exercises is the rule that gates here.
+import { decideLaunchReadiness, type LaunchState } from "./_launch-readiness";
 import idl from "../target/idl/dominion_silver_mint.json";
 
 export function ceremony(): { guardians: string[]; inventoryWallet: string } {
@@ -76,6 +79,9 @@ export interface Step8Input {
   /** Whether the premium fee vault ATA exists. ROUND 8 made this a PRECONDITION of the unpause;
    *  see `FeeVaultMissing` for why the old runbook order no longer holds. */
   feeVaultExists: boolean;
+  /** ROUND 8 L1-04. The rest of the go-live preconditions, gathered by the caller. Omitted only by
+   *  callers that are not about to unpause; when present, `decideLaunchReadiness` gates the unpause. */
+  readiness?: LaunchState;
 }
 
 /** Thrown when the chain's pre-mint destination is not the one this ceremony was authorised for. Its
@@ -132,6 +138,17 @@ export async function buildStep8Actions(i: Step8Input): Promise<CeremonyAction[]
   // Only when the unpause would actually be SENT. On a resumed ceremony the protocol is already
   // live, so the vault question is settled and re-asking it would block a re-run that emits nothing.
   if (i.paused && !i.feeVaultExists) throw new FeeVaultMissing();
+  // ROUND 8 L1-04. The full go-live gate, same function the readiness test drives. The fee vault
+  // above is one of its blockers and is kept as its own class because it has its own repair.
+  if (i.paused && i.readiness) {
+    const d = decideLaunchReadiness(i.readiness);
+    if (!d.ready) {
+      throw new Error(
+        "REFUSING step 8: the unpause is the go-live and these preconditions do not hold:\n" +
+          d.blockers.map((b) => `  - [${b.id}] ${b.why}`).join("\n"),
+      );
+    }
+  }
 
   const M = i.program.methods as any;
   const actions: CeremonyAction[] = [];
@@ -144,21 +161,32 @@ export async function buildStep8Actions(i: Step8Input): Promise<CeremonyAction[]
       label: `add_guardian(${g})`,
       intent:
         "Registers a guardian: pause, cancel a timelocked action, cancel an admin transfer. Instant, " +
-        "and add_guardian refuses config.admin itself. ROUND 8: unpause below cannot land until at " +
-        "least one of these has.",
+        "and add_guardian refuses config.admin itself. ROUND 8: the FIRST guardian was already " +
+        "appointed by initialize, so these are the additional ones, and each must be CO-SIGNED by " +
+        "the key being appointed.",
       alreadyDone: exists,
       // P2-04: "the PDA exists" is now stated as what it is. The set comparison in verify() is what
       // actually decides, because presence of the right ones does not exclude presence of a wrong one.
       observed: exists ? `guardian PDA ${pda.toBase58()} already exists` : undefined,
+      // ROUND 8 L1-02: the appointee CO-SIGNS. The emitted instruction therefore carries two
+      // independent signers, and Ops alone cannot execute it. That is deliberate: appointing a
+      // guardian now requires the participation of the key being appointed.
       ix: await M.addGuardian(pk)
-        .accounts({ config: i.configPda, admin: i.admin, payer: i.admin, guardianAccount: pda })
+        .accounts({
+          config: i.configPda,
+          admin: i.admin,
+          payer: i.admin,
+          guardianSigner: pk,
+          guardianAccount: pda,
+        })
         .instruction(),
     });
   }
 
-  // ROUND 8: `unpause` carries a guardian account and the handler refuses one whose key is the current
-  // admin. `add_guardian` already refuses appointing the admin, so any member of the expected set is a
-  // valid presenter; the first is chosen for determinism.
+  // ROUND 8: `unpause` carries a guardian account and the handler refuses one whose key is the
+  // current admin. The FIRST entry of the expected set is the one `initialize` appointed, so it is
+  // already registered and is the safe presenter: an additional guardian whose add_guardian has not
+  // been executed yet would make the unpause fail on a missing account.
   const presenter = new PublicKey(i.guardians[0]);
   actions.push({
     label: "unpause()",
@@ -259,6 +287,33 @@ async function verify(
   const ck = new Checks();
   console.log("\n  reading the chain back:");
   ck.eq("paused", c.paused, false);
+
+  // ROUND 8 L1-04. THE FEE VAULT IS RE-READ HERE, not only refused at emit time.
+  //
+  // The emit path refuses to build an unpause without it, which is useless against the case that
+  // matters: an unpause constructed somewhere else (the panel, a hand-built transaction, a resumed
+  // ceremony) takes the protocol live, and then the verification this runbook tells the operator to
+  // run reports success while every mint and every redeem reverts AccountNotInitialized. A check
+  // that only guards one door is not a check on the state.
+  const feeVaultAta = getAssociatedTokenAddressSync(
+    new PublicKey(c.usdcMint),
+    PublicKey.findProgramAddressSync([Buffer.from("fee_vault")], PROGRAM_ID)[0],
+    true,
+    TOKEN_PROGRAM_ID,
+  );
+  // An RPC failure is NOT "the vault is missing": it is "unknown", and the reassuring answer must
+  // never be the default. Reported as a failed check either way, with the reason.
+  let vaultExists: boolean | null = null;
+  try {
+    vaultExists = (await conn.getAccountInfo(feeVaultAta)) !== null;
+  } catch (e) {
+    console.log(`  FAIL  fee vault existence UNKNOWN: ${String(e).slice(0, 90)}`);
+  }
+  ck.eq(
+    `the premium fee vault exists (${feeVaultAta.toBase58()})`,
+    vaultExists === true,
+    true,
+  );
   ck.eq("inventory_wallet", c.inventoryWallet.toBase58(), inventoryWallet);
 
   // ROUND 5 P2-04. The EXACT set, not a count and not a floor. `guardian_count >= expected.length`

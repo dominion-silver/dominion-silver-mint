@@ -32,6 +32,9 @@ import {
   treasuryPda,
 } from "./pdas";
 import { roleVaultPda } from "./squads";
+// ROUND 8 L1-03: the eligibility rule for a guardian lives in ONE place (anchor-client's `active`),
+// so the unpause builder reuses it rather than restating `cooldown_until == 0 && key != admin`.
+import { fetchGuardians } from "./anchor-client";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -408,12 +411,23 @@ export async function depositUsdc(
 }
 
 // Guardians (admin-managed). `guardian_account` is auto-derived from the arg.
+/**
+ * ROUND 8 L1-02. THE APPOINTEE CO-SIGNS, so this instruction now has TWO independent signers and the
+ * Squads proposal cannot be executed by Ops alone.
+ *
+ * That is the point rather than a side effect. `add_guardian` used to need only the admin, which let
+ * a compromised Ops generate its own keys, appoint them, and satisfy the independence check
+ * `unpause` performs with a brake it controlled entirely. The panel surfaces the requirement instead
+ * of hiding it: the guardian key must sign the resulting transaction, so appointing somebody now
+ * requires their participation.
+ */
 export async function addGuardian(c: BuildCtx, g: PublicKey): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .addGuardian(g)
     .accountsPartial({
       admin: c.admin ?? adminAuthority(),
       payer: c.admin ?? adminAuthority(),
+      guardianSigner: g,
       systemProgram: SystemProgram.programId,
     })
     .instruction();
@@ -474,10 +488,47 @@ export async function pauseAsGuardian(
     .instruction();
   return one(ix);
 }
-export async function unpause(c: BuildCtx): Ix {
+/**
+ * ROUND 8 L1-03. `unpause` takes a MANDATORY `guardian` account now, and this builder did not send
+ * it. Anchor cannot derive it: the PDA seed is the guardian's own key, which the config does not
+ * hold, so `.accountsPartial` failed with `Unresolved accounts: guardian` and the card threw before
+ * producing a single instruction. The resume path after an emergency pause was dead.
+ *
+ * The account is DISCOVERED rather than typed. An operator ending an incident should not have to
+ * remember which guardian key is eligible, and the eligibility rule is not obvious: the program
+ * demands `cooldown_until == 0` AND a key different from the current admin. `fetchGuardians` already
+ * computes exactly that as `active`, for the roster panel, so this reuses it instead of restating the
+ * rule and drifting from it.
+ *
+ * Pass `guardian` explicitly to present a specific one; the caller is then responsible for its
+ * eligibility, and the program is the one that decides.
+ */
+export async function unpause(c: BuildCtx, guardian?: PublicKey): Ix {
+  let present = guardian;
+  if (!present) {
+    const admin = c.admin ?? adminAuthority();
+    const onchainAdmin = await fetchOnchainAdmin(c.connection).catch(() => admin);
+    const eligible = (await fetchGuardians(c.connection, onchainAdmin)).filter(
+      (g) => g.active,
+    );
+    if (eligible.length === 0) {
+      // The same refusal the program would give, raised where it can still be read. Without this the
+      // operator gets `Unresolved accounts: guardian`, which names a client-side symbol and says
+      // nothing about what to do.
+      throw new Error(
+        "unpause needs an ACTIVE guardian whose key is not the current admin, and none is " +
+          "registered. Add one with 'Add guardian' first. The protocol cannot leave pause until an " +
+          "independent party can pause it again.",
+      );
+    }
+    present = eligible[0].guardian;
+  }
   const ix = await (getProgram(c.connection).methods as any)
     .unpause()
-    .accountsPartial({ admin: c.admin ?? adminAuthority() })
+    .accountsPartial({
+      admin: c.admin ?? adminAuthority(),
+      guardian: guardianPda(present),
+    })
     .instruction();
   return one(ix);
 }

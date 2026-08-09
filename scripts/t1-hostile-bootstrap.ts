@@ -45,14 +45,28 @@ import {
 // instead of falling back to the devnet one (audit S-01, P0).
 const CLUSTER: ClusterContext = resolveCluster();
 const RPC = CLUSTER.rpc;
-// Module scope, not main(): the `new PublicKey` below runs first and would crash the import instead.
-if (!process.env.DOMINION_PROGRAM_ID) {
+// ROUND 8 L1-01. The demand for DOMINION_PROGRAM_ID is now conditional on this file being the
+// ENTRYPOINT, and `main()` at the bottom is guarded the same way.
+//
+// It used to be unconditional at module scope, with a comment explaining that the `new PublicKey`
+// below would otherwise crash the import. That was right about the crash and wrong about the fix:
+// the ceremony's argument builder lives in this file, so its acceptance test has to import it, and a
+// module that refuses to load cannot be tested. `test-upgrade-gate.ts` needed the same guard on
+// `upgrade-program.ts` for the same reason, and the classification gate is what found it there.
+//
+// The loud failure is KEPT for anyone who runs T1: a placeholder id that silently pointed the hostile
+// cases at the wrong program would be far worse than a crash.
+const IS_ENTRYPOINT = require.main === module;
+if (IS_ENTRYPOINT && !process.env.DOMINION_PROGRAM_ID) {
   throw new Error(
     "set DOMINION_PROGRAM_ID to the freshly deployed program id.\n" +
       "T1 must run against a deployed but NOT YET INITIALIZED program.",
   );
 }
-const PROGRAM_ID = new PublicKey(process.env.DOMINION_PROGRAM_ID);
+// On the import path nothing reads this: every use is inside `main()` or the cases it drives.
+const PROGRAM_ID = process.env.DOMINION_PROGRAM_ID
+  ? new PublicKey(process.env.DOMINION_PROGRAM_ID)
+  : PublicKey.default;
 const BPF_LOADER = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
 
 let pass = 0;
@@ -68,6 +82,132 @@ function loadKp(p: string): Keypair {
     Uint8Array.from(JSON.parse(fs.readFileSync(p, "utf8"))),
   );
 }
+/**
+ * ROUND 8 L1-01. The ceremony's `InitializeArgs`, built from config/mainnet-authorities.json.
+ *
+ * EXTRACTED AND EXPORTED because this is the function that actually initialises mainnet, and it was
+ * silently wrong. `inventory_wallet` became a required argument of `initialize` in round 8 and this
+ * builder never read it. Anchor's client coder does not refuse a missing field: it encodes the
+ * absent Pubkey as 32 zero bytes, so the transaction is well-formed, reaches the program, and reverts
+ * InventoryWalletNotSet AFTER the ceremony has already created the real Token-2022 mint. The runbook
+ * says a green T1 IS the mainnet initialisation and says not to edit this script, so the operator had
+ * no way out.
+ *
+ * It is a pure function of the manifest and four keys so that
+ * `scripts/test-t1-initialize-args.ts` can call THIS code, encode it with the real IDL coder and read
+ * the bytes back. A test that rebuilt the arg list itself would have agreed with the defect.
+ *
+ * `devnetFallback` is the local dev keypair: on devnet and localnet it stands in for every ceremony
+ * authority, which is what makes T1 runnable there at all. On any other cluster a missing authority
+ * throws rather than falling back.
+ */
+export interface T1InitializeArgs {
+  admin: PublicKey;
+  upgradeAuthorityInfo: PublicKey;
+  permanentDelegateExpected: PublicKey;
+  freezeAuthorityExpected: PublicKey;
+  complianceMode: boolean;
+  premiumBpsMint: number;
+  premiumBpsRedeem: number;
+  adminTimelockSeconds: number;
+  maxGuardianCount: number;
+  pythLazerFeedId: number;
+  inventoryWallet: PublicKey;
+  guardian: PublicKey;
+}
+
+export function buildT1InitializeArgs(
+  manifest: Record<string, unknown>,
+  cluster: string,
+  devnetFallback: PublicKey,
+  upgradeAuthorityInfo: PublicKey,
+): T1InitializeArgs {
+  const posture = ((manifest.launch_posture ?? {}) as Record<string, number>);
+  const required = (field: string): number => {
+    const v = posture[field];
+    if (typeof v !== "number") {
+      throw new Error(
+        `launch_posture.${field} missing or not a number in config/mainnet-authorities.json`,
+      );
+    }
+    return v;
+  };
+  const auths = (manifest.authorities ?? {}) as Record<
+    string,
+    { pubkey?: string } | undefined
+  >;
+  const authority = (role: string): PublicKey => {
+    if (cluster === "devnet" || cluster === "localnet") return devnetFallback;
+    const pk = auths[role]?.pubkey;
+    if (!pk) {
+      throw new Error(
+        `authorities.${role}.pubkey missing from config/mainnet-authorities.json, and this is ` +
+          `${cluster}. Refusing to initialise a real deployment with the dev keypair.`,
+      );
+    }
+    return new PublicKey(pk);
+  };
+  // The pre-mint destination. NO devnet fallback and no default: this field is bound atomically and
+  // for good, the only later writer is the 24h timelock, and a zero here is refused on chain. A
+  // ceremony that cannot name it must stop before it creates the mint, not after.
+  const invRaw = auths.inventory_wallet?.pubkey;
+  if (!invRaw) {
+    throw new Error(
+      "authorities.inventory_wallet.pubkey is missing from config/mainnet-authorities.json. " +
+        "initialize binds the pre-mint destination atomically and nothing can set it afterwards, " +
+        "so there is no value to fall back to. Fill it in before running T1.",
+    );
+  }
+  const inventoryWallet = new PublicKey(invRaw);
+  if (inventoryWallet.equals(PublicKey.default)) {
+    throw new Error("authorities.inventory_wallet.pubkey is the zero pubkey, which initialize refuses.");
+  }
+
+  const guardianRaw = auths.guardian?.pubkey;
+  if (!guardianRaw) {
+    throw new Error(
+      "authorities.guardian.pubkey is missing from config/mainnet-authorities.json. ROUND 8 L1-02: " +
+        "initialize appoints the first guardian, so the independent brake is part of the ceremony " +
+        "artifact rather than a later admin-only call. There is nothing to fall back to.",
+    );
+  }
+  const firstGuardian = new PublicKey(guardianRaw);
+  const compliance = authority("compliance");
+  if (firstGuardian.equals(PublicKey.default)) {
+    throw new Error("authorities.guardian.pubkey is the zero pubkey, which initialize refuses.");
+  }
+  return {
+    // NOT the signer. `initialize` writes `args.admin` VERBATIM with only a non-zero check, and
+    // DOM-001 binds the SIGNER to the BPF upgrade authority, not this field. The signer here would
+    // leave the deployer unilateral admin with no transfer step anywhere in the path.
+    admin: authority("ops_admin"),
+    // The SIGNER: informational, an immutable launch record of the upgrade trust root.
+    upgradeAuthorityInfo,
+    permanentDelegateExpected: compliance,
+    freezeAuthorityExpected: compliance,
+    complianceMode: false,
+    premiumBpsMint: required("premium_bps_mint"),
+    premiumBpsRedeem: required("premium_bps_redeem"),
+    adminTimelockSeconds: required("admin_timelock_seconds"),
+    maxGuardianCount: required("max_guardian_count"),
+    pythLazerFeedId: required("pyth_lazer_feed_id"),
+    inventoryWallet,
+    // ROUND 8 L1-02. The FIRST guardian, appointed by initialize itself. Same treatment as the
+    // inventory wallet: no devnet fallback and no default, because the whole point is that this key
+    // is chosen in the reviewed ceremony artifact and not by a later admin-only call.
+    guardian: firstGuardian,
+  };
+}
+
+/** The launch posture `initialize` writes, as the ceremony must read it back. Exported so T1 and its
+ *  test cannot drift from each other: round 8 opened both switches, and T1 still counted the closed
+ *  values as success, which would have reported two failures after an irreversible initialisation. */
+export const EXPECTED_POST_INITIALIZE = {
+  paused: true,
+  publicMintEnabled: true,
+  redemptionsEnabled: true,
+} as const;
+
 function programData(id: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync([id.toBytes()], BPF_LOADER)[0];
 }
@@ -203,53 +343,22 @@ async function main() {
   // ceremony, so a missing field must throw before the attacker is funded and the real SILV mint created,
   // or the retry repeats the loss. The args are READ, never retyped as literals: the literals here once
   // said 150/200 bps against a source of truth of 100/150, and a premium fix costs a 24h proposal each.
-  const posture = (mainnetConfig().launch_posture ?? {}) as Record<string, number>;
-  function required(field: string): number {
-    const v = posture[field];
-    if (typeof v !== "number") {
-      throw new Error(
-        `launch_posture.${field} missing or not a number in config/mainnet-authorities.json`,
-      );
-    }
-    return v;
-  }
-  const CEREMONY = {
-    premiumBpsMint: required("premium_bps_mint"),
-    premiumBpsRedeem: required("premium_bps_redeem"),
-    adminTimelockSeconds: required("admin_timelock_seconds"),
-    maxGuardianCount: required("max_guardian_count"),
-    pythLazerFeedId: required("pyth_lazer_feed_id"),
-  };
+  // ROUND 8 L1-01: the args come from the ONE exported builder above, so this script and its offline
+  // test exercise the same code. It throws rather than defaulting when the manifest is incomplete.
+  const CEREMONY_ARGS = buildT1InitializeArgs(
+    mainnetConfig() as Record<string, unknown>,
+    CLUSTER.cluster,
+    authority.publicKey,
+    authority.publicKey,
+  );
+  const COMPLIANCE = CEREMONY_ARGS.permanentDelegateExpected;
+  const CEREMONY_ADMIN = CEREMONY_ARGS.admin;
   console.log(
     `  ceremony args from config/mainnet-authorities.json: ` +
-      `mint=${CEREMONY.premiumBpsMint}bps redeem=${CEREMONY.premiumBpsRedeem}bps ` +
-      `timelock=${CEREMONY.adminTimelockSeconds}s guardians<=${CEREMONY.maxGuardianCount} ` +
-      `feed=${CEREMONY.pythLazerFeedId}`,
+      `mint=${CEREMONY_ARGS.premiumBpsMint}bps redeem=${CEREMONY_ARGS.premiumBpsRedeem}bps ` +
+      `timelock=${CEREMONY_ARGS.adminTimelockSeconds}s guardians<=${CEREMONY_ARGS.maxGuardianCount} ` +
+      `feed=${CEREMONY_ARGS.pythLazerFeedId} inventory=${CEREMONY_ARGS.inventoryWallet.toBase58()}`,
   );
-
-  // On a real cluster the authorities are the Squads vaults from the source of truth, not the local
-  // dev keypair. On devnet the dev keypair IS the authority, which is what makes T1 runnable there.
-  const auths = (mainnetConfig().authorities ?? {}) as Record<
-    string,
-    { pubkey?: string } | undefined
-  >;
-  function ceremonyAuthority(role: string, devnetFallback: PublicKey): PublicKey {
-    if (CLUSTER.cluster === "devnet" || CLUSTER.cluster === "localnet") return devnetFallback;
-    const pk = auths[role]?.pubkey;
-    if (!pk) {
-      throw new Error(
-        `authorities.${role}.pubkey missing from config/mainnet-authorities.json, and this is ` +
-          `${CLUSTER.cluster}. Refusing to initialise a real deployment with the dev keypair.`,
-      );
-    }
-    return new PublicKey(pk);
-  }
-  const COMPLIANCE = ceremonyAuthority("compliance", authority.publicKey);
-  // NOT the signer. `initialize` writes `args.admin` VERBATIM (initialize.rs:387) with only a non-zero
-  // check, and DOM-001 binds the SIGNER to the BPF upgrade authority (initialize.rs:162), not this field.
-  // The signer here leaves the deployer unilateral admin with no transfer step, and breaks step 7, where
-  // the Ops vault proposes opening the public mint under `has_one = admin`.
-  const CEREMONY_ADMIN = ceremonyAuthority("ops_admin", authority.publicKey);
 
 
   // ---- the attacker ----
@@ -325,19 +434,16 @@ async function main() {
   );
   console.log("  SILV mint:", silvMint.publicKey.toBase58(), "\n");
 
-  const args = (admin: PublicKey) => ({
-    admin,
-    // The SIGNER, not `admin`: informational, but it is an immutable launch record of the upgrade trust
-    // root. The real BPF upgrade authority moves to the upgrade vault at step 12.
-    upgradeAuthorityInfo: authority.publicKey,
-    permanentDelegateExpected: COMPLIANCE,
-    freezeAuthorityExpected: COMPLIANCE,
-    complianceMode: false,
-    ...CEREMONY,
-  });
+  const args = (admin: PublicKey) => ({ ...CEREMONY_ARGS, admin });
 
   const accs = (signer: PublicKey, pd: PublicKey, prog: PublicKey) => ({
     deployer: signer,
+    // ROUND 8 L1-02: initialize creates the first GuardianAccount, so its PDA is an account of the
+    // ceremony transaction.
+    firstGuardian: PublicKey.findProgramAddressSync(
+      [Buffer.from("guardian"), CEREMONY_ARGS.guardian.toBuffer()],
+      PROGRAM_ID,
+    )[0],
     dominionProgram: prog,
     programData: pd,
     config: configPda,
@@ -511,9 +617,25 @@ async function main() {
       "the deployer must not retain unilateral admin authority",
     );
     ok("case 8: config.silvMint is the intended mint", new PublicKey(cfg.silvMint).equals(silvMint.publicKey));
-    ok("case 8: starts paused", cfg.paused === true);
-    ok("case 8: public mint closed", cfg.publicMintEnabled === false);
-    ok("case 8: redemptions closed", cfg.redemptionsEnabled === false);
+    // ROUND 8 posture. These three used to assert the CLOSED values, which the program stopped
+    // writing on 2026-08-09: a correct mainnet initialisation would have ended on two red lines,
+    // indistinguishable from a half-failed ceremony and inviting a re-run that `initialize` can never
+    // accept. Read from the shared constant so the script and its test cannot drift again.
+    ok("case 8: starts paused", cfg.paused === EXPECTED_POST_INITIALIZE.paused);
+    ok(
+      "case 8: public mint OPEN at initialize (round 8 posture)",
+      cfg.publicMintEnabled === EXPECTED_POST_INITIALIZE.publicMintEnabled,
+    );
+    ok(
+      "case 8: redemptions OPEN at initialize (round 8 posture)",
+      cfg.redemptionsEnabled === EXPECTED_POST_INITIALIZE.redemptionsEnabled,
+    );
+    // L1-01: the argument actually landed. A zero here is what the omitted field produced.
+    ok(
+      "case 8: config.inventoryWallet is the manifest's pre-mint destination",
+      new PublicKey(cfg.inventoryWallet).equals(CEREMONY_ARGS.inventoryWallet),
+      `${new PublicKey(cfg.inventoryWallet).toBase58()} (expected ${CEREMONY_ARGS.inventoryWallet.toBase58()})`,
+    );
     ok("case 8: guardian floor field present", typeof cfg.guardianCount === "number");
     ok(
       "case 8: the instant redeem WINDOW respects its floor",
@@ -567,11 +689,13 @@ async function main() {
 }
 // The sweep runs in a `finally`, not at the end of main(): the loss case is a retry after a configuration
 // error, i.e. the THROWING path, which is the one path a sweep at the end of the happy flow cannot reach.
-main()
-  .catch((e) => {
-    console.error("T1 crashed:", e);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    if (sweep) await sweep();
-  });
+if (IS_ENTRYPOINT) {
+  main()
+    .catch((e) => {
+      console.error("T1 crashed:", e);
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      if (sweep) await sweep();
+    });
+}

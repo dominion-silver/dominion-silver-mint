@@ -17,6 +17,21 @@ pub struct AddGuardian<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
 
+    /// ROUND 8 L1-02. THE APPOINTEE SIGNS ITS OWN APPOINTMENT.
+    ///
+    /// This instruction used to need only the admin. `unpause` demands a guardian distinct from the
+    /// admin, so a compromised Ops could generate its own keypairs, appoint them here alone, fill
+    /// every slot, and present one of them as the "independent brake" that every timelock in this
+    /// program assumes somebody else holds. The veto was satisfiable by the hand it exists to stop.
+    ///
+    /// Requiring the named key to sign does NOT prove independence, and nothing on chain can: Ops
+    /// could still hold both keys. What it does is make the set unable to grow without the consent of
+    /// the key being added, so a guardian cannot be conscripted, and an appointment is evidence that
+    /// the holder participated. The launch guardian is anchored earlier still, as an argument of the
+    /// authenticated `initialize`, where it is part of the reviewed ceremony artifact.
+    #[account(constraint = guardian_signer.key() == guardian_pubkey @ DominionError::Unauthorized)]
+    pub guardian_signer: Signer<'info>,
+
     #[account(
         init_if_needed,
         payer = payer,

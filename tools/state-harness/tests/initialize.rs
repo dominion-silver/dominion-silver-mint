@@ -182,13 +182,16 @@ struct Args {
     /// ROUND 8 T8-03. APPENDED LAST on purpose: the 142-byte prefix above did not move, so a client
     /// that still encodes the old layout fails to deserialize instead of silently shifting a field.
     inventory_wallet: Pubkey,
+    /// ROUND 8 L1-02. The first guardian, appointed by this same transaction, so the independent
+    /// brake exists before anything can be unpaused. Appended last for the same reason.
+    guardian: Pubkey,
 }
 
 impl Args {
-    /// 174 bytes: the 142-byte prefix verified against a successful on-chain `initialize`, plus the
-    /// appended `inventory_wallet`.
+    /// 206 bytes: the 142-byte prefix verified against a successful on-chain `initialize`, plus the
+    /// appended `inventory_wallet` and `guardian`.
     fn encode(&self) -> Vec<u8> {
-        let mut a = Vec::with_capacity(174);
+        let mut a = Vec::with_capacity(206);
         a.extend_from_slice(self.admin.as_ref());
         a.extend_from_slice(self.upgrade_authority_info.as_ref());
         a.extend_from_slice(self.permanent_delegate_expected.as_ref());
@@ -201,7 +204,8 @@ impl Args {
         a.push(self.max_guardian_count);
         assert_eq!(a.len(), 142, "the InitializeArgs prefix must stay 142 bytes");
         a.extend_from_slice(self.inventory_wallet.as_ref());
-        assert_eq!(a.len(), 174, "InitializeArgs is 174 bytes");
+        a.extend_from_slice(self.guardian.as_ref());
+        assert_eq!(a.len(), 206, "InitializeArgs is 206 bytes");
         a
     }
 }
@@ -259,6 +263,7 @@ impl Boot {
             admin_timelock_seconds: ADMIN_TIMELOCK_SECONDS,
             max_guardian_count: 3,
             inventory_wallet: Pubkey::new_unique(),
+            guardian: Pubkey::new_unique(),
         };
 
         Boot {
@@ -397,6 +402,7 @@ impl Boot {
                 AccountMeta::new_readonly(pk(CLASSIC_TOKEN_PROGRAM), false),
                 AccountMeta::new_readonly(pk(TOKEN_2022_PROGRAM), false),
                 AccountMeta::new_readonly(pk(ASSOCIATED_TOKEN_PROGRAM), false),
+                AccountMeta::new(guardian_pda(&self.args.guardian), false),
                 AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
             ],
             data: ix_data("initialize", &self.args.encode()),
@@ -582,8 +588,9 @@ fn initialize_writes_every_config_field_and_the_values_read_back_on_chain() {
     assert_eq!(c.instant_used_usdc, 0, "instant_used_usdc");
     assert_eq!(c.next_redeem_request_nonce, 0, "next_redeem_request_nonce");
 
-    // Governance slots: everything empty, nothing pre-armed.
-    assert_eq!(c.guardian_count, 0, "guardian_count");
+    // Governance slots: everything empty, nothing pre-armed, EXCEPT the guardian set. ROUND 8 L1-02
+    // appoints the first guardian here, so "empty" would now mean "no independent brake at go-live".
+    assert_eq!(c.guardian_count, 1, "guardian_count: the first guardian is appointed by initialize");
     assert_eq!(c.pending_removal_count, 0, "pending_removal_count");
     assert_eq!(c.next_timelock_nonce, 0, "next_timelock_nonce");
     assert_eq!(c.active_proposal_count, 0, "active_proposal_count");
@@ -666,9 +673,13 @@ fn a_fresh_deploy_is_paused_with_mint_and_redemptions_already_open() {
         c.public_mint_enabled,
         "round 8 posture: the public mint ships OPEN"
     );
+    // ROUND 8 L1-02. ONE guardian, appointed by this same transaction. It used to be zero, and
+    // `add_guardian` was admin-only, so the "independent brake" `unpause` demands could be minted by
+    // the very key it exists to restrain. Anchoring it here puts it in the authenticated ceremony
+    // artifact instead.
     assert_eq!(
-        c.guardian_count, 0,
-        "a fresh deploy has no guardian, which is what unpause must refuse to run without"
+        c.guardian_count, 1,
+        "initialize must appoint the first guardian in the same authenticated transaction"
     );
 }
 
