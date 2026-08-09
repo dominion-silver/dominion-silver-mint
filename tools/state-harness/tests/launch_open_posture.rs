@@ -746,3 +746,75 @@ fn a_prebuilt_unpause_is_refused_after_a_matured_action_changed_the_approved_sta
     );
     assert!(!f.config().paused, "the rebuilt unpause did not resume the protocol");
 }
+
+#[test]
+fn the_readiness_digest_moves_on_every_config_field_the_decision_reads() {
+    // ROUND 8, written BEFORE the next audit rather than after it.
+    //
+    // FINAL-03 is closed by a digest, and a digest is only worth what it covers. This walks the
+    // decision in `scripts/_launch-readiness.ts` input by input and asserts, on the real chain, that
+    // each CONFIG input moves the digest. A field silently dropped from `readiness_digest()` makes
+    // the whole mechanism permissive again, and nothing else would notice.
+    //
+    // THE THREE INPUTS THE DECISION READS THAT ARE NOT CONFIG, and why a config digest not covering
+    // them is sound rather than an omission:
+    //
+    //   circulating supply  frozen for the whole window. Both emission paths (`admin_premint` at
+    //                       premint.rs:60 and `mint_silv`) require `!config.paused`, and the window
+    //                       being closed is exactly the window in which the protocol is paused.
+    //   fee vault exists    the vault is an ATA owned by a PDA and NO instruction closes it; the only
+    //                       `close =` in the admin surface targets the fee-exempt PDA
+    //                       (fee_whitelist.rs:87). It also cannot stop existing between two blocks.
+    //   active guardians    re-validated ON-CHAIN by `unpause` itself, which demands a guardian
+    //                       account with `cooldown_until == 0` that is not the admin.
+    //
+    // If a future change makes supply mutable while paused, or adds a vault-closing instruction, this
+    // comment is where the argument breaks and the digest must grow.
+    let mut f = Fixture::new();
+    let base = f.readiness_digest();
+
+    // public_mint_enabled: closing is instant, so this is one instruction away.
+    let admin = f.admin.insecure_clone();
+    let ix = Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(config_pda(), false),
+            AccountMeta::new_readonly(admin.pubkey(), true),
+        ],
+        data: ix_data("set_public_mint_enabled", &[0u8]),
+    };
+    expect_ok(f.send(&[ix], &[&admin]), "close the public mint");
+    assert!(!f.config().public_mint_enabled, "the close did not persist");
+    let after_mint = f.readiness_digest();
+    assert_ne!(base, after_mint, "public_mint_enabled is not covered by the digest");
+
+    // pyth_lazer_feed_id, through the timelock, which is the only writer.
+    let feed_before = f.config().pyth_lazer_feed_id;
+    let (r, nonce) = propose_pyth_feed(&mut f, feed_before + 7);
+    expect_ok(r, "queue a feed change");
+    f.warp(ADMIN_TIMELOCK_SECONDS as i64 + 1);
+    expect_ok(execute_pyth_feed(&mut f, nonce), "apply the feed change");
+    assert_eq!(f.config().pyth_lazer_feed_id, feed_before + 7, "the feed did not move");
+    let after_feed = f.readiness_digest();
+    assert_ne!(after_mint, after_feed, "pyth_lazer_feed_id is not covered by the digest");
+
+    // guardian_count, which is what makes the unpause's independence requirement satisfiable.
+    let g = Keypair::new();
+    f.svm.airdrop(&g.pubkey(), 100_000_000_000).unwrap();
+    expect_ok(f.add_guardian(&g), "register a guardian");
+    let after_guardian = f.readiness_digest();
+    assert_ne!(after_feed, after_guardian, "guardian_count is not covered by the digest");
+
+    // And the negative control: a mutation the decision does NOT read must NOT be required to move
+    // it. Without this the test is satisfied by hashing the whole account, which would make every
+    // unrelated timelocked action invalidate a pending unpause and turn the ceremony unrunnable.
+    let before_unrelated = f.readiness_digest();
+    let (r2, _n2) = propose_pyth_feed(&mut f, feed_before + 8);
+    expect_ok(r2, "queue an action without executing it");
+    assert_eq!(
+        before_unrelated,
+        f.readiness_digest(),
+        "merely QUEUEING an action moved the digest, so any pending proposal would invalidate a \
+         built unpause and the ceremony could never complete"
+    );
+}

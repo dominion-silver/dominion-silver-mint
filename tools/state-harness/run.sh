@@ -141,7 +141,7 @@ rm -f "$tmp_out"
 # approved_state, the acceptance test Codex specified. It builds the unpause once, executes a matured
 # feed change while paused, asserts the action DISARMED itself (which is what made the previous
 # counter guard blind), then submits the pre-built instruction unchanged.
-EXPECTED_STATE_TESTS=179
+EXPECTED_STATE_TESTS=180
 if [[ "$executed" -ne 0 && "$executed" -ne "$EXPECTED_STATE_TESTS" && ${#ARGS[@]} -eq 0 ]]; then
   echo >&2
   echo "FAIL: $executed test(s) executes, $EXPECTED_STATE_TESTS attendus (sans filtre)." >&2
