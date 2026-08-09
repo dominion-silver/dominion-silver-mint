@@ -476,6 +476,19 @@ anything to open.** The round-8 launch posture (owner, 2026-08-09) has `initiali
 during the ceremony. `scripts/ceremony-step7.ts` is deleted with the step: run against the new
 posture it would propose a value the config already holds and revert `PublicMintUnchanged`.
 
+**The redeem switch is asymmetric on purpose, and the asymmetry survives the open posture.**
+Closing redemptions is instant on two lanes; opening them is refused on both and can only
+happen through the 24h timelock, which a guardian can cancel. The two closing lanes are
+`set_redemptions_enabled(false)`, which the admin signs alone, and the emergency tighten lane, which
+also disarms any queued open so a pending loosening cannot land moments after an incident response.
+Neither lane can set the switch back to true: the program refuses it in bytecode from BOTH states, so
+there is no sequence of instant calls that reopens payouts. The only path back is
+`propose_set_redeem_limits({ redemptionsEnabled: true })`, the 24h wait, then execute, and during
+that window any active guardian can cancel it alone. Operationally: closing is a decision you can
+take in one signature at 3am, reopening is a decision the whole quorum sees coming for a day.
+`scripts/test-security-posture-docs.ts` runs the on-chain tests that demonstrate each half of this
+paragraph and fails if this text and those tests ever stop agreeing.
+
 **What holds the launch instead is THE PAUSE, and the pause is now guarded.** `unpause` requires an
 ACTIVE guardian distinct from the admin, so the transition to live cannot happen before an
 independent party can pause and can cancel a timelocked action. That is why step 8 registers the
