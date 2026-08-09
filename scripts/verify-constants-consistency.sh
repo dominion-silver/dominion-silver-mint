@@ -320,12 +320,20 @@ _RULES = {
     "roll_window": ["instructions/redeem_silv.rs"],
     # ---- go-live readiness ----
     # ROUND 8 FINAL-03. The fingerprint of the config fields the go-live decision read when the
-    # unpause was BUILT. The unpause handler recomputes it and refuses on a mismatch
-    # (StaleReadinessDigest), so a config that moved between build and send cannot be unpaused on a
-    # stale decision. ONE call site, and it is the whole point: if this call disappears from
-    # pause.rs, unpause silently accepts any digest and the gate becomes decorative.
-    # Registered 2026-08-10: the rule shipped in the readiness-digest batch without a manifest
-    # entry, so the completeness sweep failed the deploy gate. It caught it, which is its job.
+    # unpause was BUILT. Registered 2026-08-10: the rule shipped in the readiness-digest batch
+    # without a manifest entry, so the completeness sweep failed the deploy gate. It caught it,
+    # which is its job.
+    #
+    # WHAT THIS ENTRY ACTUALLY BUYS, stated honestly after a review pass measured it by mutation.
+    # It is a WIRING alarm for one file, nothing more. Mutants that still PASS: deleting the
+    # `require!` while keeping the call, making the comparison vacuous, short-circuiting it with
+    # `true ||`, and (specific to this rule) deleting the guard from `unpause_handler` while a call
+    # survives in `pause_handler`, because both handlers share pause.rs and a file-scoped regex
+    # cannot tell them apart. Only replacing the call outright fails.
+    # The SEMANTIC proof is elsewhere and it is CI-blocking:
+    # tools/state-harness/tests/launch_open_posture.rs, which drives the real bytes and asserts
+    # E_STALE_READINESS when a matured action changes the approved state under a prebuilt unpause.
+    # Do not read a green line here as "the unpause is protected".
     "readiness_digest": ["instructions/emergency/pause.rs"],
     # A post-write invariant at every premium mutation site.
     "assert_premium_within_bounds": [

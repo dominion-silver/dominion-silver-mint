@@ -227,6 +227,8 @@ for (const rpc of [
     "e2e-lazer-mint.ts",
     "e2e-public-mint-devnet.ts",
     "initialize-devnet.ts",
+    // The launch-supply sender. Added 2026-08-10 with the script itself; the gate caught its absence.
+    "premint.ts",
     "t1-hostile-bootstrap.ts",
     "test-dominion-squads-e2e.ts",
     "test-squads-e2e.ts",
@@ -260,6 +262,11 @@ for (const rpc of [
     "_readiness-digest.ts",
     "_run-state.ts",
     "test-security-posture-docs.ts",
+    // Pure unit tests over premint.ts's two exported decisions (argv -> atomic, run record ->
+    // resume plan). It imports premint.ts, which is a SENDER, but only for those two pure
+    // functions: premint.ts guards its own main behind `require.main === module`, so importing it
+    // opens no Connection and loads no keypair.
+    "test-premint-args.ts",
     "check-onchain.ts",
     "check-onchain2.ts",
     "check-pda.ts",

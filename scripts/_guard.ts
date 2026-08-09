@@ -32,7 +32,17 @@ export const ACTION_COST: Record<string, ActionCost> = {
   // only later writer is the 24h-timelocked pair.
   propose_set_inventory_wallet: "reversible", // a proposal can be cancelled instantly
   execute_set_inventory_wallet: "timelocked-undo", // moving it back costs another full window
-  admin_premint: "reversible", // adds supply; the cap bounds it
+  // REVIEW PASS 2026-08-10. This said `reversible`, "adds supply; the cap bounds it". The cap bounds
+  // the TOTAL; it is not an undo. There is NO admin burn anywhere in this program: the only burn is
+  // `silv_burn_from_user` (cpi.rs), it requires the HOLDER's signature, and it only runs inside
+  // `redeem_silv`, which pays out treasury USDC. So an over-mint cannot be undone, and the nearest
+  // thing to an undo drains the treasury. Meanwhile the tokens land in an on-curve single-signer
+  // wallet whose holder can call redeem_silv with no timelock.
+  // Classifying it `reversible` made assertReversible return before it ever read the intent list, so
+  // the ONE step that mints the entire launch supply was the only consequential step in the runbook
+  // needing no named DOMINION_INTENT. `set_max_silv_supply` is `irreversible` here on strictly weaker
+  // grounds.
+  admin_premint: "irreversible",
   propose_any: "reversible", // a proposal can be cancelled instantly
   cancel_timelocked_action: "reversible",
   cancel_guardian_removal: "reversible",

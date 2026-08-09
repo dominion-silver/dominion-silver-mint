@@ -613,14 +613,39 @@ Then SEND it with the tranche script, which takes the atomic figure the sizing p
 
 ```bash
 DOMINION_ALLOW_MAINNET=i-understand DOMINION_RPC=<mainnet> \
+  DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json DOMINION_INTENT=admin_premint \
   npx tsx scripts/premint.ts --atomic <tranche1> --dry-run   # resolve, send nothing
 DOMINION_ALLOW_MAINNET=i-understand DOMINION_RPC=<mainnet> \
+  DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json DOMINION_INTENT=admin_premint \
   npx tsx scripts/premint.ts --atomic <tranche1>
 ```
 
+**`DOMINION_INTENT=admin_premint` is required** since 2026-08-10, when `admin_premint` was
+reclassified `irreversible` in `_guard.ts`. It had been `reversible` on the grounds that
+"the cap bounds it". The cap bounds the TOTAL and is not an undo: there is no admin burn in
+this program at all, the only burn needs the holder's signature and runs inside
+`redeem_silv`, which pays out treasury USDC. An over-mint has no undo.
+
+**READ THIS BEFORE YOU RUN IT IF `config.admin` IS THE SQUADS VAULT.** `premint.ts` is a
+DIRECT sender: it signs with a local keypair. The recommended `initialize` binds
+`config.admin` to the Ops Squads vault `65g5nNX…`, which is OFF-CURVE, so no private key
+exists for it and `has_one = admin` can never be satisfied by any keypair. The script now
+calls `assertSendable` and refuses up front with that explanation, but **it has no emit
+mode**, so on that configuration this step has no tooling and the pre-mint must go through
+the admin panel like the other Squads actions. The 2026-08-10 devnet rehearsal could not
+surface this: devnet's admin is a single key. Decide before the ceremony which shape you
+are in, and if it is the vault, budget for the panel path.
+
 **Run `--dry-run` first, every time.** It prints the resolved destination, the cap, the
-headroom that would be left, and refuses the whole plan if the tranches do not fit. It is
-the only cheap moment to notice that the inventory wallet is not the one you meant.
+headroom that would be left, refuses the whole plan if the tranches do not fit, and
+cross-checks `config.inventory_wallet` against `config/mainnet-authorities.json` the same
+way step 8 does.
+
+**If a run stops part-way**, it keeps a record at `ceremony-out/premint-state.json`, names
+the tranches that landed and the ones that did not, and a plain re-run REFUSES. Finish it
+with `--resume`. Never re-issue the original command: the cap catches a duplicated 106,115
+oz plan, but it does NOT catch a duplicated ~1,750 oz operational tranche, which would
+silently double-mint into the hot wallet.
 
 The script exists because this step had NO tooling until the devnet rehearsal of
 2026-08-10: the runbook said "run admin_premint" and the only senders in the repo were a
