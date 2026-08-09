@@ -113,6 +113,11 @@ run_traced() {
 # derives ROOT with `cd -P`, so its trace says /private/var/folders/... . Two strings that can never
 # match, and a canary that can never fire. Resolve first, and check BOTH spellings, because a Linux
 # runner resolves to the same string it was given.
+# The closed list the gate binds, mirrored here so the positive control asserts the SAME set the
+# verifier checks rather than a set this test invented. If the two ever drift, the positive control
+# is testing a property the product does not have.
+POSITIVE_INPUTS="programs Cargo.toml Cargo.lock rust-toolchain.toml Anchor.toml config/mainnet-authorities.json scripts/verify-release-artifact.sh scripts/_read-release-pin.py"
+
 real_path() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
 
 reached_foreign_manifest() {
@@ -278,6 +283,101 @@ else
   bad "could not build the foreign repository for the committed-copy case"
 fi
 
+# ================================================================ 4c. a clone that OWNS the anchor, HEAD on an orphan
+#
+# THE CASE ROUND 8 REPRODUCED, and the reason `git cat-file -e` was replaced by `merge-base
+# --is-ancestor`. A commit hash is public. Any clone, fetch or object alternate hands an attacker the
+# anchor OBJECT, and containment then says nothing about where HEAD is. Codex placed a clone on an
+# orphan commit with no ancestry to the anchor and measured: is-ancestor exit 1, cat-file exit 0,
+# root_refused=no, reached_verifier_body=yes.
+#
+# This case IS that measurement, kept in the suite so the class cannot silently reopen. The
+# preconditions are ASSERTED rather than assumed: if the sandbox does not actually own the anchor, or
+# if HEAD is accidentally a descendant of it, this is a different case wearing this one's name, which
+# is the exact defect (a label promising more than the body runs) that reopened T8-02 and T8-04.
+orphan_dir="$TMP/orphan-owns-anchor"
+ANCHOR="1314be417bfbdcea861bb75047964e722a8eada9"
+if git clone -q --no-local "$REPO" "$orphan_dir" >/dev/null 2>&1 \
+   || git clone -q "$REPO" "$orphan_dir" >/dev/null 2>&1; then
+  ( cd "$orphan_dir" \
+    && git fetch -q origin "$ANCHOR" >/dev/null 2>&1 || true )
+  # Build the orphan: no parent, so no path from it to the anchor.
+  ( cd "$orphan_dir" \
+    && git checkout -q --orphan foreign-prepared >/dev/null 2>&1 \
+    && git rm -rq --cached . >/dev/null 2>&1 || true )
+  rm -rf "$orphan_dir/programs" "$orphan_dir/apps" "$orphan_dir/tools" 2>/dev/null || true
+  mkdir -p "$orphan_dir/scripts" "$orphan_dir/config" "$orphan_dir/docs" \
+           "$orphan_dir/target/deploy" "$orphan_dir/target/idl"
+  cp "$VERIFY" "$orphan_dir/scripts/verify-release-artifact.sh"
+  cp "$REPO/scripts/_read-release-pin.py" "$orphan_dir/scripts/" 2>/dev/null || true
+  chmod +x "$orphan_dir/scripts/verify-release-artifact.sh"
+  cp "$REPO/$SO_REL" "$orphan_dir/$SO_REL"
+  cp "$REPO/target/idl/dominion_silver_mint.json" "$orphan_dir/target/idl/" 2>/dev/null || true
+  python3 - "$REPO/config/mainnet-authorities.json" "$orphan_dir/config/mainnet-authorities.json" <<'PY'
+import json, sys
+m = json.load(open(sys.argv[1]))
+m["_foreign_repository_marker"] = "THIS IS NOT THE AUDITED REPOSITORY"
+json.dump(m, open(sys.argv[2], "w"), indent=2)
+PY
+  ( cd "$orphan_dir" \
+    && git -c user.email=f@f -c user.name=f add -A >/dev/null 2>&1 \
+    && git -c user.email=f@f -c user.name=f commit -qm "prepared tree" >/dev/null 2>&1 ) || true
+
+  owns_anchor=no; is_desc=no
+  ( cd "$orphan_dir" && git cat-file -e "${ANCHOR}^{commit}" 2>/dev/null ) && owns_anchor=yes
+  ( cd "$orphan_dir" && git merge-base --is-ancestor "$ANCHOR" HEAD 2>/dev/null ) && is_desc=yes
+
+  if [[ "$owns_anchor" != "yes" ]]; then
+    bad "the orphan sandbox does not own the anchor object, so it does not exercise this class"
+    echo "     this case only means something when cat-file SUCCEEDS and ancestry FAILS"
+  elif [[ "$is_desc" != "yes" ]]; then
+    run_traced "$orphan_dir/scripts/verify-release-artifact.sh" "$TMP/orphan.trace"
+    orphan_reached="$(what_was_reached "$orphan_dir" "$TMP/orphan.trace")"
+    if [[ -n "$orphan_reached" ]]; then
+      bad "a clone OWNING the anchor with HEAD on an orphan selected that tree as canonical"
+      echo "     owns anchor object: $owns_anchor, ancestor of HEAD: $is_desc"
+      echo "     reached: $orphan_reached"
+      echo "     trace  : $TMP/orphan.trace"
+    elif ! grep -q "is not an ancestor of HEAD" "$TMP/orphan.trace"; then
+      bad "the orphan clone was refused, but not by the ancestry gate"
+      echo "     a refusal for an unrelated reason would move the moment this case is repaired"
+      echo "     trace  : $TMP/orphan.trace"
+    else
+      ok "clone owning the anchor object with HEAD on an orphan refused by ancestry, before any read"
+    fi
+  else
+    bad "the orphan sandbox HEAD descends from the anchor, so it is not the case under test"
+  fi
+else
+  bad "could not clone the repository for the owns-anchor orphan case"
+fi
+
+# ================================================================ 4d. a genuine checkout with a DIRTY build input
+#
+# The realistic accident, and the cheapest way to attest bytes that were never committed. Every fact
+# the gate establishes is about a COMMIT; none of them is about a file edited after it. Run in a
+# throwaway worktree of this very repository, so the only thing separating it from the accepted case
+# below is one uncommitted byte.
+dirty_dir="$TMP/dirty"
+if git -C "$REPO" worktree add --detach "$dirty_dir" HEAD >/dev/null 2>&1; then
+  mkdir -p "$dirty_dir/target/deploy" "$dirty_dir/target/idl"
+  cp "$REPO/$SO_REL" "$dirty_dir/$SO_REL"
+  cp "$REPO/target/idl/dominion_silver_mint.json" "$dirty_dir/target/idl/" 2>/dev/null || true
+  printf '\n# uncommitted edit, never reviewed, never signed\n' >> "$dirty_dir/Cargo.toml"
+  ( cd "$dirty_dir" && PS4='+${BASH_SOURCE}:${LINENO}: ' bash -x scripts/verify-release-artifact.sh --skip-rebuild ) \
+    >"$TMP/dirty.trace" 2>&1 || true
+  git -C "$REPO" worktree remove --force "$dirty_dir" >/dev/null 2>&1
+  git -C "$REPO" worktree prune >/dev/null 2>&1
+  if ! grep -q "the build inputs differ from HEAD" "$TMP/dirty.trace"; then
+    bad "a worktree with an uncommitted change to Cargo.toml was not refused"
+    echo "     trace  : $TMP/dirty.trace"
+  else
+    ok "genuine checkout with an uncommitted build input refused before any read"
+  fi
+else
+  bad "could not create a worktree for the dirty-input case"
+fi
+
 # ================================================================ 5. the genuine checkout
 #
 # The negative control, and the reason the four cases above are not simply "refuse everything". A
@@ -314,8 +414,11 @@ if git -C "$REPO" worktree add --detach "$work_dir" HEAD >/dev/null 2>&1; then
   elif ! grep -q "ROOT=$work_real\$" "$TMP/genuine.trace" && ! grep -q "ROOT=$work_dir\$" "$TMP/genuine.trace"; then
     bad "the genuine worktree run never resolved ROOT to itself, so it proves nothing"
     echo "     trace  : $TMP/genuine.trace"
+  elif ! ( cd "$REPO" && git diff --quiet HEAD -- $POSITIVE_INPUTS ) ; then
+    bad "the positive control claims the build inputs match HEAD but they do not"
+    echo "     the label of this case must never promise more than its body runs"
   else
-    ok "genuine authenticated worktree whose build inputs match the attested source commit accepted as canonical"
+    ok "genuine authenticated worktree whose build inputs match HEAD accepted as canonical"
   fi
 else
   bad "could not create a Git worktree for the genuine case, so the negative control did not run"

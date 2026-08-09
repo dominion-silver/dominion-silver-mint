@@ -136,36 +136,119 @@ if [ "$_toplevel" != "$ROOT" ]; then
   echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
   exit 1
 fi
-# THE DISCRIMINATOR, simplified after round 8 refused the previous two.
+# THE IDENTITY GATE. Fourth design, and the first one that states its own limit.
 #
-# The first attempt required the file to be TRACKED by the enclosing tree. A prepared foreign
-# repository defeats that with `git init && git add -A && git commit`, and Codex demonstrated exactly
-# that. The second layer required the tree to contain the pin's attested source commit, which only
-# helps once a candidate is `pinned`; the status is `no-candidate`, so it never fired.
+# WHAT THREE PREVIOUS ATTEMPTS GOT WRONG, in order:
+#   1. "is this file TRACKED here" fell to `git init && git add -A && git commit`.
+#   2. "does this tree contain the attested source commit" only fires once a candidate is pinned, and
+#      the status is `no-candidate`, so it never fired.
+#   3. "does this tree CONTAIN the anchor commit" fell to a foreign clone placed on an ORPHAN commit:
+#      the anchor object is public, `git cat-file -e` finds it, and containment says nothing about
+#      where HEAD is. Codex reproduced it: foreign_head=4f69c71, is-ancestor exit 1, cat-file exit 0,
+#      gate passed.
 #
-# What actually separates THIS repository from any tree an attacker can fabricate is history. A clone
-# has our commits; a fabricated tree does not, and cannot, because it would have to reproduce a commit
-# object with our hash. One anchor is enough, and one is all this needs: no heuristics, no tracked/
-# untracked reasoning, no dependence on the pin state.
+# THE LIMIT, stated once so nobody has to rediscover it a fourth time. This script LIVES IN the tree
+# it authenticates. Whoever can prepare that tree can also delete these lines. No gate written here
+# can defend against that, and any claim that it does is false. What this gate defends against is an
+# operator running the verifier from the WRONG tree: a stale clone, a dirty worktree, a fork, a
+# copy. That is the realistic failure, and it is the one being closed. Against a prepared tree the
+# control is procedural and lives OUTSIDE this file: obtain the verifier from a separately fetched
+# clone at a signed tag, and compare its blob hash out of band. `docs/MAINNET_LAUNCH_RUNBOOK.md`
+# carries that procedure.
 #
-# The anchor is the merge that produced `main` at the round-8 baseline. It is on the protected branch,
-# every legitimate checkout and every CI clone has it, and it can never be removed: `main` forbids
-# force-push and deletion. If this project ever rewrites history so this commit is gone, this line
-# must be updated deliberately, in the commit that does it.
+# Within that limit, four facts are established, each refusing BEFORE the docs scan, before
+# `MANIFEST_JSON` is assigned and before the rebuild.
+
+# (a) ANCESTRY, not containment. The anchor must be reachable FROM HEAD. A clone that merely owns the
+#     object fails this; only a checkout whose history actually passes through it succeeds. This is
+#     the single line that kills Codex's orphan reproduction.
 ANCHOR_COMMIT="1314be417bfbdcea861bb75047964e722a8eada9"
-if ! (cd -P "$ROOT" && git cat-file -e "${ANCHOR_COMMIT}^{commit}" 2>/dev/null); then
+if ! (cd -P "$ROOT" && git merge-base --is-ancestor "$ANCHOR_COMMIT" HEAD 2>/dev/null); then
   echo ""
-  echo "REFUSING TO RUN: the Git tree at $ROOT does not contain $ANCHOR_COMMIT."
-  echo "That commit is in this repository's history, on the protected main branch, so every genuine"
-  echo "checkout has it. A tree that does not is not this repository, whatever it contains."
-  echo ""
-  echo "A byte-identical copy of this script dropped into another repository looks exactly like the"
-  echo "audited file, has one hard link, resolves to itself, and can be committed there to look"
-  echo "tracked. History is the thing it cannot fabricate."
-  echo ""
-  echo "Run the script from its own checkout. To use it elsewhere, clone the repository."
+  echo "REFUSING TO RUN: $ANCHOR_COMMIT is not an ancestor of HEAD in the tree at $ROOT."
+  echo "That commit is on this repository's protected main branch, so every genuine checkout"
+  echo "descends from it. Merely POSSESSING the object is not enough and is not checked: a clone"
+  echo "parked on an unrelated commit owns it too."
   echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
   exit 1
+fi
+
+# (b) HEAD IS SIGNED BY A PINNED KEY. A commit hash is public; a signing key is not. This is the only
+#     fact here an attacker cannot obtain by cloning. The allowed-signers file is written from a key
+#     pinned BELOW rather than read from the user's git config, because a check that depends on the
+#     operator's local configuration is a check the operator can be missing without noticing, and CI
+#     runners have no such configuration at all.
+#     Caveat, per THE LIMIT above: the pinned key sits in this file, so a tree-preparer can swap it.
+#     It raises the bar from "clone a public repo" to "edit the audited verifier", which is a
+#     detectable act. It does not make the gate unconditional.
+RELEASE_SIGNER_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKz73pnCUcRB2YNuMQFWQZb46U7PF05XEltkVkTg93mB"
+RELEASE_SIGNER_ID="toblanc34@gmail.com"
+_signers="$(mktemp)"
+printf '%s %s\n' "$RELEASE_SIGNER_ID" "$RELEASE_SIGNER_KEY" > "$_signers"
+if ! (cd -P "$ROOT" && git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$_signers" \
+        verify-commit HEAD >/dev/null 2>&1); then
+  rm -f "$_signers"
+  echo ""
+  echo "REFUSING TO RUN: HEAD in $ROOT is not signed by the pinned release key"
+  echo "($RELEASE_SIGNER_ID). Every commit that can be attested is signed."
+  echo "A merge commit created by the forge is signed by the FORGE, not by this key, so attest from"
+  echo "a signed commit rather than from a merge."
+  echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+  exit 1
+fi
+rm -f "$_signers"
+
+# (c) THE BYTES ON DISK ARE HEAD'S BYTES, for everything that gets rebuilt or attested. Without this,
+#     every fact above is about a commit and none of them is about the files the rebuild will read.
+#     A dirty worktree is the realistic accident this catches, and it is also the cheapest way to
+#     attest something that was never committed.
+BUILD_INPUTS="programs Cargo.toml Cargo.lock rust-toolchain.toml Anchor.toml config/mainnet-authorities.json scripts/verify-release-artifact.sh scripts/_read-release-pin.py"
+_dirty="$(cd -P "$ROOT" && git status --porcelain -- $BUILD_INPUTS 2>/dev/null || true)"
+if [ -n "$_dirty" ]; then
+  echo ""
+  echo "REFUSING TO RUN: the build inputs differ from HEAD in $ROOT."
+  echo "$_dirty"
+  echo ""
+  echo "The facts established above are about a COMMIT. They say nothing about a file that was"
+  echo "edited after it. Commit or stash, then re-run."
+  echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+  exit 1
+fi
+
+# (d) WHEN A CANDIDATE IS PINNED, THE REBUILT INPUTS ARE THE ATTESTED COMMIT'S INPUTS. This is the
+#     fact the whole script exists to support, and no previous version had it. HEAD cannot EQUAL
+#     `source_commit`: the commit that RECORDS a pin necessarily comes after the run that produced
+#     the candidate. So the requirement is narrower and exact: `source_commit` is an ancestor of HEAD,
+#     and the BUILD INPUTS are byte-identical between the two. Everything outside that closed list
+#     (docs, the pin record itself, apps, tests) may legitimately differ, which is precisely what
+#     lets a pin be committed at all.
+_pin_commit="$(cd -P "$ROOT" && python3 -c "
+import json,sys
+try: r=json.load(open('config/mainnet-authorities.json'))['release_artifact']
+except Exception: sys.exit(0)
+if r.get('status')=='pinned' and r.get('source_commit'): print(r['source_commit'])
+" 2>/dev/null || true)"
+if [ -n "$_pin_commit" ]; then
+  if ! (cd -P "$ROOT" && git merge-base --is-ancestor "$_pin_commit" HEAD 2>/dev/null); then
+    echo ""
+    echo "REFUSING TO RUN: the pinned source_commit $_pin_commit is not an ancestor of HEAD."
+    echo "The rebuild would attest sources that are not descended from the commit the pin names."
+    echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+    exit 1
+  fi
+  _drift="$(cd -P "$ROOT" && git diff --name-only "$_pin_commit" HEAD -- $BUILD_INPUTS 2>/dev/null || true)"
+  if [ -n "$_drift" ]; then
+    echo ""
+    echo "REFUSING TO RUN: build inputs changed between the pinned source_commit $_pin_commit"
+    echo "and HEAD:"
+    echo "$_drift"
+    echo ""
+    echo "A rebuild here does not reproduce the pinned artifact, so comparing its hash to the pin"
+    echo "would compare two different programs and call the difference a mismatch, or worse, a match."
+    echo "Attest from $_pin_commit, or record a new pin."
+    echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+    exit 1
+  fi
 fi
 
 _stray=$(grep -rnoE --include="*.md" "\b[0-9a-f]{64}\b" "$ROOT/docs" 2>/dev/null || true)

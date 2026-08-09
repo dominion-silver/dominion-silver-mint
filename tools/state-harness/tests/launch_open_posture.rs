@@ -626,7 +626,7 @@ fn launch_open_the_budget_replenishes_so_it_is_a_rate_limit_not_a_loss_cap() {
     f.warp(2 * DEFAULT_INSTANT_REDEEM_WINDOW_SECONDS as i64 + 1);
     expect_ok(
         redeem_fresh(&mut f, &holder, at_budget),
-        "the same budget again after one window",
+        "the same budget again after two windows of silence",
     );
 }
 

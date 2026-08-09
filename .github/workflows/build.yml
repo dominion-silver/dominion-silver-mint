@@ -722,6 +722,13 @@ jobs:
           blob = open(so, "rb").read()
           # solana-verify's convention: trailing zero bytes stripped, then sha256.
           stripped = blob.rstrip(b"\x00")
+          def _bare_semver(raw):
+              """Last whitespace token of `<tool> X.Y.Z`, refused unless it IS a bare semver."""
+              tok = raw.strip().split()[-1] if raw.strip() else ""
+              if not re.fullmatch(r"\d+\.\d+\.\d+", tok):
+                  raise SystemExit(f"solana-verify --version is not a bare semver: {raw.strip()!r}")
+              return tok
+
           src = open("programs/dominion_silver_mint_v2/src/lib.rs").read()
           program_id = re.search(r'declare_id!\("([1-9A-HJ-NP-Za-km-z]+)"\)', src).group(1)
           idl = "target/idl/dominion_silver_mint.json"
@@ -733,8 +740,13 @@ jobs:
               "source_commit": os.environ["GITHUB_SHA"],
               "ci_run_id": os.environ["GITHUB_RUN_ID"],
               "ci_repository": os.environ["GITHUB_REPOSITORY"],
-              "solana_verify_version": subprocess.run(
-                  ["solana-verify", "--version"], capture_output=True, text=True).stdout.strip(),
+              # ROUND 8 A-04. BARE semver, not the raw `--version` line. `solana-verify --version`
+              # prints "solana-verify 0.5.1", the runbook tells the operator to copy this field into
+              # config/mainnet-authorities.json, and the install step feeds that value straight to
+              # `cargo install --version`, which needs a bare semver constraint. Emitting the prefixed
+              # string meant the FIRST ci run after a pin could not install its own pinned tool.
+              "solana_verify_version": _bare_semver(subprocess.run(
+                  ["solana-verify", "--version"], capture_output=True, text=True).stdout),
               "idl_sha256": hashlib.sha256(open(idl, "rb").read()).hexdigest()
                             if os.path.exists(idl) else None,
           }, indent=2))
