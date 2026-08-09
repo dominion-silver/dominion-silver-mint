@@ -208,17 +208,10 @@ fn withdraw(f: &mut Fixture, signer: &Keypair, amount: u64, s: &Sweep) -> TxOutc
     f.send(&[ix], &[signer])
 }
 
+/// ROUND 8: routed through the common helper, which installs the independent guardian that
+/// `unpause` now demands.
 fn unpause(f: &mut Fixture) {
-    let admin = f.admin.insecure_clone();
-    let ix = Instruction {
-        program_id: program_id(),
-        accounts: vec![
-            AccountMeta::new(config_pda(), false),
-            AccountMeta::new_readonly(admin.pubkey(), true),
-        ],
-        data: ix_data("unpause", &[]),
-    };
-    expect_ok(f.send(&[ix], &[&admin]), "unpause");
+    expect_ok(f.unpause(), "unpause");
 }
 
 /// `treasury_min_float_usdc` through its only path, the 24h timelock. Warps the clock past the window.

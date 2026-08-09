@@ -217,16 +217,11 @@ fn pause_as(f: &mut Fixture, signer: &Keypair, guardian_slot: Option<Pubkey>) ->
     f.send(&[ix], &[signer])
 }
 
-fn unpause_as(f: &mut Fixture, signer: &Keypair) -> TxOutcome {
-    let ix = Instruction {
-        program_id: program_id(),
-        accounts: vec![
-            AccountMeta::new(config_pda(), false),
-            AccountMeta::new_readonly(signer.pubkey(), true),
-        ],
-        data: ix_data("unpause", &[]),
-    };
-    f.send(&[ix], &[signer])
+/// ROUND 8: `unpause` takes a mandatory guardian slot. This file already fills all three guardian
+/// slots before it unpauses, so it presents one of ITS OWN guardians rather than asking the common
+/// helper to appoint a fourth, which `max_guardian_count = 3` would refuse.
+fn unpause_as(f: &mut Fixture, signer: &Keypair, guardian_slot: Pubkey) -> TxOutcome {
+    f.unpause_with(signer, guardian_slot)
 }
 
 fn add_guardian_as(f: &mut Fixture, signer: &Keypair, g: Pubkey) -> TxOutcome {
@@ -754,7 +749,7 @@ fn pause_is_admin_or_guardian_and_the_flag_reads_back_on_chain() {
     let (g1, g2, _g3) = with_three_guardians(&mut f);
     let admin = f.admin.insecure_clone();
     let stranger = f.stranger.insecure_clone();
-    expect_ok(unpause_as(&mut f, &admin), "unpause to start from live");
+    expect_ok(unpause_as(&mut f, &admin, guardian_pda(&g2.pubkey())), "unpause to start from live");
     assert!(!f.config().paused);
 
     // The worst failure mode in the file: a pause that emits Paused and never writes the flag, so an
@@ -762,14 +757,14 @@ fn pause_is_admin_or_guardian_and_the_flag_reads_back_on_chain() {
     expect_ok(pause_as(&mut f, &admin, None), "pause by the admin");
     assert!(f.config().paused, "pause did not persist config.paused");
 
-    expect_ok(unpause_as(&mut f, &admin), "unpause");
+    expect_ok(unpause_as(&mut f, &admin, guardian_pda(&g2.pubkey())), "unpause");
     expect_ok(
         pause_as(&mut f, &g1, Some(guardian_pda(&g1.pubkey()))),
         "pause by an active guardian",
     );
     assert!(f.config().paused, "a guardian pause did not persist");
 
-    expect_ok(unpause_as(&mut f, &admin), "unpause");
+    expect_ok(unpause_as(&mut f, &admin, guardian_pda(&g2.pubkey())), "unpause");
     expect_error(pause_as(&mut f, &stranger, None), E_UNAUTHORIZED, "pause by a stranger");
     assert!(!f.config().paused, "a refused pause halted the protocol anyway");
     // The seeds attribute is what makes may_act's re-check unnecessary; without it this is 12013.
@@ -789,7 +784,7 @@ fn pause_is_admin_or_guardian_and_the_flag_reads_back_on_chain() {
     );
     assert!(f.config().paused);
 
-    expect_ok(unpause_as(&mut f, &admin), "unpause");
+    expect_ok(unpause_as(&mut f, &admin, guardian_pda(&g2.pubkey())), "unpause");
     f.warp(ADMIN_TIMELOCK_SECONDS as i64 + 1);
     let payer = funded(&mut f);
     expect_ok(finalize_removal(&mut f, &payer, g1.pubkey()), "finalize g1");
@@ -810,11 +805,11 @@ fn unpause_is_admin_only_and_instant() {
     assert!(f.config().paused, "a fresh deploy is paused");
 
     // Guardians hold the pause, not the resume: a guardian that could unpause would defeat its own veto.
-    expect_error(unpause_as(&mut f, &g1), E_CONSTRAINT_HAS_ONE, "unpause by a guardian");
-    expect_error(unpause_as(&mut f, &stranger), E_CONSTRAINT_HAS_ONE, "unpause by a stranger");
+    expect_error(unpause_as(&mut f, &g1, guardian_pda(&g1.pubkey())), E_CONSTRAINT_HAS_ONE, "unpause by a guardian");
+    expect_error(unpause_as(&mut f, &stranger, guardian_pda(&g1.pubkey())), E_CONSTRAINT_HAS_ONE, "unpause by a stranger");
     assert!(f.config().paused, "a refused unpause resumed the protocol");
 
-    expect_ok(unpause_as(&mut f, &admin), "unpause by the admin");
+    expect_ok(unpause_as(&mut f, &admin, guardian_pda(&g1.pubkey())), "unpause by the admin");
     assert!(!f.config().paused, "unpause did not persist; the protocol can never resume");
 }
 

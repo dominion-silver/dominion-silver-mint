@@ -105,17 +105,10 @@ impl Guards {
 
 // ---------------------------------------------------------------- generic helpers
 
+/// ROUND 8: `unpause` demands an active guardian distinct from the admin, so the seven copies of
+/// this helper now all route through the one in common, which installs that guardian on demand.
 fn unpause(f: &mut Fixture) {
-    let admin = f.admin.insecure_clone();
-    let ix = Instruction {
-        program_id: program_id(),
-        accounts: vec![
-            AccountMeta::new(config_pda(), false),
-            AccountMeta::new_readonly(admin.pubkey(), true),
-        ],
-        data: ix_data("unpause", &[]),
-    };
-    expect_ok(f.send(&[ix], &[&admin]), "unpause");
+    expect_ok(f.unpause(), "unpause");
     assert!(!f.config().paused, "unpause did not clear config.paused");
 }
 

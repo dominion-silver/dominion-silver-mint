@@ -201,7 +201,7 @@ for (const rpc of [
   // be exempt from anything. It is a SENDER, listed below, and INDIRECT, because it takes an already
   // guarded Connection from its caller and resolves no cluster of its own.
   //
-  // Moving those calls out of step7/step8 is exactly the failure mode the handover calls A, changing
+  // Moving those calls out of step 8 is exactly the failure mode the handover calls A, changing
   // a mechanism without propagating to what describes it: this gate went red on the same commit,
   // which is why it exists.
 
@@ -210,7 +210,6 @@ for (const rpc of [
     "bump-staleness.ts",
     "cancel-all.ts",
     "_ceremony-emit.ts",
-    "ceremony-step7.ts",
     "ceremony-step8.ts",
     "cancel-bad-proposal.ts",
     "cancel-nonce-1.ts",
@@ -234,7 +233,10 @@ for (const rpc of [
   // still REQUIRED to call requireSanctionedCluster, which is asserted separately, and they do.
   const INDIRECT = new Set([
     "upgrade-program.ts",
-    "ceremony-step7.ts",
+    // ROUND 8: `ceremony-step7.ts` is DELETED with runbook step 7. The public-mint open it proposed
+    // no longer exists as a launch action: initialize ships that switch open, so the proposal would
+    // revert PublicMintUnchanged. The check below refuses a manifest entry naming a deleted script,
+    // which is what forced this line to go with the file.
     "ceremony-step8.ts",
   ]);
   // `_ceremony-emit.ts` is deliberately NOT here. INDIRECT means "no send primitive is expected to
@@ -261,6 +263,11 @@ for (const rpc of [
     // `require.main === module`, so importing the decision no longer starts the upgrade script. That
     // guard was found by this classification failing.
     "test-upgrade-gate.ts",
+    // ROUND 8 T8-06. Imports `buildStep8Actions` from ceremony-step8.ts and calls it with literals.
+    // Builders stop at `.instruction()`, so nothing is signed and nothing is sent, and the module it
+    // imports guards `main()` behind `require.main === module` for the same reason test-upgrade-gate
+    // needed that guard: importing a decision must not start a ceremony.
+    "test-ceremony-inventory-flow.ts",
   ]);
 
   const files = fs.readdirSync(scriptsDir).filter((x) => x.endsWith(".ts") && !helpers.has(x));

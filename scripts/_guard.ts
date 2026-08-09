@@ -26,7 +26,12 @@ export const ACTION_COST: Record<string, ActionCost> = {
   pause: "reversible",
   unpause: "reversible",
   add_guardian: "reversible",
-  set_inventory_wallet: "reversible",
+  // ROUND 8 T8-03: `set_inventory_wallet` is DELETED from the program, so it is deleted here too. An
+  // action missing from this table is REFUSED, which is the behaviour we want for a name that no
+  // longer dispatches. The destination is now bound by `initialize` (irreversible, below) and the
+  // only later writer is the 24h-timelocked pair.
+  propose_set_inventory_wallet: "reversible", // a proposal can be cancelled instantly
+  execute_set_inventory_wallet: "timelocked-undo", // moving it back costs another full window
   admin_premint: "reversible", // adds supply; the cap bounds it
   propose_any: "reversible", // a proposal can be cancelled instantly
   cancel_timelocked_action: "reversible",

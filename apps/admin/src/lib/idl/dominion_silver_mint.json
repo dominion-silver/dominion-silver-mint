@@ -4105,56 +4105,6 @@
       ]
     },
     {
-      "name": "set_inventory_wallet",
-      "docs": [
-        "Binds the pre-mint destination ONCE. Refuses if one is already set: use the two above."
-      ],
-      "discriminator": [
-        145,
-        245,
-        215,
-        189,
-        240,
-        207,
-        205,
-        219
-      ],
-      "accounts": [
-        {
-          "name": "config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        }
-      ],
-      "args": [
-        {
-          "name": "wallet",
-          "type": "pubkey"
-        }
-      ]
-    },
-    {
       "name": "set_kyc_operator",
       "discriminator": [
         90,
@@ -4496,6 +4446,38 @@
           "relations": [
             "config"
           ]
+        },
+        {
+          "name": "guardian",
+          "docs": [
+            "ROUND 8, the conditional P2 that comes with the open launch posture. `unpause` used to check",
+            "the admin signature and nothing else, while `initialize` leaves `guardian_count = 0`. With",
+            "mint and redeem now OPEN in the initial state, that sequence lets a ceremony slip or a",
+            "compromised admin switch every flow on before any independent party can pause or cancel. The",
+            "timelocks and the emergency response both assume that party exists."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  117,
+                  97,
+                  114,
+                  100,
+                  105,
+                  97,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "guardian.guardian",
+                "account": "GuardianAccount"
+              }
+            ]
+          }
         }
       ],
       "args": []
@@ -5679,7 +5661,7 @@
     {
       "code": 12086,
       "name": "InventoryWalletNotSet",
-      "msg": "Inventory wallet is not set; call set_inventory_wallet first"
+      "msg": "Inventory wallet is not set; initialize binds it and only the 24h timelock can change it"
     },
     {
       "code": 12087,
@@ -5865,6 +5847,16 @@
       "code": 12123,
       "name": "InventoryWalletUnchanged",
       "msg": "the proposed inventory wallet is the one already configured"
+    },
+    {
+      "code": 12124,
+      "name": "NoActiveGuardian",
+      "msg": "no active guardian is registered: unpause would enable every flow with no independent brake"
+    },
+    {
+      "code": 12125,
+      "name": "GuardianNotIndependent",
+      "msg": "the supplied guardian is the current admin, so it is not an independent brake"
     }
   ],
   "types": [
@@ -6769,6 +6761,23 @@
           {
             "name": "max_guardian_count",
             "type": "u8"
+          },
+          {
+            "name": "inventory_wallet",
+            "docs": [
+              "ROUND 8 T8-03, option A. The pre-mint DESTINATION, bound ATOMICALLY with the rest of the",
+              "configuration, and the instant setter that used to bind it is DELETED.",
+              "",
+              "The round-7 shape kept a one-shot instant binding on the argument that with the field unset",
+              "there was \"nothing to steal\". That argument was wrong, and the refutation is clean: compromise",
+              "the Ops key DURING the ceremony, BEFORE the legitimate binding. The attacker binds their own",
+              "wallet, unpauses, and issues up to the whole hard cap into their ATA, with no delay and no",
+              "guardian veto. It confused supply already minted with issuance power still available.",
+              "",
+              "Appended LAST, so the 142-byte prefix of the previous layout is untouched and the only",
+              "difference on the wire is 32 more bytes."
+            ],
+            "type": "pubkey"
           }
         ]
       }

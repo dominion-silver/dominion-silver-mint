@@ -204,17 +204,10 @@ fn pause(f: &mut Fixture) -> TxOutcome {
     f.send(&[ix], &[&admin])
 }
 
+/// ROUND 8: routed through the common helper, which installs the independent guardian that
+/// `unpause` now demands.
 fn unpause(f: &mut Fixture) -> TxOutcome {
-    let admin = f.admin.insecure_clone();
-    let ix = Instruction {
-        program_id: program_id(),
-        accounts: vec![
-            AccountMeta::new(config_pda(), false),
-            AccountMeta::new_readonly(admin.pubkey(), true),
-        ],
-        data: ix_data("unpause", &[]),
-    };
-    f.send(&[ix], &[&admin])
+    f.unpause()
 }
 
 fn set_redemptions_enabled(f: &mut Fixture, enabled: bool) -> TxOutcome {
@@ -237,12 +230,44 @@ fn live() -> Fixture {
     f
 }
 
+/// `live()`, then both switches CLOSED through their instant setters.
+///
+/// ROUND 8 flipped the launch posture: `initialize` now ships `redemptions_enabled` and
+/// `public_mint_enabled` open, so a proposal to open them is a ProposalNoOp and the timelocked OPEN
+/// path becomes untestable from the launch state. The property under test never changed. Only the
+/// starting point did, so these tests close first and then prove the open still costs 24 hours, is
+/// still admin-only, still refuses to land while paused, and is still cancellable.
+///
+/// Closing is itself the permitted direction of both setters, and this helper asserts both landed:
+/// if a close silently no-opped, every test built on it would be starting from an OPEN state and
+/// proving nothing.
+fn live_closed() -> Fixture {
+    let mut f = live();
+    expect_ok(set_redemptions_enabled(&mut f, false), "fixture: close redemptions");
+    let admin = f.admin.insecure_clone();
+    let close_mint = Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(config_pda(), false),
+            AccountMeta::new_readonly(admin.pubkey(), true),
+        ],
+        data: ix_data("set_public_mint_enabled", &[0]),
+    };
+    expect_ok(f.send(&[close_mint], &[&admin]), "fixture: close the public mint");
+    let c = f.config();
+    assert!(!c.redemptions_enabled, "fixture: redemptions did not close");
+    assert!(!c.public_mint_enabled, "fixture: the public mint did not close");
+    f
+}
+
 fn warp_past_the_window(f: &mut Fixture) {
     let secs = f.config().admin_timelock_seconds as i64;
     f.warp(secs + 1);
 }
 
-/// The four throttles plus the switch are all still at their launch values.
+/// The four throttles are still at their launch values and the redeem switch is still CLOSED.
+/// Every caller starts from `live_closed()`, so an open switch here means a proposal that was
+/// refused, pending or disarmed applied itself anyway.
 fn assert_throttles_untouched(f: &Fixture, what: &str) {
     let c = f.config();
     assert_eq!(
@@ -284,7 +309,7 @@ fn assert_nothing_queued(f: &Fixture, nonce: u64, what: &str) {
 fn execute_set_redeem_limits_writes_every_field_including_the_redeem_switch() {
     // The only path that can OPEN redemptions. Proves the write reaches the account: the values are
     // read back from the VM, and each is at its fat-finger ceiling so the bounds are inclusive.
-    let mut f = live();
+    let mut f = live_closed();
     let l = Limits {
         budget: Some(INSTANT_BUDGET_CEILING_USDC),
         window: Some(INSTANT_WINDOW_MAX_SECONDS),
@@ -337,7 +362,7 @@ fn execute_set_redeem_limits_writes_every_field_including_the_redeem_switch() {
 #[test]
 fn execute_set_redeem_limits_refuses_a_non_admin_executor() {
     // A matured loosening must not be triggerable by a third party.
-    let mut f = live();
+    let mut f = live_closed();
     let l = Limits {
         enabled: Some(true),
         ..Default::default()
@@ -374,7 +399,7 @@ fn execute_set_redeem_limits_refuses_a_non_admin_executor() {
 fn execute_set_redeem_limits_refuses_to_land_while_paused() {
     // A queued open must not sit armed through an incident and take effect the moment somebody
     // unpauses, which is exactly when nobody is re-evaluating it.
-    let mut f = live();
+    let mut f = live_closed();
     let l = Limits {
         enabled: Some(true),
         ..Default::default()
@@ -408,7 +433,7 @@ fn execute_set_redeem_limits_refuses_to_land_while_paused() {
 fn a_disarmed_redeem_limits_proposal_can_no_longer_be_executed() {
     // The A7 bind. `set_redemptions_enabled(false)` clears `pending_redeem_limits_nonce` but leaves
     // the timelock account alive; without the bind the disarm is decorative and the proposal lands.
-    let mut f = live();
+    let mut f = live_closed();
     let (r, open_nonce) = propose_limits(
         &mut f,
         Limits {
@@ -469,7 +494,7 @@ fn a_disarmed_redeem_limits_proposal_can_no_longer_be_executed() {
 fn propose_set_redeem_limits_refuses_every_value_past_its_fat_finger_rail() {
     // The propose-side half of the ceilings. Each case pins its own code, and each is followed by a
     // read of the config: a rejected proposal must leave no armed slot and no consumed nonce.
-    let mut f = live();
+    let mut f = live_closed();
     let live_window = Some(DEFAULT_INSTANT_REDEEM_WINDOW_SECONDS / 2);
     let cases: [(Limits, u32, &str); 5] = [
         (
@@ -527,7 +552,7 @@ fn propose_set_redeem_limits_refuses_every_value_past_its_fat_finger_rail() {
 fn execute_set_redeem_limits_re_validates_the_rails_on_a_tampered_payload() {
     // The execute-side half of the same ceilings. The propose handler pre-validates, so the only way
     // to reach this re-validation is a payload that changed after it was queued.
-    let mut f = live();
+    let mut f = live_closed();
     let (r, nonce) = propose_limits(
         &mut f,
         Limits {
@@ -707,7 +732,7 @@ fn execute_set_treasury_min_float_re_validates_the_ceiling_on_a_tampered_payload
 fn execute_set_public_mint_disarms_the_slot_it_consumed() {
     // The single-active slot must be freed, else the public mint can never be changed again: propose
     // refuses while `pending_public_mint_nonce` is Some.
-    let mut f = live();
+    let mut f = live_closed();
     let (r, nonce) = propose(&mut f, "propose_set_public_mint", &[1]);
     expect_ok(r, "propose_set_public_mint");
     assert_eq!(
@@ -733,7 +758,7 @@ fn execute_set_public_mint_disarms_the_slot_it_consumed() {
 #[test]
 fn execute_set_public_mint_refuses_a_non_admin_executor() {
     // Opening the public mint wakes the oracle path; a third party must not choose when.
-    let mut f = live();
+    let mut f = live_closed();
     let (r, nonce) = propose(&mut f, "propose_set_public_mint", &[1]);
     expect_ok(r, "propose_set_public_mint");
     warp_past_the_window(&mut f);
@@ -763,7 +788,7 @@ fn execute_set_public_mint_refuses_a_non_admin_executor() {
 fn execute_set_public_mint_refuses_to_land_while_paused() {
     // A matured open must not land mid-incident and wake the oracle path the instant somebody
     // unpauses.
-    let mut f = live();
+    let mut f = live_closed();
     let (r, nonce) = propose(&mut f, "propose_set_public_mint", &[1]);
     expect_ok(r, "propose_set_public_mint");
     warp_past_the_window(&mut f);

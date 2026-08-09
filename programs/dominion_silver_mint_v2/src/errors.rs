@@ -189,7 +189,11 @@ pub enum DominionError {
     SupplyCapRaiseBlocked,
     #[msg("Public direct mint is disabled (closed at launch; opens with KYC in Phase 1)")]
     PublicMintDisabled,
-    #[msg("Inventory wallet is not set; call set_inventory_wallet first")]
+    /// ROUND 8 T8-03: `set_inventory_wallet` no longer exists, so this is now raised by `initialize`
+    /// (which refuses to bind the default) and by the readers that refuse to act on an unset field.
+    #[msg(
+        "Inventory wallet is not set; initialize binds it and only the 24h timelock can change it"
+    )]
     InventoryWalletNotSet,
     #[msg("Pre-mint destination is not owned by the configured inventory wallet")]
     InvalidInventoryDestination,
@@ -326,9 +330,13 @@ pub enum DominionError {
     #[msg("this price envelope was already used: another operation consumed it, retry with a fresh price")]
     LazerReplayed,
 
-    /// ROUND 7. `set_inventory_wallet` is instant ONLY for the first binding, when the field is still
-    /// the default. Any CHANGE is a redirect of where pre-minted supply lands, and goes through the
-    /// 24h timelock so a guardian can cancel it.
+    /// ROUND 7. `set_inventory_wallet` was instant ONLY for the first binding, when the field was
+    /// still the default; any CHANGE went through the 24h timelock.
+    ///
+    /// ROUND 8 T8-03 made this variant UNREACHABLE: the instruction that raised it is gone, and
+    /// `initialize` is now the first and only instant binding. It stays here because this enum is
+    /// APPEND ONLY: removing it would renumber `InventoryWalletUnchanged` and everything after it,
+    /// silently changing the meaning of error codes already quoted in clients, tests and audits.
     #[msg("the inventory wallet is already set: changing it requires propose_set_inventory_wallet and the 24h timelock")]
     InventoryWalletChangeRequiresTimelock,
 

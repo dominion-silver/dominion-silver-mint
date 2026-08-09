@@ -132,9 +132,26 @@ export const proposeSetPublicMint = (c: BuildCtx, on: boolean): Ix =>
 
 export const setRedemptionsEnabled = (c: BuildCtx, on: boolean): Ix =>
   instant(c, "setRedemptionsEnabled", on);
-// Instant. The admin_premint destination ATA is derived off-chain against this wallet.
-export const setInventoryWallet = (c: BuildCtx, wallet: PublicKey): Ix =>
-  instant(c, "setInventoryWallet", wallet);
+
+/**
+ * ROUND 8 T8-03. There is NO instant inventory setter any more, in the program or here.
+ *
+ * The pre-mint destination is an argument of `initialize`, bound atomically with everything else and
+ * validated non-default. `set_inventory_wallet` was deleted, not restricted: an instant first binding
+ * still let a key compromised DURING the ceremony bind the attacker's wallet before the legitimate
+ * one, with no delay and no veto. The builder that wrapped it is gone for the same reason: leaving it
+ * would send a discriminator the program no longer dispatches, and an operator would read the failure
+ * as an outage rather than as a removed capability.
+ *
+ * The remaining operational need is a LATER change (key rotation, custody move), and that is the
+ * 24h-timelocked pair below plus the shared `cancelTimelockedAction`, which a guardian can use inside
+ * the window. `proposeSetInventoryWallet` occupies the single `pending_inventory_wallet_nonce` slot,
+ * so exactly one change can be armed at a time and a guardian has one thing to watch.
+ */
+export const proposeSetInventoryWallet = (
+  c: BuildCtx,
+  wallet: PublicKey,
+): Ix => propose(c, "proposeSetInventoryWallet", [wallet]);
 
 /**
  * ROUND 5 P1-04. The MINIMUM SIZE OF A PRICED OPERATION, atomic USDC: `amount_usdc` on mint, the gross
@@ -595,7 +612,10 @@ export type ExecMethod =
   | "executeSetAdminTimelock"
   | "executeSetComplianceMode"
   | "executeSetRedeemLimits"
-  | "executeSetPublicMint";
+  | "executeSetPublicMint"
+  // ROUND 8 T8-03: the ONLY remaining writer of config.inventory_wallet. Same generic shape as the
+  // rest (admin, timelock PDA, rent recipient), so it needs no bespoke builder.
+  | "executeSetInventoryWallet";
 export const EXEC_METHODS: ExecMethod[] = [
   "executeSetPremiumMint",
   "executeSetPremiumRedeem",
@@ -606,6 +626,7 @@ export const EXEC_METHODS: ExecMethod[] = [
   "executeSetComplianceMode",
   "executeSetRedeemLimits",
   "executeSetPublicMint",
+  "executeSetInventoryWallet",
 ];
 
 export async function executeTimelocked(

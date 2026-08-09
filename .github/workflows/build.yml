@@ -267,6 +267,19 @@ jobs:
         # Root deps are installed above; re-running npm ci here just paid for the same install twice.
         run: npx --no-install tsx scripts/verify-client-idl-parity.ts
 
+      # ROUND 8 T8-03. The acceptance runner for option A, wired into CI in the SAME commit that adds
+      # it: round 4's P1-04 was a harness that existed, passed locally and gated no merge, and this is
+      # the same shape. `--no-build` because the release artifact was built above and the whole point
+      # is to test THOSE bytes; it also re-reads the three IDL copies and the client parity gate, so it
+      # must sit after the regenerate and parity steps.
+      - name: T8-03 option A - the pre-mint destination cannot be redirected (BLOCKING)
+        run: bash scripts/test-inventory-option-a.sh --no-build
+
+      # ROUND 8 T8-06, the ceremony half. Offline: it drives ceremony-step8's pure builder and decodes
+      # the instruction bytes. The panel half runs inside the admin app's vitest step below.
+      - name: T8-06 ceremony emits no instant inventory setter (BLOCKING)
+        run: npx --no-install tsx scripts/test-ceremony-inventory-flow.ts
+
       - name: Public app (BLOCKING - typecheck, tests, production build)
         working-directory: apps/public
         run: |

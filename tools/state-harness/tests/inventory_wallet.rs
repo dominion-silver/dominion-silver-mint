@@ -1,43 +1,40 @@
-// ROUND 7. The pre-mint DESTINATION, and the redirect both auditors refused to let ship.
+// ROUND 7, then ROUND 8 T8-03. The pre-mint DESTINATION, and the redirect both auditors refused to
+// let ship.
 //
 // THE ATTACK, in the words of the Codex report: the admin can `set_inventory_wallet(attacker)` and
 // then `admin_premint(remaining cap headroom)` in the same block. The hard cap bounds how much can be
 // taken; it provides no window in which anyone could see it coming and no way to stop it.
 //
-// THE SHAPE OF THE FIX, which these tests exist to pin down. The FIRST binding stays instant, because
-// with the field unset `admin_premint` refuses outright and there is nothing to redirect. Every
-// CHANGE goes through propose + 24h + execute, and is guardian-cancellable like every other timelocked
-// action. That deviation from the letter of the auditors' condition is deliberate and is what the
-// first two tests below assert, so it cannot be lost silently in a later refactor.
+// ROUND 7's fix kept the FIRST binding instant, on the argument that with the field unset
+// `admin_premint` refuses outright and there is nothing to redirect. Codex refuted that in round 8:
+// compromise the Ops key DURING the ceremony, before the legitimate binding, and the attacker binds
+// their own wallet with no delay and no veto. "Nothing to steal" confused supply already minted with
+// issuance power still available.
+//
+// OPTION A, what this file now pins. `inventory_wallet` is an argument of `initialize`, bound
+// atomically with everything else and validated non-default. `set_inventory_wallet` is DELETED, not
+// restricted: the instruction, its Accounts struct and its lib.rs entry are gone. The only writer
+// left is `execute_set_inventory_wallet`, behind the 24h timelock and guardian-cancellable.
+//
+// WHAT THIS FILE DOES NOT CLOSE, and D11 is the answer to it: tokens already held by the LEGITIMATE
+// destination. With redemptions open at launch, whoever holds that key redeems them into treasury
+// USDC with no admin instruction and no timelock. That is custody, not program logic.
 
 mod common;
 
 use common::*;
+use solana_sdk::account::Account;
 use solana_sdk::instruction::{AccountMeta, Instruction};
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::{Keypair, Signer};
 
-const E_INVENTORY_WALLET_NOT_SET: u32 = 12086;
 const E_TIMELOCK_NOT_ELAPSED: u32 = 12028;
 const E_NONCE_MISMATCH: u32 = 12042;
 const E_PROPOSAL_ALREADY_ACTIVE: u32 = 12044;
 const E_CONSTRAINT_HAS_ONE: u32 = 2001;
 
-// Appended at the end of the error enum, so these two are the last codes in it.
-const E_INVENTORY_CHANGE_REQUIRES_TIMELOCK: u32 = 12122;
+// Appended at the end of the error enum, so this is one of the last codes in it.
 const E_INVENTORY_UNCHANGED: u32 = 12123;
-
-fn set_inventory_as(f: &mut Fixture, signer: &Keypair, wallet: Pubkey) -> TxOutcome {
-    let ix = Instruction {
-        program_id: program_id(),
-        accounts: vec![
-            AccountMeta::new(config_pda(), false),
-            AccountMeta::new_readonly(signer.pubkey(), true),
-        ],
-        data: ix_data("set_inventory_wallet", wallet.as_ref()),
-    };
-    f.send(&[ix], &[signer])
-}
 
 fn propose_inventory_as(f: &mut Fixture, signer: &Keypair, wallet: Pubkey) -> (TxOutcome, u64) {
     let nonce = f.config().next_timelock_nonce;
@@ -68,26 +65,16 @@ fn execute_inventory_as(f: &mut Fixture, signer: &Keypair, nonce: u64, rent: Pub
     f.send(&[ix], &[signer])
 }
 
-fn unpause(f: &mut Fixture) -> TxOutcome {
-    let admin = f.admin.insecure_clone();
-    let ix = Instruction {
-        program_id: program_id(),
-        accounts: vec![
-            AccountMeta::new(config_pda(), false),
-            AccountMeta::new_readonly(admin.pubkey(), true),
-        ],
-        data: ix_data("unpause", &[]),
-    };
-    f.send(&[ix], &[&admin])
-}
-
 /// The fixture ships PAUSED, which is the launch posture. `execute_set_inventory_wallet` refuses a
 /// redirect while paused ON PURPOSE: it would otherwise take effect the instant somebody unpauses,
 /// which is exactly when nobody is watching this field. Tests that reach an execute therefore need a
 /// live protocol, and the ones that do not deliberately keep the paused fixture.
+///
+/// ROUND 8: going live is no longer one admin signature. `unpause` demands an active guardian
+/// distinct from the admin, and the common helper installs one.
 fn live() -> Fixture {
     let mut f = Fixture::new_bare();
-    expect_ok(unpause(&mut f), "fixture: unpause");
+    expect_ok(f.unpause(), "fixture: unpause");
     f
 }
 
@@ -95,58 +82,22 @@ fn inventory(f: &Fixture) -> Pubkey {
     Pubkey::new_from_array(f.config().inventory_wallet)
 }
 
-// ---------------------------------------------------------------- the first binding
-
-#[test]
-fn the_first_binding_is_instant_and_the_second_is_refused() {
-    let mut f = Fixture::new();
-    let admin = f.admin.insecure_clone();
-    let first = Pubkey::new_unique();
-    let second = Pubkey::new_unique();
-
-    assert_eq!(inventory(&f), Pubkey::default(), "the fixture starts unbound");
-    expect_ok(set_inventory_as(&mut f, &admin, first), "the first binding");
-    assert_eq!(inventory(&f), first, "the first binding did not persist");
-
-    // THE WHOLE POINT. A second instant call is the redirect, and it is refused with an error that
-    // names the path to take instead.
-    expect_error(
-        set_inventory_as(&mut f, &admin, second),
-        E_INVENTORY_CHANGE_REQUIRES_TIMELOCK,
-        "an instant CHANGE of an already-bound inventory wallet",
-    );
-    assert_eq!(inventory(&f), first, "the refused call moved the wallet anyway");
-}
-
-#[test]
-fn the_first_binding_still_refuses_the_default_pubkey_and_a_stranger() {
-    let mut f = Fixture::new();
-    let admin = f.admin.insecure_clone();
-    let stranger = f.stranger.insecure_clone();
-
-    expect_error(
-        set_inventory_as(&mut f, &admin, Pubkey::default()),
-        E_INVENTORY_WALLET_NOT_SET,
-        "binding the zero pubkey",
-    );
-    expect_error(
-        set_inventory_as(&mut f, &stranger, Pubkey::new_unique()),
-        E_CONSTRAINT_HAS_ONE,
-        "a stranger binding the inventory wallet",
-    );
-    assert_eq!(inventory(&f), Pubkey::default(), "the wallet was bound anyway");
-}
-
 // ---------------------------------------------------------------- the timelocked change
+//
+// There is no "first binding" section any more. `initialize` performs the first and only instant
+// binding, and initialize.rs owns the proof of both halves: the readback of the requested key, and
+// the refusal of the default pubkey. Everything below starts from a wallet the fixture already
+// bound, which is exactly the state a real deployment is in the moment the ceremony ends.
 
 #[test]
 fn a_change_takes_a_proposal_the_full_delay_and_an_execute() {
     let mut f = live();
     let admin = f.admin.insecure_clone();
     let admin_key = admin.pubkey();
-    let first = Pubkey::new_unique();
+    // The wallet `initialize` bound. There is no instruction that could have put it there afterwards.
+    let first = inventory(&f);
+    assert_ne!(first, Pubkey::default(), "the fixture must start bound");
     let second = Pubkey::new_unique();
-    expect_ok(set_inventory_as(&mut f, &admin, first), "bind");
 
     let (r, nonce) = propose_inventory_as(&mut f, &admin, second);
     expect_ok(r, "propose the change");
@@ -184,7 +135,6 @@ fn a_change_takes_a_proposal_the_full_delay_and_an_execute() {
 fn only_one_change_may_be_armed_at_a_time() {
     let mut f = Fixture::new();
     let admin = f.admin.insecure_clone();
-    expect_ok(set_inventory_as(&mut f, &admin, Pubkey::new_unique()), "bind");
 
     let (r, _) = propose_inventory_as(&mut f, &admin, Pubkey::new_unique());
     expect_ok(r, "the first proposal");
@@ -199,8 +149,7 @@ fn only_one_change_may_be_armed_at_a_time() {
 fn proposing_the_wallet_already_configured_is_refused() {
     let mut f = Fixture::new();
     let admin = f.admin.insecure_clone();
-    let bound = Pubkey::new_unique();
-    expect_ok(set_inventory_as(&mut f, &admin, bound), "bind");
+    let bound = inventory(&f);
 
     // A no-op costs a 24h window and a guardian's attention for nothing.
     let (r, _) = propose_inventory_as(&mut f, &admin, bound);
@@ -213,8 +162,7 @@ fn a_stranger_may_neither_propose_nor_execute_a_change() {
     let admin = f.admin.insecure_clone();
     let admin_key = admin.pubkey();
     let stranger = f.stranger.insecure_clone();
-    let first = Pubkey::new_unique();
-    expect_ok(set_inventory_as(&mut f, &admin, first), "bind");
+    let first = inventory(&f);
 
     let (r, _) = propose_inventory_as(&mut f, &stranger, Pubkey::new_unique());
     expect_error(r, E_CONSTRAINT_HAS_ONE, "a stranger proposing a redirect");
@@ -236,8 +184,7 @@ fn cancelling_a_change_releases_the_slot_and_leaves_the_wallet_alone() {
     let mut f = live();
     let admin = f.admin.insecure_clone();
     let admin_key = admin.pubkey();
-    let first = Pubkey::new_unique();
-    expect_ok(set_inventory_as(&mut f, &admin, first), "bind");
+    let first = inventory(&f);
 
     let (r, nonce) = propose_inventory_as(&mut f, &admin, Pubkey::new_unique());
     expect_ok(r, "propose");
@@ -271,27 +218,112 @@ fn cancelling_a_change_releases_the_slot_and_leaves_the_wallet_alone() {
 
 // ---------------------------------------------------------------- the attack itself
 
+/// A Token-2022 SILV token account for `owner`, written straight into the VM. `admin_premint` only
+/// requires a well-formed account whose mint and owner it can read; nothing here needs the extensions,
+/// and the base 165-byte body is a valid Token-2022 account.
+fn place_silv_token_account(f: &mut Fixture, owner: &Pubkey) -> Pubkey {
+    let mint = f.silv_mint;
+    let addr = ata(&mint, owner, &pk(TOKEN_2022_PROGRAM));
+    let mut body = vec![0u8; 165];
+    body[0..32].copy_from_slice(mint.as_ref());
+    body[32..64].copy_from_slice(owner.as_ref());
+    body[64..72].copy_from_slice(&0u64.to_le_bytes()); // amount
+    body[108] = 1; // AccountState::Initialized
+    f.svm
+        .set_account(
+            addr,
+            Account {
+                lamports: 2_039_280,
+                data: body,
+                owner: pk(TOKEN_2022_PROGRAM),
+                executable: false,
+                rent_epoch: 0,
+            },
+        )
+        .unwrap();
+    addr
+}
+
+/// Raw balance at a token account ADDRESS. The common `token_balance` derives the ATA from an owner,
+/// and these tests already hold the address.
+fn balance_at(f: &Fixture, addr: &Pubkey) -> u64 {
+    f.svm
+        .get_account(addr)
+        .map(|a| u64::from_le_bytes(a.data[64..72].try_into().unwrap()))
+        .unwrap_or(0)
+}
+
+fn premint_ix(f: &Fixture, destination_ata: Pubkey, amount: u64) -> Instruction {
+    Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(config_pda(), false),
+            AccountMeta::new_readonly(f.admin.pubkey(), true),
+            AccountMeta::new(f.silv_mint, false),
+            AccountMeta::new(destination_ata, false),
+            AccountMeta::new_readonly(silv_mint_authority_pda(), false),
+            AccountMeta::new_readonly(pk(TOKEN_2022_PROGRAM), false),
+        ],
+        data: ix_data("admin_premint", &amount.to_le_bytes()),
+    }
+}
+
 #[test]
 fn the_redirect_then_premint_pair_cannot_happen_in_one_block() {
-    let mut f = Fixture::new();
+    // THE Codex scenario, assembled for real rather than argued about: one transaction carrying the
+    // historical redirect discriminator followed by `admin_premint` of the cap headroom into the
+    // attacker's ATA. Under option A the first instruction has no handler, so the transaction fails
+    // atomically and the second one never runs.
+    //
+    // The premint half is a REAL instruction with real accounts, and the test proves it separately:
+    // the same premint into the LEGITIMATE destination succeeds. Without that control the test would
+    // pass just as happily if `admin_premint` were broken for every destination.
+    let mut f = live();
     let admin = f.admin.insecure_clone();
-    let legitimate = Pubkey::new_unique();
+    let legitimate = inventory(&f);
     let attacker = Pubkey::new_unique();
-    expect_ok(set_inventory_as(&mut f, &admin, legitimate), "bind");
+    let legit_ata = place_silv_token_account(&mut f, &legitimate);
+    let attacker_ata = place_silv_token_account(&mut f, &attacker);
+    let amount = 1_000_000u64;
 
-    // This is the Codex scenario, verbatim: redirect, then mint the cap headroom into the new
-    // destination, same block. The first half no longer exists as an instant instruction, so the
-    // pair cannot be assembled at all, and the transaction fails on the redirect rather than after
-    // the supply has moved.
-    expect_error(
-        set_inventory_as(&mut f, &admin, attacker),
-        E_INVENTORY_CHANGE_REQUIRES_TIMELOCK,
-        "the redirect half of the redirect-then-premint pair",
+    let mut redirect_data = anchor_disc("global:set_inventory_wallet").to_vec();
+    redirect_data.extend_from_slice(attacker.as_ref());
+    let redirect = Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(config_pda(), false),
+            AccountMeta::new_readonly(admin.pubkey(), true),
+        ],
+        data: redirect_data,
+    };
+    let steal = premint_ix(&f, attacker_ata, amount);
+
+    let outcome = f.send(&[redirect, steal], &[&admin]);
+    assert!(
+        outcome.is_err(),
+        "the redirect-then-premint pair landed in one transaction"
     );
     assert_eq!(
         inventory(&f),
         legitimate,
-        "the destination moved, so a premint in the same transaction would have landed at the attacker"
+        "the destination moved, so the premint in the same transaction would have landed at the attacker"
+    );
+    assert_eq!(
+        balance_at(&f, &attacker_ata),
+        0,
+        "SILV was issued to the attacker's account"
+    );
+
+    // The control: the premint itself works, into the destination `initialize` bound.
+    let control = premint_ix(&f, legit_ata, amount);
+    expect_ok(
+        f.send(&[control], &[&admin]),
+        "admin_premint into the configured inventory wallet",
+    );
+    assert_eq!(
+        balance_at(&f, &legit_ata),
+        amount,
+        "the control premint issued nothing, so the negative above proves nothing"
     );
 }
 
@@ -300,7 +332,6 @@ fn an_executed_change_cannot_be_replayed() {
     let mut f = live();
     let admin = f.admin.insecure_clone();
     let admin_key = admin.pubkey();
-    expect_ok(set_inventory_as(&mut f, &admin, Pubkey::new_unique()), "bind");
 
     let target = Pubkey::new_unique();
     let (r, nonce) = propose_inventory_as(&mut f, &admin, target);
@@ -322,7 +353,6 @@ fn a_change_cannot_be_executed_through_the_wrong_action_slot() {
     let mut f = live();
     let admin = f.admin.insecure_clone();
     let admin_key = admin.pubkey();
-    expect_ok(set_inventory_as(&mut f, &admin, Pubkey::new_unique()), "bind");
 
     // Arm an inventory change, then try to drive it through a nonce that is not the armed one. The
     // handler binds to `config.pending_inventory_wallet_nonce`, so a stray nonce is a mismatch.

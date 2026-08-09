@@ -165,16 +165,11 @@ fn cancel_transfer_as(f: &mut Fixture, signer: &Keypair, guardian_slot: Option<P
     f.send(&[ix], &[signer])
 }
 
+/// ROUND 8: routed through the common helper, which installs the independent guardian `unpause` now
+/// demands. Callers in this file MUST install it while the ORIGINAL admin still holds the office:
+/// `add_guardian` is `has_one = admin`, so an appointment attempted after a handover is refused.
 fn unpause_as(f: &mut Fixture, signer: &Keypair) -> TxOutcome {
-    let ix = Instruction {
-        program_id: program_id(),
-        accounts: vec![
-            AccountMeta::new(config_pda(), false),
-            AccountMeta::new_readonly(signer.pubkey(), true),
-        ],
-        data: ix_data("unpause", &[]),
-    };
-    f.send(&[ix], &[signer])
+    f.unpause_as(signer)
 }
 
 fn add_guardian(f: &mut Fixture, g: Pubkey) -> TxOutcome {
@@ -357,6 +352,10 @@ fn the_transfer_lifecycle_refuses_an_early_accept_then_moves_the_admin_on_chain(
     let mut f = Fixture::new();
     let incoming = funded(&mut f);
     let old_admin = f.admin.insecure_clone();
+    // ROUND 8: the unpause guardian is appointed HERE, before the handover, because `add_guardian` is
+    // admin-only and the old admin is about to lose that office. The unpause assertions at the end of
+    // this test are about who may CALL unpause, not about who may appoint.
+    f.ensure_unpause_guardian();
     expect_ok(propose_transfer(&mut f, incoming.pubkey()), "propose the handover");
 
     // FIX B: without the eta gate a compromised admin proposes and accepts in the same block and

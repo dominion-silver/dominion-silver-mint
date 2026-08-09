@@ -127,7 +127,10 @@ rm -f "$tmp_out"
 # number, so this runner exited 1 in TWO blocking jobs (gate, reproducible-build). The commit
 # message quoted 154, measured with `cargo test` directly, which is precisely the path that does
 # not go through the check whose error text says to update this in the SAME commit.
-EXPECTED_STATE_TESTS=164
+# ROUND 8 lot 1. 164 -> 166. Two `option_a_` scenarios and `initialize_refuses_a_zero_inventory_wallet`
+# and `a_closed_redeem_switch_can_only_be_reopened_through_the_24h_timelock` were added; the two tests
+# of the deleted `set_inventory_wallet` first-binding were removed with the instruction.
+EXPECTED_STATE_TESTS=166
 if [[ "$executed" -ne 0 && "$executed" -ne "$EXPECTED_STATE_TESTS" && ${#ARGS[@]} -eq 0 ]]; then
   echo >&2
   echo "FAIL: $executed test(s) executes, $EXPECTED_STATE_TESTS attendus (sans filtre)." >&2

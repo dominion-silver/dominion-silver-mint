@@ -71,13 +71,13 @@ type FieldKind =
   | "select"
   | "optint"
   | "optbig";
-interface Field {
+export interface Field {
   name: string;
   label: string;
   kind: FieldKind;
   options?: readonly string[];
 }
-interface ActionDesc {
+export interface ActionDesc {
   id: string;
   label: string;
   group: "Instant" | "Delayed (24h)" | "Execute / cancel" | "Emergency & ops";
@@ -103,7 +103,10 @@ const optBig = (s: string | undefined) =>
 const optAtomic = (s: string | undefined, decimals: number) =>
   s && s.trim() ? parseAtomic(s, decimals) : undefined;
 
-const ACTIONS: ActionDesc[] = [
+/** Exported so `src/lib/__tests__/inventory-wallet-actions.test.ts` can traverse the descriptor this
+ *  component actually renders. T8-06 asks for exactly that: asserting a string is present in
+ *  EXEC_METHODS proves nothing about which card an operator sees or which builder it calls. */
+export const ACTIONS: ActionDesc[] = [
   {
     // "Mint at launch" (Thomas, 2026-07-26). Two cards on purpose, because the
     // program is deliberately asymmetric: closing is instant, opening is timelocked.
@@ -186,19 +189,26 @@ const ACTIONS: ActionDesc[] = [
     },
   },
   {
-    id: "set-inventory-wallet",
-    label: "Set inventory wallet",
-    group: "Instant",
+    // ROUND 8 T8-03. This card moved from "Instant" to "Delayed (24h)" because the instruction behind
+    // it was DELETED. `initialize` binds the pre-mint destination atomically and nothing can set it
+    // instantly afterwards, so the only remaining operation is a CHANGE, and a change to where minted
+    // supply lands is exactly the thing that has to be announced and be guardian-cancellable.
+    id: "propose-inventory-wallet",
+    label: "Propose inventory wallet change",
+    group: "Delayed (24h)",
     mode: "squads",
-    fields: [{ name: "wallet", label: "Inventory wallet (pubkey)", kind: "pubkey" }],
-    tip: "Set the inventory wallet. admin_premint mints into this owner's Token-2022 SILV ATA.",
+    fields: [{ name: "wallet", label: "New inventory wallet (pubkey)", kind: "pubkey" }],
+    tip:
+      "Changes where admin_premint mints: the new owner's Token-2022 SILV ATA. Takes effect only " +
+      "after 24h and an execute, and a guardian can cancel it inside the window. There is no instant " +
+      "path: the first binding happens in initialize and set_inventory_wallet no longer exists.",
     current: (c) => {
       const key = new PublicKey(c.inventoryWallet);
       if (key.equals(PublicKey.default)) return "unset";
       const s = key.toBase58();
       return `${s.slice(0, 4)}..${s.slice(-4)}`;
     },
-    build: (c, p) => actions.setInventoryWallet(c, pk(p.wallet)),
+    build: (c, p) => actions.proposeSetInventoryWallet(c, pk(p.wallet)),
   },
   {
     id: "set-min-operation",
