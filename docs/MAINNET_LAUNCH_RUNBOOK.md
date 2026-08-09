@@ -86,8 +86,17 @@ DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/probe-lazer-fee
 
 **Blockers to clear by hand:**
 
-- [ ] Deployer `2Lp91Fy…` funded with **~9.2 SOL** on mainnet (rent is recoverable via
-      `solana program close`; measured, not estimated).
+- [ ] Deployer `2Lp91Fy…` funded with **~9.2 SOL** on mainnet. Measured, not estimated:
+      the devnet rehearsal of 2026-08-10 locked **8.62 SOL** of ProgramData rent for the
+      1,237,728-byte artifact, plus fees.
+      **This line used to add "rent is recoverable via `solana program close`". It was
+      deleted on 2026-08-10 and must never come back.** It is true about the lamports and
+      catastrophic as advice: closing a program id destroys it FOREVER, and this project
+      has already done it once. `gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc` answers
+      "has been closed" to this day. Closing `3ucji6…` would lose the mainnet id, and with
+      it `declare_id!`, the IDL, every PDA and the whole audited surface. There is no
+      situation in this runbook where closing is the right answer: a bad deploy is fixed
+      by `solana program deploy` again, which performs an upgrade in place.
 - [ ] The Pyth key in Vercel Production has the **`pyth-indices` entitlement** for feed
       3154. Test: `curl -X POST https://<app>/api/lazer -d '{}'` must return a price,
       not a 403.
@@ -596,7 +605,28 @@ DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/premint-sizing.
 
 At $58.34 spot that is **~115,705 oz**, i.e. `admin_premint(115705029311)`, and 77% of the
 150,000 oz cap. The script prints the atomic value (an off-by-1e6 there is a 1,000,000x
-error) and refuses if the cap could not absorb it.
+error) and refuses if the cap could not absorb it. That figure is an EXAMPLE at one spot
+price: re-run the sizing and use what it prints. On 2026-08-10 spot was $63.61 and the same
+budget was ~106,115 oz.
+
+Then SEND it with the tranche script, which takes the atomic figure the sizing printed:
+
+```bash
+DOMINION_ALLOW_MAINNET=i-understand DOMINION_RPC=<mainnet> \
+  npx tsx scripts/premint.ts --atomic <tranche1> --dry-run   # resolve, send nothing
+DOMINION_ALLOW_MAINNET=i-understand DOMINION_RPC=<mainnet> \
+  npx tsx scripts/premint.ts --atomic <tranche1>
+```
+
+**Run `--dry-run` first, every time.** It prints the resolved destination, the cap, the
+headroom that would be left, and refuses the whole plan if the tranches do not fit. It is
+the only cheap moment to notice that the inventory wallet is not the one you meant.
+
+The script exists because this step had NO tooling until the devnet rehearsal of
+2026-08-10: the runbook said "run admin_premint" and the only senders in the repo were a
+test pinned at 1000 oz and the admin panel. It takes tranches, repeatable, because that is
+the shape of D11 below, and it asserts both the supply delta AND the inventory ATA delta
+after each one, since a mint that lands in the wrong account still moves supply.
 
 **D11, 2026-08-09: PRE-MINT THE OPERATIONAL TRANCHE ONLY. This is now a rule, not advice.**
 

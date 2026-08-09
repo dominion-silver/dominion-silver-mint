@@ -15,10 +15,10 @@
  * `admin_premint` is `reversible` in _guard.ts's table because the cap bounds it. That is about the
  * SUPPLY, not about custody: minted tokens sit in a hot wallet and nothing here can pull them back.
  *
- *   npx tsx scripts/premint-devnet.ts --oz 1000                 # one tranche, ounces
- *   npx tsx scripts/premint-devnet.ts --atomic 106115340615     # one tranche, atomic (6dp)
- *   npx tsx scripts/premint-devnet.ts --atomic 106115340615 --atomic 43884659385   # two
- *   npx tsx scripts/premint-devnet.ts --oz 1000 --dry-run       # resolve and print, send nothing
+ *   npx tsx scripts/premint.ts --oz 1000                 # one tranche, ounces
+ *   npx tsx scripts/premint.ts --atomic 106115340615     # one tranche, atomic (6dp)
+ *   npx tsx scripts/premint.ts --atomic 106115340615 --atomic 43884659385   # two
+ *   npx tsx scripts/premint.ts --oz 1000 --dry-run       # resolve and print, send nothing
  *
  * Size the tranches with scripts/premint-sizing.ts AT CEREMONY TIME: the budget is in dollars and the
  * cap is in ounces, so a fall in the silver price raises the ounces a fixed budget buys.
@@ -96,7 +96,7 @@ async function main() {
   if (tranches.length === 0) {
     throw new Error("no tranche given. Use --oz <n> or --atomic <n>, repeatable.");
   }
-  await requireSanctionedCluster(RPC, "premint-devnet");
+  await requireSanctionedCluster(RPC, "premint");
   assertReversible("admin_premint", intentFromEnv());
 
   const kp = loadAdmin();
