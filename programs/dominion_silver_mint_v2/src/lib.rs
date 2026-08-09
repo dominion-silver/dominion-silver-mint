@@ -162,8 +162,10 @@ pub mod dominion_silver_mint {
         instructions::emergency::pause::pause_handler(ctx)
     }
 
-    pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
-        instructions::emergency::pause::unpause_handler(ctx)
+    /// ROUND 8 FINAL-03. `expected_readiness_digest` is the digest of the config fields the go-live
+    /// decision read WHEN THIS INSTRUCTION WAS BUILT. See `ConfigAccount::readiness_digest`.
+    pub fn unpause(ctx: Context<Unpause>, expected_readiness_digest: [u8; 32]) -> Result<()> {
+        instructions::emergency::pause::unpause_handler(ctx, expected_readiness_digest)
     }
 
     // === Admin: instant ===

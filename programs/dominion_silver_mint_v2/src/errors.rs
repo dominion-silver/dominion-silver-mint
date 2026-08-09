@@ -353,17 +353,12 @@ pub enum DominionError {
     #[msg("the supplied guardian is the current admin, so it is not an independent brake")]
     GuardianNotIndependent,
 
-    /// ROUND 8 A-03. `unpause` is the go-live, and it is emitted BEFORE it executes: a Squads
-    /// proposal is approved and executed later, sometimes much later. In that gap a timelocked
-    /// action that was already mature can execute while the protocol is still paused. Its auto-pause
-    /// is idempotent on an already-paused config, so the OLD unpause stays valid and lands on a
-    /// config that no longer matches the one the launch-readiness decision approved: a different
-    /// oracle feed, a different publisher floor, different guards.
+    /// ROUND 8 FINAL-03. The config moved between the moment this unpause was built and the moment
+    /// it executed, so the launch-readiness decision that authorised it was taken against a state
+    /// that no longer exists. Re-read the chain, rebuild the unpause, approve it again.
     ///
-    /// The off-chain readiness check cannot close that gap, because it runs at emission. This can:
-    /// the only thing that can silently change the config between emission and execution is an armed
-    /// timelocked action executing, so an unpause is refused while ANY slot is armed. Cancel or
-    /// execute the pending actions first, re-run the readiness collection, then go live.
-    #[msg("cannot unpause while a timelocked action is armed: it could execute after this unpause was approved and change the config the readiness decision validated")]
-    UnpauseWithArmedProposal,
+    /// This replaced a check on `active_proposal_count`, which read the CURRENT armed count and was
+    /// therefore blind to an action that executed and disarmed itself inside that very gap.
+    #[msg("the config changed after this unpause was built: the launch-readiness decision that authorised it is stale, so re-read the chain and rebuild it")]
+    StaleReadinessDigest,
 }

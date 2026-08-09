@@ -647,3 +647,102 @@ fn launch_open_a_guardian_pause_blocks_the_next_redemption_immediately() {
         "redeem after the guardian pause",
     );
 }
+
+// ================================================================ ROUND 8 FINAL-03
+//
+// THE EXACT SCENARIO, built the way the finding describes it and not the way that is convenient.
+//
+// The first attempt at this refused an unpause while any timelocked slot was armed. Codex showed
+// that misses the class entirely: the action that executes in the gap DISARMS itself, so the counter
+// is back to zero by the time the unpause lands. The three tests written for that guard all used
+// actions whose execute was REFUSED during the pause, so they stayed armed and the guard saw them.
+// They proved the guard, not the finding.
+//
+// This one proves the finding. The unpause instruction is built ONCE, at T0, carrying the digest of
+// the state the readiness decision approved. Then a matured oracle feed change executes while the
+// protocol is paused, moving a field the decision reads and disarming itself. The PRE-BUILT
+// instruction is then submitted, unchanged, and must be refused.
+
+const E_STALE_READINESS: u32 = 12126;
+
+fn propose_pyth_feed(f: &mut Fixture, new_feed: u32) -> (TxOutcome, u64) {
+    let admin = f.admin.insecure_clone();
+    let nonce = f.config().next_timelock_nonce;
+    let ix = Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(config_pda(), false),
+            AccountMeta::new(admin.pubkey(), true),
+            AccountMeta::new(timelock_pda(nonce), false),
+            AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
+        ],
+        data: ix_data("propose_set_pyth_feed", &new_feed.to_le_bytes()),
+    };
+    (f.send(&[ix], &[&admin]), nonce)
+}
+
+fn execute_pyth_feed(f: &mut Fixture, nonce: u64) -> TxOutcome {
+    let admin = f.admin.insecure_clone();
+    let ix = Instruction {
+        program_id: program_id(),
+        accounts: vec![
+            AccountMeta::new(config_pda(), false),
+            AccountMeta::new_readonly(admin.pubkey(), true),
+            AccountMeta::new(timelock_pda(nonce), false),
+            AccountMeta::new(admin.pubkey(), false),
+        ],
+        data: ix_data("execute_set_pyth_feed", &nonce.to_le_bytes()),
+    };
+    f.send(&[ix], &[&admin])
+}
+
+#[test]
+fn a_prebuilt_unpause_is_refused_after_a_matured_action_changed_the_approved_state() {
+    let mut f = Fixture::new();
+    let guardian = f.ensure_unpause_guardian();
+    let admin = f.admin.insecure_clone();
+    let feed_before = f.config().pyth_lazer_feed_id;
+    let new_feed = feed_before + 1;
+
+    // T0. The ceremony reads the chain, the readiness decision says go, and the unpause is BUILT.
+    // Only the digest is captured here; the instruction is submitted much later, exactly as a Squads
+    // proposal is approved at one moment and executed at another.
+    let (r, nonce) = propose_pyth_feed(&mut f, new_feed);
+    expect_ok(r, "queue a feed change before the unpause is built");
+    let approved_digest = f.readiness_digest();
+
+    f.warp(ADMIN_TIMELOCK_SECONDS as i64 + 1);
+    assert!(f.config().paused, "the fixture must still be paused at T0");
+
+    // T1. The matured action executes DURING the pause. Auto-pause is idempotent on an already
+    // paused config, so nothing invalidates the approved unpause.
+    expect_ok(execute_pyth_feed(&mut f, nonce), "the matured feed change lands while paused");
+    let c = f.config();
+    assert_eq!(c.pyth_lazer_feed_id, new_feed, "the feed change did not apply");
+    assert!(c.paused, "the execute left the protocol unpaused");
+
+    // The precondition that killed the previous mechanism, ASSERTED rather than assumed: the action
+    // disarmed itself, so any check on the CURRENT armed count is blind here.
+    assert_eq!(
+        c.active_proposal_count, 0,
+        "the executed action did not disarm, so this fixture does not exercise the class"
+    );
+    assert_eq!(c.pending_pyth_feed_nonce, None, "the slot is still armed");
+
+    // T2. The PRE-BUILT instruction, submitted unchanged.
+    expect_error(
+        f.unpause_with_digest(&admin, guardian_pda(&guardian), approved_digest),
+        E_STALE_READINESS,
+        "a prebuilt unpause after the approved state moved",
+    );
+    assert!(f.config().paused, "the refused unpause resumed the protocol");
+
+    // Re-reading and rebuilding is what an operator does next, and it must work.
+    let fresh_digest = f.readiness_digest();
+    assert_ne!(approved_digest, fresh_digest, "the digest did not move, so nothing was proved");
+    expect_ok(
+        f.unpause_with_digest(&admin, guardian_pda(&guardian), fresh_digest),
+        "the rebuilt unpause after re-reading the chain",
+    );
+    assert!(!f.config().paused, "the rebuilt unpause did not resume the protocol");
+}

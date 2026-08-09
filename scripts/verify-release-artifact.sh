@@ -209,7 +209,12 @@ rm -f "$_signers"
 #     nothing, because a manifest that lies is caught downstream by its own path: `validate_pinned`
 #     requires the source commit to exist, (d) below requires it to be an ancestor with identical
 #     inputs, and the rebuilt hash is then compared against the pinned one.
-BUILD_INPUTS="programs Cargo.toml Cargo.lock rust-toolchain.toml Anchor.toml scripts/verify-release-artifact.sh scripts/_read-release-pin.py"
+BUILD_INPUTS="programs Cargo.toml Cargo.lock rust-toolchain.toml Anchor.toml scripts/verify-release-artifact.sh scripts/_read-release-pin.py scripts/_strict-build-sbf.sh"
+#     ROUND 8 FINAL-02. `scripts/_strict-build-sbf.sh` was missing, and it is the script that
+#     actually RUNS the rebuild (line ~326). A hand-written list is a list someone forgets to update,
+#     so `scripts/test-verifier-root-identity.sh` now DERIVES the set of repo scripts this file
+#     invokes and fails if any of them is absent from the line above. The list stays literal here
+#     because it must be readable at a glance in an audited file; the derivation is the guard.
 _dirty="$(cd -P "$ROOT" && git status --porcelain -- $BUILD_INPUTS 2>/dev/null || true)"
 if [ -n "$_dirty" ]; then
   echo ""

@@ -489,23 +489,9 @@ fn a_matured_withdrawal_cannot_land_mid_incident() {
     assert_eq!(token_amount(&f, &w.treasury), TREASURY_START);
     assert_eq!(token_amount(&f, &w.recipient_ata), 0);
 
-    // ROUND 8 A-03. `unpause` now refuses while ANY timelocked slot is armed, and this withdrawal is
-    // armed. That is the finding: the launch-readiness decision is taken when the unpause is BUILT,
-    // and a matured action executing between that moment and the multisig execution changes the
-    // config the decision approved. Here the same mechanism protects an incident: the withdrawal
-    // cannot be waiting to fire the instant somebody resumes.
-    let refused = f.unpause();
-    assert!(refused.is_err(), "unpause succeeded while a matured withdrawal was armed");
-    assert!(f.config().paused, "the refused unpause resumed the protocol");
-
-    // Disarm first, resume second, then re-propose against a running protocol. The property under
-    // test (a matured withdrawal pays out exactly once, and only when not paused) is unchanged.
-    expect_ok(cancel_withdraw_as_admin(&mut f, n), "cancel the armed withdrawal");
     unpause(&mut f);
-    let n2 = propose_withdraw(&mut f, 1_000_000, &w.recipient);
-    f.warp(ADMIN_TIMELOCK_SECONDS as i64 + 1);
     expect_ok(
-        try_execute_withdraw(&mut f, n2, &admin, w.treasury, w.recipient_ata),
+        try_execute_withdraw(&mut f, n, &admin, w.treasury, w.recipient_ata),
         "the same withdrawal once unpaused",
     );
     assert_eq!(token_amount(&f, &w.treasury), TREASURY_START - 1_000_000);

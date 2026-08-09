@@ -137,7 +137,11 @@ rm -f "$tmp_out"
 # ROUND 8 lot 1 FIX PACK. 166 -> 178: tools/state-harness/tests/launch_open_posture.rs, the twelve
 # scenarios that qualify the open posture (Codex L1-04). They were the gap that let the posture ship
 # with no test of the posture.
-EXPECTED_STATE_TESTS=178
+# ROUND 8 FINAL-03. 178 -> 179: a_prebuilt_unpause_is_refused_after_a_matured_action_changed_the_
+# approved_state, the acceptance test Codex specified. It builds the unpause once, executes a matured
+# feed change while paused, asserts the action DISARMED itself (which is what made the previous
+# counter guard blind), then submits the pre-built instruction unchanged.
+EXPECTED_STATE_TESTS=179
 if [[ "$executed" -ne 0 && "$executed" -ne "$EXPECTED_STATE_TESTS" && ${#ARGS[@]} -eq 0 ]]; then
   echo >&2
   echo "FAIL: $executed test(s) executes, $EXPECTED_STATE_TESTS attendus (sans filtre)." >&2

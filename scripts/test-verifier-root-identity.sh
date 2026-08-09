@@ -116,7 +116,45 @@ run_traced() {
 # The closed list the gate binds, mirrored here so the positive control asserts the SAME set the
 # verifier checks rather than a set this test invented. If the two ever drift, the positive control
 # is testing a property the product does not have.
-POSITIVE_INPUTS="programs Cargo.toml Cargo.lock rust-toolchain.toml Anchor.toml scripts/verify-release-artifact.sh scripts/_read-release-pin.py"
+POSITIVE_INPUTS="programs Cargo.toml Cargo.lock rust-toolchain.toml Anchor.toml scripts/verify-release-artifact.sh scripts/_read-release-pin.py scripts/_strict-build-sbf.sh"
+
+# ================================================================ ROUND 8 FINAL-02
+#
+# DERIVE the set of repo scripts the verifier actually invokes, and require every one of them to be
+# in its own BUILD_INPUTS. `_strict-build-sbf.sh` was missing: it is the script that runs the rebuild,
+# so an edit to it changed the bytes being attested while the gate reported a clean tree.
+#
+# The point is not to add one path. A hand-written closed list is a list someone forgets to update,
+# which is the same defect wearing a different name. This reads the production file and fails on the
+# NEXT omission too.
+derived_inputs_are_declared() {
+  local missing="" declared invoked
+  declared="$(grep -m1 '^BUILD_INPUTS=' "$VERIFY" | cut -d'"' -f2)"
+  if [[ -z "$declared" ]]; then
+    bad "could not read BUILD_INPUTS from the verifier, so this check proves nothing"
+    return
+  fi
+  # Every `"$ROOT"/scripts/x` or `$ROOT/scripts/x` the verifier executes, comment lines excluded.
+  invoked="$(grep -vE '^\s*#' "$VERIFY"     | grep -oE '\$\{?ROOT\}?"?/scripts/[A-Za-z0-9_.-]+'     | sed -E 's|.*/scripts/|scripts/|' | sort -u || true)"
+  if [[ -z "$invoked" ]]; then
+    bad "no invoked script was derived from the verifier, so this check is vacuous"
+    return
+  fi
+  while read -r f; do
+    [[ -z "$f" ]] && continue
+    case " $declared " in
+      *" $f "*) ;;
+      *) missing="$missing $f" ;;
+    esac
+  done <<< "$invoked"
+  if [[ -n "$missing" ]]; then
+    bad "the verifier executes script(s) absent from its own BUILD_INPUTS:$missing"
+    echo "     an edit to those changes the bytes attested while the gate reports a clean tree"
+  else
+    ok "every script the verifier executes is inside the inputs it binds to HEAD"
+  fi
+}
+
 
 real_path() { python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$1"; }
 
@@ -140,6 +178,8 @@ what_was_reached() {
   fi
   echo "$out"
 }
+
+derived_inputs_are_declared
 
 echo "Verifier root identity (round 8 T8-02)"
 echo "  repository : $REPO"

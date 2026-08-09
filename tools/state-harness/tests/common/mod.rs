@@ -867,6 +867,37 @@ impl Fixture {
     /// exactly about which account lands in that slot: a guardian that is the admin, a guardian in
     /// cooldown, another guardian's PDA.
     pub fn unpause_with(&mut self, signer: &Keypair, guardian_slot: Pubkey) -> TxOutcome {
+        // ROUND 8 FINAL-03. Read the digest NOW, which is what an honest caller does: build the
+        // instruction against the state it just read. `unpause_with_digest` is the primitive the
+        // staleness tests need, because proving the gap requires a digest read EARLIER than the send.
+        let d = self.readiness_digest();
+        self.unpause_with_digest(signer, guardian_slot, d)
+    }
+
+    /// ROUND 8 FINAL-03. The digest of the config fields the go-live decision reads, computed the
+    /// same way `ConfigAccount::readiness_digest` does on-chain. Mirrored rather than imported so a
+    /// test can capture it at T0 and submit it at T2.
+    pub fn readiness_digest(&self) -> [u8; 32] {
+        let c = self.config();
+        let mut buf = Vec::with_capacity(128);
+        buf.extend_from_slice(c.admin.as_ref());
+        buf.extend_from_slice(c.silv_mint.as_ref());
+        buf.extend_from_slice(c.inventory_wallet.as_ref());
+        buf.push(c.public_mint_enabled as u8);
+        buf.push(c.redemptions_enabled as u8);
+        buf.push(c.guardian_count);
+        buf.extend_from_slice(&c.min_publishers.to_le_bytes());
+        buf.extend_from_slice(&c.pyth_lazer_feed_id.to_le_bytes());
+        solana_sdk::hash::hash(&buf).to_bytes()
+    }
+
+    /// `unpause` carrying an EXPLICIT digest, so a test can build at T0 and submit at T2.
+    pub fn unpause_with_digest(
+        &mut self,
+        signer: &Keypair,
+        guardian_slot: Pubkey,
+        digest: [u8; 32],
+    ) -> TxOutcome {
         let ix = Instruction {
             program_id: program_id(),
             accounts: vec![
@@ -874,7 +905,7 @@ impl Fixture {
                 AccountMeta::new_readonly(signer.pubkey(), true),
                 AccountMeta::new_readonly(guardian_slot, false),
             ],
-            data: ix_data("unpause", &[]),
+            data: ix_data("unpause", &digest),
         };
         self.send(&[ix], &[signer])
     }

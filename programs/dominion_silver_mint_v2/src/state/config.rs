@@ -282,6 +282,38 @@ pub struct ConfigAccount {
 }
 
 impl ConfigAccount {
+    /// ROUND 8 FINAL-03. THE FIELDS THE GO-LIVE DECISION READS, HASHED.
+    ///
+    /// `unpause` is built at one moment and executed at another: it is a Squads proposal, approved
+    /// and executed later. Between those two moments a matured timelocked action can execute while
+    /// the protocol is paused, where auto-pause is idempotent, so nothing invalidates the approved
+    /// unpause and it lands on a config the readiness decision never saw.
+    ///
+    /// The first attempt refused an unpause while any slot was armed. Codex showed that does not
+    /// close it: the guard reads the CURRENT counter, and an action that executes and disarms in the
+    /// gap brings the counter back to zero before the unpause lands. A counter is not historical.
+    ///
+    /// So the caller carries a DIGEST of the state it approved, and this recomputes it. A digest was
+    /// chosen over a revision counter for one reason: a counter has to be incremented at every
+    /// mutation site, and one forgotten site makes it silently permissive. This is derived from the
+    /// fields themselves, so a new field is a deliberate edit HERE rather than a silent omission.
+    ///
+    /// The set is exactly what `scripts/_launch-readiness.ts` reads off the config. `paused` is
+    /// deliberately EXCLUDED: the unpause is what changes it, so including it would make every
+    /// unpause stale by construction.
+    pub fn readiness_digest(&self) -> [u8; 32] {
+        let mut buf = Vec::with_capacity(128);
+        buf.extend_from_slice(self.admin.as_ref());
+        buf.extend_from_slice(self.silv_mint.as_ref());
+        buf.extend_from_slice(self.inventory_wallet.as_ref());
+        buf.push(self.public_mint_enabled as u8);
+        buf.push(self.redemptions_enabled as u8);
+        buf.push(self.guardian_count);
+        buf.extend_from_slice(&self.min_publishers.to_le_bytes());
+        buf.extend_from_slice(&self.pyth_lazer_feed_id.to_le_bytes());
+        anchor_lang::solana_program::hash::hash(&buf).to_bytes()
+    }
+
     // 8-byte discriminator + struct size, pinned at 800 below: the account must never change size.
     pub const SIZE: usize = 8
         + 32                  // admin
