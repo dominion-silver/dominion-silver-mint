@@ -96,6 +96,19 @@ run_case() {
 # test and case 10 covers that one deliberately.
 sandbox_manifest() {
   python3 scripts/_selftest-manifest.py "$1" "$2" "$3" "$REPO" "$SANDBOX"
+  # ROUND 8 T8-02. A `pinned` fixture must name a commit the sandbox actually CONTAINS. The generator
+  # writes 000...0, and the verifier now refuses a pin whose source commit the tree cannot see, which
+  # is the second layer of the root-identity check and is also what T8-04 will ask of the pin reader.
+  # Patching it to the sandbox's own HEAD makes the fixture look like a real pin instead of a stub.
+  if [ "$1" = "pinned" ]; then
+    python3 - "$SANDBOX/config/mainnet-authorities.json" "$(git -C "$SANDBOX" rev-parse HEAD)" <<'PYEOF'
+import json, sys
+p, commit = sys.argv[1], sys.argv[2]
+m = json.load(open(p))
+m["release_artifact"]["source_commit"] = commit
+json.dump(m, open(p, "w"), indent=2)
+PYEOF
+  fi
 }
 
 echo "Self-test: scripts/verify-release-artifact.sh"
