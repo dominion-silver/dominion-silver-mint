@@ -341,36 +341,34 @@ for a in "$@"; do
     *)              ARGS+=("$a") ;;
   esac
 done
-# (c bis) THE PIN ITSELF MUST BE COMMITTED, unless this is an explicitly local read.
+# (c bis) AN UNCOMMITTED PIN CANNOT BE ATTESTED.
 #
 # ROUND 8 REVIEW P1. Excluding the manifest from the rebuilt set was right; letting an UNCOMMITTED
-# manifest drive an exit-0 attestation was not. The argument that "a manifest that lies is caught
-# downstream" fails, because every downstream check recomputes from this same local tree: set sha256
-# to the local build's hash, recompute the sizes and the IDL hash from the same files, name any
-# ancestor as source_commit and any digits as ci_run_id, and `validate_pinned` passes, (d) passes,
-# and a correct NOT ATTESTED (exit 3) becomes ARTIFACT OK (exit 0). That is the removed
-# DOMINION_RELEASE_MANIFEST override reinstated through the filesystem.
+# manifest drive an exit-0 attestation was not. "A manifest that lies is caught downstream" fails,
+# because every downstream check recomputes from this same local tree: set sha256 to the local
+# build's hash, recompute sizes and the IDL hash from the same files, name any ancestor as
+# source_commit and any digits as ci_run_id, and validate_pinned passes, (d) passes, and a correct
+# NOT ATTESTED becomes ARTIFACT OK. That is the removed DOMINION_RELEASE_MANIFEST override
+# reinstated through the filesystem.
 #
-# Reading an unrecorded candidate is exactly what `--local-only` is for, so it keeps working.
-if [ "$LOCAL_ONLY" != "1" ]; then
-  _pin_dirty="$(cd -P "$ROOT" && git status --porcelain -- config/mainnet-authorities.json 2>/dev/null || true)"
-  if [ -n "$_pin_dirty" ]; then
-    echo ""
-    echo "REFUSING TO RUN: config/mainnet-authorities.json is not committed."
-    echo "$_pin_dirty"
-    echo ""
-    echo "This file IS the claim being attested. An uncommitted one lets a verdict be produced from"
-    echo "numbers nobody reviewed, all of them recomputable from this same tree."
-    echo "Commit the pin, or use --local-only to read a candidate without attesting it."
-    echo "ARTIFACT REJECTED: the pin under attestation is not recorded."
-    exit 1
-  fi
-fi
+# It is NOT a refusal to run, and the first version of this made that mistake. Refusing here says
+# "this tree is not ours", which is false and untestable: the pin self-test injects candidate
+# variants, and forcing it to commit them turned every fixture into an unsigned commit that the
+# identity gate then refused for an unrelated reason. An unrecorded pin is precisely what exit 3
+# means, so it sets NOT ATTESTED and the verdict says why.
+UNCOMMITTED_PIN=""
 
 # Set by check 1b when the pin could not be evaluated. Read at the very bottom, and it is what makes
 # the LAST LINE and the EXIT CODE agree with each other.
 not_attested=0
 not_attested_why=""
+if [ "$LOCAL_ONLY" != "1" ]; then
+  UNCOMMITTED_PIN="$(cd -P "$ROOT" && git status --porcelain -- config/mainnet-authorities.json 2>/dev/null || true)"
+  if [ -n "$UNCOMMITTED_PIN" ]; then
+    not_attested=1
+    not_attested_why="config/mainnet-authorities.json is not committed, so the pin under attestation was never recorded or reviewed. Commit it, or use --local-only to read a candidate without attesting it."
+  fi
+fi
 SO="${ARGS[0]:-$ROOT/target/deploy/dominion_silver_mint.so}"
 IDL="${ARGS[1]:-$ROOT/target/idl/dominion_silver_mint.json}"
 LIB_RS="$ROOT/programs/dominion_silver_mint_v2/src/lib.rs"

@@ -151,6 +151,35 @@ function decodeName(program: anchor.Program, ix: TransactionInstruction): string
   return String(d.name).replace(/[A-Z]/g, (m) => "_" + m.toLowerCase());
 }
 
+
+/**
+ * ROUND 8 REVIEW P1. Serialized width of an IDL arg type.
+ *
+ * `option` is `1 + inner` for Some and 1 byte for None; every option this suite builds is passed as
+ * Some, and the assertion below would flag a None as short, so a builder that starts passing null
+ * must add its case here deliberately rather than silently.
+ */
+function idlArgSize(t: any): number | null {
+  if (typeof t === "string") {
+    const prim: Record<string, number> = {
+      bool: 1, u8: 1, i8: 1, u16: 2, i16: 2, u32: 4, i32: 4,
+      u64: 8, i64: 8, u128: 16, i128: 16, pubkey: 32, publicKey: 32,
+    };
+    return prim[t] ?? null;
+  }
+  if (t?.array) {
+    const inner = idlArgSize(t.array[0]);
+    return inner === null ? null : inner * Number(t.array[1]);
+  }
+  if (t?.option) {
+    const inner = idlArgSize(t.option);
+    return inner === null ? null : 1 + inner;
+  }
+  // `defined` (a struct) and length-prefixed types have no fixed width without walking the IDL type
+  // table. null degrades this builder to the weaker assertion rather than faking a precision.
+  return null;
+}
+
 describe("every admin builder passes exactly the accounts the IDL declares", () => {
   const program = new anchor.Program(
     IDL,
@@ -181,6 +210,31 @@ describe("every admin builder passes exactly the accounts the IDL declares", () 
             .map((a: any) => a.name)
             .join(", ")}) and the builder sent ${ix.keys.length}`,
         ).toBe(declared.length);
+
+      // ROUND 8 REVIEW P1. ARG LENGTH TOO, on the loop that already walks every exported builder.
+      //
+      // The P1 of the previous pass was an ARGUMENT dropped when the program gained one, and this
+      // suite only ever compared ACCOUNT counts. `instruction-args-parity.test.ts` builds its own
+      // instruction, so it proves Anchor encodes an argument it was handed, not that the panel hands
+      // one over. This does, for every builder, from the real exported function.
+        const declaredArgs = IDL.instructions.find((x: any) => x.name === expectedName).args ?? [];
+        const sizes = declaredArgs.map((a: any) => idlArgSize(a.type));
+        if (declaredArgs.length > 0 && sizes.every((n: number | null) => n !== null)) {
+          const argBytes = sizes.reduce((n: number, x: number) => n + x, 0);
+          expect(
+            ix.data.length,
+            `${expectedName} encoded ${ix.data.length} bytes; the IDL declares 8 + ${argBytes}. ` +
+              "A short instruction means this builder was not updated when the program gained an arg.",
+          ).toBe(8 + argBytes);
+        } else if (declaredArgs.length > 0) {
+          // Struct or length-prefixed args: the exact width needs the IDL type table, but the
+          // failure mode being hunted is a BARE DISCRIMINATOR, and that is caught either way.
+          expect(
+            ix.data.length,
+            `${expectedName} declares ${declaredArgs.length} arg(s) and encoded only ` +
+              `${ix.data.length} bytes, which is the discriminator alone.`,
+          ).toBeGreaterThan(8);
+        }
       });
     });
   }
