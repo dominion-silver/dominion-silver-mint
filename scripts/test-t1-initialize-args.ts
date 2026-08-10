@@ -25,6 +25,7 @@ import path from "path";
 import idl from "../target/idl/dominion_silver_mint.json";
 import {
   buildT1InitializeArgs,
+  preGeneratedMintConflict,
   EXPECTED_POST_INITIALIZE,
 } from "./t1-hostile-bootstrap";
 
@@ -160,6 +161,35 @@ function main(): void {
       posture.paused === EXPECTED_POST_INITIALIZE.paused,
     "config/mainnet-authorities.json declares the same posture T1 asserts",
     "the manifest and T1 disagree about the launch posture",
+  );
+
+  // THE PRE-GENERATED MINT GUARD. Added 2026-08-11 with the pre-generation tool. Once an address is
+  // pre-generated it gets announced (pre-validated on an aggregator, pasted into a listing form), and a
+  // forgotten export would make the ceremony create a DIFFERENT mint, shipping the token at an address
+  // nobody was told about. Nothing later in a T1 run would notice: every check is internally consistent
+  // with whichever mint it created. This is the only place the decision can be proven, because on a
+  // cluster an earlier refusal fires first on devnet and mainnet runs once.
+  check(
+    preGeneratedMintConflict(undefined, true),
+    "a pre-generated mint with no env var REFUSES the run",
+    "a forgotten DOMINION_SILV_MINT_KEYPAIR would silently rename the token",
+  );
+  check(
+    !preGeneratedMintConflict("/path/to/key.json", true),
+    "passing the keypair proceeds",
+    "the guard blocks the supported path",
+  );
+  check(
+    !preGeneratedMintConflict(undefined, false),
+    "no pre-generated file means nothing to protect, so it proceeds",
+    "the guard fires when no address was ever pre-generated",
+  );
+  // An empty export (`DOMINION_SILV_MINT_KEYPAIR=`) must count as UNSET and refuse. Treating it as a
+  // path would send an empty string to existsSync and fail later, confusingly, after spending.
+  check(
+    preGeneratedMintConflict("", true),
+    "an EMPTY env var counts as unset and is refused by the same rule",
+    "an empty string slipped past as if it were a path",
   );
 
   if (failures > 0) {

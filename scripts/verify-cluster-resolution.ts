@@ -219,6 +219,8 @@ for (const rpc of [
     "cancel-bad-proposal.ts",
     "cancel-nonce-1.ts",
     "create-fee-vault.ts",
+    // Creates the USDC treasury account early so the treasury can be funded before the ceremony.
+    "create-usdc-treasury-ata.ts",
     "dev-set-premiums.ts",
     "e2e-fixa-devnet.ts",
     // ROUND 8 L1-05. The two-phase inventory change across the real 24h timelock.

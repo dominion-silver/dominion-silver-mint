@@ -59,6 +59,12 @@ export const ACTION_COST: Record<string, ActionCost> = {
   // NOT reversible: closing a token account needs the OWNER's signature, the owner is the fee_vault PDA,
   // and this program signs no CloseAccount for it anywhere (mint_silv.rs:60). Rent locked for good.
   create_fee_vault: "irreversible",
+  // Same shape as create_fee_vault and irreversible for the same reason: the owner is a program PDA,
+  // closing a token account needs the OWNER's signature, and this program signs no CloseAccount for
+  // it anywhere. The rent is locked for good. It is normally created by `initialize`
+  // (init_if_needed), so this action exists only to create it EARLY, which is what lets the treasury
+  // be funded before the ceremony.
+  create_usdc_treasury: "irreversible",
   set_fee_exempt: "reversible", // remove_fee_exempt is instant
   remove_fee_exempt: "reversible", // set_fee_exempt is instant
   set_kyc_operator: "reversible",

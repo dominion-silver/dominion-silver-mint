@@ -116,6 +116,24 @@ export interface T1InitializeArgs {
   guardian: PublicKey;
 }
 
+/**
+ * Must this run REFUSE because a pre-generated SILV mint exists but was not passed in?
+ *
+ * Pure and exported so it can be proven, because it cannot be exercised on a cluster: on devnet an
+ * earlier and more fundamental refusal (the config PDA already exists) fires first, and on mainnet it
+ * will only ever run once. A guard that can only be tested by doing the thing it guards is a guard
+ * nobody has tested.
+ *
+ * The refusal it drives: once an address is pre-generated it gets announced, and a forgotten export
+ * would ship the token at a different address than the one buyers were told.
+ */
+export function preGeneratedMintConflict(
+  envValue: string | undefined,
+  defaultFileExists: boolean,
+): boolean {
+  return !envValue && defaultFileExists;
+}
+
 export function buildT1InitializeArgs(
   manifest: Record<string, unknown>,
   cluster: string,
@@ -338,6 +356,30 @@ async function main() {
     );
   }
   console.log("  config PDA does not exist yet: the bootstrap window is open.\n");
+
+  // THE FOOTGUN THIS CLOSES. Once an address has been pre-generated it is announced: pre-validated on
+  // an aggregator, pasted into a listing form, put in front of buyers. If the ceremony then runs
+  // WITHOUT the env var, this script generates a fresh keypair and the token ships at a DIFFERENT
+  // address than the one announced. Nothing later in the run would notice, because every check is
+  // internally consistent with whichever mint it created.
+  // So: if the default pre-generation path exists and the variable is unset, REFUSE. A forgotten
+  // export must not be able to silently rename the token.
+  const defaultPreGenPath = path.join(os.homedir(), ".config", "solana", "dominion-silv-mint.json");
+  if (
+    preGeneratedMintConflict(process.env.DOMINION_SILV_MINT_KEYPAIR, fs.existsSync(defaultPreGenPath))
+  ) {
+    const announced = Keypair.fromSecretKey(
+      new Uint8Array(JSON.parse(fs.readFileSync(defaultPreGenPath, "utf8"))),
+    ).publicKey.toBase58();
+    throw new Error(
+      `a pre-generated SILV mint keypair exists at ${defaultPreGenPath}\n` +
+        `  address: ${announced}\n` +
+        `but DOMINION_SILV_MINT_KEYPAIR is NOT set, so this run would create a DIFFERENT mint and the\n` +
+        `token would ship at an address nobody was told about. Refusing.\n` +
+        `  Either:  DOMINION_SILV_MINT_KEYPAIR=${defaultPreGenPath} ...\n` +
+        `  or, if that address was never announced and you mean to abandon it, move the file aside.`,
+    );
+  }
 
   // Resolved and VALIDATED here, before a single lamport moves: this file is hand-edited during the
   // ceremony, so a missing field must throw before the attacker is funded and the real SILV mint created,
