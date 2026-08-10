@@ -386,14 +386,14 @@
       "which is what `verify-from-repo` compares against the chain. On the same macOS file those were",
       "60c8a269... and 945fe91a...: different numbers for the same bytes."
     ],
-    "status": "no-candidate",
-    "sha256": null,
-    "normalized_sha256": null,
-    "bytes": null,
-    "source_commit": null,
-    "ci_run_id": null,
-    "program_id": null,
-    "idl_sha256": null,
+    "status": "pinned",
+    "sha256": "241e1ed558186e2056486003608c3464173e88126991dd80241686d2c60321da",
+    "normalized_sha256": "073b2e3846d5df790a2f91da15a6edaf09ea0eda575a133b80bffd6ccfdd256a",
+    "bytes": 1237704,
+    "source_commit": "6466539d84b6ed619037ef78cd0bd9cf287c92a7",
+    "ci_run_id": "31393065516",
+    "program_id": "3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ",
+    "idl_sha256": "f24cbabc180931359b64019e4c112fcd535dedf25c8aa038c6bc0decf46178d5",
     "solana_verify_version": "0.5.1",
     "toolchain": "solana-cli/SBF 3.0.0, platform-tools v1.51, SBF rustc 1.84.1, anchor-cli 0.31.1",
     "_retired_pins": [
@@ -403,6 +403,17 @@
       "184df9895f2d5bf0b0787b182e07ed9af2a1773982873a16ab02c6385eb010e5 (1193592 bytes): the container",
       "build of 91e92f9, measured in two independent CI jobs and passing 141/141 LiteSVM. Correct bytes",
       "for that commit, and still NOT the mainnet candidate: it carries the devnet program id."
+    ],
+    "_pinned_note": [
+      "EPINGLE LE 2026-08-11 depuis le job reproducible-build du run CI 31393065516, tag v1.0.0-rc2.",
+      "Recopie depuis release-manifest.json produit par ce job, PAS gratte dans les logs et PAS d un build local.",
+      "VERIFIE INDEPENDAMMENT avant d ecrire ces valeurs: le .so telecharge depuis l artefact hashe bien",
+      "241e1ed5... pour 1237704 octets, l IDL committe hashe bien idl_sha256, et source_commit est bien le",
+      "commit sur lequel pointe le tag v1.0.0-rc2.",
+      "",
+      "SUR UN MAC, verify-release-artifact.sh rapportera exit 3 NOT ATTESTED contre ce pin, et c est CORRECT:",
+      "S-07, un build macOS ne peut pas reproduire un build conteneur linux/amd64. Ce n est pas un echec de",
+      "comparaison, c est le refus de comparer ce qui n est pas comparable. Le gate linux de la CI, lui, compare."
     ]
   }
 }
