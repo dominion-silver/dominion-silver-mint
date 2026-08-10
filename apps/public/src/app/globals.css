@@ -8,36 +8,75 @@
 
 html,
 body {
-  /* dominion.market/why-silv: #1a1a1a body, #b0b0b0 text */
-  background: #1a1a1a;
-  color: #b0b0b0;
+  /* dominion.market, read off the live DOM 2026-08-11: rgb(11,12,14) ground, rgb(199,203,210) text.
+     The previous values (#1a1a1a / #b0b0b0) matched the site before its rebrand. */
+  background: #0b0c0e;
+  color: #c7cbd2;
   min-height: 100vh;
-  font-family: var(--font-inter), system-ui, sans-serif;
+  font-family: var(--font-jost), system-ui, sans-serif;
 }
 
-/* Display headings + numbers use Space Grotesk with Mark's tight tracking. */
-h1,
+/* THE PAGE TITLE GETS THE DISPLAY SERIF; SECTION HEADINGS DO NOT.
+   dominion.market sets every heading in Cormorant Garamond at 0.24em tracking. That is beautiful at
+   64px and unreadable at 13px, and this app is mostly small labels over numbers. So the split: h1 is
+   the hero and carries the brand face, h2/h3 are structural and stay in Jost.
+   The first version of this file put h1 in Jost too, which contradicted the comment right above it
+   and left the page with no brand typography at all. */
+h1 {
+  font-family: var(--font-cormorant), Georgia, serif;
+  font-weight: 500;
+  /* Narrower than the site's 0.24em: that value is tuned for a 64px wordmark, and at 30px it pushes
+     the words apart faster than it reads as elegant. */
+  letter-spacing: 0.12em;
+  color: #f4f5f7;
+}
 h2,
 h3 {
-  font-family: var(--font-space-grotesk), system-ui, sans-serif;
-  letter-spacing: -0.02em;
-  color: #e8e8e8;
+  font-family: var(--font-jost), system-ui, sans-serif;
+  letter-spacing: 0.005em;
+  color: #f4f5f7;
 }
 
-/* Tabular figures for all numeric (price/amount) displays, like Mark's. */
-.font-mono {
+/* Numbers line up in columns. The site's own live price is Jost 700, not the serif, so amounts stay
+   in the UI face and only need tabular figures. */
+.font-mono,
+.tabular {
   font-variant-numeric: tabular-nums;
 }
 
-/* Wallet adapter button = dominion.market CTA (green-400 bg, dark text). */
+/* The wallet button is a third-party component, so it is restyled here rather than in its markup.
+   Matches the site's "Buy SILV" CTA: the periwinkle gradient, dark text, 6px radius, weight 600. */
 .wallet-adapter-button {
-  background-color: #4ade80 !important;
-  color: #1a1a1a !important;
+  background-image: linear-gradient(#c9daf3 0%, #8badda 50%, #6e93c4 100%) !important;
+  background-color: transparent !important;
+  color: #0b0c0e !important;
   font-weight: 600 !important;
   border-radius: 6px !important;
-  font-family: var(--font-inter), system-ui, sans-serif !important;
-  transition: background-color 150ms ease;
+  font-family: var(--font-jost), system-ui, sans-serif !important;
+  transition:
+    filter 150ms ease,
+    opacity 150ms ease;
 }
 .wallet-adapter-button:not(.wallet-adapter-button-trigger):hover {
-  background-color: #22c55e !important;
+  /* Brightening the gradient rather than swapping a flat colour keeps the metal feel on hover. */
+  filter: brightness(1.08);
+}
+
+/* The wallet modal is the same component family and would otherwise keep its default light chrome
+   on a near-black page. */
+.wallet-adapter-modal-wrapper {
+  background-color: #15161a !important;
+  border: 1px solid #232427 !important;
+}
+.wallet-adapter-modal-title {
+  color: #f4f5f7 !important;
+  font-family: var(--font-jost), system-ui, sans-serif !important;
+}
+.wallet-adapter-modal-list li button {
+  background-color: #0b0c0e !important;
+  border: 1px solid #232427 !important;
+  color: #c7cbd2 !important;
+}
+.wallet-adapter-modal-list li button:hover {
+  border-color: #8badda !important;
 }

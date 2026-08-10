@@ -783,7 +783,7 @@ export function MintRedeemCard() {
           insufficientSol
         }
         onClick={handleSubmit}
-        className="w-full rounded-lg bg-accent py-3 font-semibold text-bg transition hover:bg-accentDim disabled:cursor-not-allowed disabled:opacity-40"
+        className="w-full rounded-lg bg-cta py-3 font-semibold text-bg transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
       >
         {!wallet.connected
           ? "Connect wallet"
