@@ -227,6 +227,8 @@ for (const rpc of [
     // The live proof that the fee-exemption whitelist changes what the chain charges. Added
     // 2026-08-11: nothing anywhere drove a completed mint_silv or redeem_silv against an exemption.
     "e2e-fee-exempt-devnet.ts",
+    // The guardian veto, the fee sweep, the oracle anti-replay and the readiness digest, live.
+    "e2e-guardian-fees-devnet.ts",
     "e2e-lazer-mint.ts",
     "e2e-public-mint-devnet.ts",
     "initialize-devnet.ts",
