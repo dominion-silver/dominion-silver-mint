@@ -1,0 +1,17 @@
+{
+  "name": "Dominion Silver",
+  "symbol": "SILV",
+  "description": "REVIEW BEFORE PUBLISHING. Written 2026-08-11 as a ready-to-host skeleton; the description and image are the two fields nobody can fill in for you.",
+  "image": "https://dominion.market/silv.png",
+  "external_url": "https://dominion.market",
+  "decimals": 6,
+  "properties": {
+    "files": [
+      {
+        "uri": "https://dominion.market/silv.png",
+        "type": "image/png"
+      }
+    ],
+    "category": "image"
+  }
+}

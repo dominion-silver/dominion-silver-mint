@@ -422,7 +422,35 @@ async function main() {
     );
 
   // Created by the AUTHORITY so case 1 is the worst case: the attacker points at the real, valid mint.
-  const silvMint = Keypair.generate();
+  //
+  // DOMINION_SILV_MINT_KEYPAIR is an OPT-IN, added 2026-08-11 so the SILV address can be known and
+  // pre-validated (Jupiter, pools, listings) BEFORE the ceremony rather than first appearing in the
+  // ceremony's own scrollback. Unset, the behaviour is exactly what it was and audit A-30 holds: a
+  // fresh keypair, never persisted.
+  //
+  // WHAT A-30 IS ABOUT, so the trade is made with open eyes. After creation the mint keypair has NO
+  // power over the token: the mint authority is a program PDA, freeze and permanent delegate are the
+  // compliance vault. Persisting it therefore buys nothing operationally and only adds a secret to
+  // lose, which is why the default is to discard it.
+  // WHAT PRE-GENERATING RISKS is narrow and it is NOT a fund risk: whoever holds the secret before
+  // the ceremony can create that mint account first, which makes createSilvMintForTest fail and burns
+  // the address you already announced. Griefing the ceremony, not stealing from it. So keep the file
+  // mode 600 on the ceremony machine and delete it once the mint exists.
+  const preGenerated = process.env.DOMINION_SILV_MINT_KEYPAIR;
+  const silvMint = preGenerated
+    ? Keypair.fromSecretKey(new Uint8Array(JSON.parse(fs.readFileSync(preGenerated, "utf8"))))
+    : Keypair.generate();
+  if (preGenerated) {
+    console.log(`  SILV mint keypair supplied from ${preGenerated} (pre-announced address)`);
+    const already = await conn.getAccountInfo(silvMint.publicKey);
+    if (already) {
+      throw new Error(
+        `the pre-generated SILV mint ${silvMint.publicKey.toBase58()} ALREADY EXISTS on this cluster.\n` +
+          `Creation would fail. Either this ceremony already ran, or the keypair leaked and someone\n` +
+          `created it first. Do not proceed: generate a new one and re-announce the address.`,
+      );
+    }
+  }
   console.log("  creating the real SILV mint (Token-2022 + extensions)...");
   await createSilvMintForTest(
     conn,

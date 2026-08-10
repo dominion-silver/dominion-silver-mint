@@ -267,6 +267,9 @@ for (const rpc of [
     // functions: premint.ts guards its own main behind `require.main === module`, so importing it
     // opens no Connection and loads no keypair.
     "test-premint-args.ts",
+    // Generates a keypair and writes it to disk. No Connection, no cluster, no send: the address it
+    // prints exists nowhere until the ceremony creates it.
+    "pregenerate-silv-mint.ts",
     "check-onchain.ts",
     "check-onchain2.ts",
     "check-pda.ts",
