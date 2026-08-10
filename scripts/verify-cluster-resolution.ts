@@ -229,6 +229,8 @@ for (const rpc of [
     "e2e-fee-exempt-devnet.ts",
     // The guardian veto, the fee sweep, the oracle anti-replay and the readiness digest, live.
     "e2e-guardian-fees-devnet.ts",
+    // Causes a REAL redemption in order to prove the monitor decodes it and the alarm fires.
+    "test-redeem-monitor-e2e.ts",
     "e2e-lazer-mint.ts",
     "e2e-public-mint-devnet.ts",
     "initialize-devnet.ts",
@@ -277,6 +279,12 @@ for (const rpc of [
     "pregenerate-silv-mint.ts",
     // Fetches a signed envelope over HTTPS from Lazer. No Solana Connection, no keypair, no send.
     "_lazer-envelope.ts",
+    // Pure port of the program's rolling-window rule, plus its fixtures. No cluster, no keypair.
+    "_redeem-window.ts",
+    "test-redeem-window.ts",
+    // READ-ONLY alarm. It builds an Anchor Program with a throwaway keypair precisely so it CANNOT
+    // sign, reads the config and the logs, and sends no transaction.
+    "redeem-monitor.ts",
     "check-onchain.ts",
     "check-onchain2.ts",
     "check-pda.ts",

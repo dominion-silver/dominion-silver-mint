@@ -330,6 +330,11 @@ jobs:
       - name: Pre-mint argument and resume decisions (BLOCKING)
         run: npx --no-install tsx scripts/test-premint-args.ts
 
+      # The monitor's rolling-window port must agree with state/redeem_window.rs. It is the number an
+      # on-call rota is sized against, and the two can only agree while something checks.
+      - name: Redeem-window port matches the program's rule (BLOCKING)
+        run: npx --no-install tsx scripts/test-redeem-window.ts
+
       - name: Public app (BLOCKING - typecheck, tests, production build)
         working-directory: apps/public
         run: |
