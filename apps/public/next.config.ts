@@ -32,6 +32,16 @@ const nextConfig: NextConfig = {
           { key: "Cache-Control", value: "public, max-age=300, s-maxage=3600" },
         ],
       },
+      // The logo the metadata points at. An <img> tag needs no CORS, but anything that draws the
+      // token icon through a canvas does, and a tainted canvas throws rather than degrading. Same
+      // reasoning as the JSON above: this asset is consumed by third-party UIs we do not control.
+      {
+        source: "/silv.png",
+        headers: [
+          { key: "Access-Control-Allow-Origin", value: "*" },
+          { key: "Cache-Control", value: "public, max-age=3600, s-maxage=86400" },
+        ],
+      },
       {
         source: "/:path*",
         headers: [
