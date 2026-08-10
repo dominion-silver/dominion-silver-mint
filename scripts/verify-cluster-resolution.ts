@@ -224,6 +224,9 @@ for (const rpc of [
     // ROUND 8 L1-05. The two-phase inventory change across the real 24h timelock.
     "e2e-inventory-change-devnet.ts",
     "e2e-guardian-devnet.ts",
+    // The live proof that the fee-exemption whitelist changes what the chain charges. Added
+    // 2026-08-11: nothing anywhere drove a completed mint_silv or redeem_silv against an exemption.
+    "e2e-fee-exempt-devnet.ts",
     "e2e-lazer-mint.ts",
     "e2e-public-mint-devnet.ts",
     "initialize-devnet.ts",
@@ -270,6 +273,8 @@ for (const rpc of [
     // Generates a keypair and writes it to disk. No Connection, no cluster, no send: the address it
     // prints exists nowhere until the ceremony creates it.
     "pregenerate-silv-mint.ts",
+    // Fetches a signed envelope over HTTPS from Lazer. No Solana Connection, no keypair, no send.
+    "_lazer-envelope.ts",
     "check-onchain.ts",
     "check-onchain2.ts",
     "check-pda.ts",

@@ -22,6 +22,9 @@ import { PROGRAM_ID as SHARED_PROGRAM_ID } from "./_program-id";
 import { requireSanctionedCluster, assertReversible, intentFromEnv } from "./_guard";
 import { resolveCluster, describeCluster } from "./_cluster";
 import { requireEligibleGuardian } from "./_guardian";
+// EXTRACTED 2026-08-11 so scripts/e2e-fee-exempt-devnet.ts uses the SAME feed id, channel and
+// property list rather than a second copy of them.
+import { fetchSilvEnvelope } from "./_lazer-envelope";
 
 // RPC, program id, USDC mint and Lazer treasury are RESOLVED, never hardcoded: this script sends, so
 // a devnet literal would sign devnet transactions with a mainnet key while looking like a mainnet test.
@@ -44,25 +47,6 @@ const pda = (seed: string) => PublicKey.findProgramAddressSync([Buffer.from(seed
 const pda2 = (seed: string, extra: Uint8Array) =>
   PublicKey.findProgramAddressSync([Buffer.from(seed), Buffer.from(extra)], PROGRAM_ID)[0];
 
-async function fetchSilvEnvelope(): Promise<{ envelope: Uint8Array; priceUsd: number }> {
-  const resp = await fetch("https://pyth-lazer.dourolabs.app/v1/latest_price", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.PYTH_LAZER_KEY}` },
-    body: JSON.stringify({
-      priceFeedIds: [3154], // Metal.Index.SILVER/USD (confirmed 2026-07-26)
-      properties: ["price", "exponent", "publisherCount", "confidence", "feedUpdateTimestamp"],
-      chains: ["solana"], channel: "fixed_rate@1000ms",
-    }),
-  });
-  const j: any = await resp.json();
-  if (!j?.solana?.data) throw new Error("no envelope: " + JSON.stringify(j).slice(0, 300));
-  const f = j.parsed.priceFeeds[0];
-  const priceUsd = Number(f.price) * Math.pow(10, Number(f.exponent));
-  console.log("  SILV price: $" + priceUsd.toFixed(5),
-    "| publishers:", f.publisherCount,
-    "| feed_ts==ts:", f.feedUpdateTimestamp === Number(j.parsed.timestampUs));
-  return { envelope: new Uint8Array(Buffer.from(j.solana.data, "base64")), priceUsd };
-}
 
 // The four fee/KYC accounts, resolved the SAME way the app resolves them. Optional accounts MUST be
 // explicit null when absent: `.accounts()` is not strict in Anchor 0.31.1 (it delegates to
