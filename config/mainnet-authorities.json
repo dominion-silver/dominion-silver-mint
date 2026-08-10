@@ -96,7 +96,7 @@
     "metadata_update_authority": "the program's silv_metadata_authority PDA",
     "name": "Dominion Silver",
     "symbol": "SILV",
-    "uri": "https://dominion.market/silv-metadata.json",
+    "uri": "https://app.dominion.market/silv-metadata.json",
     "uri_must_resolve_before_launch": true
   },
   "launch_posture": {

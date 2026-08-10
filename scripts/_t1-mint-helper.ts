@@ -60,7 +60,7 @@ export async function createSilvMintForTest(
     mint: silvMintKeypair.publicKey,
     name: "Dominion Silver",
     symbol: "SILV",
-    uri: "https://dominion.market/silv-metadata.json",
+    uri: "https://app.dominion.market/silv-metadata.json",
     additionalMetadata: [],
   };
   const extensions = [

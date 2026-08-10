@@ -102,8 +102,15 @@ DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/probe-lazer-fee
       not a 403.
 - [ ] Sunrise has confirmed they accept a Token-2022 mint carrying **freeze authority +
       permanent delegate**. If not, there is no venue and the launch model fails.
-- [ ] `https://dominion.market/silv-metadata.json` resolves (it is baked into the mint
-      permanently).
+- [ ] `https://app.dominion.market/silv-metadata.json` serves the JSON. **The host changed on
+      2026-08-11 and the reason matters: `dominion.market` is a separate property (Mark's, on
+      GCP, Namecheap DNS) that we cannot publish to, so the file now lives in THIS repo at
+      `apps/public/public/silv-metadata.json` and is served by our own app on the `app.`
+      subdomain.** Verify with the readiness gate, not by eye: it fetches the URI AND a path
+      that cannot exist and demands they differ, because the old apex answers 200 with
+      identical HTML for every path and made a status-code check incapable of failing. The URI
+      is baked into the mint permanently: changing it afterwards costs a 24h timelock
+      (`propose_update_metadata` / `execute_update_metadata`).
 - [ ] Site copy discloses the **freeze and seize** powers (SolidProof MEDIUM #2, and the
       head-dev's requirement). Fix the over-claimed Chainlink PoR while you are there.
 - [ ] At least 2 guardian keys exist, held independently, on hardware.
