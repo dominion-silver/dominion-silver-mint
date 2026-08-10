@@ -378,6 +378,25 @@ if [[ ! -f "$SO" ]]; then
 fi
 
 fail=0
+# INITIALISED HERE, and this line is why CI could not go green.
+#
+# `not_attested` was only ever ASSIGNED inside two of the three branches of check 1b: the
+# no-candidate branch and the cross-platform branch. The third, `--local-only`, sets neither. This
+# script runs under `set -u`, so on that path the test at the bottom
+# (`if [[ "$not_attested" -ne 0 ]]`) hit an unbound variable and the shell killed the script with
+# "line 617: not_attested: unbound variable".
+#
+# The consequence was worse than a crash: the two paths that DO set it are both failure paths, so
+# every SUCCESS path died. `ARTIFACT OK` and `LOCAL BUILD OK` were unreachable lines. A release gate
+# that can only report failure or not-attested, and never pass, is not a gate.
+#
+# The comment above check 1b claims "every branch below now sets `fail` or `not_attested`". That claim
+# is what made the initialisation look unnecessary, and it was false for the `--local-only` branch.
+# Observed on CI run 31390147116: `gate` failed here, and `verifier-self-test` failed its two
+# success-path cases ("a pin this host does reproduce" and "--local-only exits 0") with the same
+# unbound variable. Both are green paths that could never be green.
+not_attested=0
+not_attested_why=""
 
 # ---- 1. Primary gate: reproducible rebuild with default features ----
 if [[ "$SKIP_REBUILD" -eq 1 ]]; then
