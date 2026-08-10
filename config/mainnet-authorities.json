@@ -35,7 +35,7 @@
       "role": "config.admin. Day-to-day operations: premint, param setters, proposing timelocked actions.",
       "kind": "off-curve (PDA, consistent with a Squads vault)",
       "verified_onchain": "2026-07-26: exists on mainnet, 0.100251 SOL, System-owned, OFF-CURVE",
-      "notes": "The hottest key: touched on every operational action. Correctly separated from the upgrade authority."
+      "notes": "The hottest key: touched on every operational action. SEPARE EN COMPTE, PAS EN CONTROLE, corrige le 2026-08-11: c est un vault Squads distinct de l upgrade authority, mais les deux sont 3/5 sur LES MEMES CINQ MEMBRES, donc les memes trois signatures atteignent les deux. La phrase precedente disait Correctly separated from the upgrade authority, ce qui laissait croire a une separation de controle. Voir risk_accepted.upgrade_equals_compliance."
     },
     "upgrade_authority": {
       "pubkey": "FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3",
@@ -56,7 +56,7 @@
       "role": "Guardian veto: pause, cancel_timelocked_action, cancel_admin_transfer during a delay window.",
       "kind": "off-curve (PDA, consistent with a Squads vault)",
       "verified_onchain": "same account as upgrade_authority",
-      "notes": "Distinct from ops_admin, which is what matters for the code: add_guardian refuses config.admin and GuardianAccount::may_act refuses a guardian that IS the admin. Both pass with this assignment. More guardians to be added shortly (Thomas, 2026-07-26); MIN_ACTIVE_GUARDIANS is 1 and max_guardian_count defaults to 3."
+      "notes": "Distinct from ops_admin AU SENS DU CODE, et c est tout ce que le code verifie: add_guardian refuses config.admin and GuardianAccount::may_act refuses a guardian that IS the admin. Both pass with this assignment. CE QUE LE CODE NE PEUT PAS VERIFIER, ajoute le 2026-08-11: les deux vaults partagent leurs cinq membres et leur seuil 3/5, donc le veto du gardien n est pas independant de l admin qu il contraint des lors que trois cles sont atteintes. More guardians to be added shortly (Thomas, 2026-07-26); MIN_ACTIVE_GUARDIANS is 1 and max_guardian_count defaults to 3."
     },
     "inventory_wallet": {
       "pubkey": "EkDhR65JUL8tGhxRhnueaqri6zNzxMEJ82UU35pQ7V56",
@@ -77,7 +77,7 @@
     "upgrade_equals_compliance": {
       "what": "upgrade_authority and compliance are the SAME vault (FqFNX...), and it is also the guardian.",
       "why_it_matters": "SolidProof TrustNet MEDIUM #1 is precisely 'these must be split across separate multisigs'. A compromise of FqFNX can replace the program with arbitrary code AND freeze or seize any holder's balance. That is the complete-takeover scenario the audit named, lacking only the ops_admin role, which an arbitrary upgrade can grant itself anyway.",
-      "what_it_DOES_still_defend": "The more likely compromise. ops_admin is the hot, frequently-signed key, and it is genuinely separate: if it falls, FqFNX can veto its timelocked actions as guardian and repair the program as upgrade authority.",
+      "what_it_DOES_still_defend": "CORRIGE LE 2026-08-11, et l ancienne phrase etait fausse. Elle disait: ops_admin est genuinement separe, donc s il tombe, FqFNX peut vetoer ses actions timelockees comme gardien et reparer le programme comme upgrade authority. MESURE: les DEUX vaults sont des Squads 3/5 avec LES MEMES CINQ MEMBRES. Donc ce qui atteint 3 signatures sur l ops atteint 3 signatures sur le gardien au meme instant, et le veto n est pas independant de ce qu il vete. CE QUI TIENT REELLEMENT: la compromission d UNE ou DEUX cles membre n atteint aucun des deux seuils, et c est le cas le plus probable. A TROIS cles, il ne reste que le delai de 24h lui-meme, et seulement pour les actions qui en portent un: aucune separation de pouvoir ne subsiste. CE QUI FERMERAIT: un jeu de signataires DISTINCT sur au moins un vault. Le document SolidProof le propose explicitement et attend leur reponse.",
       "recommendation": "Separate upgrade_authority from compliance before material value accrues. Compliance is a WARM key (it gets exercised in response to legal orders); an upgrade authority should be COLD, used rarely, and ideally renounced once the code is final. A third vault, or renouncing upgradeability post-launch, closes this.",
       "status": "ACCEPTED for launch by Thomas 2026-07-26, with the split tracked as a follow-up."
     }
