@@ -112,21 +112,26 @@ export function ReservesPanel() {
               value={`${oz(data.maxSupply)} oz`}
               sub={`${(data.utilBps / 100).toFixed(2)}% used`}
             />
-            <Row
-              label="Treasury USDC (redemption float, not a reserve)"
-              value={`$${usd(data.treasury)}`}
-            />
-            <Row
-              label="Instant redeemable now"
-              value={`$${usd(data.instantAvail)}`}
-              sub={
-                data.paused
-                  ? "paused"
-                  : data.redemptionsEnabled
-                    ? "this window"
-                    : "redemptions off"
-              }
-            />
+            {/* THE TREASURY BALANCE AND THE INSTANT-REDEEMABLE FIGURE BOTH USED TO SIT HERE, and both
+                were removed on 2026-08-11 because this panel is the first thing a visitor reads.
+
+                BOTH had to go, not just the treasury row. Instant-redeemable is the MINIMUM of the
+                rolling-window budget and the treasury balance, so whenever the treasury is the
+                binding constraint the second row printed the first row's number under a different
+                name. Removing only the row that says "Treasury" would have moved the figure, not
+                withdrawn it.
+
+                It is not hidden, and nobody should think otherwise: the treasury is an on-chain
+                account and anyone can read it. What changed is that a protocol-sizing number is no
+                longer the headline of a page aimed at buyers.
+
+                A user who is actually redeeming still needs it to size their own transaction, and
+                still gets it: MintRedeemCard shows "Max instant now", in USDC and in approximate
+                SILV, but only while the redeem tab is open.
+
+                The `paused` and `redemptionsEnabled` states this row also carried are not lost.
+                MintRedeemCard surfaces them where they change what the user can do, with a full
+                sentence rather than a two-word subtitle. */}
           </div>
 
           <p className="mt-4 text-center text-xs leading-relaxed text-muted">
