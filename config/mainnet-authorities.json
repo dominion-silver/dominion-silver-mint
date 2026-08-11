@@ -84,6 +84,22 @@
   },
   "mint_creation_ceremony": {
     "_note": "Every value here is FIXED FOREVER at mint creation. There is no second chance.",
+    "pregenerated_mint": "SiLVFMgD3eD2rgK628NbTBq9MnuJF5FW2CRaVyTB35L",
+    "_pregenerated_mint_note": [
+      "LOCKED 2026-08-11 by the owner. A vanity address: the `i` is lowercase because Solana base58",
+      "has no capital `I` (nor `0`, `O`, `l`), so `SILV` in capitals is not a possible prefix for",
+      "anyone, us included. The secret key lives at ~/.config/solana/dominion-silv-mint.json, mode",
+      "600, on the ceremony machine only, and t1-hostile-bootstrap.ts consumes it via",
+      "DOMINION_SILV_MINT_KEYPAIR.",
+      "",
+      "THIS FIELD EXISTS TO BE COMPARED. The address is announced publicly (Jupiter pre-validation)",
+      "before the token exists, so a wrong keypair file at ceremony time would create the token at an",
+      "address nobody was told about. T1 now refuses unless the supplied keypair derives to exactly",
+      "this value; the earlier guard only caught a keypair file present with the env var unset.",
+      "",
+      "WHAT THE PREFIX DOES NOT DO: authenticate. `SiLV` is four characters and a lookalike mint",
+      "costs about 90 seconds of grinding. Only the full address identifies the token."
+    ],
     "decimals": 6,
     "extensions": [
       "MetadataPointer",

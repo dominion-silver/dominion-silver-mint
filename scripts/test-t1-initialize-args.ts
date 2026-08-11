@@ -26,6 +26,7 @@ import idl from "../target/idl/dominion_silver_mint.json";
 import {
   buildT1InitializeArgs,
   preGeneratedMintConflict,
+  pinnedMintMismatch,
   EXPECTED_POST_INITIALIZE,
 } from "./t1-hostile-bootstrap";
 
@@ -190,6 +191,49 @@ function main(): void {
     preGeneratedMintConflict("", true),
     "an EMPTY env var counts as unset and is refused by the same rule",
     "an empty string slipped past as if it were a path",
+  );
+
+  // ---- the WRONG export, which the rule above cannot see ----
+  //
+  // `preGeneratedMintConflict` only fires on an UNSET variable. A variable SET to the wrong keypair
+  // renames the token exactly as effectively, and there are real ways to get there: the retired
+  // `4vdwEdyr` keypair is kept deliberately beside the live one, so a path typo is one character.
+  const CEREMONY = (MANIFEST.mint_creation_ceremony ?? {}) as Record<string, unknown>;
+  const PINNED = CEREMONY.pregenerated_mint;
+
+  check(
+    typeof PINNED === "string" && PINNED.startsWith("SiLV"),
+    `the manifest pins the announced vanity mint (${String(PINNED)})`,
+    "mint_creation_ceremony.pregenerated_mint is missing, so nothing pins the announced address",
+  );
+  check(
+    pinnedMintMismatch(PINNED as string, PINNED) === null,
+    "the pinned keypair passes",
+    "the check rejects the very address it pins",
+  );
+  check(
+    pinnedMintMismatch("4vdwEdyruqd3fESSY2QYMGcyv4FAHAMyCLTQ7hKZgdb", PINNED) !== null,
+    "the RETIRED address is refused, which is the realistic wrong-file case",
+    "the retired keypair would have been accepted and renamed the token",
+  );
+  // A lookalike with the same four-character prefix. `SiLV` costs about 90 seconds to grind, so a
+  // prefix comparison would be worthless here: the check must be on the WHOLE address.
+  check(
+    pinnedMintMismatch("SiLV1111111111111111111111111111111111111111", PINNED) !== null,
+    "a different address with the SAME SiLV prefix is still refused",
+    "the check accepted a lookalike, so it is comparing prefixes and not addresses",
+  );
+  // No env var means a fresh keypair per run, the documented default (audit A-30). Nothing to compare.
+  check(
+    pinnedMintMismatch(undefined, PINNED) === null,
+    "no supplied keypair means the default fresh-keypair path, not a refusal",
+    "the check blocks the default path where no address was pre-generated",
+  );
+  // And a manifest with nothing pinned must not manufacture a complaint.
+  check(
+    pinnedMintMismatch("SiLVFMgD3eD2rgK628NbTBq9MnuJF5FW2CRaVyTB35L", undefined) === null,
+    "an unpinned manifest has nothing to compare and does not refuse",
+    "a missing pin turned into a refusal",
   );
 
   if (failures > 0) {

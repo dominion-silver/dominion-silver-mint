@@ -134,6 +134,37 @@ export function preGeneratedMintConflict(
   return !envValue && defaultFileExists;
 }
 
+/**
+ * Does the supplied keypair derive to the address that was announced?
+ *
+ * `preGeneratedMintConflict` above catches a FORGOTTEN export. This catches a WRONG one, which is the
+ * remaining way to ship the token at an address nobody was told about: a second keypair on the
+ * machine, a stale path, a half-finished copy, a file restored from the retired `4vdwEdyr` one that
+ * sits deliberately next to it. Same consequence as the forgotten export, and until 2026-08-11 the
+ * only thing standing between us and it was reading the pubkey off the scrollback in the middle of a
+ * one-shot ceremony.
+ *
+ * Returns null when the pair is coherent, otherwise the reason to refuse.
+ *
+ * `pinned` unset means the manifest carries no pre-generated address, so there is nothing to compare
+ * and nothing to complain about: a fresh keypair per run is the documented default (audit A-30).
+ */
+export function pinnedMintMismatch(
+  suppliedPubkey: string | undefined,
+  pinned: unknown,
+): string | null {
+  if (!suppliedPubkey) return null;
+  if (typeof pinned !== "string" || pinned.length === 0) return null;
+  if (suppliedPubkey === pinned) return null;
+  return (
+    `the supplied SILV mint keypair derives to ${suppliedPubkey}, but the announced address pinned in\n` +
+    `config/mainnet-authorities.json (mint_creation_ceremony.pregenerated_mint) is ${pinned}.\n` +
+    `Creating the token here would put it at an address nobody has been told about. Either point\n` +
+    `DOMINION_SILV_MINT_KEYPAIR at the keypair for the pinned address, or change the pinned address\n` +
+    `FIRST and re-announce it.`
+  );
+}
+
 export function buildT1InitializeArgs(
   manifest: Record<string, unknown>,
   cluster: string,
@@ -379,6 +410,31 @@ async function main() {
         `  Either:  DOMINION_SILV_MINT_KEYPAIR=${defaultPreGenPath} ...\n` +
         `  or, if that address was never announced and you mean to abandon it, move the file aside.`,
     );
+  }
+
+  // AND THE OTHER HALF OF THE SAME FOOTGUN: an export that points at the WRONG keypair. The refusal
+  // above only fires when the variable is UNSET, so a stale path, a second keypair on the machine or
+  // the retired one kept deliberately beside the live one would all sail through it and rename the
+  // token just as effectively. Compared against the address pinned in the manifest, so the check is
+  // against what was ANNOUNCED rather than against whatever happens to be on disk. Placed here with
+  // the other early refusals, before any lamport moves and before the mint is created.
+  {
+    const supplied = process.env.DOMINION_SILV_MINT_KEYPAIR;
+    const pinned = (
+      (mainnetConfig() as Record<string, unknown>).mint_creation_ceremony as
+        | Record<string, unknown>
+        | undefined
+    )?.pregenerated_mint;
+    const suppliedPubkey = supplied
+      ? Keypair.fromSecretKey(
+          new Uint8Array(JSON.parse(fs.readFileSync(supplied, "utf8"))),
+        ).publicKey.toBase58()
+      : undefined;
+    const why = pinnedMintMismatch(suppliedPubkey, pinned);
+    if (why) throw new Error(why);
+    if (suppliedPubkey && typeof pinned === "string") {
+      console.log(`  SILV mint address matches the pinned, announced one: ${pinned}`);
+    }
   }
 
   // Resolved and VALIDATED here, before a single lamport moves: this file is hand-edited during the
