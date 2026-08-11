@@ -160,15 +160,65 @@ if "SILV_MINT" in a and "SILV_MINT" in p_:
 # exists, and t1-hostile-bootstrap refuses on mainnet unless the supplied keypair derives to exactly
 # it. So a truncated or typo'd value does not fail here, it fails in the one-shot window. It is also
 # the string a human copies into listing forms.
+#
+# THIS GATE IS THE ONE THE LAUNCH PATH RUNS, which is why the checks live here and not only in
+# scripts/test-t1-initialize-args.ts: the runbook calls this script, and it does not call that test.
+# Corrected after a review-of-fixes pass: the first version skipped in TOTAL SILENCE when the field was
+# missing, so renaming the key to `pregenerated_mnt` left this gate at CONSTANTS OK with no line about
+# the pin at all. Failing open is exactly the defect the check was added to remove.
 _manifest_path = pathlib.Path("config/mainnet-authorities.json")
-_MANIFEST = _json_or_die(_manifest_path.read_text(), str(_manifest_path))
-_PIN = (_MANIFEST.get("mint_creation_ceremony") or {}).get("pregenerated_mint")
-if _PIN is not None:
-    check(isinstance(_PIN, str) and re.fullmatch(B58, _PIN) is not None,
-          f"mint_creation_ceremony.pregenerated_mint is base58 and pubkey-shaped ({_PIN})")
-    # A pinned address that is also on the retired list would mean re-announcing a dead token.
-    check(_PIN not in RETIRED_MINTS,
-          "the pinned mint is not a known-retired mint")
+if not _manifest_path.exists():
+    # Not the IDL, so _json_or_die's "regenerate with anchor idl build" advice would be wrong here.
+    check(False, f"{_manifest_path} is missing, and it is the source of truth for the ceremony")
+    _MANIFEST = {}
+else:
+    try:
+        _MANIFEST = json.loads(_manifest_path.read_text())
+    except Exception as _e:
+        check(False, f"{_manifest_path} is not valid JSON ({_e}). It is hand-edited during the ceremony.")
+        _MANIFEST = {}
+
+
+def _b58_decode(s):
+    """Decode base58 to bytes, or None. Written out because this gate is deliberately dependency-free,
+    and a length-and-alphabet regex is not a decode: `{32,44}` happily passes strings that are not 32
+    bytes, and the pinned value is the one a human copies into a listing form."""
+    alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+    n = 0
+    for ch in s:
+        idx = alphabet.find(ch)
+        if idx < 0:
+            return None
+        n = n * 58 + idx
+    body = n.to_bytes((n.bit_length() + 7) // 8, "big") if n else b""
+    return b"\x00" * (len(s) - len(s.lstrip("1"))) + body
+
+
+_PIN = (_MANIFEST.get("mint_creation_ceremony") or {}).get("pregenerated_mint") if _MANIFEST else None
+# The retired PRE-GENERATED addresses, which are a different list from the retired app SILV_MINTs
+# above: this one is about mint keypairs that were generated, superseded, and kept on disk beside the
+# live one. `4vdwEdyr` is precisely the file a stale path would pick up, so re-pinning it is a mistake
+# worth naming rather than a hypothetical.
+RETIRED_PREGEN = {
+    "4vdwEdyruqd3fESSY2QYMGcyv4FAHAMyCLTQ7hKZgdb",  # pre-vanity, never announced, retired 2026-08-11
+}
+if _MANIFEST:
+    check(isinstance(_PIN, str) and len(_PIN) > 0,
+          "mint_creation_ceremony.pregenerated_mint is present (the announced SILV address)")
+if isinstance(_PIN, str) and _PIN:
+    _decoded = _b58_decode(_PIN)
+    check(_decoded is not None and len(_decoded) == 32,
+          f"the pinned mint decodes to a 32-byte pubkey ({_PIN})")
+    # A pinned address on either retired list would mean announcing a dead token.
+    check(_PIN not in RETIRED_MINTS and _PIN not in RETIRED_PREGEN,
+          "the pinned mint is not a retired mint or a retired pre-generated address")
+    # After runbook step 6c the apps carry the mainnet mint, and then it MUST be the pinned one. Before
+    # 6c they carry a devnet mint, so disagreement is the expected state and cannot be an assertion.
+    if "SILV_MINT" in a:
+        if a["SILV_MINT"] == _PIN:
+            print("   ok: the apps carry the pinned mint, so step 6c is done and consistent")
+        else:
+            print(f"   note: apps carry {a['SILV_MINT']}, pin is {_PIN} (expected before runbook step 6c)")
 
 print("4a. Anchor account mutability")
 # CLASS check: for every `#[derive(Accounts)]` struct, any field the matching handler writes must be

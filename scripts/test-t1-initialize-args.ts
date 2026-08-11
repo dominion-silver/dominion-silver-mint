@@ -275,6 +275,22 @@ function main(): void {
     "devnet with nothing pinned and nothing supplied proceeds",
     "the unpinned default path is blocked",
   );
+  // localnet is the third member of the Cluster union in _cluster.ts and the carve-out was unproven.
+  check(
+    mintKeypairRefusal("localnet", OTHER, PINNED) === null &&
+      mintKeypairRefusal("localnet", undefined, PINNED) === null,
+    "localnet gets the same carve-out as devnet",
+    "localnet is treated as mainnet, so a local test demands the announced keypair",
+  );
+  // DEFAULT-DENY. A string nobody expects must not land in the permissive branch: the carve-out is a
+  // closed list of rehearsal clusters, so a caller bug produces a refusal rather than a token created
+  // at an unannounced address on what might be mainnet.
+  check(
+    mintKeypairRefusal("mainnet", OTHER, PINNED) !== null &&
+      mintKeypairRefusal("", undefined, PINNED) !== null,
+    "an unexpected cluster string is treated as mainnet and refuses",
+    "an unrecognised cluster took the rehearsal carve-out, which is the wrong direction to fail",
+  );
 
   if (failures > 0) {
     console.log(`\nT1 INITIALIZE ARGS TEST FAILED: ${failures} check(s)`);

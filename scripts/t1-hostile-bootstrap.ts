@@ -178,7 +178,11 @@ export function mintKeypairRefusal(
   suppliedPubkey: string | undefined,
   pinned: string | undefined,
 ): string | null {
-  const mainnet = cluster === "mainnet-beta";
+  // DEFAULT-DENY, so the carve-out is the closed list and not the strict path. `classifyCluster` only
+  // ever returns one of three strings, and it already maps anything unrecognised to "mainnet-beta", so
+  // this can differ only through a caller bug. When that happens the safe direction is to demand the
+  // announced keypair, not to wave a rehearsal carve-out at what might be mainnet.
+  const mainnet = cluster !== "devnet" && cluster !== "localnet";
 
   if (mainnet && !pinned) {
     return (
@@ -200,15 +204,15 @@ export function mintKeypairRefusal(
     );
   }
 
+  // Off mainnet, everything that reaches this point is allowed and the caller warns instead. Both
+  // refusals above already returned, so on mainnet the only case left is (both defined, and equal or
+  // not); the guard below is the ONE line that decides mismatch.
+  if (!mainnet) return null;
   if (!suppliedPubkey || !pinned || suppliedPubkey === pinned) return null;
 
-  const detail =
-    `the supplied SILV mint keypair derives to ${suppliedPubkey}, but the announced address pinned in\n` +
-    `config/mainnet-authorities.json (mint_creation_ceremony.pregenerated_mint) is ${pinned}.`;
-
-  if (!mainnet) return null; // caller warns; see the doc comment on why devnet proceeds
   return (
-    `${detail}\n` +
+    `the supplied SILV mint keypair derives to ${suppliedPubkey}, but the announced address pinned in\n` +
+    `config/mainnet-authorities.json (mint_creation_ceremony.pregenerated_mint) is ${pinned}.\n` +
     `Creating the token here would put it at an address nobody has been told about. Either point\n` +
     `DOMINION_SILV_MINT_KEYPAIR at the keypair for the pinned address, or change the pinned address\n` +
     `FIRST and re-announce it.`
@@ -449,16 +453,29 @@ async function main() {
   if (
     preGeneratedMintConflict(process.env.DOMINION_SILV_MINT_KEYPAIR, fs.existsSync(defaultPreGenPath))
   ) {
-    const announced = Keypair.fromSecretKey(
-      new Uint8Array(JSON.parse(fs.readFileSync(defaultPreGenPath, "utf8"))),
-    ).publicKey.toBase58();
+    // Read defensively: a corrupt file here used to throw the same bare, unnamed error the env-var
+    // path was fixed for, in the middle of a refusal that is trying to explain something else.
+    let announced: string;
+    try {
+      announced = Keypair.fromSecretKey(
+        new Uint8Array(JSON.parse(fs.readFileSync(defaultPreGenPath, "utf8"))),
+      ).publicKey.toBase58();
+    } catch (e) {
+      announced = `UNREADABLE (${(e as Error).message})`;
+    }
     throw new Error(
       `a pre-generated SILV mint keypair exists at ${defaultPreGenPath}\n` +
         `  address: ${announced}\n` +
         `but DOMINION_SILV_MINT_KEYPAIR is NOT set, so this run would create a DIFFERENT mint and the\n` +
         `token would ship at an address nobody was told about. Refusing.\n` +
-        `  Either:  DOMINION_SILV_MINT_KEYPAIR=${defaultPreGenPath} ...\n` +
-        `  or, if that address was never announced and you mean to abandon it, move the file aside.`,
+        `  On mainnet:  DOMINION_SILV_MINT_KEYPAIR=${defaultPreGenPath} ...\n` +
+        // NOT "move the file aside" as the only alternative: on this cluster that would mean moving the
+        // live announced keypair out of the way for a rehearsal, which is the wrong instinct to teach.
+        // A retired keypair kept beside it is exactly what a rehearsal should spend.
+        `  On a rehearsal cluster: point it at a RETIRED keypair instead, e.g.\n` +
+        `      ${path.join(os.homedir(), ".config", "solana", "dominion-silv-mint-RETIRED-4vdwEdyr.json")}\n` +
+        `    so the announced address is not spent on devnet. A mismatch is allowed off mainnet.\n` +
+        `  Only if that address was never announced and you mean to abandon it, move the file aside.`,
     );
   }
 
@@ -503,6 +520,16 @@ async function main() {
       console.log(`  SILV mint: ${pinned} pinned, no keypair supplied (fresh keypair, ${CLUSTER.cluster})`);
     } else if (suppliedPubkey === pinned) {
       console.log(`  SILV mint address matches the pinned, announced one: ${pinned}`);
+      // The MISMATCH case warns. So must this one, off mainnet: creating the announced mint on a
+      // rehearsal cluster spends the address for good, and this run would then be the only reason the
+      // real ceremony fails with "ALREADY EXISTS". A rehearsal should spend a retired keypair.
+      if (CLUSTER.cluster !== "mainnet-beta") {
+        console.log(
+          `  WARNING: that is the ANNOUNCED mainnet key, and this is ${CLUSTER.cluster}. Creating it\n` +
+            `  here burns the address: the real ceremony would then refuse it as already existing.\n` +
+            `  For a rehearsal, point DOMINION_SILV_MINT_KEYPAIR at a retired keypair instead.`,
+        );
+      }
     } else {
       console.log(
         `  WARNING: supplied SILV mint ${suppliedPubkey} is NOT the pinned ${pinned}.\n` +
