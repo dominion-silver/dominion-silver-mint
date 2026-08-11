@@ -135,30 +135,80 @@ export function preGeneratedMintConflict(
 }
 
 /**
- * Does the supplied keypair derive to the address that was announced?
+ * The announced SILV address, read from the manifest.
  *
- * `preGeneratedMintConflict` above catches a FORGOTTEN export. This catches a WRONG one, which is the
- * remaining way to ship the token at an address nobody was told about: a second keypair on the
- * machine, a stale path, a half-finished copy, a file restored from the retired `4vdwEdyr` one that
- * sits deliberately next to it. Same consequence as the forgotten export, and until 2026-08-11 the
- * only thing standing between us and it was reading the pubkey off the scrollback in the middle of a
- * one-shot ceremony.
- *
- * Returns null when the pair is coherent, otherwise the reason to refuse.
- *
- * `pinned` unset means the manifest carries no pre-generated address, so there is nothing to compare
- * and nothing to complain about: a fresh keypair per run is the documented default (audit A-30).
+ * Exported and used by the run itself so the TEST drives the same key path the ceremony does. Written
+ * after a review pass measured the alternative: with the path inlined at the call site, a
+ * one-character typo in `pregenerated_mint` left the whole suite green and the typecheck clean, so the
+ * pure function was proven and the code that actually runs on mainnet was not.
  */
-export function pinnedMintMismatch(
+export function readPinnedMint(manifest: Record<string, unknown>): string | undefined {
+  const ceremony = manifest.mint_creation_ceremony as Record<string, unknown> | undefined;
+  const pinned = ceremony?.pregenerated_mint;
+  return typeof pinned === "string" && pinned.length > 0 ? pinned : undefined;
+}
+
+/**
+ * Is the (cluster, supplied keypair, pinned address) triple allowed to create the token?
+ *
+ * Returns null to proceed, otherwise the reason to refuse.
+ *
+ * THREE WAYS TO SHIP THE TOKEN AT AN ADDRESS NOBODY WAS TOLD ABOUT, and this closes the two that
+ * survived the first version:
+ *
+ *  1. A FORGOTTEN export. `preGeneratedMintConflict` above catches it, but only by looking for one
+ *     literal path under `os.homedir()`. A different $HOME (sudo, a second operator account, a
+ *     re-imaged machine), the key on removable media, or the operator having simply moved the file,
+ *     and that guard sees nothing and `Keypair.generate()` runs. So: ON MAINNET, once an address is
+ *     pinned, a missing keypair is FATAL here too, and this check does not care where the file is.
+ *     The A-30 fresh-keypair default is a legitimate path only while nothing is pinned; the moment an
+ *     address is announced it stops being one.
+ *  2. A WRONG export: a stale path, a half-finished copy, or the retired `4vdwEdyr` keypair that sits
+ *     deliberately next to the live one, which makes this a one-character typo.
+ *  3. Nothing pinned at all, so there is nothing to compare against. On mainnet that is now itself a
+ *     refusal, because a manifest that lost the field is indistinguishable from one that never had it.
+ *
+ * DEVNET IS DELIBERATELY DIFFERENT: it warns and proceeds. Rehearsals are the whole point of devnet
+ * and pass B needs a fresh program id, so T1 runs there again before launch. Refusing would leave two
+ * bad options in launch week: move aside the very file the mainnet ceremony depends on, or spend the
+ * announced keypair on devnet.
+ */
+export function mintKeypairRefusal(
+  cluster: string,
   suppliedPubkey: string | undefined,
-  pinned: unknown,
+  pinned: string | undefined,
 ): string | null {
-  if (!suppliedPubkey) return null;
-  if (typeof pinned !== "string" || pinned.length === 0) return null;
-  if (suppliedPubkey === pinned) return null;
-  return (
+  const mainnet = cluster === "mainnet-beta";
+
+  if (mainnet && !pinned) {
+    return (
+      `no announced SILV address is pinned in config/mainnet-authorities.json\n` +
+      `(mint_creation_ceremony.pregenerated_mint), and this is mainnet. That field is what this run\n` +
+      `compares the mint keypair against, so without it the token could be created at any address.\n` +
+      `The manifest is hand-edited during the ceremony: check the field was not lost in an edit.`
+    );
+  }
+
+  if (mainnet && !suppliedPubkey) {
+    return (
+      `DOMINION_SILV_MINT_KEYPAIR is not set, and this is mainnet with ${pinned}\n` +
+      `pinned as the announced SILV address. This run would call Keypair.generate() and the token\n` +
+      `would be created at a random address, permanently, while buyers hold the announced one.\n` +
+      `  export DOMINION_SILV_MINT_KEYPAIR=<path to the keypair for ${pinned}>\n` +
+      `The usual path is ~/.config/solana/dominion-silv-mint.json, but this refusal does not depend\n` +
+      `on that: point it wherever the key actually is.`
+    );
+  }
+
+  if (!suppliedPubkey || !pinned || suppliedPubkey === pinned) return null;
+
+  const detail =
     `the supplied SILV mint keypair derives to ${suppliedPubkey}, but the announced address pinned in\n` +
-    `config/mainnet-authorities.json (mint_creation_ceremony.pregenerated_mint) is ${pinned}.\n` +
+    `config/mainnet-authorities.json (mint_creation_ceremony.pregenerated_mint) is ${pinned}.`;
+
+  if (!mainnet) return null; // caller warns; see the doc comment on why devnet proceeds
+  return (
+    `${detail}\n` +
     `Creating the token here would put it at an address nobody has been told about. Either point\n` +
     `DOMINION_SILV_MINT_KEYPAIR at the keypair for the pinned address, or change the pinned address\n` +
     `FIRST and re-announce it.`
@@ -418,22 +468,46 @@ async function main() {
   // token just as effectively. Compared against the address pinned in the manifest, so the check is
   // against what was ANNOUNCED rather than against whatever happens to be on disk. Placed here with
   // the other early refusals, before any lamport moves and before the mint is created.
+  //
+  // LOADED ONCE, HERE, and carried to the creation call. It used to be read a second time down at the
+  // creation site, with the attacker-funding transaction in between: the bytes that got signed were
+  // not the bytes that were checked.
+  const suppliedMintPath = process.env.DOMINION_SILV_MINT_KEYPAIR || undefined;
+  let preGeneratedMint: Keypair | undefined;
+  if (suppliedMintPath) {
+    try {
+      preGeneratedMint = Keypair.fromSecretKey(
+        new Uint8Array(JSON.parse(fs.readFileSync(suppliedMintPath, "utf8"))),
+      );
+    } catch (e) {
+      // Named, because the raw ENOENT or "bad secret key size" says nothing about WHICH variable is
+      // wrong, and this is read in the middle of a one-shot ceremony.
+      throw new Error(
+        `DOMINION_SILV_MINT_KEYPAIR=${suppliedMintPath} could not be read as a Solana keypair: ` +
+          `${(e as Error).message}\n` +
+          `Expected the 64-byte JSON array that solana-keygen writes.`,
+      );
+    }
+  }
   {
-    const supplied = process.env.DOMINION_SILV_MINT_KEYPAIR;
-    const pinned = (
-      (mainnetConfig() as Record<string, unknown>).mint_creation_ceremony as
-        | Record<string, unknown>
-        | undefined
-    )?.pregenerated_mint;
-    const suppliedPubkey = supplied
-      ? Keypair.fromSecretKey(
-          new Uint8Array(JSON.parse(fs.readFileSync(supplied, "utf8"))),
-        ).publicKey.toBase58()
-      : undefined;
-    const why = pinnedMintMismatch(suppliedPubkey, pinned);
+    const pinned = readPinnedMint(mainnetConfig() as Record<string, unknown>);
+    const suppliedPubkey = preGeneratedMint?.publicKey.toBase58();
+    const why = mintKeypairRefusal(CLUSTER.cluster, suppliedPubkey, pinned);
     if (why) throw new Error(why);
-    if (suppliedPubkey && typeof pinned === "string") {
+    // ALWAYS SAY WHICH BRANCH RAN. The first version printed only on success, so a skipped check and
+    // a check that does not exist looked identical in the scrollback, which is the one place this gets
+    // read from.
+    if (!pinned) {
+      console.log("  SILV mint: nothing pinned in the manifest, no announced address to compare");
+    } else if (!suppliedPubkey) {
+      console.log(`  SILV mint: ${pinned} pinned, no keypair supplied (fresh keypair, ${CLUSTER.cluster})`);
+    } else if (suppliedPubkey === pinned) {
       console.log(`  SILV mint address matches the pinned, announced one: ${pinned}`);
+    } else {
+      console.log(
+        `  WARNING: supplied SILV mint ${suppliedPubkey} is NOT the pinned ${pinned}.\n` +
+          `  Allowed because this is ${CLUSTER.cluster}. On mainnet this is a refusal.`,
+      );
     }
   }
 
@@ -534,12 +608,13 @@ async function main() {
   // the ceremony can create that mint account first, which makes createSilvMintForTest fail and burns
   // the address you already announced. Griefing the ceremony, not stealing from it. So keep the file
   // mode 600 on the ceremony machine and delete it once the mint exists.
-  const preGenerated = process.env.DOMINION_SILV_MINT_KEYPAIR;
-  const silvMint = preGenerated
-    ? Keypair.fromSecretKey(new Uint8Array(JSON.parse(fs.readFileSync(preGenerated, "utf8"))))
-    : Keypair.generate();
-  if (preGenerated) {
-    console.log(`  SILV mint keypair supplied from ${preGenerated} (pre-announced address)`);
+  //
+  // The keypair itself was read, and checked against the pinned address, up in the early refusals. It
+  // is REUSED here rather than read again: re-reading put a network round trip between the check and
+  // the signature, so the bytes that got signed were not the bytes that were verified.
+  const silvMint = preGeneratedMint ?? Keypair.generate();
+  if (preGeneratedMint) {
+    console.log(`  SILV mint keypair supplied from ${suppliedMintPath} (pre-announced address)`);
     const already = await conn.getAccountInfo(silvMint.publicKey);
     if (already) {
       throw new Error(

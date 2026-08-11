@@ -64,13 +64,22 @@ function main() {
   console.log("  This is the address the token WILL have, on whichever cluster the ceremony runs.");
   console.log("  It does not exist on chain yet: nothing is minted until T1 creates it.");
   console.log("");
-  console.log("  Use it with:");
+  console.log("  PIN IT FIRST, or T1 will refuse to use it on mainnet. Write the address into");
+  console.log("  config/mainnet-authorities.json:");
+  console.log(`    mint_creation_ceremony.pregenerated_mint = "${kp.publicKey.toBase58()}"`);
+  console.log("  That field is what the ceremony compares this keypair against, so that a stale path or");
+  console.log("  a second keypair on the machine cannot rename the token. A keypair that is not the");
+  console.log("  pinned one is refused on mainnet, and so is a missing pin.");
+  console.log("");
+  console.log("  Then use it with:");
   console.log(`    DOMINION_SILV_MINT_KEYPAIR=${out} \\`);
   console.log("      ... npx tsx scripts/t1-hostile-bootstrap.ts");
   console.log("");
-  console.log("  Then: keep the file on this machine only, and delete it once the mint exists.");
+  console.log("  Keep the file on this machine only, and delete it once the mint exists.");
   console.log("  If it leaks before the ceremony, someone can create the account first and burn this");
-  console.log("  address. T1 refuses in that case rather than failing confusingly.");
+  console.log("  address. T1 refuses in that case rather than failing confusingly. Recovering from a");
+  console.log("  leak means a new keypair, a new pin, AND re-announcing: anywhere the old address was");
+  console.log("  published is now wrong.");
 }
 
 main();

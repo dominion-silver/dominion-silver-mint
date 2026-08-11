@@ -132,25 +132,43 @@ for app in ("admin", "public"):
         check(got["PROGRAM_ID"] == DECLARED, f"{path}: PROGRAM_ID == declare_id!")
 
 a, p_ = consts.get("admin", {}), consts.get("public", {})
+# `initialize` creates SILV_MINT, so agreement plus this list is all an offline gate can prove.
+# AT MODULE SCOPE, not inside the `if` below: the pinned-mint check further down also reads it, and a
+# tree where neither app declared SILV_MINT would otherwise reach that check with the name unbound and
+# kill the gate with a NameError instead of printing a verdict.
+RETIRED_MINTS = {
+    "9jM14E8kV6asGw2FwNhKk3gXQNzGhoLrJGyFZ8U7gMoF",  # gc5TW era, program closed
+    "5i13gz6vGKTYhpWbMuQfiBAApfNHCxxJu2GtDGM1A2Li",  # AX7se era, program closed
+    "62dTkSN7FF2HH8tENWL1mXmrCm8ouqX1bditK71yfxPr",  # 6bgSnXYg era, program closed 2026-08-07
+    # Both apps still carried this on 2026-08-10, hours after T1 created the live mint on the
+    # 3ucji6 deploy. It is not from a closed program: it is a LIVE devnet mint with supply 0 whose
+    # mint authority is not this program's silv_mint_authority PDA, so every instruction the apps
+    # built against it would have been rejected. Runbook step 6c is marked BLOCKING and was
+    # skipped. The list is the only thing that makes this gate able to say so, and it did not
+    # contain the value, so the gate printed `ok` on a broken config. That is the failure mode the
+    # comment above predicts, observed.
+    "G5zez3JWETJMfG3hnCQbdPm7usXMnmKUpajdGJYB5JFF",  # pre-3ucji6 devnet mint, retired 2026-08-10
+}
 if "SILV_MINT" in a and "SILV_MINT" in p_:
     check(a["SILV_MINT"] == p_["SILV_MINT"],
           f"both apps agree on SILV_MINT ({a['SILV_MINT']})")
-    # `initialize` creates SILV_MINT, so agreement plus this list is all an offline gate can prove.
-    RETIRED_MINTS = {
-        "9jM14E8kV6asGw2FwNhKk3gXQNzGhoLrJGyFZ8U7gMoF",  # gc5TW era, program closed
-        "5i13gz6vGKTYhpWbMuQfiBAApfNHCxxJu2GtDGM1A2Li",  # AX7se era, program closed
-        "62dTkSN7FF2HH8tENWL1mXmrCm8ouqX1bditK71yfxPr",  # 6bgSnXYg era, program closed 2026-08-07
-        # Both apps still carried this on 2026-08-10, hours after T1 created the live mint on the
-        # 3ucji6 deploy. It is not from a closed program: it is a LIVE devnet mint with supply 0 whose
-        # mint authority is not this program's silv_mint_authority PDA, so every instruction the apps
-        # built against it would have been rejected. Runbook step 6c is marked BLOCKING and was
-        # skipped. The list is the only thing that makes this gate able to say so, and it did not
-        # contain the value, so the gate printed `ok` on a broken config. That is the failure mode the
-        # comment above predicts, observed.
-        "G5zez3JWETJMfG3hnCQbdPm7usXMnmKUpajdGJYB5JFF",  # pre-3ucji6 devnet mint, retired 2026-08-10
-    }
     check(a["SILV_MINT"] not in RETIRED_MINTS,
           "SILV_MINT is not a known-retired mint")
+
+# THE ANNOUNCED MINT ADDRESS, checked offline because the alternative is finding out mid-ceremony.
+# `mint_creation_ceremony.pregenerated_mint` is the address published to aggregators before the token
+# exists, and t1-hostile-bootstrap refuses on mainnet unless the supplied keypair derives to exactly
+# it. So a truncated or typo'd value does not fail here, it fails in the one-shot window. It is also
+# the string a human copies into listing forms.
+_manifest_path = pathlib.Path("config/mainnet-authorities.json")
+_MANIFEST = _json_or_die(_manifest_path.read_text(), str(_manifest_path))
+_PIN = (_MANIFEST.get("mint_creation_ceremony") or {}).get("pregenerated_mint")
+if _PIN is not None:
+    check(isinstance(_PIN, str) and re.fullmatch(B58, _PIN) is not None,
+          f"mint_creation_ceremony.pregenerated_mint is base58 and pubkey-shaped ({_PIN})")
+    # A pinned address that is also on the retired list would mean re-announcing a dead token.
+    check(_PIN not in RETIRED_MINTS,
+          "the pinned mint is not a known-retired mint")
 
 print("4a. Anchor account mutability")
 # CLASS check: for every `#[derive(Accounts)]` struct, any field the matching handler writes must be

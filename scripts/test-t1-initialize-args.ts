@@ -26,7 +26,8 @@ import idl from "../target/idl/dominion_silver_mint.json";
 import {
   buildT1InitializeArgs,
   preGeneratedMintConflict,
-  pinnedMintMismatch,
+  mintKeypairRefusal,
+  readPinnedMint,
   EXPECTED_POST_INITIALIZE,
 } from "./t1-hostile-bootstrap";
 
@@ -193,47 +194,86 @@ function main(): void {
     "an empty string slipped past as if it were a path",
   );
 
-  // ---- the WRONG export, which the rule above cannot see ----
+  // ---- the WRONG export, and the FORGOTTEN one, on mainnet ----
   //
-  // `preGeneratedMintConflict` only fires on an UNSET variable. A variable SET to the wrong keypair
-  // renames the token exactly as effectively, and there are real ways to get there: the retired
-  // `4vdwEdyr` keypair is kept deliberately beside the live one, so a path typo is one character.
-  const CEREMONY = (MANIFEST.mint_creation_ceremony ?? {}) as Record<string, unknown>;
-  const PINNED = CEREMONY.pregenerated_mint;
+  // `preGeneratedMintConflict` only fires on an UNSET variable AND only by looking for one literal
+  // path under os.homedir(). A variable set to the wrong keypair, or the right keypair kept somewhere
+  // else, both rename the token just as effectively. `mintKeypairRefusal` is the path-independent
+  // guard, and it is cluster-aware: mainnet refuses, devnet warns so rehearsals still work.
+  //
+  // READ THROUGH THE PRODUCTION READER, not by indexing the JSON here. With the key path inlined at
+  // the call site, a mutation test showed a one-character typo in `pregenerated_mint` left this whole
+  // suite green: the pure function was proven and the code that runs on mainnet was not.
+  const PINNED = readPinnedMint(MANIFEST);
+  const OTHER = "4vdwEdyruqd3fESSY2QYMGcyv4FAHAMyCLTQ7hKZgdb"; // the retired one, kept beside the live
 
   check(
     typeof PINNED === "string" && PINNED.startsWith("SiLV"),
     `the manifest pins the announced vanity mint (${String(PINNED)})`,
     "mint_creation_ceremony.pregenerated_mint is missing, so nothing pins the announced address",
   );
+  // The pinned string is what gets ANNOUNCED publicly, and a truncated or typo'd one would otherwise
+  // surface only as a refusal mid-ceremony. Decoding it here is the cheapest possible proof.
+  let pinDecodes = false;
+  try {
+    pinDecodes = new PublicKey(PINNED as string).toBase58() === PINNED;
+  } catch {
+    pinDecodes = false;
+  }
   check(
-    pinnedMintMismatch(PINNED as string, PINNED) === null,
-    "the pinned keypair passes",
+    pinDecodes,
+    "the pinned address is a valid 32-byte base58 pubkey",
+    "the pinned address does not decode, so it cannot be the address anyone was told about",
+  );
+
+  // ---- mainnet: every way to get a different token is a refusal ----
+  check(
+    mintKeypairRefusal("mainnet-beta", PINNED, PINNED) === null,
+    "mainnet with the pinned keypair proceeds",
     "the check rejects the very address it pins",
   );
   check(
-    pinnedMintMismatch("4vdwEdyruqd3fESSY2QYMGcyv4FAHAMyCLTQ7hKZgdb", PINNED) !== null,
-    "the RETIRED address is refused, which is the realistic wrong-file case",
+    mintKeypairRefusal("mainnet-beta", OTHER, PINNED) !== null,
+    "mainnet refuses the RETIRED address, the realistic wrong-file case",
     "the retired keypair would have been accepted and renamed the token",
   );
   // A lookalike with the same four-character prefix. `SiLV` costs about 90 seconds to grind, so a
   // prefix comparison would be worthless here: the check must be on the WHOLE address.
   check(
-    pinnedMintMismatch("SiLV1111111111111111111111111111111111111111", PINNED) !== null,
-    "a different address with the SAME SiLV prefix is still refused",
+    mintKeypairRefusal("mainnet-beta", "SiLV1111111111111111111111111111111111111111", PINNED) !== null,
+    "mainnet refuses a different address with the SAME SiLV prefix",
     "the check accepted a lookalike, so it is comparing prefixes and not addresses",
   );
-  // No env var means a fresh keypair per run, the documented default (audit A-30). Nothing to compare.
+  // THE P0 THE FIRST VERSION LEFT OPEN. An unset variable on mainnet fell through to
+  // Keypair.generate(), and the only thing covering it was a guard keyed on one $HOME path.
   check(
-    pinnedMintMismatch(undefined, PINNED) === null,
-    "no supplied keypair means the default fresh-keypair path, not a refusal",
-    "the check blocks the default path where no address was pre-generated",
+    mintKeypairRefusal("mainnet-beta", undefined, PINNED) !== null,
+    "mainnet with an address pinned REFUSES when no keypair is supplied",
+    "a forgotten export on mainnet would create the token at a random address, permanently",
   );
-  // And a manifest with nothing pinned must not manufacture a complaint.
+  // A manifest that lost the field is indistinguishable from one that never had it, so on mainnet the
+  // missing pin is itself the refusal rather than a silently skipped check.
   check(
-    pinnedMintMismatch("SiLVFMgD3eD2rgK628NbTBq9MnuJF5FW2CRaVyTB35L", undefined) === null,
-    "an unpinned manifest has nothing to compare and does not refuse",
-    "a missing pin turned into a refusal",
+    mintKeypairRefusal("mainnet-beta", PINNED, undefined) !== null,
+    "mainnet refuses when NOTHING is pinned, rather than skipping the comparison",
+    "an edit that dropped pregenerated_mint would disable the check silently",
+  );
+
+  // ---- devnet: warns, proceeds, because pass B has to run T1 again ----
+  check(
+    mintKeypairRefusal("devnet", OTHER, PINNED) === null,
+    "devnet allows a different keypair, so a rehearsal does not need the announced key",
+    "devnet refuses a mismatch, which blocks pass B in launch week",
+  );
+  check(
+    mintKeypairRefusal("devnet", undefined, PINNED) === null,
+    "devnet with no keypair keeps the A-30 fresh-keypair default",
+    "devnet now demands the announced keypair",
+  );
+  check(
+    mintKeypairRefusal("devnet", undefined, undefined) === null,
+    "devnet with nothing pinned and nothing supplied proceeds",
+    "the unpinned default path is blocked",
   );
 
   if (failures > 0) {

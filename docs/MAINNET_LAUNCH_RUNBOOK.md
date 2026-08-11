@@ -344,8 +344,19 @@ DOMINION_RPC=https://api.mainnet-beta.solana.com \
 DOMINION_INTENT=initialize \
 DOMINION_PROGRAM_ID=<PROGRAM_ID> \
 DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json \
+DOMINION_SILV_MINT_KEYPAIR=~/.config/solana/dominion-silv-mint.json \
 npx tsx scripts/t1-hostile-bootstrap.ts
 ```
+
+**`DOMINION_SILV_MINT_KEYPAIR` is on that list because the SILV address is ANNOUNCED before this step
+runs.** `SiLVFMgD3eD2rgK628NbTBq9MnuJF5FW2CRaVyTB35L` is pinned in
+`config/mainnet-authorities.json` (`mint_creation_ceremony.pregenerated_mint`) and pre-validated on
+aggregators, so without this variable T1 would call `Keypair.generate()` and create the token at a
+random address, permanently, while buyers hold the announced one. The script now refuses on mainnet
+when an address is pinned and no keypair is supplied, and refuses again if the keypair supplied is not
+the pinned one. Neither refusal depends on the file being at the path above: point it wherever the key
+actually is. The retired `dominion-silv-mint-RETIRED-4vdwEdyr.json` sits in the same directory on
+purpose, so read the path before you press enter.
 
 **`DOMINION_INTENT=initialize` is on that list because RULE 2 demands it and this page did not have it.**
 `initialize` is classified irreversible, and T1's case 5 performs it. The guard now fires BEFORE the mint is
