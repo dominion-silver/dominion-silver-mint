@@ -45,41 +45,12 @@ import { getAccount, getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@so
 import { loadIdl, PROGRAM_ID } from "./_program-id";
 import { resolveCluster } from "./_cluster";
 import { adversarialBound, rollWindow } from "./_redeem-window";
+import { redactRpc } from "./_redact";
 
 const CLUSTER = resolveCluster();
 const RPC = CLUSTER.rpc;
 const JSON_OUT = process.argv.includes("--json");
 
-/**
- * The endpoint with any credential stripped, for printing.
- *
- * THIS IS NOT COSMETIC. The whole point of this script is to be run by a scheduler, and the two obvious
- * schedulers both publish their output: a webhook posts the JSON to a third party, and a GitHub Actions
- * run on a PUBLIC repository puts stdout in a world-readable log. `DOMINION_RPC` for a paid provider
- * carries the API key in its query string, so printing the raw endpoint publishes the key to whoever
- * reads the alert. Caught while wiring this to a schedule: the JSON report's `cluster` field was the
- * full Helius URL, key included.
- *
- * The host is kept, because "which cluster did this check read" is exactly what a reader needs, and it
- * is not a secret.
- */
-export function redactRpc(rpc: string): string {
-  try {
-    const u = new URL(rpc);
-    // Any query string on an RPC endpoint is provider credentials in practice. Drop the values rather
-    // than allow-listing names, or the next provider's `?token=` walks straight through.
-    const hadSecret = [...u.searchParams.keys()].length > 0;
-    u.search = "";
-    // A key can also sit in the path, e.g. some providers use /<uuid>. Keep only the first segment.
-    const segs = u.pathname.split("/").filter(Boolean);
-    const pathHidden = segs.length > 0;
-    u.pathname = "/";
-    return u.origin + (hadSecret || pathHidden ? " (credentials redacted)" : "");
-  } catch {
-    // Unparseable: say nothing about it rather than echo a string that might be a secret.
-    return "(unparseable endpoint, redacted)";
-  }
-}
 const RPC_SAFE = redactRpc(RPC);
 
 /** How much of the budget may be gone before this is an alert rather than a note. */

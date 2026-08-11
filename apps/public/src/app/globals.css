@@ -73,6 +73,13 @@ h3 {
   font-family: var(--font-jost), system-ui, sans-serif !important;
 }
 .wallet-adapter-modal-list li button {
+  /* `background-image: none` IS THE LOAD-BEARING LINE, and its absence was a real legibility bug found
+     by screenshotting the open modal rather than reading this file. The list items are also
+     `.wallet-adapter-button`, so they inherited the CTA gradient above, and `background-color` cannot
+     override a `background-image`: the gradient paints on top of it. The result was pale wallet names
+     (#c7cbd2) on a pale periwinkle gradient, so "Phantom", "Solflare", "Ledger" and "Coinbase Wallet"
+     were close to unreadable on the very first interaction every user has with this app. */
+  background-image: none !important;
   background-color: #0b0c0e !important;
   border: 1px solid #232427 !important;
   color: #c7cbd2 !important;

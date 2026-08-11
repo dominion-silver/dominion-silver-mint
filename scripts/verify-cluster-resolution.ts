@@ -262,13 +262,25 @@ for (const rpc of [
   // `requireSanctionedCluster` itself. Listing it would have exempted the one file every mainnet
   // ceremony transaction leaves from, from the check that exists to catch a narrowed regex.
   // Shell out to READ, so not required to guard. A CLAIM, checked below against the send primitives.
-  const READ_ONLY_CLI = new Set(["verify-mainnet-authorities.ts", "verify-mainnet-readiness.ts"]);
+  const READ_ONLY_CLI = new Set([
+    "verify-mainnet-authorities.ts",
+    "verify-mainnet-readiness.ts",
+    // Drives every admin-panel instruction builder and hands each one to `simulateTransaction`. It
+    // opens no keypair and calls no `sendTransaction`: simulation executes against real account state
+    // and discards the result, which is the whole reason it can exercise the timelock proposals without
+    // starting a single 24h clock.
+    "test-admin-panel-simulate.ts",
+  ]);
   // Everything else. Listed by name so ADDING a script is recorded, not silently blessed by a regex.
   const NON_SENDERS = new Set([
     // ROUND 8 REVIEW. Three files this gate had never seen. `_readiness-digest.ts` and
     // `_run-state.ts` are pure: no Connection, no keypair, no send. `test-security-posture-docs.ts`
     // shells out to the litesvm harness and reads files, and touches no cluster.
     "_readiness-digest.ts",
+    // Pure string function: strips provider credentials out of an RPC endpoint before anything prints
+    // it. No Connection, no keypair. Extracted from redeem-monitor.ts precisely BECAUSE that file runs
+    // its main() at import time, so importing the helper from there executed a whole monitor run.
+    "_redact.ts",
     "_run-state.ts",
     "test-security-posture-docs.ts",
     // Pure unit tests over premint.ts's two exported decisions (argv -> atomic, run record ->
