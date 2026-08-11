@@ -1,0 +1,87 @@
+name: RedeemEvent monitor
+
+# THE D11 COMPENSATING CONTROL, on a schedule.
+#
+# D11 accepted a hot single-signer inventory wallet holding the pre-mint while redemptions are open, and
+# named an automatic alert on RedeemEvent and on budget-consumption rate as one of the two things that
+# make that acceptable. The script existed and was proven against a real redemption; nothing ran it.
+#
+# WHY GITHUB ACTIONS RATHER THAN A LAPTOP CRON. The alert has to survive a closed lid, and launch day is
+# exactly when the operator's machine is least predictable. A scheduled workflow also gives the alert
+# channel for free: the monitor exits 1 on ALERT and 2 on could-not-tell, a non-zero exit fails the run,
+# and a failed run on a repository you watch sends mail. No webhook, no third party, no new secret.
+#
+# WHAT IT COSTS IN PRIVACY, since this repository is PUBLIC: the run log will show redemption amounts and
+# the redeemer's address. All of it is already on chain and readable by anyone, so this publishes nothing
+# that was private. What must NOT reach the log is the RPC credential, and it does not: the script prints
+# the endpoint through `redactRpc`, which strips the query string and the path.
+#
+# GRANULARITY, honestly. GitHub's minimum is 5 minutes and scheduled runs are queued, so under load the
+# real spacing is 10 to 20 minutes. That is fine here and it is worth saying why: the protocol's own
+# rolling window is what bounds a drain (~40,000 USDC over 24h, twice the nominal budget because the
+# sliding counter admits close to 2x across a boundary), not the speed of this alarm. The alarm exists to
+# put a human in the loop well inside that window, and `pause` carries multisig latency anyway.
+
+on:
+  schedule:
+    # Every 10 minutes. Cheap: one config read plus one signature page per run.
+    - cron: "*/10 * * * *"
+  # So it can be fired by hand during the ceremony and on launch day, without waiting for the tick.
+  workflow_dispatch:
+    inputs:
+      cluster:
+        description: "Which cluster to check"
+        required: true
+        default: mainnet
+        type: choice
+        options: [mainnet, devnet]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never let a slow run overlap the next tick: two monitors reporting the same window is noise, and the
+  # in-flight one has the better view. `cancel-in-progress: false` so the running check finishes.
+  group: redeem-monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci --ignore-scripts
+
+      - name: Check the redemption budget and the RedeemEvent stream
+        env:
+          # REQUIRED SECRETS, and the run FAILS LOUDLY without them rather than silently checking devnet:
+          #   RPC_MAINNET  full endpoint URL including the provider key
+          #   RPC_DEVNET   same, devnet
+          # Set them under Settings > Secrets and variables > Actions. A public repository still keeps
+          # Actions secrets private; they are simply unavailable to pull requests from forks, and this
+          # workflow never runs on a fork PR.
+          RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
+          RPC_DEVNET: ${{ secrets.RPC_DEVNET }}
+          WANT: ${{ inputs.cluster || 'mainnet' }}
+          REDEEM_ALERT_SINGLE_PCT: "25"
+          REDEEM_ALERT_BUDGET_PCT: "60"
+          # Higher than the script's default of 25, which exists to survive the free devnet endpoint.
+          # This runs on a paid one.
+          REDEEM_SCAN_LIMIT: "200"
+        run: |
+          set -euo pipefail
+          if [ "${WANT}" = "devnet" ]; then RPC="${RPC_DEVNET:-}"; else RPC="${RPC_MAINNET:-}"; fi
+          if [ -z "${RPC}" ]; then
+            echo "::error::the ${WANT} RPC secret is not set, so this check did not run."
+            echo "::error::Set RPC_MAINNET (and RPC_DEVNET) in the repository's Actions secrets."
+            # A monitor that cannot check must not report success. This is the same posture as the
+            # script's own exit 2: could-not-tell is not silence.
+            exit 1
+          fi
+          # NEVER echo $RPC. It carries the provider key.
+          echo "checking ${WANT}"
+          DOMINION_RPC="${RPC}" npx tsx scripts/redeem-monitor.ts
