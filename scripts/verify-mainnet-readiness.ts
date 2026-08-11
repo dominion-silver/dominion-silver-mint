@@ -479,6 +479,30 @@ async function main() {
   section("F. Only a human can clear these");
   byHand("Sunrise confirmed they accept freeze authority + permanent delegate");
   byHand("the Vercel PROD Pyth key has the pyth-indices entitlement");
+  // FOUND 2026-08-11 by an independent review of the admin panel, and it is a launch blocker that was
+  // written down nowhere.
+  //
+  // `authorities.ops_admin.pubkey` (65g5nNX...) is the Squads VAULT PDA, which is what config.admin is
+  // set to. Verified on mainnet: that account is owned by the System Program with ZERO bytes of data and
+  // 5.1 SOL, which is a vault, not a Squads multisig account. But the admin panel's
+  // NEXT_PUBLIC_OPS_SQUADS wants the MULTISIG address, a DIFFERENT pubkey that this repo does not record
+  // anywhere and that cannot be recovered from chain: the vault has never had a Squads interaction, only
+  // USDC funding transfers, so its history contains no reference to its own multisig.
+  //
+  // WHAT HAPPENS IF IT IS MISSING: isConfigured("ops") is false, the panel shows its placeholder banner,
+  // and EVERY Squads action is disabled. On mainnet config.admin IS the vault, so that means no premint,
+  // no add-guardian and no unpause from the panel. The go-live lever would not be clickable.
+  //
+  // WHAT HAPPENS IF THE WRONG ONE IS PASTED: pasting the VAULT here (the likely mistake, since that is
+  // the address written in every note) makes adminAuthority() derive a vault OF the vault, a third
+  // address that is not config.admin. Every proposal built would target the wrong signer.
+  //
+  // The owner has UI access to both multisigs, so this is a read-and-record task, not a recovery task.
+  byHand(
+    "NEXT_PUBLIC_OPS_SQUADS is the ops MULTISIG address (not the vault 65g5nNX...), set in Vercel prod",
+    "read it from the Squads UI; the vault is config.admin, the multisig is what the panel needs",
+  );
+  byHand("NEXT_PUBLIC_UPGRADE_SQUADS likewise, and both recorded in config/mainnet-authorities.json");
   // MEASURED 2026-08-10, and this used to be a `byHand` reading "…resolves". A human clearing it by
   // curling the URL and seeing 200 gets a GUARANTEED false pass: dominion.market is an SPA catch-all
   // that answers 200 with the same 5,228-byte HTML document for EVERY path, including

@@ -33,6 +33,21 @@
     "ops_admin": {
       "pubkey": "65g5nNXTtqtFz3jggKAqyvS6oCoVUXuXqAU9B8jHqPPS",
       "role": "config.admin. Day-to-day operations: premint, param setters, proposing timelocked actions.",
+      "is_a_squads_vault_pda_not_a_multisig": true,
+      "_vault_vs_multisig": [
+        "VERIFIED ON MAINNET 2026-08-11: this account is owned by the System Program, holds 5.1 SOL and",
+        "has ZERO bytes of data. That is a Squads VAULT PDA. It is the right value for config.admin.",
+        "",
+        "IT IS THE WRONG VALUE FOR NEXT_PUBLIC_OPS_SQUADS. That env var wants the MULTISIG account, a",
+        "different pubkey, and pasting the vault there makes adminAuthority() derive a vault OF the vault:",
+        "a third address that is not config.admin, so every proposal the panel builds targets the wrong",
+        "signer. With the var unset instead, isConfigured(\"ops\") is false and every Squads action in the",
+        "panel is DISABLED, which on mainnet means no premint, no add-guardian and no unpause.",
+        "",
+        "The multisig address is recorded in ops_squads_multisig below. It could not be recovered from",
+        "chain: the vault has only ever received USDC transfers, never a Squads interaction, so nothing in",
+        "its history names its own multisig. Read it from the Squads UI."
+      ],
       "kind": "off-curve (PDA, consistent with a Squads vault)",
       "verified_onchain": "2026-07-26: exists on mainnet, 0.100251 SOL, System-owned, OFF-CURVE",
       "notes": "The hottest key: touched on every operational action. SEPARE EN COMPTE, PAS EN CONTROLE, corrige le 2026-08-11: c est un vault Squads distinct de l upgrade authority, mais les deux sont 3/5 sur LES MEMES CINQ MEMBRES, donc les memes trois signatures atteignent les deux. La phrase precedente disait Correctly separated from the upgrade authority, ce qui laissait croire a une separation de controle. Voir risk_accepted.upgrade_equals_compliance."
@@ -64,6 +79,16 @@
       "kind": "ON-CURVE (a plain single-signer wallet, NOT a multisig)",
       "verified_onchain": "2026-07-26: exists on mainnet, 0.119654603 SOL, System-owned, ON-CURVE",
       "notes": "Deliberately a hot wallet so inventory can be moved to the pool without a multisig round trip. It will hold the ENTIRE pre-minted supply, so its private key is as valuable as the float. Consider a Squads vault once the pool is seeded and inventory stops moving."
+    },
+    "ops_squads_multisig": {
+      "pubkey": "UNSET_READ_FROM_SQUADS_UI",
+      "role": "The Squads MULTISIG account whose vault index 0 is ops_admin above. Value for NEXT_PUBLIC_OPS_SQUADS in the admin app's Vercel prod env. NOT the same as ops_admin.",
+      "notes": "BLOCKING for the admin panel: unset, every Squads action is disabled and the go-live unpause is not clickable. 3/5 threshold, same 5 members as the upgrade multisig."
+    },
+    "upgrade_squads_multisig": {
+      "pubkey": "UNSET_READ_FROM_SQUADS_UI",
+      "role": "The Squads MULTISIG account whose vault is the BPF loader upgrade authority (FqFNX... above). Value for NEXT_PUBLIC_UPGRADE_SQUADS.",
+      "notes": "Less urgent than the ops one: the upgrade authority is driven with the Solana CLI, not from this app. Still record it."
     },
     "deployer": {
       "pubkey": "2Lp91FyJUb8MQ1yteFLKh345Umb5f1RgCCwwDFNCYEcD",

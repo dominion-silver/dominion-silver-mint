@@ -59,6 +59,35 @@ function pk(s: string): PublicKey {
 const U32 = 4_294_967_295;
 const U16 = 65_535;
 
+/**
+ * THE PROGRAM'S REAL LIMITS, mirrored from programs/dominion_silver_mint_v2/src/state/config.rs.
+ *
+ * These exist because the labels used to promise ranges the program does not allow, and always in the
+ * PERMISSIVE direction: "Premium (bps, 0..2000)" against a ceiling of 500, "Fee (bps, 0..1000)" against
+ * 500, and "Delay (3600..604800 s)" against a FLOOR of 86400. The field validators were
+ * `parseUint(p.bps, U16)` and `parseUint(p.secs, U32)`, so the printed range was decoration and 65535
+ * bps built cleanly.
+ *
+ * WHY THAT IS WORSE THAN A COSMETIC BUG. Every one of these is a `propose`, so the cost of a value the
+ * program will refuse is a full Squads ceremony: create the vault transaction, collect three of five
+ * approvals from three different humans, execute, and only then does it revert. The timelock one was the
+ * worst of the three: it told the operator the guardian veto window could be shortened to one hour, when
+ * the program's floor is 24h and shortening that window is exactly what an attacker with the admin key
+ * would want.
+ *
+ * Label and enforcement now read the same constant, so they cannot drift apart again.
+ */
+const PREMIUM_BPS_CEILING = 500; // config.rs:4 and :5, both sides, 5%
+const ADMIN_TIMELOCK_MIN_SECONDS = 86_400; // config.rs:10, 24h
+const ADMIN_TIMELOCK_MAX_SECONDS = 604_800; // 7 days, the panel's own operational ceiling
+
+/** Like parseUint but with a real floor, for fields whose minimum is not zero. */
+function parseUintRange(s: string, min: number, max: number): number {
+  const n = parseUint(s, max);
+  if (n < min) throw new Error(`Out of range (${min}..${max})`);
+  return n;
+}
+
 type FieldKind =
   | "usdc"
   | "silv"
@@ -244,22 +273,22 @@ export const ACTIONS: ActionDesc[] = [
     label: "Propose mint premium",
     group: "Delayed (24h)",
     mode: "squads",
-    fields: [{ name: "bps", label: "Premium (bps, 0..2000)", kind: "bps" }],
+    fields: [{ name: "bps", label: `Premium (bps, 0..${PREMIUM_BPS_CEILING})`, kind: "bps" }],
     tip: "Markup users pay to mint.",
     current: (c) => `${c.premiumBpsMint / 100}%`,
     build: (c, p) =>
-      actions.proposeSetPremiumMint(c, parseUint(p.bps, U16)),
+      actions.proposeSetPremiumMint(c, parseUint(p.bps, PREMIUM_BPS_CEILING)),
   },
   {
     id: "propose-premium-redeem",
     label: "Propose redeem fee",
     group: "Delayed (24h)",
     mode: "squads",
-    fields: [{ name: "bps", label: "Fee (bps, 0..1000)", kind: "bps" }],
+    fields: [{ name: "bps", label: `Fee (bps, 0..${PREMIUM_BPS_CEILING})`, kind: "bps" }],
     tip: "Fee applied when users redeem.",
     current: (c) => `${c.premiumBpsRedeem / 100}%`,
     build: (c, p) =>
-      actions.proposeSetPremiumRedeem(c, parseUint(p.bps, U16)),
+      actions.proposeSetPremiumRedeem(c, parseUint(p.bps, PREMIUM_BPS_CEILING)),
   },
   {
     id: "propose-withdraw",
@@ -280,12 +309,12 @@ export const ACTIONS: ActionDesc[] = [
     group: "Delayed (24h)",
     mode: "squads",
     fields: [
-      { name: "secs", label: "Delay (3600..604800 s)", kind: "int" },
+      { name: "secs", label: `Delay (${ADMIN_TIMELOCK_MIN_SECONDS}..${ADMIN_TIMELOCK_MAX_SECONDS} s; the program floor is 24h)`, kind: "int" },
     ],
     tip: "Change the timelock duration itself.",
     current: (c) => `${c.adminTimelockSeconds}s`,
     build: (c, p) =>
-      actions.proposeSetAdminTimelock(c, parseUint(p.secs, U32)),
+      actions.proposeSetAdminTimelock(c, parseUintRange(p.secs, ADMIN_TIMELOCK_MIN_SECONDS, ADMIN_TIMELOCK_MAX_SECONDS)),
   },
   {
     id: "propose-compliance",
@@ -806,11 +835,16 @@ export function AdminActions() {
   );
   const [pending, setPending] = useState<ProposalView[]>([]);
   const [adminMismatch, setAdminMismatch] = useState<boolean | null>(null);
+  const [onchainAdmin, setOnchainAdmin] = useState<PublicKey | null>(null);
   const [activeGroup, setActiveGroup] =
     useState<ActionDesc["group"]>("Instant");
   const [cfg, setCfg] = useState<any>(null);
   const opsConfigured = isConfigured("ops");
-  const squadsBlocked = !opsConfigured || adminMismatch === true;
+  // FAILS CLOSED. `adminMismatch === true` alone let the UNKNOWN case through: null is the value both
+  // before the check resolves and after any RPC failure, so a failed read enabled every Squads button on
+  // a screen indistinguishable from the healthy one. On a guard that exists to stop an operator signing
+  // against the wrong multisig, unknown has to mean blocked.
+  const squadsBlocked = !opsConfigured || adminMismatch !== false;
   // Direct-admin mode: the connected wallet IS the on-chain config.admin (a
   // plain wallet, e.g. the current devnet deploy - not the Ops Squads vault).
   // In that case squads-mode admin actions are signed + sent DIRECTLY by this
@@ -830,15 +864,23 @@ export function AdminActions() {
     let alive = true;
     if (!opsConfigured) {
       setAdminMismatch(null);
+      setOnchainAdmin(null);
       return;
     }
     (async () => {
       try {
         const onchain = await actions.fetchOnchainAdmin(connection);
-        if (alive)
+        if (alive) {
+          // Kept so the UI can PRINT it. Showing both addresses is what turns "no banner" from an
+          // ambiguous signal into a statement an operator can check against the runbook.
+          setOnchainAdmin(onchain);
           setAdminMismatch(!onchain.equals(actions.adminAuthority()));
+        }
       } catch {
-        if (alive) setAdminMismatch(null);
+        if (alive) {
+          setOnchainAdmin(null);
+          setAdminMismatch(null);
+        }
       }
     })();
     return () => {
@@ -1029,6 +1071,34 @@ export function AdminActions() {
           <code className="mx-1">config.admin</code>. Do NOT sign Squads
           proposals - the app is pointed at the wrong multisig. Fix
           <code className="mx-1">NEXT_PUBLIC_OPS_SQUADS</code>.
+        </div>
+      )}
+      {/* THE UNKNOWN CASE, which used to render nothing at all.
+          `adminMismatch` is null until the check resolves AND after any RPC failure, and the banner
+          above only fires on `=== true`. So a single failed `fetchOnchainAdmin` left the screen looking
+          exactly like the healthy state while every Squads button stayed enabled. "No banner" was both
+          the good state and the error state, on the one guard whose whole job is to stop an operator
+          signing against the wrong vault. It now says so, and `squadsBlocked` treats null as blocked. */}
+      {!directAdmin && opsConfigured && adminMismatch === null && (
+        <div className="rounded-md border border-warning bg-warning/10 p-3 text-xs text-warning">
+          UNVERIFIED: could not read the on-chain <code className="mx-1">config.admin</code> to
+          confirm this app is pointed at the right multisig. Squads actions are disabled until it
+          resolves. This is a failed RPC read, not a mismatch: reload, or check the endpoint.
+        </div>
+      )}
+      {/* POSITIVE CONFIRMATION, because until now neither address was rendered anywhere. An operator
+          about to start a one-shot mainnet ceremony could not tell from the screen which vault they were
+          about to commit to, and the only feedback was the absence of a warning. */}
+      {!directAdmin && opsConfigured && (
+        <div className="rounded-md border border-border bg-bg/40 p-3 text-[11px] text-muted">
+          <div>
+            Ops vault this app targets: <code className="text-fg">{actions.adminAuthority().toBase58()}</code>
+          </div>
+          <div>
+            On-chain <code>config.admin</code>:{" "}
+            <code className="text-fg">{onchainAdmin ? onchainAdmin.toBase58() : "unread"}</code>
+            {adminMismatch === false && <span className="ml-2 text-accent">match</span>}
+          </div>
         </div>
       )}
 

@@ -41,6 +41,7 @@
 import { Connection, PublicKey, Transaction, TransactionInstruction } from "@solana/web3.js";
 import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import * as A from "../apps/admin/src/lib/admin-actions";
+import fs from "fs";
 import { resolveCluster } from "./_cluster";
 import { redactRpc } from "./_redact";
 
@@ -170,6 +171,26 @@ async function main(): Promise<void> {
   await sim("adminPremint (1 oz to config.inventoryWallet)", () => A.adminPremint(c, 1_000_000n, new PublicKey(cfg.inventoryWallet)), admin);
 
   console.log("");
+  console.log("A-bis. THE EMERGENCY LEVERS, and the fact that they were missing is the point.");
+  // An independent review of this file found seven builders it never touched, four of them the instant
+  // brakes: closing the public mint, tightening the redeem limits, cutting fee routing, closing
+  // redemptions. "48 wired, 0 broken" excluded every emergency control, which made the headline number
+  // mean less than it looked like it meant. These are the ones you reach for while something is going
+  // wrong, so they are the LAST ones that should have been untested.
+  await sim("setPublicMintEnabled(false) = CLOSE the mint", () => A.setPublicMintEnabled(c, false), admin, true);
+  await sim("setRedemptionsEnabled(false) = CLOSE redemptions", () => A.setRedemptionsEnabled(c, false), admin, true);
+  await sim("setFeeRoutingEnabled(toggle)", () => A.setFeeRoutingEnabled(c, !!cfg.feeRoutingDisabled), admin, true);
+  await sim(
+    "emergencyTightenRedeemLimits (budget halved)",
+    () => A.emergencyTightenRedeemLimits(c, { instantRedeemBudgetUsdc: BigInt(cfg.instantRedeemBudgetUsdc.toString()) / 2n }),
+    admin,
+    true,
+  );
+  await sim("setMinOperationUsdc(1 USDC)", () => A.setMinOperationUsdc(c, 1_000_000n), admin);
+  await sim("setKycOperator", () => A.setKycOperator(c, OTHER), admin);
+  await sim("setKycScope(redeem only)", () => A.setKycScope(c, 2), admin);
+
+  console.log("");
   console.log("B. GUARDIAN-side actions");
   await sim("pauseAsGuardian", () => A.pauseAsGuardian(c, admin), admin);
   await sim("removeGuardian", () => A.removeGuardian(c, OTHER), admin);
@@ -224,7 +245,38 @@ async function main(): Promise<void> {
   // a builder that silently only works with a plain-wallet admin would be dead on arrival at the
   // ceremony, and that is exactly the failure this section exists to catch early.
   const cVault: A.BuildCtx = { connection: conn };
+  // THE INDEPENDENT SOURCE, and the previous version had none. It compared the builders' signer against
+  // `A.adminAuthority()`, which is the very function those builders call to fill that field, so the
+  // assertion could not fail: it restated the implementation. Worse, it ran with NEXT_PUBLIC_OPS_SQUADS
+  // unset, so `adminAuthority()` returned the vault derived from the `11111...` PLACEHOLDER, printed
+  // truncated, and passed. The mainnet vault had never been exercised by it at all.
+  //
+  // The manifest is the source of truth for who config.admin will be on mainnet, so that is what the
+  // signer is compared against, and the placeholder case is now an explicit failure rather than a pass.
+  const MANIFEST = JSON.parse(fs.readFileSync("config/mainnet-authorities.json", "utf8"));
+  const expectedOps: string = MANIFEST.authorities?.ops_admin?.pubkey ?? "";
+  if (!expectedOps) throw new Error("authorities.ops_admin.pubkey missing from config/mainnet-authorities.json");
   const vault = A.adminAuthority().toBase58();
+  const PLACEHOLDER_VAULTS = new Set(["HyvBpUqbXi4DEpVknM8Z6tUK3mKUTHaGmQ321rgvdDU6"]);
+  if (PLACEHOLDER_VAULTS.has(vault)) {
+    fail += 1;
+    failures.push(
+      `section F is running against the PLACEHOLDER vault ${vault}, not the manifest's ops_admin ` +
+        `${expectedOps}. Set NEXT_PUBLIC_OPS_SQUADS to exercise the real thing.`,
+    );
+    console.log(
+      `  FAIL  section F ran against the placeholder vault ${vault}\n` +
+        `          expected the manifest ops_admin ${expectedOps}\n` +
+        `          export NEXT_PUBLIC_OPS_SQUADS=<the ops multisig> and re-run`,
+    );
+  } else if (vault !== expectedOps) {
+    fail += 1;
+    failures.push(`adminAuthority() resolves to ${vault}, manifest ops_admin is ${expectedOps}`);
+    console.log(`  FAIL  adminAuthority() = ${vault}, but the manifest says ${expectedOps}`);
+  } else {
+    pass += 1;
+    console.log(`  ok    adminAuthority() equals the manifest ops_admin ${expectedOps}`);
+  }
   for (const [name, build] of [
     ["pauseAsAdmin via vault", () => A.pauseAsAdmin(cVault)],
     ["unpause via vault", () => A.unpause(cVault)],
