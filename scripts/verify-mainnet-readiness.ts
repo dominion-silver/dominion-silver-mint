@@ -479,6 +479,55 @@ async function main() {
   section("F. Only a human can clear these");
   byHand("Sunrise confirmed they accept freeze authority + permanent delegate");
   byHand("the Vercel PROD Pyth key has the pyth-indices entitlement");
+
+  // MECHANICAL, and it replaces nothing because nothing checked this before.
+  //
+  // Found 2026-08-11 by an independent review, then confirmed by loading the live page and tallying its
+  // requests: production app.dominion.market made THREE calls to api.devnet.solana.com, the hardcoded
+  // fallback in lib/constants.ts, because NEXT_PUBLIC_HELIUS_RPC is not set in Vercel. Two consequences,
+  // the second being the launch-breaker: the public endpoint rate-limits, so under launch traffic the
+  // reads 429 and the panel flips to "Offline"; and CLUSTER is DERIVED from the APP_RPC host, so once
+  // step 6c swaps the program and mint to mainnet, an unset variable means the app reads MAINNET accounts
+  // through a DEVNET endpoint and stamps every explorer link ?cluster=devnet. Silent, and it looks like a
+  // deploy with no data yet.
+  //
+  // It was undetectable from outside because the value is inlined in a lazily-loaded client chunk. So the
+  // app now reports its own resolved configuration at /api/health, deliberately public and credential-free,
+  // and this reads it.
+  try {
+    const r = await fetch("https://app.dominion.market/api/health", { cache: "no-store" as RequestCache });
+    if (!r.ok) {
+      byHand(`app.dominion.market/api/health answered ${r.status}`, "deploy the health route, then re-run");
+    } else {
+      const h = (await r.json()) as {
+        cluster: string;
+        rpcHost: string;
+        onPublicFallbackRpc: boolean;
+        programId: string;
+        silvMint: string;
+      };
+      if (h.onPublicFallbackRpc) {
+        no(
+          `the deployed app reads chain from ${h.rpcHost}, a shared public endpoint that rate-limits`,
+          "set NEXT_PUBLIC_HELIUS_RPC in Vercel production and redeploy. CLUSTER is derived from this " +
+            "host, so after step 6c an unset value also mislabels the whole UI and every explorer link as devnet",
+        );
+      } else {
+        ok(`the deployed app uses a dedicated RPC (${h.rpcHost})`);
+      }
+      // Cross-check the cluster the app RESOLVED against the mint it carries. Disagreement here is the
+      // exact 6c half-done state: mainnet constants behind a devnet endpoint, or the reverse.
+      const appIsMainnet = h.cluster === "mainnet-beta";
+      const mintIsDevnet = h.silvMint === "CebhMovXRM5hEhFDTyq7Y1ez8h11UzFSGjELbyQeJExv";
+      if (appIsMainnet && mintIsDevnet) {
+        no("the deployed app resolves MAINNET but still carries the devnet SILV mint", "runbook step 6c is half done");
+      } else {
+        ok(`the deployed app is coherent`, `cluster=${h.cluster} mint=${h.silvMint.slice(0, 8)}...`);
+      }
+    }
+  } catch (e) {
+    byHand("could not reach app.dominion.market/api/health", String(e).slice(0, 80));
+  }
   // FOUND 2026-08-11 by an independent review of the admin panel, and it is a launch blocker that was
   // written down nowhere.
   //

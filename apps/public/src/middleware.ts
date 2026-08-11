@@ -25,6 +25,11 @@ const COOKIE = "dominion_gate";
 const PUBLIC_PATHS = [
   "/gate",
   "/api/gate",
+  // Public on purpose: it reports which cluster, RPC host, program and mint this deployment resolved to,
+  // so a misconfigured production build is one curl away instead of invisible. Every value it returns is
+  // already inlined in the client bundle any visitor downloads, and the RPC credential is stripped to a
+  // host. Gating it would mean the launch-readiness gate needs the site password to check the site.
+  "/api/health",
   "/silv-metadata.json",
   "/silv.png",
   "/logo.png",

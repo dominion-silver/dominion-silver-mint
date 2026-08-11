@@ -470,8 +470,15 @@ export function errorToText(e: unknown): string {
 // scientific notation ("2e3") and these run inside a render-time useMemo, so a `new BN("2e3")` throw would
 // crash the page via the error boundary. Anything but a plain decimal returns 0, which callers already guard.
 function parseDecimalToAtomic6(input: string): BN {
-  if (!/^\d*\.?\d*$/.test(input.trim())) return new BN(0);
-  const [whole = "0", frac = ""] = input.split(".");
+  // TRIM ONCE, then use the trimmed value. The regex tested `input.trim()` while the split used the RAW
+  // input, so " ", "\t" and "\n" passed the guard (the regex allows an empty string) and then reached
+  // `new BN(" ")`, whose `words` is null: a TypeError from inside a render-time useMemo, which is exactly
+  // the error-boundary crash the comment above says this function exists to prevent. Unreachable today
+  // because every caller guards with parseFloat first and `<input type=number>` never emits lone
+  // whitespace, but the contract said "anything but a plain decimal returns 0" and it did not hold.
+  const t = input.trim();
+  if (!/^\d*\.?\d*$/.test(t)) return new BN(0);
+  const [whole = "0", frac = ""] = t.split(".");
   const fracPadded = (frac + "000000").slice(0, 6);
   return new BN(whole || "0")
     .mul(new BN(1_000_000))
