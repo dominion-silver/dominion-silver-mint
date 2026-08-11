@@ -16,6 +16,12 @@ name: RedeemEvent monitor
 # that was private. What must NOT reach the log is the RPC credential, and it does not: the script prints
 # the endpoint through `redactRpc`, which strips the query string and the path.
 #
+# IT IS DORMANT UNTIL THIS FILE IS ON `main`. Measured, not assumed: `gh workflow run` against this
+# branch answered `HTTP 404: workflow redeem-monitor.yml not found on the default branch`. GitHub
+# registers `schedule` and `workflow_dispatch` from the DEFAULT branch only, so a monitor living on a
+# feature branch never fires and nothing says so. Until this lands on main, the alarm is code, not a
+# control, and the D11 item stays open.
+#
 # GRANULARITY, honestly. GitHub's minimum is 5 minutes and scheduled runs are queued, so under load the
 # real spacing is 10 to 20 minutes. That is fine here and it is worth saying why: the protocol's own
 # rolling window is what bounds a drain (~40,000 USDC over 24h, twice the nominal budget because the
