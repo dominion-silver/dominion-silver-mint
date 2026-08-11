@@ -53,6 +53,40 @@ const JSON_OUT = process.argv.includes("--json");
 
 const RPC_SAFE = redactRpc(RPC);
 
+/**
+ * The alert body, shaped so the three channels anyone actually uses accept it as-is.
+ *
+ * THE COMMENT THIS REPLACES WAS WRONG, and confidently so: it said "whichever channel is chosen
+ * (Telegram, Slack, a pager), it is a POST of this JSON". It is not. Slack reads `text` and answers 400
+ * `invalid_payload` to anything else. Discord reads `content` and answers 400 with an embeds error.
+ * Telegram's bot API wants `chat_id` and `text`. Posting the raw report to any of them produces a
+ * channel that looks configured, exits 1 as if it alerted, and delivers nothing to a human. That is the
+ * worst failure mode a monitor has: silence that looks like coverage.
+ *
+ * So the payload carries a human-readable one-liner under all three keys AND the full structured report
+ * alongside. Slack picks up `text`, Discord picks up `content`, Telegram needs `chat_id` in the URL and
+ * picks up `text`, and a generic receiver or a Vercel route gets everything. One shape, no per-provider
+ * branching to get wrong at 3am.
+ */
+export function alertPayload(report: Record<string, unknown>): Record<string, unknown> {
+  const findings = (report.findings as { level: string; what: string }[] | undefined) ?? [];
+  const alerts = findings.filter((f) => f.level === "alert").map((f) => f.what);
+  // CAPPED, because this is read on a phone. Measured on devnet: eleven redemptions tripping a low
+  // threshold produced a fourteen-line message, and both Slack and Discord truncate. A page that gets
+  // truncated loses its last line, which here is the one saying the alarm does not pause anything.
+  const MAX_LINES = 5;
+  const shown = alerts.slice(0, MAX_LINES).map((a) => `- ${a}`);
+  if (alerts.length > MAX_LINES) shown.push(`- ...and ${alerts.length - MAX_LINES} more (see the full report)`);
+  const summary =
+    `DOMINION REDEEM ALERT (${report.cluster})\n` +
+    `${report.usedPct}% of the ${report.budgetUsdc} USDC window used, ` +
+    `${report.remainingUsdc} left. Treasury ${report.treasuryUsdc} USDC. ` +
+    `paused=${report.paused}\n` +
+    (shown.length ? shown.join("\n") : "(no named finding)") +
+    `\nThis alarm does NOT pause anything. Pausing needs a guardian or admin signature.`;
+  return { text: summary, content: summary, report };
+}
+
 /** How much of the budget may be gone before this is an alert rather than a note. */
 const BUDGET_ALERT_PCT = Number(process.env.REDEEM_ALERT_BUDGET_PCT ?? 25);
 /** A single redemption at or above this share of the budget is an alert on its own. */
@@ -288,17 +322,19 @@ async function main() {
     console.log(`\n  VERDICT: ${report.verdict}`);
   }
 
-  // The webhook is a thin adapter on purpose: whichever channel is chosen (Telegram, Slack, a pager),
-  // it is a POST of this JSON. Nothing about the detection changes with the channel.
   const hook = process.env.REDEEM_MONITOR_WEBHOOK;
   if (hook && report.verdict === "ALERT") {
     try {
       const r = await fetch(hook, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(report),
+        body: JSON.stringify(alertPayload(report)),
       });
       console.log(`  webhook: HTTP ${r.status}`);
+      // A 2xx is the only thing that means delivered. Slack and Discord both answer 4xx with a body
+      // explaining the rejection, and swallowing that would leave a channel that looks configured and
+      // delivers nothing.
+      if (!r.ok) console.error(`  webhook REJECTED the payload: ${(await r.text()).slice(0, 200)}`);
     } catch (e) {
       // A failed webhook must NOT turn an alert into a pass, and must not hide the alert either.
       console.error(`  webhook FAILED: ${String(e).slice(0, 140)}`);
