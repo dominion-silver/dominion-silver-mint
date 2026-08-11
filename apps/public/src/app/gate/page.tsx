@@ -16,9 +16,9 @@ import type { Metadata } from "next";
  * list exist to prevent. So it waits for 6c.
  */
 export const metadata: Metadata = {
-  title: "Dominion Silver — SILV goes live 13 August 2026, 16:00 UTC",
+  title: "Dominion Silver: SILV goes live 13 August 2026, 15:00 UTC",
   description:
-    "SILV is tokenized physical silver on Solana. One SILV represents one troy ounce held in allocated, audited vault storage. Live 13 August 2026 at 16:00 UTC.",
+    "SILV is tokenized physical silver on Solana. One SILV represents one troy ounce held in allocated, audited vault storage. Live 13 August 2026 at 15:00 UTC.",
 };
 
 export default function GatePage({
@@ -36,7 +36,7 @@ export default function GatePage({
       <div className="mb-12 w-full rounded-xl border border-border bg-card px-6 py-8">
         <p className="mb-2 text-xs uppercase tracking-[0.2em] text-subtle">SILV goes live</p>
         <p className="mb-1 font-display text-3xl tracking-[0.08em] text-fg">13 August 2026</p>
-        <p className="text-lg font-semibold text-accent">16:00 UTC</p>
+        <p className="text-lg font-semibold text-accent">15:00 UTC</p>
       </div>
 
       <div className="mb-12 space-y-4 text-sm leading-relaxed text-muted">

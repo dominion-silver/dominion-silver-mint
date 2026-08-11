@@ -392,22 +392,116 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
+
+      # SCOPE GATE, added 2026-08-11 because this job was 34 of the workflow's 57 minutes and it is not
+      # on the release path: it tests the VERIFIER, not the artifact. scripts/test-verify-release-artifact.sh
+      # runs eleven cases and most of them do a full clean `cargo build-sbf`, so the cost is inherent to
+      # the test rather than to a slow runner.
+      #
+      # WHY THE JOB STILL RUNS INSTEAD OF BEING SKIPPED. GitHub's `paths:` filter only exists at the
+      # workflow level, and making the JOB conditional turns a required check into a skipped one, whose
+      # treatment depends on branch-protection settings that live outside this file. So the job always
+      # runs and always reports; only the expensive STEPS are conditional. A green line here therefore
+      # still means what it meant, and the log below says which of the two things it means.
+      #
+      # FAIL-SAFE DIRECTION IS "RUN". A tag, a manual dispatch, an unknown base, a force-push, a first
+      # push to a new branch: all of those run the full self-test. It only skips when git can prove the
+      # diff touched none of the verifier's own inputs.
+      #
+      # Plain git rather than a paths-filter action: this workflow's header requires every external
+      # reference to be pinned and auditable, and a diff of file names does not need a dependency.
+      - name: Decide whether the verifier's own inputs changed
+        id: scope
+        env:
+          # BUILD_INPUTS from scripts/verify-release-artifact.sh, plus this workflow. Keep in step with
+          # that list: something the verifier reads but this does not would skip a real regression.
+          WATCHED: >-
+            programs
+            Cargo.toml
+            Cargo.lock
+            rust-toolchain.toml
+            Anchor.toml
+            scripts/verify-release-artifact.sh
+            scripts/test-verify-release-artifact.sh
+            scripts/_read-release-pin.py
+            scripts/_strict-build-sbf.sh
+            config/mainnet-authorities.json
+            .github/workflows/build.yml
+            .github/install-solana.sh
+            .github/test-install-solana.sh
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_it() { echo "relevant=true" >> "$GITHUB_OUTPUT"; echo "FULL SELF-TEST: $1"; exit 0; }
+
+          # EXPLICIT ARRAY, not implicit word-splitting of $WATCHED. This was caught by testing the
+          # logic locally: the same line under zsh passes the whole list as ONE pathspec, matches
+          # nothing, and scopes out every single diff including one that rewrote five program files. It
+          # happens to work under bash, but a gate whose correctness depends on which shell expands it
+          # is a gate that will be wrong the day someone changes `shell:`.
+          read -ra PATHS <<< "${WATCHED}"
+
+          # A RENAME MUST NOT SILENTLY REMOVE COVERAGE. `git diff -- some/deleted/path` is happy to
+          # report nothing, so if verify-release-artifact.sh is ever renamed, this gate would scope out
+          # forever and the self-test would never run again. Assert every watched path still exists.
+          for p in "${PATHS[@]}"; do
+            git ls-files --error-unmatch "$p" >/dev/null 2>&1 || {
+              echo "::error::watched path '$p' is not tracked any more. Update WATCHED in this workflow:"
+              echo "::error::a stale entry silently stops covering the file it was meant to watch."
+              exit 1
+            }
+          done
+
+          case "${GITHUB_REF}" in
+            refs/tags/*) run_it "this is a tag, and a release must be verified end to end" ;;
+          esac
+          [ "${GITHUB_EVENT_NAME}" = "pull_request" ] || [ "${GITHUB_EVENT_NAME}" = "push" ] \
+            || run_it "unrecognised event ${GITHUB_EVENT_NAME}"
+
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          # All-zero SHA is what a branch's first push reports; empty happens on dispatch.
+          case "${BASE:-}" in
+            ""|0000000000000000000000000000000000000000) run_it "no usable base commit to diff against" ;;
+          esac
+          git cat-file -e "${BASE}^{commit}" 2>/dev/null || run_it "base ${BASE} is not in this clone"
+
+          CHANGED="$(git diff --name-only "${BASE}" "${GITHUB_SHA}" -- "${PATHS[@]}")"
+          if [ -n "${CHANGED}" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            echo "FULL SELF-TEST: the verifier's inputs changed:"
+            echo "${CHANGED}" | sed 's/^/  /'
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+            echo "SKIPPING the rebuild cases: none of the verifier's own inputs changed between"
+            echo "  ${BASE}"
+            echo "  ${GITHUB_SHA}"
+            echo "Watched paths: ${WATCHED}"
+            echo "The verifier is unchanged, so re-proving its exit codes would re-prove the last run."
+          fi
+
       - name: Install Rust toolchain
+        if: steps.scope.outputs.relevant == 'true'
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable, 2026-08-08
         with:
           toolchain: 1.89.0
       # ROUND 8 T8-01. The self-test runs BEFORE the real install, so a regression in the
       # authentication is caught before any toolchain is placed on this runner.
+      #
+      # NOT behind the scope gate: it is seconds long, it guards a supply-chain property rather than the
+      # verifier, and .github/install-solana.sh is used by three jobs. Cheap enough to always run.
       - name: The Solana installer authenticates its archive (BLOCKING)
         run: bash .github/test-install-solana.sh
 
       - name: Install Solana CLI (for cargo build-sbf)
+        if: steps.scope.outputs.relevant == 'true'
         run: bash .github/install-solana.sh
       - name: Build the artifact the self-test reads
+        if: steps.scope.outputs.relevant == 'true'
         # ROUND 8 F-03: through the strict builder, which makes a BPF stack overflow fatal even
         # though cargo exits 0 and emits a .so.
         run: bash scripts/_strict-build-sbf.sh --manifest-path programs/dominion_silver_mint_v2/Cargo.toml -- --locked
       - name: Regenerate the IDL (the verifier treats a missing one as a failure)
+        if: steps.scope.outputs.relevant == 'true'
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/target/idl"
@@ -417,7 +511,16 @@ jobs:
           (cd programs/dominion_silver_mint_v2 && anchor idl build -o "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json" -- --locked)
           printf '\n' >> "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json"
       - name: Assert the verifier's exit codes and final lines (BLOCKING)
+        if: steps.scope.outputs.relevant == 'true'
         run: bash scripts/test-verify-release-artifact.sh
+      - name: Say so in the summary when the self-test was scoped out
+        if: steps.scope.outputs.relevant != 'true'
+        run: |
+          echo "### Verifier self-test: SCOPED OUT" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "None of \`scripts/verify-release-artifact.sh\`'s inputs changed in this diff, so its" >> "$GITHUB_STEP_SUMMARY"
+          echo "eleven rebuild cases did not run. A tag, a changed build input or an unknown base" >> "$GITHUB_STEP_SUMMARY"
+          echo "always runs them in full. See the \"Decide whether\" step for the exact diff." >> "$GITHUB_STEP_SUMMARY"
 
   build:
     runs-on: ubuntu-latest
