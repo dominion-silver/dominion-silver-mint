@@ -1,8 +1,8 @@
 import { PublicKey } from "@solana/web3.js";
 
-// DEVNET, deployed 2026-07-25. `initialize` runs once per program id, so a config or guardian layout
-// change forces a new id: replace PROGRAM_ID and SILV_MINT in the SAME commit, and list the old id in
-// RETIRED in scripts/verify-constants-consistency.sh.
+// MAINNET, deployed 2026-08-12 (tx pgWbEKnP..., slot 438841839). `initialize` runs once per program id,
+// so a config or guardian layout change forces a new id: replace PROGRAM_ID and SILV_MINT in the SAME
+// commit, and list the old id in RETIRED in scripts/verify-constants-consistency.sh.
 export const PROGRAM_ID = new PublicKey("3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ");
 
 // Token programs.
@@ -10,21 +10,32 @@ export const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9
 export const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 export const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
-// USDC, DEVNET (Circle). Mainnet: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
-export const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+// USDC, MAINNET (Circle). Devnet was 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU
+export const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
 
-// The SILV mint created by the DEVNET init above. Read it back with scripts/read-config.ts after every
-// fresh init.
-export const SILV_MINT = new PublicKey("CebhMovXRM5hEhFDTyq7Y1ez8h11UzFSGjELbyQeJExv");
+// The MAINNET SILV mint, the announced vanity address, bound by `initialize` on 2026-08-12. Read it
+// back with scripts/read-config.ts after every fresh init.
+// Devnet was CebhMovXRM5hEhFDTyq7Y1ez8h11UzFSGjELbyQeJExv.
+export const SILV_MINT = new PublicKey("SiLVFMgD3eD2rgK628NbTBq9MnuJF5FW2CRaVyTB35L");
 
 // Pyth Lazer (Pyth Pro) accounts, passed by the dominion oracle ix. No Pyth Core / Hermes XAG feed id
 // belongs here: the program prices from Lazer 3154 alone, and a second live-looking price source is how
 // the wrong one gets wired back in.
 export const LAZER_PROGRAM_ID = new PublicKey("pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt"); // devnet == mainnet
 export const LAZER_STORAGE = new PublicKey("3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpPuSCQVyQL"); // devnet == mainnet
-// CLUSTER-SPECIFIC, DEVNET value here. The contract checks whatever we pass against the Storage's own
-// treasury field (read_treasury), so it must be the current cluster's. Mainnet: Gx4MBPb1...
-export const LAZER_TREASURY = new PublicKey("opsLibxVY7Vz5eYMmSfX8cLFCFVYTtH6fr6MiifMpA7");
+// CLUSTER-SPECIFIC, MAINNET value here. The contract checks whatever we pass against the Storage's own
+// treasury field (read_treasury), so it must be the current cluster's.
+//
+// CONFIRMED 2026-08-12 BY TWO INDEPENDENT ROUTES, because getting this wrong makes every mint revert
+// with an error that says nothing about treasuries:
+//  1. Read from the Lazer Storage account 3rdJbqfna... on mainnet at offset 40 (layout is
+//     8 discriminator | top_authority 32 | treasury 32). Devnet could not validate that offset on its
+//     own, since the same key sits at BOTH offset 8 and 40 there. The balances disambiguate: the
+//     treasury accrues the per-update fee, and offset 40 held 203.85 SOL against 0.05 SOL at offset 8.
+//  2. The prior comment on this line already recorded "Mainnet: Gx4MBPb1...", written before the
+//     cutover from a separate source.
+// Devnet was opsLibxVY7Vz5eYMmSfX8cLFCFVYTtH6fr6MiifMpA7.
+export const LAZER_TREASURY = new PublicKey("Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak");
 // Metal.Index.SILVER/USD, PURE SPOT: all protocol margin lives in premium_bps_mint /
 // premium_bps_redeem, never baked into the feed.
 export const LAZER_SILV_FEED_ID = 3154;
