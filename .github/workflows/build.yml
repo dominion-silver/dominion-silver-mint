@@ -193,7 +193,7 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install root and public-app dependencies
+      - name: Install root and both apps' dependencies
         # The root install is what makes `npx --no-install tsc` and `npx --no-install tsx` resolve the
         # pinned compiler instead of downloading one.
         #
@@ -203,9 +203,20 @@ jobs:
         # ships. lazer-tx pulls @solana/wallet-adapter-react, an app dependency, so typechecking scripts/
         # genuinely requires the app's node_modules. Without this the gate failed with TS2307 on a module
         # that exists, and section 4b of verify-constants-consistency.sh hit the same error one step later.
+        #
+        # apps/admin is here for EXACTLY the same reason, and its absence broke this job the first time
+        # CI ever ran on the round-8 branch. `scripts/test-admin-panel-simulate.ts:43` imports
+        # `../apps/admin/src/lib/admin-actions` so that the simulator exercises the REAL builders the
+        # panel ships rather than a second copy of them, and that import chain reaches
+        # `apps/admin/src/lib/squads.ts`, which imports `@sqds/multisig`. Without the install, tsc aborts
+        # on TS2307 before it reaches scripts/ at all, and section 4b then reports the failure it was
+        # written to report: "tsc exited 2 with no scripts/ diagnostics, so it checked NOTHING".
+        #
+        # That is the failure mode this gate exists for, caught by the gate rather than by a merge.
         run: |
           npm ci
           npm ci --prefix apps/public
+          npm ci --prefix apps/admin
 
       - name: Verify every hand-copied address agrees with declare_id! (BLOCKING)
         run: bash scripts/verify-constants-consistency.sh
