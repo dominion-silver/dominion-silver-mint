@@ -56,6 +56,10 @@ async function main() {
   //    decodes, which is exactly why the checks below matter more than this one.
   const keys: Record<string, PublicKey> = {};
   for (const [role, entry] of Object.entries(a)) {
+    // `_`-prefixed entries are prose, not addresses. That convention is used throughout this manifest
+    // and was not honoured here, so adding a note inside `authorities` made the gate report
+    // "_squads_facts_verified_2026_08_12 is NOT a valid pubkey" and refuse the ceremony outright.
+    if (role.startsWith("_")) continue;
     try {
       keys[role] = new PublicKey(entry.pubkey);
       ok(`${role} is a valid pubkey`, entry.pubkey);
@@ -68,8 +72,11 @@ async function main() {
   // A Squads vault is a PDA and is therefore off-curve. A keypair-backed wallet is
   // on-curve. This is the only way to tell them apart from the outside, because a
   // vault holding lamports and no data is System-owned exactly like a wallet.
-  const expectPda = ["ops_admin", "upgrade_authority", "compliance", "guardian"];
-  const expectWallet = ["inventory_wallet", "deployer"];
+  // `inventory_wallet` MOVED FROM expectWallet TO expectPda on 2026-08-12: it was an on-curve hot
+  // wallet and is now the ops Squads vault, so the old classification emitted a caution reading
+  // "Intended to be a plain wallet", the opposite of the current design.
+  const expectPda = ["ops_admin", "upgrade_authority", "compliance", "guardian", "inventory_wallet"];
+  const expectWallet = ["deployer", "inventory_transit_wallet"];
   for (const role of expectPda) {
     if (!keys[role]) continue;
     const onCurve = PublicKey.isOnCurve(keys[role].toBytes());
@@ -109,6 +116,20 @@ async function main() {
       );
     } else {
       ok("upgrade_authority != ops_admin");
+    }
+  }
+  // inventory_wallet == ops_admin is a DECISION, not a defect: no program check forbids it, initialize
+  // only rejects Pubkey::default. Surfaced rather than left silent, because it is the one collision in
+  // this file that a reader would otherwise assume is a mistake.
+  if (keys.inventory_wallet && keys.ops_admin) {
+    if (keys.inventory_wallet.equals(keys.ops_admin)) {
+      caution(
+        "inventory_wallet == ops_admin. DELIBERATE since 2026-08-12: the float sits behind the same " +
+          "3-of-5 that authorises the pre-mint. Loses separation between who mints and who custodies; " +
+          "buys moving the float off a single key that was also a signer of both multisigs.",
+      );
+    } else {
+      ok("inventory_wallet != ops_admin");
     }
   }
   if (keys.upgrade_authority && keys.compliance) {
