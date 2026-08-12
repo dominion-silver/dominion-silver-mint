@@ -44,9 +44,9 @@
         "signer. With the var unset instead, isConfigured(\"ops\") is false and every Squads action in the",
         "panel is DISABLED, which on mainnet means no premint, no add-guardian and no unpause.",
         "",
-        "The multisig address is recorded in ops_squads_multisig below. It could not be recovered from",
-        "chain: the vault has only ever received USDC transfers, never a Squads interaction, so nothing in",
-        "its history names its own multisig. Read it from the Squads UI."
+        "RESOLVED 2026-08-12: the multisig is 9BwMVmjMwjppJyBn5Kj6vTae8Rc7NUamH5H2Tq7H5VtU, recorded in",
+        "ops_squads_multisig below. The vault history was a dead end (only USDC transfers), so it was",
+        "recovered by enumerating every account owned by the Squads program and deriving vault 0 of each."
       ],
       "kind": "off-curve (PDA, consistent with a Squads vault)",
       "verified_onchain": "2026-07-26: exists on mainnet, 0.100251 SOL, System-owned, OFF-CURVE",
@@ -81,15 +81,35 @@
       "notes": "Deliberately a hot wallet so inventory can be moved to the pool without a multisig round trip. It will hold the ENTIRE pre-minted supply, so its private key is as valuable as the float. Consider a Squads vault once the pool is seeded and inventory stops moving."
     },
     "ops_squads_multisig": {
-      "pubkey": "UNSET_READ_FROM_SQUADS_UI",
-      "role": "The Squads MULTISIG account whose vault index 0 is ops_admin above. Value for NEXT_PUBLIC_OPS_SQUADS in the admin app's Vercel prod env. NOT the same as ops_admin.",
-      "notes": "BLOCKING for the admin panel: unset, every Squads action is disabled and the go-live unpause is not clickable. 3/5 threshold, same 5 members as the upgrade multisig."
+      "pubkey": "9BwMVmjMwjppJyBn5Kj6vTae8Rc7NUamH5H2Tq7H5VtU",
+      "role": "The Squads MULTISIG account whose vault index 0 IS ops_admin (65g5nNX...). This is the value for NEXT_PUBLIC_OPS_SQUADS. NOT interchangeable with ops_admin.",
+      "verified_onchain": "2026-08-12: threshold 3 of 5 members, Squads timeLock 0s, transactionIndex 9",
+      "notes": "RECOVERED, not read from a UI. The Squads UI shows the VAULT address, which is why every note in this repo had the vault and nobody had the multisig. Found by enumerating all 1,310,966 accounts owned by SQDS4ep65T869zMMBKyuUq6aD6EgTu8psMjkvj52pCf and deriving vault index 0 of each until it matched. The derivation is one-way, so this is the only way to invert it."
     },
     "upgrade_squads_multisig": {
-      "pubkey": "UNSET_READ_FROM_SQUADS_UI",
-      "role": "The Squads MULTISIG account whose vault is the BPF loader upgrade authority (FqFNX... above). Value for NEXT_PUBLIC_UPGRADE_SQUADS.",
-      "notes": "Less urgent than the ops one: the upgrade authority is driven with the Solana CLI, not from this app. Still record it."
+      "pubkey": "BjbtdEcy324Xdmt9182D8FZYGiH2nhTLFHP7EaAEXLAi",
+      "role": "The Squads MULTISIG account whose vault index 0 is the upgrade authority AND the compliance vault (FqFNX...). Value for NEXT_PUBLIC_UPGRADE_SQUADS.",
+      "verified_onchain": "2026-08-12: threshold 3 of 5 members, Squads timeLock 0s, transactionIndex 8",
+      "notes": "Same five members as the ops multisig, which is the shared-signer-set risk recorded in risk_accepted.upgrade_equals_compliance."
     },
+    "fee_exempt_at_launch": {
+      "pubkey": "6dJw4BELW3gqDYRoVFohivS1Fp1yZGeXwHQhMhsEAPsf",
+      "role": "To be fee-exempted on BOTH sides (flags 3 = mint + redeem) at launch, per the owner 2026-08-12.",
+      "verified_onchain": "devnet 2026-08-12, sig 5XpcScWNF7b3sSjUcbSSc4Z9Ux4KvjQt6Mxq6bo1Kj6aWFQbEj6ERfBN3wSCzgjsXXk4HZk9AA746LoEoDwCBjU1",
+      "notes": "The expiry is MANDATORY and must be future seconds, at most two years out: zero is NOT indefinite and is rejected. Set one year. On mainnet this is a Squads action like any other admin action, and it is reversible with remove_fee_exempt."
+    },
+    "_squads_facts_verified_2026_08_12": [
+      "FIRST MECHANICAL VERIFICATION of the 3/5 claim, which until now came only from Mark. Both",
+      "multisigs: threshold 3, five members, and the SAME five members on both, which is the shared",
+      "signer set already recorded as an accepted risk.",
+      "",
+      "SQUADS ADDS NO DELAY OF ITS OWN: timeLock is 0 on both. Approvals take as long as the humans take.",
+      "There is no window to miss and no expiry on a pending proposal.",
+      "",
+      "AND THEY ARE NOT VIRGIN. transactionIndex is 9 on ops and 8 on upgrade, so both have been driven",
+      "before. An earlier note in this project said the vaults showed no interactions; that was read off",
+      "the vault accounts rather than the multisig accounts and was wrong."
+    ],
     "deployer": {
       "pubkey": "2Lp91FyJUb8MQ1yteFLKh345Umb5f1RgCCwwDFNCYEcD",
       "role": "Pays for the mainnet deploy and signs initialize. MUST be the upgrade authority at initialize time (audit DOM-001 binds them), so either deploy from the upgrade Squads vault or transfer the upgrade authority to it AFTER initialize.",

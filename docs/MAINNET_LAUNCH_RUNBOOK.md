@@ -560,6 +560,22 @@ incompatible orders. To propose a float, use `propose_set_treasury_min_float` fr
 
 ### 8. Register the guardians, then unpause
 
+> **ORDRE OBLIGATOIRE A L'INTERIEUR DE CETTE ETAPE, sinon l'unpause reverte.**
+>
+> Construire la proposition Squads d'`unpause` **EN DERNIER**, apres que les gardiens soient ajoutes et
+> que `min_publishers` soit a sa valeur finale. Raison: `unpause` porte une empreinte de readiness qui
+> couvre `guardian_count` et `min_publishers`, et Squads scelle l'empreinte au moment ou la transaction
+> de coffre est **creee**, pas executee. Une proposition d'unpause creee avant l'ajout des gardiens est
+> donc invalidee par l'ajout lui-meme, et elle echoue sur `E_STALE_READINESS` a l'execution, apres que
+> trois personnes l'aient approuvee.
+>
+> Il n'y a **aucune contrainte de temps** sur les approbations: le `timeLock` Squads des deux multisigs
+> vaut 0 (verifie on-chain le 2026-08-12), donc une proposition en attente n'expire jamais et les
+> signataires prennent le temps qu'il faut. La seule chose qui la perime est un changement de config,
+> d'ou l'ordre ci-dessus.
+
+
+
 ```
 add_guardian(<guardian 1>)                 # instant
 add_guardian(<guardian 2>)                 # instant
