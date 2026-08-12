@@ -65,6 +65,11 @@ export const ACTION_COST: Record<string, ActionCost> = {
   // (init_if_needed), so this action exists only to create it EARLY, which is what lets the treasury
   // be funded before the ceremony.
   create_usdc_treasury: "irreversible",
+  // An associated token account holds only rent and can be closed by its owner. Here the owner is the
+  // ops Squads vault, so closing it costs a 3-of-5 round: slow, not impossible. Classified reversible
+  // because the point of this list is "can this be cheaply undone", and rent that a 3-of-5 can reclaim
+  // is the cheapest thing on it.
+  create_inventory_silv_ata: "reversible",
   set_fee_exempt: "reversible", // remove_fee_exempt is instant
   remove_fee_exempt: "reversible", // set_fee_exempt is instant
   set_kyc_operator: "reversible",

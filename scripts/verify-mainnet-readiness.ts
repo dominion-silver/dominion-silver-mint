@@ -11,6 +11,7 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import {
   getAssociatedTokenAddressSync,
+  TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { PROGRAM_ID } from "./_program-id";
@@ -318,7 +319,10 @@ async function main() {
             "the apps' SILV_MINT does NOT match the on-chain config.silv_mint",
             `on chain ${onChainSilv}, public ${silvConst}, admin ${silvAdmin}. ` +
               `Write the observed mint into both apps, commit, test, THEN deploy the panel`,
-            7,
+            // CORRECTED 2026-08-12 from 7 to 6, same off-by-one as the fee vault: `dueStep < STAGE`
+            // means 7 cannot fire at `--stage=7`, and step 6c is exactly the point where the runbook
+            // tells the operator to run `--stage=7`.
+            6,
           );
       onChainUsdc === USDC_MAINNET
         ? ok("the on-chain config.usdc_mint is the mainnet USDC mint")
@@ -444,11 +448,14 @@ async function main() {
         "3c. the MAINNET fee vault does not exist yet",
         `${vault.toBase58()} -- run scripts/create-fee-vault.ts AFTER the deploy and BEFORE the ` +
           `unpause, or every mint and every redeem reverts AccountNotInitialized`,
-        // ROUND 8 L1-04. Due at 8, NOT 9. The deadline moved with the posture: the unpause is now
-        // the go-live, because initialize leaves mint and redeem open, so a vault that is merely
-        // "due at 9b" is reported on time by this gate and missing in production. `dueStep < STAGE`
-        // means 8 here makes `--stage=8` report it OVERDUE, which is the whole point of the flag.
-        8,
+        // ROUND 8 L1-04. Due at 8, NOT 9: the unpause is the go-live, because initialize leaves mint
+        // and redeem open, so a vault merely "due at 9b" is reported on time here and missing in prod.
+        //
+        // CORRECTED 2026-08-12 from 8 to 7. The old comment claimed 8 makes `--stage=8` report it
+        // OVERDUE. It does not: the test is `dueStep < STAGE`, so at exactly stage 8 `8 < 8` is false,
+        // the gate prints a non-blocking AT STEP line and exits 0. The one stage an operator is told to
+        // run before the unpause was the one stage where this could neither block nor stay silent.
+        7,
       );
     }
   }
@@ -476,6 +483,41 @@ async function main() {
   );
 
   // ------------------------------------------------------------ human blockers
+  // THE INVENTORY SILV ATA. Added 2026-08-12: two independent reviews found that `admin_premint` takes
+  // this account as ALREADY EXISTING (premint.rs:41-46, no `init`) and that NOTHING in the repo created
+  // it on the mainnet shape. Missing, the pre-mint reverts AccountNotInitialized at Squads-execute time,
+  // AFTER three humans have approved: the most expensive possible way to find a missing account.
+  //
+  // Derived from the MANIFEST rather than from chain, deliberately: this must be answerable before the
+  // deploy, when no config account exists. That the manifest and the chain agree is checked separately.
+  {
+    const m = JSON.parse(
+      fs.readFileSync(path.join(ROOT, "config", "mainnet-authorities.json"), "utf8"),
+    );
+    const invOwner = m.authorities?.inventory_wallet?.pubkey;
+    const pinnedMint = m.mint_creation_ceremony?.pregenerated_mint;
+    if (typeof invOwner === "string" && typeof pinnedMint === "string") {
+      // allowOwnerOffCurve = true is MANDATORY: since 2026-08-12 the owner is the ops Squads vault, a PDA.
+      const invAta = getAssociatedTokenAddressSync(
+        new PublicKey(pinnedMint),
+        new PublicKey(invOwner),
+        true,
+        TOKEN_2022_PROGRAM_ID,
+      );
+      const info = await conn.getAccountInfo(invAta);
+      if (info) {
+        ok("the inventory SILV ATA exists", invAta.toBase58());
+      } else {
+        atStep(
+          "9, right after T1 and BEFORE the pre-mint",
+          "the inventory SILV ATA does not exist, so admin_premint would revert AccountNotInitialized",
+          `${invAta.toBase58()} -- run scripts/create-inventory-silv-ata.ts, or a full 3-of-5 round is wasted`,
+          8,
+        );
+      }
+    }
+  }
+
   section("F. Only a human can clear these");
   byHand("Sunrise confirmed they accept freeze authority + permanent delegate");
   byHand("the Vercel PROD Pyth key has the pyth-indices entitlement");

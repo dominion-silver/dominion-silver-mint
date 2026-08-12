@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { APP_RPC, CLUSTER, PROGRAM_ID, SILV_MINT, USDC_MINT, LAZER_SILV_FEED_ID } from "@/lib/constants";
+import { APP_RPC, CLUSTER, PROGRAM_ID, SILV_MINT, USDC_MINT, LAZER_SILV_FEED_ID, LAZER_TREASURY } from "@/lib/constants";
 
 /**
  * What is this deployment actually pointed at?
@@ -54,6 +54,13 @@ export function GET() {
       programId: PROGRAM_ID.toBase58(),
       silvMint: SILV_MINT.toBase58(),
       usdcMint: USDC_MINT.toBase58(),
+      // ADDED 2026-08-12. This is the cutover constant with NO offline gate and, until now, no external
+      // signal: verify-constants-consistency.sh never reads it, and it is consumed on the mint path
+      // (lazer-tx.ts) where the program validates it against the Lazer Storage's own treasury field.
+      // Left on the devnet value after a cutover, the panel looks healthy, the price banner works, and
+      // EVERY user mint reverts. Exposing it here is the only way to check the deployed state from
+      // outside, which is the argument this whole route was created on.
+      lazerTreasury: LAZER_TREASURY.toBase58(),
       lazerFeedId: LAZER_SILV_FEED_ID,
     },
     // Never cached: the answer changes with a redeploy, and a cached answer would be worse than none.

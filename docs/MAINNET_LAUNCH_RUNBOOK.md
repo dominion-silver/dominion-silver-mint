@@ -496,8 +496,13 @@ improvisation on exactly the actions that set the launch posture.
 ```bash
 # Vercel env for apps/admin:
 #   NEXT_PUBLIC_HELIUS_RPC     = a mainnet RPC
-#   NEXT_PUBLIC_OPS_SQUADS     = 65g5nNXTtqtFz3jggKAqyvS6oCoVUXuXqAU9B8jHqPPS
-#   NEXT_PUBLIC_UPGRADE_SQUADS = FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3
+#   NEXT_PUBLIC_OPS_SQUADS     = 9BwMVmjMwjppJyBn5Kj6vTae8Rc7NUamH5H2Tq7H5VtU
+#   ^^^ THE MULTISIG, NOT THE VAULT. Corrected 2026-08-12: this said 65g5nNX..., the vault
+#   (= config.admin). squads.ts consumes this as the MULTISIG and derives the vault FROM it, so pasting
+#   the vault makes adminAuthority() return a vault OF the vault: fetchMultisig throws on a 0-byte
+#   account, no proposal can be created, and the go-live unpause is unexecutable. Vercel already holds
+#   the correct value; do not "fix" it from an older copy of this page.
+#   NEXT_PUBLIC_UPGRADE_SQUADS = BjbtdEcy324Xdmt9182D8FZYGiH2nhTLFHP7EaAEXLAi   # THE MULTISIG, not FqFNX (the vault)
 (cd apps/admin && vercel --prod --yes)
 ```
 
@@ -524,8 +529,17 @@ also disarms any queued open so a pending loosening cannot land moments after an
 Neither lane can set the switch back to true: the program refuses it in bytecode from BOTH states, so
 there is no sequence of instant calls that reopens payouts. The only path back is
 `propose_set_redeem_limits({ redemptionsEnabled: true })`, the 24h wait, then execute, and during
-that window any active guardian can cancel it alone. Operationally: closing is a decision you can
-take in one signature at 3am, reopening is a decision the whole quorum sees coming for a day.
+that window any active guardian can cancel it alone. Operationally: closing needs **THREE signatures** at 3am, reopening is a decision the whole quorum
+sees coming for a day.
+
+> **CORRECTED 2026-08-12. This said "one signature at 3am" and that is false on the mainnet shape.**
+> `pause` accepts `config.admin` OR an active guardian, and both are 3-of-5 Squads vaults over the same
+> five members. `set_redemptions_enabled(false)` wants `config.admin`, so 3-of-5 too. **No single
+> signature can stop this protocol.** And the guardian veto is not exercisable by any tooling here: the
+> panel's guardian cards sign with the connected wallet and a vault PDA cannot connect, while
+> `runAction` hardcodes `role: "ops"` so the panel cannot even propose on the upgrade multisig where
+> that guardian's authority lives. Treat the ADMIN pause as the only reachable brake, and make sure
+> three signers are reachable out of hours.
 `scripts/test-security-posture-docs.ts` runs the on-chain tests that demonstrate each half of this
 paragraph and fails if this text and those tests ever stop agreeing.
 
@@ -558,7 +572,16 @@ This page previously called a non-zero float a BLOCKER while the decision said z
 `ceremony-step7.ts` refused to run without one. Round 5 P1-06: two sources of truth giving
 incompatible orders. To propose a float, use `propose_set_treasury_min_float` from the admin panel.
 
-### 8. Register the guardians, then unpause
+### 8. Unpause. `add_guardian` is NOT a step.
+
+> **CORRECTED 2026-08-12.** `initialize` itself creates the first guardian's account and sets
+> `guardian_count = 1` (`initialize.rs:148-159`, `:427`), and the manifest has no `additional_guardians`
+> key, so `ceremony-step8.ts` marks the guardian `alreadyDone` and emits **only the unpause, in the
+> first run**. The two-run "add_guardian x2 then STOP then re-run" choreography below never happens.
+> Two consequences it is worth stating: the launch ships with ONE guardian, which is the same vault as
+> the upgrade authority and compliance; and `MIN_ACTIVE_GUARDIANS = 1` with a count of 1 makes
+> `finalize_guardian_removal` permanently impossible, so that guardian cannot be rotated without adding
+> a second one first.
 
 > **ORDRE OBLIGATOIRE A L'INTERIEUR DE CETTE ETAPE, sinon l'unpause reverte.**
 >
@@ -828,8 +851,8 @@ public app is left.
 ```bash
 # Vercel env for apps/public:
 #   NEXT_PUBLIC_HELIUS_RPC   = a mainnet RPC (the public endpoint will rate-limit you)
-#   NEXT_PUBLIC_OPS_SQUADS   = 65g5nNXTtqtFz3jggKAqyvS6oCoVUXuXqAU9B8jHqPPS
-#   NEXT_PUBLIC_UPGRADE_SQUADS = FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3
+#   NEXT_PUBLIC_OPS_SQUADS   = 9BwMVmjMwjppJyBn5Kj6vTae8Rc7NUamH5H2Tq7H5VtU   # THE MULTISIG, not the vault
+#   NEXT_PUBLIC_UPGRADE_SQUADS = BjbtdEcy324Xdmt9182D8FZYGiH2nhTLFHP7EaAEXLAi   # THE MULTISIG, not FqFNX (the vault)
 #   PYTH_LAZER_API_KEY       = the entitled key (public app only)
 (cd apps/public && vercel --prod --yes)
 
@@ -856,7 +879,7 @@ Only after everything above works. `initialize` needed the deployer to be the up
 authority, so this cannot come earlier.
 
 ```bash
-solana program set-upgrade-authority <PROGRAM_ID> \
+solana program set-upgrade-authority --skip-new-upgrade-authority-signer-check <PROGRAM_ID> \
   --new-upgrade-authority FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3 \
   -k ~/.config/solana/dominion-dev.json -u mainnet-beta
 

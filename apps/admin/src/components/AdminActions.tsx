@@ -1245,26 +1245,39 @@ export function AdminActions() {
                 key={p.transactionIndex.toString()}
                 className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-xs"
               >
-                <span>
+                <span className={p.stale ? "text-muted line-through" : undefined}>
                   #{p.transactionIndex.toString()} - {p.status} -{" "}
                   {p.approvals}/{p.threshold} approvals
                 </span>
-                <span className="flex gap-2">
-                  <button
-                    disabled={busy !== null || !publicKey}
-                    onClick={() => approve(p.transactionIndex)}
-                    className="rounded border border-accent px-2 py-1 text-accent disabled:opacity-50"
-                  >
-                    {busy === `a${p.transactionIndex}` ? "..." : "Approve"}
-                  </button>
-                  <button
-                    disabled={busy !== null || !publicKey}
-                    onClick={() => execute(p.transactionIndex)}
-                    className="rounded border border-border px-2 py-1 disabled:opacity-50"
-                  >
-                    {busy === `e${p.transactionIndex}` ? "..." : "Execute"}
-                  </button>
-                </span>
+                {/* STALE ROWS ARE LABELLED AND DISABLED, added 2026-08-12. Squads voids every proposal at
+                    or below `staleTransactionIndex` whenever membership or the threshold changes, and both
+                    multisigs sit exactly there today. Index 6 on the ops vault is an `AddMember` at
+                    `Approved` with 2 of 3, so the old rendering showed live Approve and Execute buttons
+                    reading "one signature short" on the highest-privilege change that exists, right next
+                    to the real ceremony rows. Clicking either wastes a fee on `StaleProposal` (0x1777) and
+                    leaves the operator unsure what still needs signing. */}
+                {p.stale ? (
+                  <span className="rounded border border-border px-2 py-1 text-[10px] text-muted">
+                    stale, voided by a later config change
+                  </span>
+                ) : (
+                  <span className="flex gap-2">
+                    <button
+                      disabled={busy !== null || !publicKey}
+                      onClick={() => approve(p.transactionIndex)}
+                      className="rounded border border-accent px-2 py-1 text-accent disabled:opacity-50"
+                    >
+                      {busy === `a${p.transactionIndex}` ? "..." : "Approve"}
+                    </button>
+                    <button
+                      disabled={busy !== null || !publicKey}
+                      onClick={() => execute(p.transactionIndex)}
+                      className="rounded border border-border px-2 py-1 disabled:opacity-50"
+                    >
+                      {busy === `e${p.transactionIndex}` ? "..." : "Execute"}
+                    </button>
+                  </span>
+                )}
               </div>
             ))}
           </div>

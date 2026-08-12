@@ -409,18 +409,32 @@ async function main() {
   //
   // Until premint has an emit mode, this is the honest failure: it stops before the ATA-creation
   // transaction instead of dying on an opaque ConstraintHasOne after spending mainnet SOL.
-  try {
-    assertSendable(new PublicKey(cfg.admin), kp.publicKey, "premint");
-  } catch (e) {
-    // assertSendable's message ends with "run without --send to EMIT the instructions". That is true
-    // of the ceremony steps it was written for and FALSE here: premint has no --send and no emit
-    // mode, so an operator following that sentence gets "unrecognised argument --send".
-    throw new Error(
-      `${e instanceof Error ? e.message : String(e)}\n` +
-        `  NOTE, specific to premint: this script has NO --send and NO emit mode. If config.admin is\n` +
-        `  a Squads vault, the pre-mint must be built and executed through the admin panel, which is\n` +
-        `  the only thing that wraps a dominion instruction in a vault transaction. See runbook step 9.`,
-    );
+  //
+  // MOVED BEHIND `dryRun` ON 2026-08-12, and that is the whole point. The refusal was unconditional and
+  // sat 107 lines ABOVE the `if (dryRun) return`, so `--dry-run` threw too. On the mainnet shape that
+  // made this script completely unusable, and with it every guardrail it carries: the cap-and-headroom
+  // refusal below, the manifest destination cross-check, the ounce/atomic conversion and the plan
+  // printout. The replacement is the admin panel, whose pre-mint card is two free-text fields with no
+  // cap check and no read-back, on the one irreversible instruction in the protocol (there is no admin
+  // burn). A dry run SENDS NOTHING, so refusing it bought nothing and cost the operator the only tool
+  // that computes the numbers they are about to type into that form. The refusal still stands for a
+  // real run, where it is correct and load-bearing.
+  if (!dryRun) {
+    try {
+      assertSendable(new PublicKey(cfg.admin), kp.publicKey, "premint");
+    } catch (e) {
+      // assertSendable's message ends with "run without --send to EMIT the instructions". That is true
+      // of the ceremony steps it was written for and FALSE here: premint has no --send and no emit
+      // mode, so an operator following that sentence gets "unrecognised argument --send".
+      throw new Error(
+        `${e instanceof Error ? e.message : String(e)}\n` +
+          `  NOTE, specific to premint: this script has NO --send and NO emit mode. If config.admin is\n` +
+          `  a Squads vault, the pre-mint must be built and executed through the admin panel, which is\n` +
+          `  the only thing that wraps a dominion instruction in a vault transaction. See runbook step 9.\n` +
+          `  RUN THIS SAME COMMAND WITH --dry-run to get the cap, the headroom and the exact atomic\n` +
+          `  amount to type into that form. The dry run sends nothing and no longer refuses.`,
+      );
+    }
   }
   // `admin_premint` requires !paused (premint.rs). Discovering that from a raw Anchor code AFTER
   // paying for an ATA is exactly the confusion the 2026-08-10 rehearsal hit.

@@ -212,6 +212,10 @@ for (const rpc of [
 
   // THE MANIFEST. Every script here sends transactions and must call requireSanctionedCluster.
   const SENDERS = new Set([
+    // Creates the SILV ATA of config.inventory_wallet, the precondition admin_premint has and that
+    // nothing else in the repo satisfied on the mainnet shape. It sends, so it is a SENDER and calls
+    // assertReversible like the rest.
+    "create-inventory-silv-ata.ts",
     "bump-staleness.ts",
     "cancel-all.ts",
     "_ceremony-emit.ts",
