@@ -79,6 +79,37 @@ async function walletFlagAccounts(conn: anchor.web3.Connection, wallet: PublicKe
   };
 }
 
+/** Exercise the redeem half alone, against SILV already held. See the note at its use site. */
+const SKIP_MINT = process.argv.slice(2).includes("--skip-mint");
+
+/**
+ * Confirm a signature AT FINALIZED and prove it did not revert, before any balance is read.
+ *
+ * This session produced FIVE false negatives from reading state at `confirmed` immediately after a
+ * send, on a load-balanced endpoint. Two of them looked like outright failures on transactions that
+ * had in fact succeeded, and one made this very script report a pricing regression that did not
+ * exist. A reflexive re-send on any of them would have been a double execution.
+ *
+ * So: never infer success from the send returning, and never read an account at `confirmed` to decide
+ * whether the write landed. Read the TRANSACTION at `finalized` first.
+ */
+async function confirmAtFinalized(conn: Connection, sig: string, label: string): Promise<void> {
+  for (let i = 0; i < 40; i++) {
+    const tx = await conn.getTransaction(sig, {
+      commitment: "finalized",
+      maxSupportedTransactionVersion: 0,
+    });
+    if (tx) {
+      if (tx.meta?.err) throw new Error(`${label} FAILED on chain: ${JSON.stringify(tx.meta.err)}`);
+      console.log(`  ${label} finalized, slot ${tx.slot}`);
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 3000));
+  }
+  // Not "it failed": we do not know. Saying so is the point, because the wrong guess here is a re-send.
+  throw new Error(`${label} not finalized after 120s. DO NOT RE-SEND. Inspect ${sig} by hand.`);
+}
+
 async function main() {
   // RULE 1 (_guard.ts): refuse any cluster but devnet unless DOMINION_ALLOW_MAINNET is set.
   await requireSanctionedCluster(RPC, "priced mint E2E");
@@ -152,76 +183,112 @@ async function main() {
     minSilvOut / 1e6,
   );
 
-  // 5. Build the mint tx (mirrors buildLazerMintTx in lazer-tx.ts).
+  // Used by BOTH halves, so it lives outside the conditional mint block below.
   const usdcTreasuryAta = getAssociatedTokenAddressSync(USDC_MINT, pda("treasury"), true, TOKEN_PROGRAM);
-  const messageData = Buffer.from(lazerMessageData(envelope));
-  const flags = await walletFlagAccounts(provider.connection, user);
-  const dominionIx = await (program.methods as any)
-    .mintSilv(new anchor.BN(10_000_000), new anchor.BN(minSilvOut), messageData, ED25519_IX_INDEX, 0) // 10 USDC
-    .accounts({
-      config: configPda, user, usdcMint: USDC_MINT, silvMint: SILV_MINT,
-      usdcTreasury: usdcTreasuryAta, userUsdcAta, userSilvAta,
-      feeVaultPda, feeVault: feeVaultAta,
-      feeExempt: flags.feeExempt, kyc: flags.kyc,
-      silvMintAuthority: pda("silv_mint_authority"),
-      lazerProgram: LAZER_PROGRAM, lazerStorage: LAZER_STORAGE, lazerTreasury: LAZER_TREASURY,
-      lazerFeePayer: pda("lazer_fee_payer"), instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
-      classicTokenProgram: TOKEN_PROGRAM, token2022Program: TOKEN_2022,
-      associatedTokenProgram: ATA_PROGRAM, systemProgram: SystemProgram.programId,
-    })
-    .instruction();
 
-  const ataIxs = [
-    createAssociatedTokenAccountIdempotentInstruction(user, userSilvAta, user, SILV_MINT, TOKEN_2022),
-    createAssociatedTokenAccountIdempotentInstruction(user, userUsdcAta, user, USDC_MINT, TOKEN_PROGRAM),
-  ];
-  // Same assembly as the frontend: [cb_limit, cb_price, ed25519, ...ataIxs, dominion].
-  const tx = new Transaction().add(...assembleLazerOracleIxs(dominionIx, envelope, ataIxs));
-  // Simulate first. A priced mint clears the ed25519 pre-instruction, the Lazer verify CPI, the
-  // payload parse, the feed-id match and six policy guards before it moves a token, and a send-only
-  // failure is an opaque revert. The simulation logs name the guard that rejected it.
-  tx.feePayer = user;
-  tx.recentBlockhash = (await conn.getLatestBlockhash()).blockhash;
-  const presim = await conn.simulateTransaction(tx, [kp]);
-  if (presim.value.err !== null) {
-    console.log("\n  SIMULATION FAILED:", JSON.stringify(presim.value.err));
-    for (const l of presim.value.logs ?? []) {
-      if (/Program log:|invoke \[|[Ee]rror/.test(l)) console.log("   ", l.slice(0, 160));
+  // --skip-mint EXERCISES THE REDEEM HALF ALONE, against SILV already held.
+  //
+  // Added 2026-08-12 because the mainnet redeem path had never been exercised while
+  // `redemptions_enabled` is true from launch, and the wallet that could exercise it had spent all its
+  // USDC on the two mints that came first. Minting again just to reach the redeem is not only wasteful,
+  // it needs USDC this wallet no longer has.
+  let silvAfter: number;
+  let usdcAfter: number;
+  let supply: number;
+  if (SKIP_MINT) {
+    console.log("\n  --skip-mint: the mint is skipped; the redeem runs against the existing balance.");
+    silvAfter = await getAccount(conn, userSilvAta, "finalized", TOKEN_2022).then((a) => Number(a.amount)).catch(() => 0);
+    usdcAfter = await getAccount(conn, userUsdcAta, "finalized", TOKEN_PROGRAM).then((a) => Number(a.amount)).catch(() => 0);
+    supply = Number((await getMint(conn, SILV_MINT, "finalized", TOKEN_2022)).supply);
+    console.log("  holdings: USDC", usdcAfter / 1e6, "| SILV", silvAfter / 1e6, "| total supply", supply / 1e6);
+    if (silvAfter === 0) throw new Error("--skip-mint needs SILV already held, and this wallet holds none.");
+  } else {
+    // 5. Build the mint tx (mirrors buildLazerMintTx in lazer-tx.ts).
+    const messageData = Buffer.from(lazerMessageData(envelope));
+    const flags = await walletFlagAccounts(provider.connection, user);
+    const dominionIx = await (program.methods as any)
+      .mintSilv(new anchor.BN(10_000_000), new anchor.BN(minSilvOut), messageData, ED25519_IX_INDEX, 0) // 10 USDC
+      .accounts({
+        config: configPda, user, usdcMint: USDC_MINT, silvMint: SILV_MINT,
+        usdcTreasury: usdcTreasuryAta, userUsdcAta, userSilvAta,
+        feeVaultPda, feeVault: feeVaultAta,
+        feeExempt: flags.feeExempt, kyc: flags.kyc,
+        silvMintAuthority: pda("silv_mint_authority"),
+        lazerProgram: LAZER_PROGRAM, lazerStorage: LAZER_STORAGE, lazerTreasury: LAZER_TREASURY,
+        lazerFeePayer: pda("lazer_fee_payer"), instructionsSysvar: SYSVAR_INSTRUCTIONS_PUBKEY,
+        classicTokenProgram: TOKEN_PROGRAM, token2022Program: TOKEN_2022,
+        associatedTokenProgram: ATA_PROGRAM, systemProgram: SystemProgram.programId,
+      })
+      .instruction();
+
+    const ataIxs = [
+      createAssociatedTokenAccountIdempotentInstruction(user, userSilvAta, user, SILV_MINT, TOKEN_2022),
+      createAssociatedTokenAccountIdempotentInstruction(user, userUsdcAta, user, USDC_MINT, TOKEN_PROGRAM),
+    ];
+    // Same assembly as the frontend: [cb_limit, cb_price, ed25519, ...ataIxs, dominion].
+    const tx = new Transaction().add(...assembleLazerOracleIxs(dominionIx, envelope, ataIxs));
+    // Simulate first. A priced mint clears the ed25519 pre-instruction, the Lazer verify CPI, the
+    // payload parse, the feed-id match and six policy guards before it moves a token, and a send-only
+    // failure is an opaque revert. The simulation logs name the guard that rejected it.
+    tx.feePayer = user;
+    tx.recentBlockhash = (await conn.getLatestBlockhash()).blockhash;
+    const presim = await conn.simulateTransaction(tx, [kp]);
+    if (presim.value.err !== null) {
+      console.log("\n  SIMULATION FAILED:", JSON.stringify(presim.value.err));
+      for (const l of presim.value.logs ?? []) {
+        if (/Program log:|invoke \[|[Ee]rror/.test(l)) console.log("   ", l.slice(0, 160));
+      }
+      throw new Error("mint would revert; see the logs above");
     }
-    throw new Error("mint would revert; see the logs above");
-  }
-  console.log("  simulation clean, CU:", presim.value.unitsConsumed);
-  const sig = await provider.sendAndConfirm(tx, []);
-  console.log("\n  ✅ MINT TX:", sig);
+    console.log("  simulation clean, CU:", presim.value.unitsConsumed);
+    const sig = await provider.sendAndConfirm(tx, []);
+    console.log("\n  ✅ MINT TX:", sig);
 
-  // 6. Balances after.
-  const silvAfter = Number((await getAccount(conn, userSilvAta, "confirmed", TOKEN_2022)).amount);
-  const usdcAfter = Number((await getAccount(conn, userUsdcAta, "confirmed", TOKEN_PROGRAM)).amount);
-  const supply = Number((await getMint(conn, SILV_MINT, "confirmed", TOKEN_2022)).supply);
-  console.log("after:  USDC", usdcAfter / 1e6, "| SILV", silvAfter / 1e6, "| total supply", supply / 1e6);
-  console.log("\n  USDC spent:", (usdcBefore - usdcAfter) / 1e6, "| SILV minted:", (silvAfter - silvBefore) / 1e6);
+    // 6. Balances after.
+    //
+    // READ AT FINALIZED, AND ONLY AFTER CONFIRMING THE TRANSACTION ITSELF. Reading at `confirmed`
+    // straight after the send produced a FALSE ALARM on mainnet on 2026-08-12, and not a harmless one:
+    // the balance came back at its PRE-MINT value on a load-balanced endpoint, `silvMinted` computed to
+    // 0, `impliedPricePerOz` divided by zero, and the run died with
+    //
+    //     MINT ECONOMICS WRONG: the chain charged 10000 bps, config says 100.
+    //     This is the check that a pricing regression has to fail.
+    //
+    // The mint was correct: 10 / (65.50443 / 0.99) = 0.151134 SILV, exactly what landed. So the
+    // strongest assertion in this script was reporting a pricing regression that did not exist, which
+    // is worse than no assertion at all - it trains the operator to distrust the alarm.
+    //
+    // Fifth occurrence of this same read-back pattern in one session. The rule: confirm the signature
+    // at `finalized`, THEN read the accounts at `finalized`.
+    await confirmAtFinalized(conn, sig, "mint");
+    silvAfter = Number((await getAccount(conn, userSilvAta, "finalized", TOKEN_2022)).amount);
+    usdcAfter = Number((await getAccount(conn, userUsdcAta, "finalized", TOKEN_PROGRAM)).amount);
+    supply = Number((await getMint(conn, SILV_MINT, "finalized", TOKEN_2022)).supply);
+    console.log("after:  USDC", usdcAfter / 1e6, "| SILV", silvAfter / 1e6, "| total supply", supply / 1e6);
+    console.log("\n  USDC spent:", (usdcBefore - usdcAfter) / 1e6, "| SILV minted:", (silvAfter - silvBefore) / 1e6);
 
-  // Assert the ACTUAL premium the chain charged. "SILV increased" is satisfied by any premium from
-  // 0% to 99%, so on its own it is a liveness check, not an economic one.
-  const usdcSpent = (usdcBefore - usdcAfter) / 1e6;
-  const silvMinted = (silvAfter - silvBefore) / 1e6;
-  const impliedPricePerOz = usdcSpent / silvMinted;
-  const impliedPremiumBps = Math.round((1 - priceUsd / impliedPricePerOz) * 10_000);
-  console.log(
-    `  implied price: $${impliedPricePerOz.toFixed(4)}/oz vs spot $${priceUsd.toFixed(4)} ` +
-      `=> premium ${impliedPremiumBps} bps (configured ${premiumBpsMint})`,
-  );
-  // 2 bps, not more. The two integer floors are far smaller (at a 10 USDC size and ~$58/oz one SILV
-  // atomic unit is ~0.06 bps, one USDC atomic unit ~0.001 bps), and a wider tolerance accepts a real
-  // pricing regression: 25 bps would pass a 125 bps charge against a configured 100.
-  if (Math.abs(impliedPremiumBps - premiumBpsMint) > 2) {
-    throw new Error(
-      `MINT ECONOMICS WRONG: the chain charged ${impliedPremiumBps} bps, config says ${premiumBpsMint}. ` +
-        `This is the check that a pricing regression has to fail.`,
+    // Assert the ACTUAL premium the chain charged. "SILV increased" is satisfied by any premium from
+    // 0% to 99%, so on its own it is a liveness check, not an economic one.
+    const usdcSpent = (usdcBefore - usdcAfter) / 1e6;
+    const silvMinted = (silvAfter - silvBefore) / 1e6;
+    const impliedPricePerOz = usdcSpent / silvMinted;
+    const impliedPremiumBps = Math.round((1 - priceUsd / impliedPricePerOz) * 10_000);
+    console.log(
+      `  implied price: $${impliedPricePerOz.toFixed(4)}/oz vs spot $${priceUsd.toFixed(4)} ` +
+        `=> premium ${impliedPremiumBps} bps (configured ${premiumBpsMint})`,
     );
+    // 2 bps, not more. The two integer floors are far smaller (at a 10 USDC size and ~$58/oz one SILV
+    // atomic unit is ~0.06 bps, one USDC atomic unit ~0.001 bps), and a wider tolerance accepts a real
+    // pricing regression: 25 bps would pass a 125 bps charge against a configured 100.
+    if (Math.abs(impliedPremiumBps - premiumBpsMint) > 2) {
+      throw new Error(
+        `MINT ECONOMICS WRONG: the chain charged ${impliedPremiumBps} bps, config says ${premiumBpsMint}. ` +
+          `This is the check that a pricing regression has to fail.`,
+      );
+    }
+    if (silvAfter <= silvBefore) throw new Error("SILV did not increase");
+    console.log("  ✅ MINT OK");
   }
-  if (silvAfter <= silvBefore) throw new Error("SILV did not increase");
-  console.log("  ✅ MINT OK");
 
   // === REDEEM (instant) - validates the redeem account set on-chain too ===
   console.log("\n== Redeem 0.05 SILV (instant, fresh envelope) ==");
@@ -312,8 +379,11 @@ async function main() {
   ];
   const redeemSig = await provider.sendAndConfirm(new Transaction().add(...assembleLazerOracleIxs(redeemIx, redeemEnv, redeemAtas)), []);
   console.log("  ✅ REDEEM TX:", redeemSig);
-  const silvFinal = Number((await getAccount(conn, userSilvAta, "confirmed", TOKEN_2022)).amount);
-  const usdcFinal = Number((await getAccount(conn, userUsdcAta, "confirmed", TOKEN_PROGRAM)).amount);
+  // Same rule as the mint half, and for the same reason: the redeem's own economic assertion divides
+  // by the SILV delta, so a stale `confirmed` read here would fabricate a premium out of nothing.
+  await confirmAtFinalized(conn, redeemSig, "redeem");
+  const silvFinal = Number((await getAccount(conn, userSilvAta, "finalized", TOKEN_2022)).amount);
+  const usdcFinal = Number((await getAccount(conn, userUsdcAta, "finalized", TOKEN_PROGRAM)).amount);
   const silvBurned = (silvAfter - silvFinal) / 1e6;
   const usdcReceived = (usdcFinal - usdcAfter) / 1e6;
   console.log("  SILV burned:", silvBurned, "| USDC received:", usdcReceived);
