@@ -173,6 +173,17 @@ for (const rpc of [
     /\.\s*sendEncodedTransaction\s*\(/,     // Connection.sendEncodedTransaction: not matched by the above
     /\.\s*sendAll\s*\(/,                    // AnchorProvider.sendAll
     /\.\s*rpc\s*\(/,                        // Anchor methods().rpc(), tolerating whitespace
+    // THE SQUADS SDK's SENDING NAMESPACE, and a real blind spot until 2026-08-12. `@sqds/multisig`
+    // sends through `rpc.<name>(...)`: vaultTransactionCreate, proposalCreate, proposalApprove,
+    // vaultTransactionExecute, multisigCreateV2. That is `.rpc.` followed by a call, which the Anchor
+    // pattern above does NOT match because it expects `.rpc(` directly.
+    //
+    // It went unnoticed because every earlier Squads script also airdrops or transfers SOL through
+    // `sendAndConfirmTransaction`, so it was detected for the wrong reason. `create-ops-proposal.ts`
+    // is the first script whose ONLY sends are Squads calls, and this gate caught it: the script was
+    // in SENDERS and the detector could not see how it sent, which is exactly the regression this
+    // check was written to report.
+    /\.\s*rpc\s*\.\s*\w+\s*\(/,
   ];
   // Matched against code with comments stripped and strings KEPT, since the command name is a literal,
   // and paired with a write verb because a bare /solana/ matched read-only preflights. Two shapes:
@@ -219,6 +230,13 @@ for (const rpc of [
     // nothing else in the repo satisfied on the mainnet shape. It sends, so it is a SENDER and calls
     // assertReversible like the rest.
     "create-inventory-silv-ata.ts",
+    // Builds a Dominion admin instruction, wraps it in a Squads v4 vault transaction on the ops
+    // multisig, and creates / approves / EXECUTES the proposal. It built the mainnet unpause and
+    // pre-mint rounds. It sends on three separate paths (vaultTransactionCreate, proposalCreate,
+    // proposalApprove, vaultTransactionExecute), so it is a SENDER, it calls
+    // requireSanctionedCluster first, and it gates --execute through assertReversible under the
+    // action's own ACTION_COST name rather than a generic one.
+    "create-ops-proposal.ts",
     "bump-staleness.ts",
     "cancel-all.ts",
     "_ceremony-emit.ts",
