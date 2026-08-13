@@ -30,6 +30,11 @@ export const ACTION_COST: Record<string, ActionCost> = {
   // action missing from this table is REFUSED, which is the behaviour we want for a name that no
   // longer dispatches. The destination is now bound by `initialize` (irreversible, below) and the
   // only later writer is the 24h-timelocked pair.
+  // Funding the redemption treasury. NOT `reversible`: getting it back out is
+  // `propose_withdraw_usdc` then `execute_withdraw_usdc`, a 24h `admin_timelock_seconds` window and a
+  // 3-of-5 on each leg. Money in is same-day; money out is next-day at best, so the honest cost is
+  // timelocked-undo and the operator has to name it.
+  deposit_usdc: "timelocked-undo",
   propose_set_inventory_wallet: "reversible", // a proposal can be cancelled instantly
   execute_set_inventory_wallet: "timelocked-undo", // moving it back costs another full window
   // REVIEW PASS 2026-08-10. This said `reversible`, "adds supply; the cap bounds it". The cap bounds

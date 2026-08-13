@@ -237,6 +237,10 @@ for (const rpc of [
     // requireSanctionedCluster first, and it gates --execute through assertReversible under the
     // action's own ACTION_COST name rather than a generic one.
     "create-ops-proposal.ts",
+    // Funds the redemption treasury through the program's own `deposit_usdc`, rather than a raw
+    // transfer, so the deposit emits TreasuryDeposit and the pinned-account constraints reject
+    // account confusion on chain. It sends, so it is a SENDER and calls requireSanctionedCluster first.
+    "deposit-treasury-usdc.ts",
     "bump-staleness.ts",
     "cancel-all.ts",
     "_ceremony-emit.ts",
