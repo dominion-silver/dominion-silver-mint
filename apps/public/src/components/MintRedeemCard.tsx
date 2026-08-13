@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { mapUserFacingError } from "@/lib/user-error-messages";
 import useSWR from "swr";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
 import { BN } from "@coral-xyz/anchor";
@@ -355,7 +356,8 @@ export function MintRedeemCard() {
     setSubmitting(true);
     try {
       if (mode === "mint") {
-        // Public direct mint is closed at launch (revert PublicMintDisabled).
+        // ROUND 8: public direct mint ships OPEN from `initialize`. This branch is what a user sees
+        // after an EMERGENCY CLOSE, not at launch: reopening rides the 24h timelock.
         if (!cfg.publicMintEnabled) {
           throw new Error(
             "Direct mint isn't open yet. You can buy SILV on the DEX.",
@@ -479,39 +481,9 @@ export function MintRedeemCard() {
         }
       }
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      // Flatten once (message + program logs + structured err): a confirmed-but-reverted tx carries the
-      // signal in logs/onChainErr, not in `.message`.
-      const flat = errorToText(e);
-      // StaleOracle takes priority on EVERY Pyth path, and this covers the confirmed-on-chain-revert case
-      // as well as the simulation revert that pyth-posting already maps.
-      const reroute =
-        mode === "redeem" ? parseRedeemError(flat) : null;
-      // REVIEW PASS ON 3bf3097. `isBelowMinimumError` had ZERO call sites, so the on-chain revert it
-      // exists for reached the user as a raw simulation string. It is genuinely reachable: the
-      // pre-flight guards are computed off a client-side quote, so the price can move between quote
-      // and land, and the admin can raise the floor mid-flight. It is checked on BOTH sides, above the
-      // redeem-only reroutes, because mint raises the same error and had no mapping at all.
-      const friendly =
-        isStaleOracleError(flat)
-          ? STALE_ORACLE_USER_MESSAGE
-          // ROUND 7 R7-08. Both sides, above the redeem-only reroutes, because mint raises them too.
-          // Two codes, two messages, because the correct next action differs: retry now versus wait.
-          : isLazerReplayedError(flat)
-            ? "Another transaction used the same price update a moment before yours. Nothing was charged. Try again, and a fresh price will be fetched."
-          : isLazerCarriedForwardError(flat)
-            ? "The silver price feed has not published a new value yet. Nothing was charged. Wait a few seconds rather than retrying immediately."
-          : isBelowMinimumError(flat)
-            ? "That amount is below the protocol's minimum operation size. Nothing was charged. Try a larger amount."
-          : reroute === "limit"
-            ? "The protocol's rolling redemption limit for this window is used up. Your SILV was not touched. Retry after the window rolls, or redeem less."
-            : reroute === "kyc"
-              ? `This wallet needs identity verification before it can redeem. Contact ${OTC_EMAIL}.`
-              : reroute === "otc"
-              ? `Treasury can't cover this now. Redeem via OTC: ${OTC_EMAIL}.`
-              : reroute === "disabled"
-                ? "Redemptions are disabled / paused."
-                : msg;
+      // ROUND 8 T8-07. The mapping moved to lib/user-error-messages.ts so it can be tested. It was
+      // inline in this catch, so the wording a user reads after a revert was asserted by nothing.
+      const friendly = mapUserFacingError(e, mode, OTC_EMAIL);
       showError(friendly);
       toast({
         message: `${mode === "mint" ? "Mint" : "Redeem"} failed: ${friendly.split("\n")[0].slice(0, 140)}`,
@@ -811,7 +783,7 @@ export function MintRedeemCard() {
           insufficientSol
         }
         onClick={handleSubmit}
-        className="w-full rounded-lg bg-accent py-3 font-semibold text-bg transition hover:bg-accentDim disabled:cursor-not-allowed disabled:opacity-40"
+        className="w-full rounded-lg bg-cta py-3 font-semibold text-bg transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"
       >
         {!wallet.connected
           ? "Connect wallet"

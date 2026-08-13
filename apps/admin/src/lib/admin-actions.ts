@@ -4,6 +4,7 @@
 // The `timelock` PDA seed is `[b"timelock", nonce_u64_le]`, account-data-dependent, so it is derived
 // and passed EXPLICITLY, as is the OPTIONAL `guardian` on pause/cancel (Anchor 0.31 skips optionals).
 
+import { readinessDigestFromConfig } from "./readiness-digest";
 import { AnchorProvider, BN, Program } from "@coral-xyz/anchor";
 import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import {
@@ -32,6 +33,9 @@ import {
   treasuryPda,
 } from "./pdas";
 import { roleVaultPda } from "./squads";
+// ROUND 8 L1-03: the eligibility rule for a guardian lives in ONE place (anchor-client's `active`),
+// so the unpause builder reuses it rather than restating `cooldown_until == 0 && key != admin`.
+import { fetchGuardians } from "./anchor-client";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -132,9 +136,26 @@ export const proposeSetPublicMint = (c: BuildCtx, on: boolean): Ix =>
 
 export const setRedemptionsEnabled = (c: BuildCtx, on: boolean): Ix =>
   instant(c, "setRedemptionsEnabled", on);
-// Instant. The admin_premint destination ATA is derived off-chain against this wallet.
-export const setInventoryWallet = (c: BuildCtx, wallet: PublicKey): Ix =>
-  instant(c, "setInventoryWallet", wallet);
+
+/**
+ * ROUND 8 T8-03. There is NO instant inventory setter any more, in the program or here.
+ *
+ * The pre-mint destination is an argument of `initialize`, bound atomically with everything else and
+ * validated non-default. `set_inventory_wallet` was deleted, not restricted: an instant first binding
+ * still let a key compromised DURING the ceremony bind the attacker's wallet before the legitimate
+ * one, with no delay and no veto. The builder that wrapped it is gone for the same reason: leaving it
+ * would send a discriminator the program no longer dispatches, and an operator would read the failure
+ * as an outage rather than as a removed capability.
+ *
+ * The remaining operational need is a LATER change (key rotation, custody move), and that is the
+ * 24h-timelocked pair below plus the shared `cancelTimelockedAction`, which a guardian can use inside
+ * the window. `proposeSetInventoryWallet` occupies the single `pending_inventory_wallet_nonce` slot,
+ * so exactly one change can be armed at a time and a guardian has one thing to watch.
+ */
+export const proposeSetInventoryWallet = (
+  c: BuildCtx,
+  wallet: PublicKey,
+): Ix => propose(c, "proposeSetInventoryWallet", [wallet]);
 
 /**
  * ROUND 5 P1-04. The MINIMUM SIZE OF A PRICED OPERATION, atomic USDC: `amount_usdc` on mint, the gross
@@ -391,6 +412,8 @@ export async function depositUsdc(
 }
 
 // Guardians (admin-managed). `guardian_account` is auto-derived from the arg.
+/** ROUND 8 F-02: single signer. The appointee's co-signature was removed; it made the instruction
+ *  unexecutable through the Squads path, which has no moment for an external key to sign. */
 export async function addGuardian(c: BuildCtx, g: PublicKey): Ix {
   const ix = await (getProgram(c.connection).methods as any)
     .addGuardian(g)
@@ -457,10 +480,50 @@ export async function pauseAsGuardian(
     .instruction();
   return one(ix);
 }
-export async function unpause(c: BuildCtx): Ix {
+/**
+ * ROUND 8 L1-03. `unpause` takes a MANDATORY `guardian` account now, and this builder did not send
+ * it. Anchor cannot derive it: the PDA seed is the guardian's own key, which the config does not
+ * hold, so `.accountsPartial` failed with `Unresolved accounts: guardian` and the card threw before
+ * producing a single instruction. The resume path after an emergency pause was dead.
+ *
+ * The account is DISCOVERED rather than typed. An operator ending an incident should not have to
+ * remember which guardian key is eligible, and the eligibility rule is not obvious: the program
+ * demands `cooldown_until == 0` AND a key different from the current admin. `fetchGuardians` already
+ * computes exactly that as `active`, for the roster panel, so this reuses it instead of restating the
+ * rule and drifting from it.
+ *
+ * Pass `guardian` explicitly to present a specific one; the caller is then responsible for its
+ * eligibility, and the program is the one that decides.
+ */
+export async function unpause(c: BuildCtx, guardian?: PublicKey): Ix {
+  let present = guardian;
+  if (!present) {
+    const admin = c.admin ?? adminAuthority();
+    const onchainAdmin = await fetchOnchainAdmin(c.connection).catch(() => admin);
+    const eligible = (await fetchGuardians(c.connection, onchainAdmin)).filter(
+      (g) => g.active,
+    );
+    if (eligible.length === 0) {
+      // The same refusal the program would give, raised where it can still be read. Without this the
+      // operator gets `Unresolved accounts: guardian`, which names a client-side symbol and says
+      // nothing about what to do.
+      throw new Error(
+        "unpause needs an ACTIVE guardian whose key is not the current admin, and none is " +
+          "registered. Add one with 'Add guardian' first. The protocol cannot leave pause until an " +
+          "independent party can pause it again.",
+      );
+    }
+    present = eligible[0].guardian;
+  }
+  // ROUND 8 P1. `unpause` takes the digest of the config it is unpausing; read it here, from the
+  // same chain read this action is built against.
+  const digest = readinessDigestFromConfig(await fetchConfig(c.connection));
   const ix = await (getProgram(c.connection).methods as any)
-    .unpause()
-    .accountsPartial({ admin: c.admin ?? adminAuthority() })
+    .unpause(digest)
+    .accountsPartial({
+      admin: c.admin ?? adminAuthority(),
+      guardian: guardianPda(present),
+    })
     .instruction();
   return one(ix);
 }
@@ -595,7 +658,10 @@ export type ExecMethod =
   | "executeSetAdminTimelock"
   | "executeSetComplianceMode"
   | "executeSetRedeemLimits"
-  | "executeSetPublicMint";
+  | "executeSetPublicMint"
+  // ROUND 8 T8-03: the ONLY remaining writer of config.inventory_wallet. Same generic shape as the
+  // rest (admin, timelock PDA, rent recipient), so it needs no bespoke builder.
+  | "executeSetInventoryWallet";
 export const EXEC_METHODS: ExecMethod[] = [
   "executeSetPremiumMint",
   "executeSetPremiumRedeem",
@@ -606,6 +672,7 @@ export const EXEC_METHODS: ExecMethod[] = [
   "executeSetComplianceMode",
   "executeSetRedeemLimits",
   "executeSetPublicMint",
+  "executeSetInventoryWallet",
 ];
 
 export async function executeTimelocked(

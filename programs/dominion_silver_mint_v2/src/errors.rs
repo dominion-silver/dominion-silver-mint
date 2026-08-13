@@ -187,14 +187,18 @@ pub enum DominionError {
     // Launch spec 2026-07 (pre-mint + hard cap, KYC/PoR deferred). APPEND ONLY.
     #[msg("Supply cap can only be lowered instantly; raising it is not available at launch")]
     SupplyCapRaiseBlocked,
-    #[msg("Public direct mint is disabled (closed at launch; opens with KYC in Phase 1)")]
+    #[msg("Public direct mint is disabled. ROUND 8: it ships OPEN and this fires only after an emergency close; reopening is 24h-timelocked")]
     PublicMintDisabled,
-    #[msg("Inventory wallet is not set; call set_inventory_wallet first")]
+    /// ROUND 8 T8-03: `set_inventory_wallet` no longer exists, so this is now raised by `initialize`
+    /// (which refuses to bind the default) and by the readers that refuse to act on an unset field.
+    #[msg(
+        "Inventory wallet is not set; initialize binds it and only the 24h timelock can change it"
+    )]
     InventoryWalletNotSet,
     #[msg("Pre-mint destination is not owned by the configured inventory wallet")]
     InvalidInventoryDestination,
     #[msg(
-        "Enabling redemptions is blocked at launch; it opens with the Phase 1 KYC/redeem upgrade"
+        "Enabling redemptions on this lane is blocked. ROUND 8: redeem ships OPEN, and REOPENING after a close rides propose/execute_set_redeem_limits and the 24h timelock, not an upgrade"
     )]
     RedemptionsEnableBlocked,
     #[msg("SILV mint freeze_authority does not match config.freeze_authority_expected")]
@@ -326,13 +330,35 @@ pub enum DominionError {
     #[msg("this price envelope was already used: another operation consumed it, retry with a fresh price")]
     LazerReplayed,
 
-    /// ROUND 7. `set_inventory_wallet` is instant ONLY for the first binding, when the field is still
-    /// the default. Any CHANGE is a redirect of where pre-minted supply lands, and goes through the
-    /// 24h timelock so a guardian can cancel it.
+    /// ROUND 7. `set_inventory_wallet` was instant ONLY for the first binding, when the field was
+    /// still the default; any CHANGE went through the 24h timelock.
+    ///
+    /// ROUND 8 T8-03 made this variant UNREACHABLE: the instruction that raised it is gone, and
+    /// `initialize` is now the first and only instant binding. It stays here because this enum is
+    /// APPEND ONLY: removing it would renumber `InventoryWalletUnchanged` and everything after it,
+    /// silently changing the meaning of error codes already quoted in clients, tests and audits.
     #[msg("the inventory wallet is already set: changing it requires propose_set_inventory_wallet and the 24h timelock")]
     InventoryWalletChangeRequiresTimelock,
 
     /// Proposing the value already stored: a 24h window and a guardian's attention for a no-op.
     #[msg("the proposed inventory wallet is the one already configured")]
     InventoryWalletUnchanged,
+
+    /// ROUND 8. Unpausing with no registered guardian would switch on every flow before the
+    /// independent brake exists. Every timelock in this program assumes someone can cancel.
+    #[msg("no active guardian is registered: unpause would enable every flow with no independent brake")]
+    NoActiveGuardian,
+
+    /// A guardian slot held by the current admin is a brake wired to the same lever.
+    #[msg("the supplied guardian is the current admin, so it is not an independent brake")]
+    GuardianNotIndependent,
+
+    /// ROUND 8 FINAL-03. The config moved between the moment this unpause was built and the moment
+    /// it executed, so the launch-readiness decision that authorised it was taken against a state
+    /// that no longer exists. Re-read the chain, rebuild the unpause, approve it again.
+    ///
+    /// This replaced a check on `active_proposal_count`, which read the CURRENT armed count and was
+    /// therefore blind to an action that executed and disarmed itself inside that very gap.
+    #[msg("the config changed after this unpause was built: the launch-readiness decision that authorised it is stale, so re-read the chain and rebuild it")]
+    StaleReadinessDigest,
 }

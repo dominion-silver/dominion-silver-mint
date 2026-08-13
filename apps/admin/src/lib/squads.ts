@@ -234,6 +234,18 @@ export async function buildExecuteTx(params: {
 }
 
 export interface ProposalView {
+  /**
+   * Is this index below the multisig's `staleTransactionIndex`, i.e. voided by a later config change?
+   *
+   * ADDED 2026-08-12. Squads bumps `staleTransactionIndex` whenever membership or the threshold changes,
+   * and every proposal at or below it can no longer be approved or executed (`StaleProposal`, 0x1777).
+   * The ops multisig today has `staleTransactionIndex == transactionIndex == 9`, and index 6 is an
+   * `AddMember` sitting at `Approved` with 2 of 3. Without this flag the panel rendered it with live
+   * Approve and Execute buttons reading "one signature short" on the highest-privilege change that
+   * exists, immediately next to the real ceremony rows. On launch day that is a mis-click waiting to
+   * happen, and the click wastes a fee and confuses the operator about what still needs signing.
+   */
+  stale: boolean;
   transactionIndex: bigint;
   status: string;
   approvals: number;
@@ -257,6 +269,8 @@ export async function listProposals(params: {
   const multisigPda = info.multisigPda;
   const out: ProposalView[] = [];
   const start = info.transactionIndex;
+  // `staleTransactionIndex` is on the Multisig account; anything at or below it is void.
+  const staleAtOrBelow = BigInt((info as unknown as { staleTransactionIndex: bigint | number }).staleTransactionIndex ?? 0);
   for (let i = start; i > 0n && i > start - BigInt(lookback); i -= 1n) {
     const [proposalPda] = multisig.getProposalPda({
       multisigPda,
@@ -268,6 +282,7 @@ export async function listProposals(params: {
         proposalPda,
       );
       out.push({
+        stale: i <= staleAtOrBelow,
         transactionIndex: i,
         status: (p.status?.__kind as string) ?? "Unknown",
         approvals: p.approved?.length ?? 0,

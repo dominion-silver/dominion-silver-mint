@@ -41,6 +41,20 @@ SANDBOX="$TMP/repo"
 mkdir -p "$SANDBOX"
 rsync -a --exclude='.git' --exclude='node_modules' --exclude='.next' --exclude='target/' \
       "$REPO/" "$SANDBOX/" || { echo "FAIL: could not build the sandbox copy"; exit 1; }
+# ROUND 8 T8-02. The sandbox is now a real Git repository, because the verifier refuses to attest a
+# tree that cannot authenticate it. That is not a concession to the test: the sandbox is a COPY OF
+# THIS REPOSITORY, and a repository has a .git. Copying the sources without it produced something no
+# real deployment ever looks like, which is why the omission went unnoticed for six rounds.
+# ROUND 8 T8-02. The sandbox carries THIS repository's HISTORY, not a fresh `git init`.
+#
+# The verifier now refuses any tree that does not contain our anchor commit, because that is the one
+# thing a fabricated repository cannot produce. A `git init` sandbox is, correctly, such a tree: it
+# was refused, and that refusal is the guard doing its job rather than a test to work around.
+#
+# Copying .git is also what makes the sandbox honest. It is meant to be a COPY OF THIS REPOSITORY,
+# and a repository has history. The rsync above excludes .git for size, so it is brought over here.
+cp -R "$REPO/.git" "$SANDBOX/.git" \
+  || { echo "FAIL: could not give the sandbox this repository's history"; exit 1; }
 mkdir -p "$SANDBOX/target/deploy" "$SANDBOX/target/idl"
 cp "$REPO/target/deploy/dominion_silver_mint.so" "$SANDBOX/target/deploy/" 2>/dev/null || true
 cp "$REPO/target/idl/dominion_silver_mint.json" "$SANDBOX/target/idl/" 2>/dev/null || true
@@ -87,6 +101,19 @@ run_case() {
 # test and case 10 covers that one deliberately.
 sandbox_manifest() {
   python3 scripts/_selftest-manifest.py "$1" "$2" "$3" "$REPO" "$SANDBOX"
+  # ROUND 8 T8-02. A `pinned` fixture must name a commit the sandbox actually CONTAINS. The generator
+  # writes 000...0, and the verifier now refuses a pin whose source commit the tree cannot see, which
+  # is the second layer of the root-identity check and is also what T8-04 will ask of the pin reader.
+  # Patching it to the sandbox's own HEAD makes the fixture look like a real pin instead of a stub.
+  if [ "$1" = "pinned" ]; then
+    python3 - "$SANDBOX/config/mainnet-authorities.json" "$(git -C "$SANDBOX" rev-parse HEAD)" <<'PYEOF'
+import json, sys
+p, commit = sys.argv[1], sys.argv[2]
+m = json.load(open(p))
+m["release_artifact"]["source_commit"] = commit
+json.dump(m, open(p, "w"), indent=2)
+PYEOF
+  fi
 }
 
 echo "Self-test: scripts/verify-release-artifact.sh"
@@ -207,14 +234,35 @@ echo "-- the removed override --"
 SENTINEL="aaaaaaaabbbbbbbbccccccccddddddddeeeeeeeeffffffff00000000deadbeef"
 sandbox_manifest pinned "$SENTINEL" 424242
 ovr_out="$TMP/override-set.log"
-env DOMINION_RELEASE_MANIFEST="$SANDBOX/config/mainnet-authorities.json" bash "$VERIFY" --skip-rebuild >"$ovr_out" 2>&1
-if grep -q "$SENTINEL" "$ovr_out"; then
+# ROUND 8 T8-05. THE COVERAGE ASSERTION, and the reason this case had to stop using --skip-rebuild.
+#
+# The sentinel absence was the whole test, and absence proves nothing unless the production manifest
+# read ACTUALLY RAN. It did not: measured on this tree with `bash -x`, `--skip-rebuild` never reaches
+# `MANIFEST_JSON` at all, because check 1b lives inside the `else` of the same `if` that skips the
+# rebuild. So the case asserted that a string did not appear on a path that could never print it, and
+# it would have stayed green with the override fully restored.
+#
+# It now runs the FULL path with a trace, and requires three things in it: the 1b block entered with
+# LOCAL_ONLY=0, the MANIFEST_JSON assignment, and the production call to _read-release-pin.py. The
+# sentinel check keeps its meaning only because these three hold.
+env PS4='+${BASH_SOURCE}:${LINENO}: ' DOMINION_RELEASE_MANIFEST="$SANDBOX/config/mainnet-authorities.json" \
+  bash -x "$VERIFY" >"$ovr_out" 2>&1
+cov_missing=""
+grep -q 'MANIFEST_JSON=' "$ovr_out" || cov_missing="MANIFEST_JSON assignment"
+grep -q '_read-release-pin.py' "$ovr_out" || cov_missing="${cov_missing:+$cov_missing and }the _read-release-pin.py invocation"
+if [ -n "$cov_missing" ]; then
+  echo "  FAIL: override regression case did not execute the production manifest read"
+  echo "        expected MANIFEST_JSON assignment and _read-release-pin.py invocation in the trace"
+  echo "        missing: $cov_missing"
+  echo "        full trace: $ovr_out"
+  fail=$((fail + 1))
+elif grep -q "$SENTINEL" "$ovr_out"; then
   echo "  FAIL: DOMINION_RELEASE_MANIFEST was honoured. The verifier read the sandbox pin."
   echo "        The override was restored, or something else reads that variable."
   echo "        full output: $ovr_out"
   fail=$((fail + 1))
 else
-  echo "  ok  : DOMINION_RELEASE_MANIFEST is ignored (the sandbox pin never reaches the verifier)"
+  echo "  ok  : DOMINION_RELEASE_MANIFEST is ignored after the production manifest read executed"
   pass=$((pass + 1))
 fi
 

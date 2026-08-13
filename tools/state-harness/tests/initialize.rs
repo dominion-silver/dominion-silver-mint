@@ -30,6 +30,8 @@ const E_SILV_MINT_HAS_PREEXISTING_SUPPLY: u32 = 12052;
 const E_SILV_MINT_AUTHORITY_MISMATCH: u32 = 12053;
 const E_USDC_MINT_NOT_ALLOWED: u32 = 12055;
 const E_SILV_METADATA_UPDATE_AUTHORITY_MISMATCH: u32 = 12058;
+/// ROUND 8 T8-03. Verified against target/idl/dominion_silver_mint.json, not counted by hand.
+const E_INVENTORY_WALLET_NOT_SET: u32 = 12086;
 const E_DISALLOWED_MINT_EXTENSION: u32 = 12066;
 const E_SILV_FREEZE_AUTHORITY_MISMATCH: u32 = 12089;
 const E_DEPLOYER_NOT_UPGRADE_AUTHORITY: u32 = 12092;
@@ -177,12 +179,19 @@ struct Args {
     pyth_lazer_feed_id: u32,
     admin_timelock_seconds: u32,
     max_guardian_count: u8,
+    /// ROUND 8 T8-03. APPENDED LAST on purpose: the 142-byte prefix above did not move, so a client
+    /// that still encodes the old layout fails to deserialize instead of silently shifting a field.
+    inventory_wallet: Pubkey,
+    /// ROUND 8 L1-02. The first guardian, appointed by this same transaction, so the independent
+    /// brake exists before anything can be unpaused. Appended last for the same reason.
+    guardian: Pubkey,
 }
 
 impl Args {
-    /// 142 bytes, the layout verified against a successful on-chain `initialize`.
+    /// 206 bytes: the 142-byte prefix verified against a successful on-chain `initialize`, plus the
+    /// appended `inventory_wallet` and `guardian`.
     fn encode(&self) -> Vec<u8> {
-        let mut a = Vec::with_capacity(142);
+        let mut a = Vec::with_capacity(206);
         a.extend_from_slice(self.admin.as_ref());
         a.extend_from_slice(self.upgrade_authority_info.as_ref());
         a.extend_from_slice(self.permanent_delegate_expected.as_ref());
@@ -193,7 +202,10 @@ impl Args {
         a.extend_from_slice(&self.pyth_lazer_feed_id.to_le_bytes());
         a.extend_from_slice(&self.admin_timelock_seconds.to_le_bytes());
         a.push(self.max_guardian_count);
-        assert_eq!(a.len(), 142, "InitializeArgs is 142 bytes");
+        assert_eq!(a.len(), 142, "the InitializeArgs prefix must stay 142 bytes");
+        a.extend_from_slice(self.inventory_wallet.as_ref());
+        a.extend_from_slice(self.guardian.as_ref());
+        assert_eq!(a.len(), 206, "InitializeArgs is 206 bytes");
         a
     }
 }
@@ -250,6 +262,8 @@ impl Boot {
             pyth_lazer_feed_id: 3154,
             admin_timelock_seconds: ADMIN_TIMELOCK_SECONDS,
             max_guardian_count: 3,
+            inventory_wallet: Pubkey::new_unique(),
+            guardian: Pubkey::new_unique(),
         };
 
         Boot {
@@ -388,6 +402,7 @@ impl Boot {
                 AccountMeta::new_readonly(pk(CLASSIC_TOKEN_PROGRAM), false),
                 AccountMeta::new_readonly(pk(TOKEN_2022_PROGRAM), false),
                 AccountMeta::new_readonly(pk(ASSOCIATED_TOKEN_PROGRAM), false),
+                AccountMeta::new(guardian_pda(&self.args.guardian), false),
                 AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
             ],
             data: ix_data("initialize", &self.args.encode()),
@@ -573,8 +588,9 @@ fn initialize_writes_every_config_field_and_the_values_read_back_on_chain() {
     assert_eq!(c.instant_used_usdc, 0, "instant_used_usdc");
     assert_eq!(c.next_redeem_request_nonce, 0, "next_redeem_request_nonce");
 
-    // Governance slots: everything empty, nothing pre-armed.
-    assert_eq!(c.guardian_count, 0, "guardian_count");
+    // Governance slots: everything empty, nothing pre-armed, EXCEPT the guardian set. ROUND 8 L1-02
+    // appoints the first guardian here, so "empty" would now mean "no independent brake at go-live".
+    assert_eq!(c.guardian_count, 1, "guardian_count: the first guardian is appointed by initialize");
     assert_eq!(c.pending_removal_count, 0, "pending_removal_count");
     assert_eq!(c.next_timelock_nonce, 0, "next_timelock_nonce");
     assert_eq!(c.active_proposal_count, 0, "active_proposal_count");
@@ -602,7 +618,14 @@ fn initialize_writes_every_config_field_and_the_values_read_back_on_chain() {
     }
 
     // Phase-2 hooks and granular pauses.
-    assert_eq!(key(c.inventory_wallet), Pubkey::default(), "inventory_wallet");
+    // ROUND 8 T8-03: `inventory_wallet` is no longer a hook left at zero for a later instant setter.
+    // It is bound HERE, from the argument, and no instruction can set it afterwards. Reading back
+    // the requested key is what proves the binding is atomic with the one initialize transaction.
+    assert_eq!(
+        key(c.inventory_wallet),
+        b.args.inventory_wallet,
+        "inventory_wallet must be the argument, bound atomically by initialize"
+    );
     assert_eq!(key(c.por_feed), Pubkey::default(), "por_feed");
     assert_eq!(c.por_max_staleness_seconds, 0, "por_max_staleness_seconds");
     assert!(!c.por_enforced, "por_enforced");
@@ -627,21 +650,51 @@ fn initialize_writes_every_config_field_and_the_values_read_back_on_chain() {
 }
 
 #[test]
-fn a_fresh_deploy_is_paused_with_mint_and_redemptions_closed() {
+fn a_fresh_deploy_is_paused_with_mint_and_redemptions_already_open() {
+    // ROUND 8 launch posture, decided 2026-08-09. The two switches ship OPEN so that no base setting
+    // costs a 24h wait during the ceremony. THE PAUSE is what holds the launch, and it is the one
+    // assertion here whose inversion would put the protocol live at block zero against oracle bounds
+    // nobody validated. The pair of open switches is not the same thing as a live protocol, and this
+    // test asserts exactly that distinction: open, and paused.
+    //
+    // The compensating control is on the OTHER side, in `unpause`: it now demands an active guardian
+    // distinct from the admin, so the transition to live cannot happen before the independent brake
+    // is installed. `guardian_count = 0` here is what makes that requirement bite.
     let mut b = Boot::new();
     expect_ok(b.run(), "initialize");
     let c = b.config();
 
-    // Each of these is a one-line assignment whose inversion is invisible to a unit test and would
-    // put the protocol LIVE at block zero against oracle bounds nobody validated.
     assert!(c.paused, "a fresh deploy must be PAUSED");
     assert!(
-        !c.redemptions_enabled,
-        "public direct redeem must be CLOSED at launch"
+        c.redemptions_enabled,
+        "round 8 posture: public direct redeem ships OPEN"
     );
     assert!(
-        !c.public_mint_enabled,
-        "the public mint must be CLOSED at launch"
+        c.public_mint_enabled,
+        "round 8 posture: the public mint ships OPEN"
+    );
+    // ROUND 8 L1-02. ONE guardian, appointed by this same transaction. It used to be zero, and
+    // `add_guardian` was admin-only, so the "independent brake" `unpause` demands could be minted by
+    // the very key it exists to restrain. Anchoring it here puts it in the authenticated ceremony
+    // artifact instead.
+    assert_eq!(
+        c.guardian_count, 1,
+        "initialize must appoint the first guardian in the same authenticated transaction"
+    );
+}
+
+#[test]
+fn initialize_refuses_a_zero_inventory_wallet() {
+    // ROUND 8 T8-03. The destination of the pre-mint is now an argument with no later setter, so the
+    // ONE transaction that writes it has to refuse the empty value. Without this check a ceremony
+    // that forgot the field would bind the pre-mint to the default pubkey permanently, and the only
+    // repair would be a 24h timelocked change.
+    let mut b = Boot::new();
+    b.args.inventory_wallet = Pubkey::default();
+    expect_error(
+        b.run(),
+        E_INVENTORY_WALLET_NOT_SET,
+        "initialize with a zero inventory wallet",
     );
 }
 

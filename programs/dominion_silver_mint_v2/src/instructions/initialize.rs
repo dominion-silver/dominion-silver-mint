@@ -31,9 +31,57 @@ pub struct InitializeArgs {
     // Optional overrides (else defaults)
     pub admin_timelock_seconds: u32, // default 86400, bounds [86400, 604800] (24h..7d)
     pub max_guardian_count: u8,      // default 3
+
+    /// ROUND 8 T8-03, option A. The pre-mint DESTINATION, bound ATOMICALLY with the rest of the
+    /// configuration, and the instant setter that used to bind it is DELETED.
+    ///
+    /// The round-7 shape kept a one-shot instant binding on the argument that with the field unset
+    /// there was "nothing to steal". That argument was wrong, and the refutation is clean: compromise
+    /// the Ops key DURING the ceremony, BEFORE the legitimate binding. The attacker binds their own
+    /// wallet, unpauses, and issues up to the whole hard cap into their ATA, with no delay and no
+    /// guardian veto. It confused supply already minted with issuance power still available.
+    ///
+    /// Appended LAST, so the 142-byte prefix of the previous layout is untouched and the only
+    /// difference on the wire is 32 more bytes.
+    pub inventory_wallet: Pubkey,
+
+    /// ROUND 8 L1-02. The FIRST guardian, appointed in this transaction.
+    ///
+    /// WHY IT IS AN ARGUMENT AND NOT A LATER CALL. `unpause` demands an active GuardianAccount whose
+    /// key differs from the admin, and that closes the two syntactic holes (no guardian at all, and a
+    /// guardian that IS the admin). It does not establish that an independent brake exists, because
+    /// `add_guardian` was admin-only: a compromised Ops could mint its own guardian keys, fill the
+    /// slots, present one to `unpause` and hold every power the timelocks assume somebody else holds.
+    /// A second keypair created by Ops is not independence.
+    ///
+    /// No on-chain check can PROVE independence. What this moves is the trust boundary. Binding the
+    /// first guardian here puts it in the same authenticated transaction as `config.admin`, under the
+    /// DOM-001 chain, inside the ceremony artifact that is reviewed and diffed before it is signed.
+    /// It becomes evidence somebody audits, instead of a call Ops can make later and alone. Every
+    /// LATER appointment additionally requires the named key to sign (`add_guardian`), so the set can
+    /// never grow without the consent of the key being added.
+    ///
+    /// Validated non-default and distinct from `admin`: a zero would leave `guardian_count = 1` with
+    /// no usable brake, and an admin-held slot is a brake wired to the same lever.
+    ///
+    /// Appended LAST for the same reason as the field above.
+    pub guardian: Pubkey,
 }
 
+/// EVERY LARGE ACCOUNT HERE IS BOXED, and that is load-bearing rather than stylistic.
+///
+/// ROUND 8 L1-02. Adding `first_guardian` pushed `try_accounts` past the 4KB BPF stack frame:
+/// `Account<'info, T>` holds the deserialized `T` INLINE, and `ConfigAccount` alone is 800 bytes.
+/// `cargo build-sbf` reported "Stack offset of 4112 exceeded max offset of 4096 by 16 bytes" and
+/// then EXITED 0. The overflow silently zeroed 16 bytes of a neighbouring account, so the SILV mint
+/// authority read back as the right key with a hole in the middle and `initialize` failed with
+/// SilvMintAuthorityMismatch: a correct check reporting a corrupted input.
+///
+/// The 16 corrupted bytes and the "by 16 bytes" in the warning are the same 16 bytes. Boxing moves
+/// the payloads to the heap. `tools/state-harness/run.sh` now FAILS on that message, because a
+/// warning that exits 0 is a warning nobody reads.
 #[derive(Accounts)]
+#[instruction(args: InitializeArgs)]
 pub struct Initialize<'info> {
     #[account(
         init,
@@ -42,7 +90,7 @@ pub struct Initialize<'info> {
         seeds = [CONFIG_SEED],
         bump,
     )]
-    pub config: Account<'info, ConfigAccount>,
+    pub config: Box<Account<'info, ConfigAccount>>,
 
     #[account(mut)]
     pub deployer: Signer<'info>,
@@ -63,7 +111,7 @@ pub struct Initialize<'info> {
     )]
     pub dominion_program: Program<'info, crate::program::DominionSilverMint>,
 
-    pub program_data: Account<'info, ProgramData>,
+    pub program_data: Box<Account<'info, ProgramData>>,
 
     // Treasury PDA (authority for the USDC ATA we create below).
     /// CHECK: derived deterministically; signs USDC transfer out via seeds.
@@ -72,11 +120,11 @@ pub struct Initialize<'info> {
 
     // USDC mint (classic SPL Token).
     #[account(mint::token_program = classic_token_program)]
-    pub usdc_mint: Account<'info, ClassicMint>,
+    pub usdc_mint: Box<Account<'info, ClassicMint>>,
 
     // SILV mint (SPL Token-2022) - already created with PermanentDelegate + metadata.
     #[account(mint::token_program = token_2022_program)]
-    pub silv_mint: InterfaceAccount<'info, InterfaceMint>,
+    pub silv_mint: Box<InterfaceAccount<'info, InterfaceMint>>,
 
     // Treasury USDC ATA, owned by treasury_pda.
     //
@@ -92,11 +140,24 @@ pub struct Initialize<'info> {
         associated_token::authority = treasury_pda,
         associated_token::token_program = classic_token_program,
     )]
-    pub usdc_treasury: Account<'info, TokenAccount>,
+    pub usdc_treasury: Box<Account<'info, TokenAccount>>,
 
     pub classic_token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
+    /// ROUND 8 L1-02. The FIRST guardian's account, created here so the independent brake exists in
+    /// the same authenticated transaction as `config.admin` rather than in a later admin-only call.
+    /// The seed is `args.guardian`, so the account address is a function of the argument and cannot
+    /// be pointed at some other key.
+    #[account(
+        init,
+        payer = deployer,
+        space = GuardianAccount::SIZE,
+        seeds = [GUARDIAN_SEED, args.guardian.as_ref()],
+        bump,
+    )]
+    pub first_guardian: Box<Account<'info, GuardianAccount>>,
+
     pub system_program: Program<'info, System>,
 }
 
@@ -326,7 +387,11 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.max_silv_supply = DEFAULT_MAX_SILV_SUPPLY;
     config.treasury_min_float_usdc = DEFAULT_TREASURY_MIN_FLOAT_USDC;
     // Public direct redeem is CLOSED at launch: users exit by selling on the DEX.
-    config.redemptions_enabled = false;
+    // ROUND 8, launch posture decided by Thomas 2026-08-09: mint AND redeem OPEN at initialize, so
+    // no base setting costs a 24h wait during the ceremony. Closing stays instant (the emergency
+    // direction); re-opening after a close goes through the timelocked SetRedeemLimits, which is the
+    // same asymmetry the public mint already has.
+    config.redemptions_enabled = true;
     config.large_redeem_threshold_usdc = DEFAULT_LARGE_REDEEM_THRESHOLD_USDC;
     config.instant_redeem_budget_usdc = DEFAULT_INSTANT_REDEEM_BUDGET_USDC;
     config.instant_redeem_window_seconds = DEFAULT_INSTANT_REDEEM_WINDOW_SECONDS;
@@ -337,7 +402,29 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
 
     config.admin_timelock_seconds = admin_timelock;
     config.max_guardian_count = max_guardians;
-    config.guardian_count = 0;
+    // ROUND 8 L1-02. The first guardian is appointed HERE, in the DOM-001-authenticated transaction,
+    // so the independent brake exists before anything can be unpaused and lands in the ceremony
+    // artifact that gets reviewed. It used to be 0, and `add_guardian` was admin-only, which let a
+    // compromised Ops appoint its own keys later and satisfy `unpause` with a brake it controlled.
+    require!(
+        args.guardian != Pubkey::default(),
+        DominionError::NoActiveGuardian
+    );
+    // The same independence rule `unpause` enforces, applied at the only moment the pair is chosen
+    // together. Refusing it here means the state `unpause` rejects can never be reached at all.
+    require!(
+        args.guardian != args.admin,
+        DominionError::GuardianNotIndependent
+    );
+    let now = Clock::get()?.unix_timestamp;
+    let first_guardian = &mut ctx.accounts.first_guardian;
+    first_guardian.guardian = args.guardian;
+    first_guardian.added_at = now;
+    first_guardian.cooldown_until = 0;
+    first_guardian.pending_removal_at = 0;
+    first_guardian.self_cancel_used = false;
+    first_guardian.version = GUARDIAN_ACCOUNT_VERSION;
+    config.guardian_count = 1;
 
     config.mint_paused_until = 0;
     // A fresh deploy starts PAUSED: the operating oracle bounds MUST be set from live SILV data and
@@ -360,9 +447,14 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.pending_admin_eta = 0;
     config.pending_max_supply_nonce = None;
     config.pending_redeem_limits_nonce = None;
-    // Inventory wallet is set via set_inventory_wallet before the first pre-mint.
-    config.inventory_wallet = Pubkey::default();
-    config.public_mint_enabled = DEFAULT_PUBLIC_MINT_ENABLED;
+    // ROUND 8 T8-03. Bound here, once, atomically. There is no instruction that can set this from
+    // the default afterwards: the only remaining writer is the 24h-timelocked change.
+    require!(
+        args.inventory_wallet != Pubkey::default(),
+        DominionError::InventoryWalletNotSet
+    );
+    config.inventory_wallet = args.inventory_wallet;
+    config.public_mint_enabled = true;
     // KYC gate: on-chain but DORMANT. `kyc_operator` unset is what BLOCKS enabling: set_kyc_scope
     // refuses to arm with no attestor, since a gate that can approve nobody locks out every holder.
     config.kyc_operator = Pubkey::default();

@@ -45,14 +45,28 @@ import {
 // instead of falling back to the devnet one (audit S-01, P0).
 const CLUSTER: ClusterContext = resolveCluster();
 const RPC = CLUSTER.rpc;
-// Module scope, not main(): the `new PublicKey` below runs first and would crash the import instead.
-if (!process.env.DOMINION_PROGRAM_ID) {
+// ROUND 8 L1-01. The demand for DOMINION_PROGRAM_ID is now conditional on this file being the
+// ENTRYPOINT, and `main()` at the bottom is guarded the same way.
+//
+// It used to be unconditional at module scope, with a comment explaining that the `new PublicKey`
+// below would otherwise crash the import. That was right about the crash and wrong about the fix:
+// the ceremony's argument builder lives in this file, so its acceptance test has to import it, and a
+// module that refuses to load cannot be tested. `test-upgrade-gate.ts` needed the same guard on
+// `upgrade-program.ts` for the same reason, and the classification gate is what found it there.
+//
+// The loud failure is KEPT for anyone who runs T1: a placeholder id that silently pointed the hostile
+// cases at the wrong program would be far worse than a crash.
+const IS_ENTRYPOINT = require.main === module;
+if (IS_ENTRYPOINT && !process.env.DOMINION_PROGRAM_ID) {
   throw new Error(
     "set DOMINION_PROGRAM_ID to the freshly deployed program id.\n" +
       "T1 must run against a deployed but NOT YET INITIALIZED program.",
   );
 }
-const PROGRAM_ID = new PublicKey(process.env.DOMINION_PROGRAM_ID);
+// On the import path nothing reads this: every use is inside `main()` or the cases it drives.
+const PROGRAM_ID = process.env.DOMINION_PROGRAM_ID
+  ? new PublicKey(process.env.DOMINION_PROGRAM_ID)
+  : PublicKey.default;
 const BPF_LOADER = new PublicKey("BPFLoaderUpgradeab1e11111111111111111111111");
 
 let pass = 0;
@@ -68,6 +82,235 @@ function loadKp(p: string): Keypair {
     Uint8Array.from(JSON.parse(fs.readFileSync(p, "utf8"))),
   );
 }
+/**
+ * ROUND 8 L1-01. The ceremony's `InitializeArgs`, built from config/mainnet-authorities.json.
+ *
+ * EXTRACTED AND EXPORTED because this is the function that actually initialises mainnet, and it was
+ * silently wrong. `inventory_wallet` became a required argument of `initialize` in round 8 and this
+ * builder never read it. Anchor's client coder does not refuse a missing field: it encodes the
+ * absent Pubkey as 32 zero bytes, so the transaction is well-formed, reaches the program, and reverts
+ * InventoryWalletNotSet AFTER the ceremony has already created the real Token-2022 mint. The runbook
+ * says a green T1 IS the mainnet initialisation and says not to edit this script, so the operator had
+ * no way out.
+ *
+ * It is a pure function of the manifest and four keys so that
+ * `scripts/test-t1-initialize-args.ts` can call THIS code, encode it with the real IDL coder and read
+ * the bytes back. A test that rebuilt the arg list itself would have agreed with the defect.
+ *
+ * `devnetFallback` is the local dev keypair: on devnet and localnet it stands in for every ceremony
+ * authority, which is what makes T1 runnable there at all. On any other cluster a missing authority
+ * throws rather than falling back.
+ */
+export interface T1InitializeArgs {
+  admin: PublicKey;
+  upgradeAuthorityInfo: PublicKey;
+  permanentDelegateExpected: PublicKey;
+  freezeAuthorityExpected: PublicKey;
+  complianceMode: boolean;
+  premiumBpsMint: number;
+  premiumBpsRedeem: number;
+  adminTimelockSeconds: number;
+  maxGuardianCount: number;
+  pythLazerFeedId: number;
+  inventoryWallet: PublicKey;
+  guardian: PublicKey;
+}
+
+/**
+ * Must this run REFUSE because a pre-generated SILV mint exists but was not passed in?
+ *
+ * Pure and exported so it can be proven, because it cannot be exercised on a cluster: on devnet an
+ * earlier and more fundamental refusal (the config PDA already exists) fires first, and on mainnet it
+ * will only ever run once. A guard that can only be tested by doing the thing it guards is a guard
+ * nobody has tested.
+ *
+ * The refusal it drives: once an address is pre-generated it gets announced, and a forgotten export
+ * would ship the token at a different address than the one buyers were told.
+ */
+export function preGeneratedMintConflict(
+  envValue: string | undefined,
+  defaultFileExists: boolean,
+): boolean {
+  return !envValue && defaultFileExists;
+}
+
+/**
+ * The announced SILV address, read from the manifest.
+ *
+ * Exported and used by the run itself so the TEST drives the same key path the ceremony does. Written
+ * after a review pass measured the alternative: with the path inlined at the call site, a
+ * one-character typo in `pregenerated_mint` left the whole suite green and the typecheck clean, so the
+ * pure function was proven and the code that actually runs on mainnet was not.
+ */
+export function readPinnedMint(manifest: Record<string, unknown>): string | undefined {
+  const ceremony = manifest.mint_creation_ceremony as Record<string, unknown> | undefined;
+  const pinned = ceremony?.pregenerated_mint;
+  return typeof pinned === "string" && pinned.length > 0 ? pinned : undefined;
+}
+
+/**
+ * Is the (cluster, supplied keypair, pinned address) triple allowed to create the token?
+ *
+ * Returns null to proceed, otherwise the reason to refuse.
+ *
+ * THREE WAYS TO SHIP THE TOKEN AT AN ADDRESS NOBODY WAS TOLD ABOUT, and this closes the two that
+ * survived the first version:
+ *
+ *  1. A FORGOTTEN export. `preGeneratedMintConflict` above catches it, but only by looking for one
+ *     literal path under `os.homedir()`. A different $HOME (sudo, a second operator account, a
+ *     re-imaged machine), the key on removable media, or the operator having simply moved the file,
+ *     and that guard sees nothing and `Keypair.generate()` runs. So: ON MAINNET, once an address is
+ *     pinned, a missing keypair is FATAL here too, and this check does not care where the file is.
+ *     The A-30 fresh-keypair default is a legitimate path only while nothing is pinned; the moment an
+ *     address is announced it stops being one.
+ *  2. A WRONG export: a stale path, a half-finished copy, or the retired `4vdwEdyr` keypair that sits
+ *     deliberately next to the live one, which makes this a one-character typo.
+ *  3. Nothing pinned at all, so there is nothing to compare against. On mainnet that is now itself a
+ *     refusal, because a manifest that lost the field is indistinguishable from one that never had it.
+ *
+ * DEVNET IS DELIBERATELY DIFFERENT: it warns and proceeds. Rehearsals are the whole point of devnet
+ * and pass B needs a fresh program id, so T1 runs there again before launch. Refusing would leave two
+ * bad options in launch week: move aside the very file the mainnet ceremony depends on, or spend the
+ * announced keypair on devnet.
+ */
+export function mintKeypairRefusal(
+  cluster: string,
+  suppliedPubkey: string | undefined,
+  pinned: string | undefined,
+): string | null {
+  // DEFAULT-DENY, so the carve-out is the closed list and not the strict path. `classifyCluster` only
+  // ever returns one of three strings, and it already maps anything unrecognised to "mainnet-beta", so
+  // this can differ only through a caller bug. When that happens the safe direction is to demand the
+  // announced keypair, not to wave a rehearsal carve-out at what might be mainnet.
+  const mainnet = cluster !== "devnet" && cluster !== "localnet";
+
+  if (mainnet && !pinned) {
+    return (
+      `no announced SILV address is pinned in config/mainnet-authorities.json\n` +
+      `(mint_creation_ceremony.pregenerated_mint), and this is mainnet. That field is what this run\n` +
+      `compares the mint keypair against, so without it the token could be created at any address.\n` +
+      `The manifest is hand-edited during the ceremony: check the field was not lost in an edit.`
+    );
+  }
+
+  if (mainnet && !suppliedPubkey) {
+    return (
+      `DOMINION_SILV_MINT_KEYPAIR is not set, and this is mainnet with ${pinned}\n` +
+      `pinned as the announced SILV address. This run would call Keypair.generate() and the token\n` +
+      `would be created at a random address, permanently, while buyers hold the announced one.\n` +
+      `  export DOMINION_SILV_MINT_KEYPAIR=<path to the keypair for ${pinned}>\n` +
+      `The usual path is ~/.config/solana/dominion-silv-mint.json, but this refusal does not depend\n` +
+      `on that: point it wherever the key actually is.`
+    );
+  }
+
+  // Off mainnet, everything that reaches this point is allowed and the caller warns instead. Both
+  // refusals above already returned, so on mainnet the only case left is (both defined, and equal or
+  // not); the guard below is the ONE line that decides mismatch.
+  if (!mainnet) return null;
+  if (!suppliedPubkey || !pinned || suppliedPubkey === pinned) return null;
+
+  return (
+    `the supplied SILV mint keypair derives to ${suppliedPubkey}, but the announced address pinned in\n` +
+    `config/mainnet-authorities.json (mint_creation_ceremony.pregenerated_mint) is ${pinned}.\n` +
+    `Creating the token here would put it at an address nobody has been told about. Either point\n` +
+    `DOMINION_SILV_MINT_KEYPAIR at the keypair for the pinned address, or change the pinned address\n` +
+    `FIRST and re-announce it.`
+  );
+}
+
+export function buildT1InitializeArgs(
+  manifest: Record<string, unknown>,
+  cluster: string,
+  devnetFallback: PublicKey,
+  upgradeAuthorityInfo: PublicKey,
+): T1InitializeArgs {
+  const posture = ((manifest.launch_posture ?? {}) as Record<string, number>);
+  const required = (field: string): number => {
+    const v = posture[field];
+    if (typeof v !== "number") {
+      throw new Error(
+        `launch_posture.${field} missing or not a number in config/mainnet-authorities.json`,
+      );
+    }
+    return v;
+  };
+  const auths = (manifest.authorities ?? {}) as Record<
+    string,
+    { pubkey?: string } | undefined
+  >;
+  const authority = (role: string): PublicKey => {
+    if (cluster === "devnet" || cluster === "localnet") return devnetFallback;
+    const pk = auths[role]?.pubkey;
+    if (!pk) {
+      throw new Error(
+        `authorities.${role}.pubkey missing from config/mainnet-authorities.json, and this is ` +
+          `${cluster}. Refusing to initialise a real deployment with the dev keypair.`,
+      );
+    }
+    return new PublicKey(pk);
+  };
+  // The pre-mint destination. NO devnet fallback and no default: this field is bound atomically and
+  // for good, the only later writer is the 24h timelock, and a zero here is refused on chain. A
+  // ceremony that cannot name it must stop before it creates the mint, not after.
+  const invRaw = auths.inventory_wallet?.pubkey;
+  if (!invRaw) {
+    throw new Error(
+      "authorities.inventory_wallet.pubkey is missing from config/mainnet-authorities.json. " +
+        "initialize binds the pre-mint destination atomically and nothing can set it afterwards, " +
+        "so there is no value to fall back to. Fill it in before running T1.",
+    );
+  }
+  const inventoryWallet = new PublicKey(invRaw);
+  if (inventoryWallet.equals(PublicKey.default)) {
+    throw new Error("authorities.inventory_wallet.pubkey is the zero pubkey, which initialize refuses.");
+  }
+
+  const guardianRaw = auths.guardian?.pubkey;
+  if (!guardianRaw) {
+    throw new Error(
+      "authorities.guardian.pubkey is missing from config/mainnet-authorities.json. ROUND 8 L1-02: " +
+        "initialize appoints the first guardian, so the independent brake is part of the ceremony " +
+        "artifact rather than a later admin-only call. There is nothing to fall back to.",
+    );
+  }
+  const firstGuardian = new PublicKey(guardianRaw);
+  const compliance = authority("compliance");
+  if (firstGuardian.equals(PublicKey.default)) {
+    throw new Error("authorities.guardian.pubkey is the zero pubkey, which initialize refuses.");
+  }
+  return {
+    // NOT the signer. `initialize` writes `args.admin` VERBATIM with only a non-zero check, and
+    // DOM-001 binds the SIGNER to the BPF upgrade authority, not this field. The signer here would
+    // leave the deployer unilateral admin with no transfer step anywhere in the path.
+    admin: authority("ops_admin"),
+    // The SIGNER: informational, an immutable launch record of the upgrade trust root.
+    upgradeAuthorityInfo,
+    permanentDelegateExpected: compliance,
+    freezeAuthorityExpected: compliance,
+    complianceMode: false,
+    premiumBpsMint: required("premium_bps_mint"),
+    premiumBpsRedeem: required("premium_bps_redeem"),
+    adminTimelockSeconds: required("admin_timelock_seconds"),
+    maxGuardianCount: required("max_guardian_count"),
+    pythLazerFeedId: required("pyth_lazer_feed_id"),
+    inventoryWallet,
+    // ROUND 8 L1-02. The FIRST guardian, appointed by initialize itself. Same treatment as the
+    // inventory wallet: no devnet fallback and no default, because the whole point is that this key
+    // is chosen in the reviewed ceremony artifact and not by a later admin-only call.
+    guardian: firstGuardian,
+  };
+}
+
+/** The launch posture `initialize` writes, as the ceremony must read it back. Exported so T1 and its
+ *  test cannot drift from each other: round 8 opened both switches, and T1 still counted the closed
+ *  values as success, which would have reported two failures after an irreversible initialisation. */
+export const EXPECTED_POST_INITIALIZE = {
+  paused: true,
+  publicMintEnabled: true,
+  redemptionsEnabled: true,
+} as const;
+
 function programData(id: PublicKey): PublicKey {
   return PublicKey.findProgramAddressSync([id.toBytes()], BPF_LOADER)[0];
 }
@@ -199,57 +442,122 @@ async function main() {
   }
   console.log("  config PDA does not exist yet: the bootstrap window is open.\n");
 
+  // THE FOOTGUN THIS CLOSES. Once an address has been pre-generated it is announced: pre-validated on
+  // an aggregator, pasted into a listing form, put in front of buyers. If the ceremony then runs
+  // WITHOUT the env var, this script generates a fresh keypair and the token ships at a DIFFERENT
+  // address than the one announced. Nothing later in the run would notice, because every check is
+  // internally consistent with whichever mint it created.
+  // So: if the default pre-generation path exists and the variable is unset, REFUSE. A forgotten
+  // export must not be able to silently rename the token.
+  const defaultPreGenPath = path.join(os.homedir(), ".config", "solana", "dominion-silv-mint.json");
+  if (
+    preGeneratedMintConflict(process.env.DOMINION_SILV_MINT_KEYPAIR, fs.existsSync(defaultPreGenPath))
+  ) {
+    // Read defensively: a corrupt file here used to throw the same bare, unnamed error the env-var
+    // path was fixed for, in the middle of a refusal that is trying to explain something else.
+    let announced: string;
+    try {
+      announced = Keypair.fromSecretKey(
+        new Uint8Array(JSON.parse(fs.readFileSync(defaultPreGenPath, "utf8"))),
+      ).publicKey.toBase58();
+    } catch (e) {
+      announced = `UNREADABLE (${(e as Error).message})`;
+    }
+    throw new Error(
+      `a pre-generated SILV mint keypair exists at ${defaultPreGenPath}\n` +
+        `  address: ${announced}\n` +
+        `but DOMINION_SILV_MINT_KEYPAIR is NOT set, so this run would create a DIFFERENT mint and the\n` +
+        `token would ship at an address nobody was told about. Refusing.\n` +
+        `  On mainnet:  DOMINION_SILV_MINT_KEYPAIR=${defaultPreGenPath} ...\n` +
+        // NOT "move the file aside" as the only alternative: on this cluster that would mean moving the
+        // live announced keypair out of the way for a rehearsal, which is the wrong instinct to teach.
+        // A retired keypair kept beside it is exactly what a rehearsal should spend.
+        `  On a rehearsal cluster: point it at a RETIRED keypair instead, e.g.\n` +
+        `      ${path.join(os.homedir(), ".config", "solana", "dominion-silv-mint-RETIRED-4vdwEdyr.json")}\n` +
+        `    so the announced address is not spent on devnet. A mismatch is allowed off mainnet.\n` +
+        `  Only if that address was never announced and you mean to abandon it, move the file aside.`,
+    );
+  }
+
+  // AND THE OTHER HALF OF THE SAME FOOTGUN: an export that points at the WRONG keypair. The refusal
+  // above only fires when the variable is UNSET, so a stale path, a second keypair on the machine or
+  // the retired one kept deliberately beside the live one would all sail through it and rename the
+  // token just as effectively. Compared against the address pinned in the manifest, so the check is
+  // against what was ANNOUNCED rather than against whatever happens to be on disk. Placed here with
+  // the other early refusals, before any lamport moves and before the mint is created.
+  //
+  // LOADED ONCE, HERE, and carried to the creation call. It used to be read a second time down at the
+  // creation site, with the attacker-funding transaction in between: the bytes that got signed were
+  // not the bytes that were checked.
+  const suppliedMintPath = process.env.DOMINION_SILV_MINT_KEYPAIR || undefined;
+  let preGeneratedMint: Keypair | undefined;
+  if (suppliedMintPath) {
+    try {
+      preGeneratedMint = Keypair.fromSecretKey(
+        new Uint8Array(JSON.parse(fs.readFileSync(suppliedMintPath, "utf8"))),
+      );
+    } catch (e) {
+      // Named, because the raw ENOENT or "bad secret key size" says nothing about WHICH variable is
+      // wrong, and this is read in the middle of a one-shot ceremony.
+      throw new Error(
+        `DOMINION_SILV_MINT_KEYPAIR=${suppliedMintPath} could not be read as a Solana keypair: ` +
+          `${(e as Error).message}\n` +
+          `Expected the 64-byte JSON array that solana-keygen writes.`,
+      );
+    }
+  }
+  {
+    const pinned = readPinnedMint(mainnetConfig() as Record<string, unknown>);
+    const suppliedPubkey = preGeneratedMint?.publicKey.toBase58();
+    const why = mintKeypairRefusal(CLUSTER.cluster, suppliedPubkey, pinned);
+    if (why) throw new Error(why);
+    // ALWAYS SAY WHICH BRANCH RAN. The first version printed only on success, so a skipped check and
+    // a check that does not exist looked identical in the scrollback, which is the one place this gets
+    // read from.
+    if (!pinned) {
+      console.log("  SILV mint: nothing pinned in the manifest, no announced address to compare");
+    } else if (!suppliedPubkey) {
+      console.log(`  SILV mint: ${pinned} pinned, no keypair supplied (fresh keypair, ${CLUSTER.cluster})`);
+    } else if (suppliedPubkey === pinned) {
+      console.log(`  SILV mint address matches the pinned, announced one: ${pinned}`);
+      // The MISMATCH case warns. So must this one, off mainnet: creating the announced mint on a
+      // rehearsal cluster spends the address for good, and this run would then be the only reason the
+      // real ceremony fails with "ALREADY EXISTS". A rehearsal should spend a retired keypair.
+      if (CLUSTER.cluster !== "mainnet-beta") {
+        console.log(
+          `  WARNING: that is the ANNOUNCED mainnet key, and this is ${CLUSTER.cluster}. Creating it\n` +
+            `  here burns the address: the real ceremony would then refuse it as already existing.\n` +
+            `  For a rehearsal, point DOMINION_SILV_MINT_KEYPAIR at a retired keypair instead.`,
+        );
+      }
+    } else {
+      console.log(
+        `  WARNING: supplied SILV mint ${suppliedPubkey} is NOT the pinned ${pinned}.\n` +
+          `  Allowed because this is ${CLUSTER.cluster}. On mainnet this is a refusal.`,
+      );
+    }
+  }
+
   // Resolved and VALIDATED here, before a single lamport moves: this file is hand-edited during the
   // ceremony, so a missing field must throw before the attacker is funded and the real SILV mint created,
   // or the retry repeats the loss. The args are READ, never retyped as literals: the literals here once
   // said 150/200 bps against a source of truth of 100/150, and a premium fix costs a 24h proposal each.
-  const posture = (mainnetConfig().launch_posture ?? {}) as Record<string, number>;
-  function required(field: string): number {
-    const v = posture[field];
-    if (typeof v !== "number") {
-      throw new Error(
-        `launch_posture.${field} missing or not a number in config/mainnet-authorities.json`,
-      );
-    }
-    return v;
-  }
-  const CEREMONY = {
-    premiumBpsMint: required("premium_bps_mint"),
-    premiumBpsRedeem: required("premium_bps_redeem"),
-    adminTimelockSeconds: required("admin_timelock_seconds"),
-    maxGuardianCount: required("max_guardian_count"),
-    pythLazerFeedId: required("pyth_lazer_feed_id"),
-  };
+  // ROUND 8 L1-01: the args come from the ONE exported builder above, so this script and its offline
+  // test exercise the same code. It throws rather than defaulting when the manifest is incomplete.
+  const CEREMONY_ARGS = buildT1InitializeArgs(
+    mainnetConfig() as Record<string, unknown>,
+    CLUSTER.cluster,
+    authority.publicKey,
+    authority.publicKey,
+  );
+  const COMPLIANCE = CEREMONY_ARGS.permanentDelegateExpected;
+  const CEREMONY_ADMIN = CEREMONY_ARGS.admin;
   console.log(
     `  ceremony args from config/mainnet-authorities.json: ` +
-      `mint=${CEREMONY.premiumBpsMint}bps redeem=${CEREMONY.premiumBpsRedeem}bps ` +
-      `timelock=${CEREMONY.adminTimelockSeconds}s guardians<=${CEREMONY.maxGuardianCount} ` +
-      `feed=${CEREMONY.pythLazerFeedId}`,
+      `mint=${CEREMONY_ARGS.premiumBpsMint}bps redeem=${CEREMONY_ARGS.premiumBpsRedeem}bps ` +
+      `timelock=${CEREMONY_ARGS.adminTimelockSeconds}s guardians<=${CEREMONY_ARGS.maxGuardianCount} ` +
+      `feed=${CEREMONY_ARGS.pythLazerFeedId} inventory=${CEREMONY_ARGS.inventoryWallet.toBase58()}`,
   );
-
-  // On a real cluster the authorities are the Squads vaults from the source of truth, not the local
-  // dev keypair. On devnet the dev keypair IS the authority, which is what makes T1 runnable there.
-  const auths = (mainnetConfig().authorities ?? {}) as Record<
-    string,
-    { pubkey?: string } | undefined
-  >;
-  function ceremonyAuthority(role: string, devnetFallback: PublicKey): PublicKey {
-    if (CLUSTER.cluster === "devnet" || CLUSTER.cluster === "localnet") return devnetFallback;
-    const pk = auths[role]?.pubkey;
-    if (!pk) {
-      throw new Error(
-        `authorities.${role}.pubkey missing from config/mainnet-authorities.json, and this is ` +
-          `${CLUSTER.cluster}. Refusing to initialise a real deployment with the dev keypair.`,
-      );
-    }
-    return new PublicKey(pk);
-  }
-  const COMPLIANCE = ceremonyAuthority("compliance", authority.publicKey);
-  // NOT the signer. `initialize` writes `args.admin` VERBATIM (initialize.rs:387) with only a non-zero
-  // check, and DOM-001 binds the SIGNER to the BPF upgrade authority (initialize.rs:162), not this field.
-  // The signer here leaves the deployer unilateral admin with no transfer step, and breaks step 7, where
-  // the Ops vault proposes opening the public mint under `has_one = admin`.
-  const CEREMONY_ADMIN = ceremonyAuthority("ops_admin", authority.publicKey);
 
 
   // ---- the attacker ----
@@ -313,7 +621,36 @@ async function main() {
     );
 
   // Created by the AUTHORITY so case 1 is the worst case: the attacker points at the real, valid mint.
-  const silvMint = Keypair.generate();
+  //
+  // DOMINION_SILV_MINT_KEYPAIR is an OPT-IN, added 2026-08-11 so the SILV address can be known and
+  // pre-validated (Jupiter, pools, listings) BEFORE the ceremony rather than first appearing in the
+  // ceremony's own scrollback. Unset, the behaviour is exactly what it was and audit A-30 holds: a
+  // fresh keypair, never persisted.
+  //
+  // WHAT A-30 IS ABOUT, so the trade is made with open eyes. After creation the mint keypair has NO
+  // power over the token: the mint authority is a program PDA, freeze and permanent delegate are the
+  // compliance vault. Persisting it therefore buys nothing operationally and only adds a secret to
+  // lose, which is why the default is to discard it.
+  // WHAT PRE-GENERATING RISKS is narrow and it is NOT a fund risk: whoever holds the secret before
+  // the ceremony can create that mint account first, which makes createSilvMintForTest fail and burns
+  // the address you already announced. Griefing the ceremony, not stealing from it. So keep the file
+  // mode 600 on the ceremony machine and delete it once the mint exists.
+  //
+  // The keypair itself was read, and checked against the pinned address, up in the early refusals. It
+  // is REUSED here rather than read again: re-reading put a network round trip between the check and
+  // the signature, so the bytes that got signed were not the bytes that were verified.
+  const silvMint = preGeneratedMint ?? Keypair.generate();
+  if (preGeneratedMint) {
+    console.log(`  SILV mint keypair supplied from ${suppliedMintPath} (pre-announced address)`);
+    const already = await conn.getAccountInfo(silvMint.publicKey);
+    if (already) {
+      throw new Error(
+        `the pre-generated SILV mint ${silvMint.publicKey.toBase58()} ALREADY EXISTS on this cluster.\n` +
+          `Creation would fail. Either this ceremony already ran, or the keypair leaked and someone\n` +
+          `created it first. Do not proceed: generate a new one and re-announce the address.`,
+      );
+    }
+  }
   console.log("  creating the real SILV mint (Token-2022 + extensions)...");
   await createSilvMintForTest(
     conn,
@@ -325,19 +662,16 @@ async function main() {
   );
   console.log("  SILV mint:", silvMint.publicKey.toBase58(), "\n");
 
-  const args = (admin: PublicKey) => ({
-    admin,
-    // The SIGNER, not `admin`: informational, but it is an immutable launch record of the upgrade trust
-    // root. The real BPF upgrade authority moves to the upgrade vault at step 12.
-    upgradeAuthorityInfo: authority.publicKey,
-    permanentDelegateExpected: COMPLIANCE,
-    freezeAuthorityExpected: COMPLIANCE,
-    complianceMode: false,
-    ...CEREMONY,
-  });
+  const args = (admin: PublicKey) => ({ ...CEREMONY_ARGS, admin });
 
   const accs = (signer: PublicKey, pd: PublicKey, prog: PublicKey) => ({
     deployer: signer,
+    // ROUND 8 L1-02: initialize creates the first GuardianAccount, so its PDA is an account of the
+    // ceremony transaction.
+    firstGuardian: PublicKey.findProgramAddressSync(
+      [Buffer.from("guardian"), CEREMONY_ARGS.guardian.toBuffer()],
+      PROGRAM_ID,
+    )[0],
     dominionProgram: prog,
     programData: pd,
     config: configPda,
@@ -511,9 +845,25 @@ async function main() {
       "the deployer must not retain unilateral admin authority",
     );
     ok("case 8: config.silvMint is the intended mint", new PublicKey(cfg.silvMint).equals(silvMint.publicKey));
-    ok("case 8: starts paused", cfg.paused === true);
-    ok("case 8: public mint closed", cfg.publicMintEnabled === false);
-    ok("case 8: redemptions closed", cfg.redemptionsEnabled === false);
+    // ROUND 8 posture. These three used to assert the CLOSED values, which the program stopped
+    // writing on 2026-08-09: a correct mainnet initialisation would have ended on two red lines,
+    // indistinguishable from a half-failed ceremony and inviting a re-run that `initialize` can never
+    // accept. Read from the shared constant so the script and its test cannot drift again.
+    ok("case 8: starts paused", cfg.paused === EXPECTED_POST_INITIALIZE.paused);
+    ok(
+      "case 8: public mint OPEN at initialize (round 8 posture)",
+      cfg.publicMintEnabled === EXPECTED_POST_INITIALIZE.publicMintEnabled,
+    );
+    ok(
+      "case 8: redemptions OPEN at initialize (round 8 posture)",
+      cfg.redemptionsEnabled === EXPECTED_POST_INITIALIZE.redemptionsEnabled,
+    );
+    // L1-01: the argument actually landed. A zero here is what the omitted field produced.
+    ok(
+      "case 8: config.inventoryWallet is the manifest's pre-mint destination",
+      new PublicKey(cfg.inventoryWallet).equals(CEREMONY_ARGS.inventoryWallet),
+      `${new PublicKey(cfg.inventoryWallet).toBase58()} (expected ${CEREMONY_ARGS.inventoryWallet.toBase58()})`,
+    );
     ok("case 8: guardian floor field present", typeof cfg.guardianCount === "number");
     ok(
       "case 8: the instant redeem WINDOW respects its floor",
@@ -567,11 +917,13 @@ async function main() {
 }
 // The sweep runs in a `finally`, not at the end of main(): the loss case is a retry after a configuration
 // error, i.e. the THROWING path, which is the one path a sweep at the end of the happy flow cannot reach.
-main()
-  .catch((e) => {
-    console.error("T1 crashed:", e);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    if (sweep) await sweep();
-  });
+if (IS_ENTRYPOINT) {
+  main()
+    .catch((e) => {
+      console.error("T1 crashed:", e);
+      process.exitCode = 1;
+    })
+    .finally(async () => {
+      if (sweep) await sweep();
+    });
+}

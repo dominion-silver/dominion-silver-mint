@@ -126,8 +126,13 @@ fn a_redeem_persists_the_feed_timestamp_and_the_same_envelope_is_then_refused() 
     assert!(silv > 0, "the seed mint issued no SILV");
     f.fund_token_account(&f.usdc_mint.clone(), &treasury_pda(), TREASURY_USDC);
 
-    // `open_redemptions` warps a day, so the envelope must be stamped AFTER it or it is stale.
-    f.open_redemptions();
+    // ROUND 8: redemptions are open from `initialize`, so the 24h warp the old opener performed is
+    // gone. The seed mint above CONSUMED the print at `ts0`, and `now_us` has microsecond resolution
+    // over a second-resolution clock, so without advancing time `ts == ts0` and the redeem below
+    // would fail on LazerReplayed rather than on the property under test. One second is the smallest
+    // move that produces a strictly newer print.
+    f.require_redemptions_open();
+    f.warp(1);
 
     let ts = f.now_us();
     let envelope = lazer_payload(ts);
@@ -171,7 +176,9 @@ fn both_sides_share_one_high_water_mark() {
     let ts0 = f.now_us();
     expect_ok(f.mint_priced(&holder, MINT_AMOUNT, &lazer_payload(ts0)), "seed mint");
     let silv = f.token_balance(&f.silv_mint.clone(), &holder.pubkey(), TOKEN_2022_PROGRAM);
-    f.open_redemptions();
+    f.require_redemptions_open();
+    // The seed mint consumed the print at `ts0`; a strictly newer one is a second away.
+    f.warp(1);
 
     let ts = f.now_us();
     let envelope = lazer_payload(ts);
@@ -258,7 +265,9 @@ fn the_redeem_side_has_the_same_floor_and_a_dust_redeem_cannot_capture_a_print()
     expect_ok(f.mint_priced(&holder, MINT_AMOUNT, &lazer_payload(ts0)), "seed mint");
     let silv = f.token_balance(&f.silv_mint.clone(), &holder.pubkey(), TOKEN_2022_PROGRAM);
     f.fund_token_account(&f.usdc_mint.clone(), &treasury_pda(), TREASURY_USDC);
-    f.open_redemptions();
+    f.require_redemptions_open();
+    // The seed mint consumed the print at `ts0`; a strictly newer one is a second away.
+    f.warp(1);
 
     let mark_before = f.config().last_used_feed_update_timestamp_us;
     let ts = f.now_us();
@@ -301,8 +310,10 @@ fn lowering_the_floor_to_zero_reopens_the_redeem_capture_too() {
     let ts0 = f.now_us();
     expect_ok(f.mint_priced(&holder, MINT_AMOUNT, &lazer_payload(ts0)), "seed mint");
     f.fund_token_account(&f.usdc_mint.clone(), &treasury_pda(), TREASURY_USDC);
-    f.open_redemptions();
+    f.require_redemptions_open();
     f.set_min_operation_usdc(0);
+    // The seed mint consumed the print at `ts0`; a strictly newer one is a second away.
+    f.warp(1);
 
     let ts = f.now_us();
     expect_ok(

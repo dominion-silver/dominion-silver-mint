@@ -26,8 +26,23 @@ export const ACTION_COST: Record<string, ActionCost> = {
   pause: "reversible",
   unpause: "reversible",
   add_guardian: "reversible",
-  set_inventory_wallet: "reversible",
-  admin_premint: "reversible", // adds supply; the cap bounds it
+  // ROUND 8 T8-03: `set_inventory_wallet` is DELETED from the program, so it is deleted here too. An
+  // action missing from this table is REFUSED, which is the behaviour we want for a name that no
+  // longer dispatches. The destination is now bound by `initialize` (irreversible, below) and the
+  // only later writer is the 24h-timelocked pair.
+  propose_set_inventory_wallet: "reversible", // a proposal can be cancelled instantly
+  execute_set_inventory_wallet: "timelocked-undo", // moving it back costs another full window
+  // REVIEW PASS 2026-08-10. This said `reversible`, "adds supply; the cap bounds it". The cap bounds
+  // the TOTAL; it is not an undo. There is NO admin burn anywhere in this program: the only burn is
+  // `silv_burn_from_user` (cpi.rs), it requires the HOLDER's signature, and it only runs inside
+  // `redeem_silv`, which pays out treasury USDC. So an over-mint cannot be undone, and the nearest
+  // thing to an undo drains the treasury. Meanwhile the tokens land in an on-curve single-signer
+  // wallet whose holder can call redeem_silv with no timelock.
+  // Classifying it `reversible` made assertReversible return before it ever read the intent list, so
+  // the ONE step that mints the entire launch supply was the only consequential step in the runbook
+  // needing no named DOMINION_INTENT. `set_max_silv_supply` is `irreversible` here on strictly weaker
+  // grounds.
+  admin_premint: "irreversible",
   propose_any: "reversible", // a proposal can be cancelled instantly
   cancel_timelocked_action: "reversible",
   cancel_guardian_removal: "reversible",
@@ -44,6 +59,17 @@ export const ACTION_COST: Record<string, ActionCost> = {
   // NOT reversible: closing a token account needs the OWNER's signature, the owner is the fee_vault PDA,
   // and this program signs no CloseAccount for it anywhere (mint_silv.rs:60). Rent locked for good.
   create_fee_vault: "irreversible",
+  // Same shape as create_fee_vault and irreversible for the same reason: the owner is a program PDA,
+  // closing a token account needs the OWNER's signature, and this program signs no CloseAccount for
+  // it anywhere. The rent is locked for good. It is normally created by `initialize`
+  // (init_if_needed), so this action exists only to create it EARLY, which is what lets the treasury
+  // be funded before the ceremony.
+  create_usdc_treasury: "irreversible",
+  // An associated token account holds only rent and can be closed by its owner. Here the owner is the
+  // ops Squads vault, so closing it costs a 3-of-5 round: slow, not impossible. Classified reversible
+  // because the point of this list is "can this be cheaply undone", and rent that a 3-of-5 can reclaim
+  // is the cheapest thing on it.
+  create_inventory_silv_ata: "reversible",
   set_fee_exempt: "reversible", // remove_fee_exempt is instant
   remove_fee_exempt: "reversible", // set_fee_exempt is instant
   set_kyc_operator: "reversible",

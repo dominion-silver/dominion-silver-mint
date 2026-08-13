@@ -112,16 +112,21 @@ pub fn validate_new_max_supply(new_max: u64, current_cap: u64, live_supply: u64)
     Ok(())
 }
 
-/// D11 (launch spec 2026-07, Codex audit P0-01): the manual redemptions switch is
-/// now FALSE-ONLY at launch. DISABLING is instant (an emergency tighten). ENABLING
-/// is BLOCKED on-chain until the Phase 1 upgrade, which re-adds the enable path
-/// behind the KYC registry + the loosen-slow redeem-limit model. Rationale: public
-/// redeem is closed at launch; if a compromised admin could re-enable redemptions
-/// instantly (and instantly loosen the instant-redeem throttles), it could redeem
-/// pre-minted SILV for treasury USDC, bypassing the 24h-timelocked withdraw path.
-/// With enabling blocked, redemptions are cryptographically off at launch, so the
-/// throttle setters are genuinely inert and the treasury can only be drawn down via
-/// the timelocked, guardian-cancellable withdraw_usdc.
+/// The manual redemptions switch is FALSE-ONLY on this lane: DISABLING is instant, ENABLING always
+/// reverts `RedemptionsEnableBlocked`. That asymmetry is the whole point and it has not moved.
+///
+/// ROUND 8 T8-08 CORRECTS WHAT THIS COMMENT USED TO CLAIM. It said redemptions were
+/// "cryptographically off at launch" and that enabling would need a Phase 1 UPGRADE. Both were
+/// false, and the second was false even when it was written: the 24h-timelocked `SetRedeemLimits`
+/// action carries `redemptions_enabled` and `execute.rs` writes it, so opening has always been a
+/// governance action and never a code change. Since the 2026-08-09 posture change `initialize` also
+/// ships the switch OPEN, so there is nothing "off" here to begin with.
+///
+/// What this refusal actually buys, stated without the overclaim: a compromised admin cannot REOPEN
+/// redemptions in one transaction after an emergency close. It must announce the reopen, wait the
+/// full 24h and survive a guardian cancel. It does NOT stop that admin from draining an already-open
+/// protocol, and it never did: the rolling budget is the only brake there, and it bounds the RATE,
+/// not the total. See `redeem_window.rs` and the D11 custody note in config/mainnet-authorities.json.
 pub fn set_redemptions_enabled_handler(ctx: Context<SetParam>, enabled: bool) -> Result<()> {
     require!(!enabled, DominionError::RedemptionsEnableBlocked);
     // NO-OP GUARD, mirroring `set_public_mint_enabled_handler`. Its absence was not cosmetic: this
@@ -282,7 +287,10 @@ pub(crate) fn validate_min_operation(current: u64, requested: u64) -> Result<()>
 /// delay UP. Fat-finger ceilings still apply. No pause interaction (only tightens
 /// safety limits, so safe regardless of pause state). Note (accepted): lengthening
 /// the window toward the 7d max is a denial-of-instant-redemption grief, not a
-/// drain; doubly moot at launch since public redeem is closed.
+/// drain. ROUND 8 T8-08: it is no longer "doubly moot because public redeem is
+/// closed". Redeem is OPEN from `initialize`, so this grief is reachable on a live
+/// protocol and the only thing standing against it is that the same guardian who
+/// can cancel a loosening can also pause.
 pub fn emergency_tighten_redeem_limits_handler(
     ctx: Context<SetParam>,
     args: RedeemLimitsArgs,

@@ -1,14 +1,17 @@
-// admin_premint + set_inventory_wallet: the launch supply model. The admin mints
-// SILV against the hard supply cap into the inventory wallet with NO USDC and NO
-// oracle, a 1:1 mint against the physical allocation the cap represents. Public
-// direct mint is closed at launch, so this is the only mint path.
-
-// ROUND 7: the redirect-then-premint pair is CLOSED. This header used to say "Phase 1 should
-// timelock the setter", and both auditors independently said phase 1 was now. Changing an
-// already-bound inventory wallet goes through propose_set_inventory_wallet + 24h + execute, so a
-// guardian sees a redirect a day before any supply can land in the new wallet. The FIRST binding is
-// still instant, deliberately: with the field unset `admin_premint` refuses, so there is nothing to
-// redirect. See set_inventory_wallet_handler below.
+// admin_premint: the launch supply model. The admin mints SILV against the hard supply cap into the
+// inventory wallet with NO USDC and NO oracle, a 1:1 mint against the physical allocation the cap
+// represents.
+//
+// ROUND 8: the redirect-then-premint pair is CLOSED, and closed by REMOVAL. The destination is an
+// argument of `initialize`, bound atomically, and the only writer afterwards is the 24h-timelocked
+// `execute_set_inventory_wallet`. The round-7 shape kept the first binding instant and was refuted:
+// compromise the Ops key during the ceremony, before the legitimate binding, and there was no delay
+// and no veto between binding your own wallet and issuing the cap into it.
+//
+// WHAT THIS DOES NOT PROTECT, and D11 in config/mainnet-authorities.json is the answer to it: tokens
+// already held by the LEGITIMATE destination. With redemptions open at launch, whoever holds that
+// key can redeem them into treasury USDC with no admin instruction and no timelock. That is a
+// custody problem, not a program one, and the decision is to pre-mint only the operational tranche.
 //
 // admin_premint still does not gate on the dormant `mint_paused` field; whoever wires it must
 // include this mint path.
@@ -104,47 +107,15 @@ pub fn premint_handler(ctx: Context<AdminPremint>, amount: u64) -> Result<()> {
     Ok(())
 }
 
-#[derive(Accounts)]
-pub struct SetInventoryWallet<'info> {
-    #[account(mut, seeds = [CONFIG_SEED], bump, has_one = admin)]
-    pub config: Account<'info, ConfigAccount>,
-    pub admin: Signer<'info>,
-}
-
-/// Admin BINDS the pre-mint destination owner, once. Required before the first `admin_premint`.
-///
-/// ROUND 7, SolidProof condition 4 and Codex condition 3. This used to be instant in both directions,
-/// which made the pair `set_inventory_wallet(attacker)` + `admin_premint(remaining headroom)` a single
-/// block with no delay and no veto. Both auditors called that untenable for mainnet while a premint
-/// capability exists. The hard cap bounds the size of the theft; it provides no window in which anyone
-/// could see it coming.
-///
-/// WHY THE FIRST BINDING STAYS INSTANT, and why that is not the same hole. The attack is a REDIRECT:
-/// it needs a wallet already bound and supply worth diverting. While the field is still the default,
-/// `admin_premint` refuses outright (`InventoryWalletNotSet`), so there is nothing to redirect and
-/// nothing to steal. Making the first bind wait 24h would add a dead day to a ceremony that moves real
-/// funds, and a longer ceremony is one with more room for mistakes. This is a deliberate deviation
-/// from the letter of the condition, and it is disclosed as one.
-pub fn set_inventory_wallet_handler(
-    ctx: Context<SetInventoryWallet>,
-    wallet: Pubkey,
-) -> Result<()> {
-    require!(
-        wallet != Pubkey::default(),
-        DominionError::InventoryWalletNotSet
-    );
-    require!(
-        ctx.accounts.config.inventory_wallet == Pubkey::default(),
-        DominionError::InventoryWalletChangeRequiresTimelock
-    );
-    let old_wallet = ctx.accounts.config.inventory_wallet;
-    ctx.accounts.config.inventory_wallet = wallet;
-    // The event is load-bearing, not decoration: an instant redirect cannot be
-    // blocked, so a monitor has to be able to alert on one it did not authorize.
-    emit!(InventoryWalletChanged {
-        old_wallet,
-        new_wallet: wallet,
-        by: ctx.accounts.admin.key(),
-    });
-    Ok(())
-}
+// ROUND 8 T8-03. `SetInventoryWallet` and its handler are DELETED, not restricted.
+//
+// The round-7 version kept the first binding instant on the argument that with the field unset there
+// was nothing to redirect. Codex refuted it: compromise the Ops key DURING the ceremony, before the
+// legitimate binding, and the attacker binds their own wallet, unpauses, and issues the hard cap into
+// their ATA with no delay and no veto. "Nothing to steal" confused supply already minted with
+// issuance power still available.
+//
+// The destination is now an argument of `initialize`, bound atomically with everything else, and the
+// ONLY remaining writer is `execute_set_inventory_wallet` behind the 24h timelock. Deleting the
+// instruction removes the surface instead of moving it, which is why this option was preferred over
+// proposing at ceremony step 7 and executing at step 8.

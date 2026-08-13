@@ -13,7 +13,7 @@ export default function HomePage() {
       <PriceBanner />
       <main className="mx-auto max-w-2xl px-6 py-12">
         <div className="mb-8 text-center">
-          <h1 className="mb-2 text-3xl font-bold tracking-tight">
+          <h1 className="mb-2 text-3xl">
             Mint or redeem SILV
           </h1>
           <p className="text-sm text-muted">

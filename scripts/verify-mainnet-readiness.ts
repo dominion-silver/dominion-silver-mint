@@ -11,6 +11,7 @@
 import { Connection, PublicKey } from "@solana/web3.js";
 import {
   getAssociatedTokenAddressSync,
+  TOKEN_2022_PROGRAM_ID,
   TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { PROGRAM_ID } from "./_program-id";
@@ -83,6 +84,52 @@ function byHand(msg: string, detail = "") {
 // the stated 3-of-5 model must be verified by hand in the Squads UI.
 function section(t: string) {
   console.log(`\n${t}`);
+}
+
+/** The metadata URI baked into the mint at creation, from the manifest rather than a second copy. */
+function metadataUri(): string {
+  const m = JSON.parse(
+    fs.readFileSync(path.join(ROOT, "config", "mainnet-authorities.json"), "utf8"),
+  );
+  return m?.mint_creation_ceremony?.uri ?? "";
+}
+
+/**
+ * Is the metadata JSON actually THERE. A status code cannot answer this on an SPA origin, so the
+ * test is differential: fetch the real URI and a path that cannot exist, and demand they differ AND
+ * that the real one parses as JSON. Either half alone is foolable.
+ */
+async function checkMetadataUri(): Promise<void> {
+  const uri = metadataUri();
+  if (!uri) {
+    no("mint_creation_ceremony.uri is missing from the manifest");
+    return;
+  }
+  const control = new URL(uri);
+  control.pathname = control.pathname.replace(/[^/]+$/, "dominion-readiness-control-404.json");
+  try {
+    const [real, ctl] = await Promise.all([fetch(uri), fetch(control.toString())]);
+    const [realBody, ctlBody] = await Promise.all([real.text(), ctl.text()]);
+    if (realBody === ctlBody) {
+      no(
+        `${uri} returns the SAME body as a nonexistent path`,
+        `HTTP ${real.status}, ${realBody.length} bytes, catch-all origin: the JSON is ABSENT and a ` +
+          `status-code check will pass anyway. This URI is baked into the mint FOREVER at creation.`,
+      );
+      return;
+    }
+    try {
+      const parsed = JSON.parse(realBody);
+      ok(
+        `${uri} serves parseable JSON and differs from a nonexistent path`,
+        `name=${JSON.stringify((parsed as Record<string, unknown>)?.name ?? "?")}`,
+      );
+    } catch {
+      no(`${uri} does not parse as JSON`, `content-type ${real.headers.get("content-type")}`);
+    }
+  } catch (e) {
+    no(`${uri} could not be fetched`, String(e).slice(0, 120));
+  }
 }
 
 function grep(rel: string, re: RegExp): string | null {
@@ -272,7 +319,10 @@ async function main() {
             "the apps' SILV_MINT does NOT match the on-chain config.silv_mint",
             `on chain ${onChainSilv}, public ${silvConst}, admin ${silvAdmin}. ` +
               `Write the observed mint into both apps, commit, test, THEN deploy the panel`,
-            7,
+            // CORRECTED 2026-08-12 from 7 to 6, same off-by-one as the fee vault: `dueStep < STAGE`
+            // means 7 cannot fire at `--stage=7`, and step 6c is exactly the point where the runbook
+            // tells the operator to run `--stage=7`.
+            6,
           );
       onChainUsdc === USDC_MAINNET
         ? ok("the on-chain config.usdc_mint is the mainnet USDC mint")
@@ -344,12 +394,14 @@ async function main() {
   atStep(
     "runbook steps 7-9",
     "2. pre-mint freely to the inventory wallet, seed a Sunrise pool",
-    "admin_premint runs at step 7; the pool is seeded off-chain afterwards.",
+    "admin_premint runs at step 9, AFTER the unpause (it requires !paused); the pool is seeded off-chain afterwards.",
     9,
   );
-  byHand(
+  ok(
     "3. public mint with no KYC",
-    "works, but opening it costs a 24h timelock (propose at step 7, execute at step 10)",
+    "ROUND 8: OPEN from initialize, so there is nothing to propose and nothing to execute. Runbook " +
+      "steps 7 and 10 are retired. What holds the launch is the PAUSE, and `unpause` refuses to run " +
+      "without an ACTIVE guardian distinct from the admin, appointed by initialize itself",
   );
   ok(
     "3b. enable KYC LATER",
@@ -392,20 +444,28 @@ async function main() {
       ok("3c. the MAINNET fee vault exists", vault.toBase58());
     } else {
       atStep(
-        "9b, BEFORE step 10",
+        "9b, BEFORE step 8's UNPAUSE",
         "3c. the MAINNET fee vault does not exist yet",
-        `${vault.toBase58()} -- run scripts/create-fee-vault.ts AFTER the deploy and BEFORE opening ` +
-          `mint or redeem, or every mint and every redeem reverts AccountNotInitialized`,
-        // Due at 9b: it MUST exist before step 10 opens the public mint.
-        9,
+        `${vault.toBase58()} -- run scripts/create-fee-vault.ts AFTER the deploy and BEFORE the ` +
+          `unpause, or every mint and every redeem reverts AccountNotInitialized`,
+        // ROUND 8 L1-04. Due at 8, NOT 9: the unpause is the go-live, because initialize leaves mint
+        // and redeem open, so a vault merely "due at 9b" is reported on time here and missing in prod.
+        //
+        // CORRECTED 2026-08-12 from 8 to 7. The old comment claimed 8 makes `--stage=8` report it
+        // OVERDUE. It does not: the test is `dueStep < STAGE`, so at exactly stage 8 `8 < 8` is false,
+        // the gate prints a non-blocking AT STEP line and exits 0. The one stage an operator is told to
+        // run before the unpause was the one stage where this could neither block nor stay silent.
+        7,
       );
     }
   }
 
   ok(
-    "4. redeem: closed now, open later WITHOUT an upgrade",
-    "set_redemptions_enabled still refuses true, but the 24h-timelocked SetRedeemLimits action " +
-      "now carries the switch (propose_set_redeem_limits with redemptionsEnabled=true). " +
+    "4. redeem: OPEN at launch (round 8), and reopening after a close needs no upgrade",
+    "ROUND 8: redemptions_enabled is true from initialize. set_redemptions_enabled still refuses " +
+      "true, so the asymmetry is unchanged: closing is instant on both lanes and REOPENING rides " +
+      "the 24h-timelocked SetRedeemLimits action (propose_set_redeem_limits with " +
+      "redemptionsEnabled=true). The path did not change; the starting point did. " +
       // ROUND 5 P1-06. This used to list "treasury_min_float_usdc must be non-zero" as a
       // precondition, which contradicts D5. Two sources of truth gave incompatible orders: following
       // the decision made this gate report a blocker, following the gate annulled the decision. The
@@ -423,10 +483,126 @@ async function main() {
   );
 
   // ------------------------------------------------------------ human blockers
+  // THE INVENTORY SILV ATA. Added 2026-08-12: two independent reviews found that `admin_premint` takes
+  // this account as ALREADY EXISTING (premint.rs:41-46, no `init`) and that NOTHING in the repo created
+  // it on the mainnet shape. Missing, the pre-mint reverts AccountNotInitialized at Squads-execute time,
+  // AFTER three humans have approved: the most expensive possible way to find a missing account.
+  //
+  // Derived from the MANIFEST rather than from chain, deliberately: this must be answerable before the
+  // deploy, when no config account exists. That the manifest and the chain agree is checked separately.
+  {
+    const m = JSON.parse(
+      fs.readFileSync(path.join(ROOT, "config", "mainnet-authorities.json"), "utf8"),
+    );
+    const invOwner = m.authorities?.inventory_wallet?.pubkey;
+    const pinnedMint = m.mint_creation_ceremony?.pregenerated_mint;
+    if (typeof invOwner === "string" && typeof pinnedMint === "string") {
+      // allowOwnerOffCurve = true is MANDATORY: since 2026-08-12 the owner is the ops Squads vault, a PDA.
+      const invAta = getAssociatedTokenAddressSync(
+        new PublicKey(pinnedMint),
+        new PublicKey(invOwner),
+        true,
+        TOKEN_2022_PROGRAM_ID,
+      );
+      const info = await conn.getAccountInfo(invAta);
+      if (info) {
+        ok("the inventory SILV ATA exists", invAta.toBase58());
+      } else {
+        atStep(
+          "9, right after T1 and BEFORE the pre-mint",
+          "the inventory SILV ATA does not exist, so admin_premint would revert AccountNotInitialized",
+          `${invAta.toBase58()} -- run scripts/create-inventory-silv-ata.ts, or a full 3-of-5 round is wasted`,
+          8,
+        );
+      }
+    }
+  }
+
   section("F. Only a human can clear these");
   byHand("Sunrise confirmed they accept freeze authority + permanent delegate");
   byHand("the Vercel PROD Pyth key has the pyth-indices entitlement");
-  byHand("https://dominion.market/silv-metadata.json resolves (baked into the mint forever)");
+
+  // MECHANICAL, and it replaces nothing because nothing checked this before.
+  //
+  // Found 2026-08-11 by an independent review, then confirmed by loading the live page and tallying its
+  // requests: production app.dominion.market made THREE calls to api.devnet.solana.com, the hardcoded
+  // fallback in lib/constants.ts, because NEXT_PUBLIC_HELIUS_RPC is not set in Vercel. Two consequences,
+  // the second being the launch-breaker: the public endpoint rate-limits, so under launch traffic the
+  // reads 429 and the panel flips to "Offline"; and CLUSTER is DERIVED from the APP_RPC host, so once
+  // step 6c swaps the program and mint to mainnet, an unset variable means the app reads MAINNET accounts
+  // through a DEVNET endpoint and stamps every explorer link ?cluster=devnet. Silent, and it looks like a
+  // deploy with no data yet.
+  //
+  // It was undetectable from outside because the value is inlined in a lazily-loaded client chunk. So the
+  // app now reports its own resolved configuration at /api/health, deliberately public and credential-free,
+  // and this reads it.
+  try {
+    const r = await fetch("https://app.dominion.market/api/health", { cache: "no-store" as RequestCache });
+    if (!r.ok) {
+      byHand(`app.dominion.market/api/health answered ${r.status}`, "deploy the health route, then re-run");
+    } else {
+      const h = (await r.json()) as {
+        cluster: string;
+        rpcHost: string;
+        onPublicFallbackRpc: boolean;
+        programId: string;
+        silvMint: string;
+      };
+      if (h.onPublicFallbackRpc) {
+        no(
+          `the deployed app reads chain from ${h.rpcHost}, a shared public endpoint that rate-limits`,
+          "set NEXT_PUBLIC_HELIUS_RPC in Vercel production and redeploy. CLUSTER is derived from this " +
+            "host, so after step 6c an unset value also mislabels the whole UI and every explorer link as devnet",
+        );
+      } else {
+        ok(`the deployed app uses a dedicated RPC (${h.rpcHost})`);
+      }
+      // Cross-check the cluster the app RESOLVED against the mint it carries. Disagreement here is the
+      // exact 6c half-done state: mainnet constants behind a devnet endpoint, or the reverse.
+      const appIsMainnet = h.cluster === "mainnet-beta";
+      const mintIsDevnet = h.silvMint === "CebhMovXRM5hEhFDTyq7Y1ez8h11UzFSGjELbyQeJExv";
+      if (appIsMainnet && mintIsDevnet) {
+        no("the deployed app resolves MAINNET but still carries the devnet SILV mint", "runbook step 6c is half done");
+      } else {
+        ok(`the deployed app is coherent`, `cluster=${h.cluster} mint=${h.silvMint.slice(0, 8)}...`);
+      }
+    }
+  } catch (e) {
+    byHand("could not reach app.dominion.market/api/health", String(e).slice(0, 80));
+  }
+  // FOUND 2026-08-11 by an independent review of the admin panel, and it is a launch blocker that was
+  // written down nowhere.
+  //
+  // `authorities.ops_admin.pubkey` (65g5nNX...) is the Squads VAULT PDA, which is what config.admin is
+  // set to. Verified on mainnet: that account is owned by the System Program with ZERO bytes of data and
+  // 5.1 SOL, which is a vault, not a Squads multisig account. But the admin panel's
+  // NEXT_PUBLIC_OPS_SQUADS wants the MULTISIG address, a DIFFERENT pubkey that this repo does not record
+  // anywhere and that cannot be recovered from chain: the vault has never had a Squads interaction, only
+  // USDC funding transfers, so its history contains no reference to its own multisig.
+  //
+  // WHAT HAPPENS IF IT IS MISSING: isConfigured("ops") is false, the panel shows its placeholder banner,
+  // and EVERY Squads action is disabled. On mainnet config.admin IS the vault, so that means no premint,
+  // no add-guardian and no unpause from the panel. The go-live lever would not be clickable.
+  //
+  // WHAT HAPPENS IF THE WRONG ONE IS PASTED: pasting the VAULT here (the likely mistake, since that is
+  // the address written in every note) makes adminAuthority() derive a vault OF the vault, a third
+  // address that is not config.admin. Every proposal built would target the wrong signer.
+  //
+  // The owner has UI access to both multisigs, so this is a read-and-record task, not a recovery task.
+  byHand(
+    "NEXT_PUBLIC_OPS_SQUADS is the ops MULTISIG address (not the vault 65g5nNX...), set in Vercel prod",
+    "read it from the Squads UI; the vault is config.admin, the multisig is what the panel needs",
+  );
+  byHand("NEXT_PUBLIC_UPGRADE_SQUADS likewise, and both recorded in config/mainnet-authorities.json");
+  // MEASURED 2026-08-10, and this used to be a `byHand` reading "…resolves". A human clearing it by
+  // curling the URL and seeing 200 gets a GUARANTEED false pass: dominion.market is an SPA catch-all
+  // that answers 200 with the same 5,228-byte HTML document for EVERY path, including
+  // /definitely-does-not-exist.json. The file is simply absent. The URI is written into the mint at
+  // creation, so a launch on this state bakes a URI serving HTML and SILV renders broken in every
+  // wallet; the repair is propose_/execute_update_metadata, a 24h timelock, i.e. not on launch day.
+  // "Resolves" is therefore the wrong question. The check is: does it parse as JSON, and does it
+  // differ from what a nonsense path returns.
+  await checkMetadataUri();
   byHand("site copy discloses the freeze and seize powers");
   byHand("at least 2 independent guardian keys exist, on hardware");
   // ROUND 5 P1-06. Was "treasury_min_float_usdc will be set NON-ZERO before any USDC arrives", which

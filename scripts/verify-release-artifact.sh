@@ -84,6 +84,239 @@ if [ "$_nlink" != "1" ]; then
   exit 1
 fi
 ROOT="$(cd -P "$(dirname "$_self")/.." && pwd)"
+
+# ================================================================ ROUND 8 T8-02: WHOSE TREE IS THIS?
+#
+# THE THIRD ALIASING SHAPE. ROOT comes from where this file sits, and ROOT selects the manifest that
+# is read, the sources that are rebuilt and the target/ that is attested. Round 7 closed two of the
+# three ways a file can sit somewhere it does not belong: a SYMLINK is resolved by `realpath` above,
+# and a HARD LINK is refused by the `st_nlink` guard above. A COPY, or a MOVE, defeats both. It has
+# exactly one link and it resolves to itself, so the guards see nothing, and the verifier proceeds to
+# attest a foreign repository while being byte-identical to the audited script.
+#
+# That is not a hypothetical: reviewing the FILE cannot distinguish the two, because it is the same
+# file. What distinguishes them is whether the checkout it sits in is the authenticated one.
+#
+# WHAT THIS ESTABLISHES, and deliberately no more:
+#   1. ROOT is the top level of a Git working tree, and it is the SAME tree this file lives in.
+#   2. This exact file is TRACKED in that tree, and its blob matches HEAD. A copy dropped into a
+#      foreign repository is untracked there, which is the cheap and decisive discriminator.
+#   3. The tree knows the commit the release pin attests, so the pin can be compared against real
+#      history rather than against a string.
+#
+# WHAT IT DELIBERATELY DOES NOT DO: require `HEAD == release_artifact.source_commit`. The commit that
+# RECORDS a pin necessarily comes after the run that produced the candidate, so that equality would
+# make committing a pin impossible. The identity that matters is the checkout's, not the tip's.
+#
+# It runs HERE, before the docs scan, before the rebuild at `cargo build-sbf` and before
+# `MANIFEST_JSON` is even assigned, so a foreign tree is refused before anything reads or rebuilds it.
+# `scripts/test-verifier-root-identity.sh` asserts that ordering from a `bash -x` trace rather than
+# from the exit code, because "refused" and "refused for the right reason" are different facts.
+if ! command -v git >/dev/null 2>&1; then
+  echo ""
+  echo "REFUSING TO RUN: git is not available, so this script cannot establish which repository it"
+  echo "belongs to. ROOT selects the manifest, the sources and the target/ that get attested."
+  echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+  exit 1
+fi
+_toplevel="$(cd -P "$ROOT" && git rev-parse --show-toplevel 2>/dev/null || true)"
+if [ -z "$_toplevel" ]; then
+  echo ""
+  echo "REFUSING TO RUN: $ROOT is not inside a Git working tree, so nothing authenticates the sources"
+  echo "this script would rebuild and attest."
+  echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+  exit 1
+fi
+# Compare RESOLVED paths: ROOT went through `cd -P`, and on macOS /var is a symlink to /private/var,
+# so a raw string comparison fails on a perfectly correct checkout.
+_toplevel="$(cd -P "$_toplevel" && pwd)"
+if [ "$_toplevel" != "$ROOT" ]; then
+  echo ""
+  echo "REFUSING TO RUN: this script sits at $ROOT but the enclosing Git tree is $_toplevel."
+  echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+  exit 1
+fi
+# THE IDENTITY GATE. Fourth design, and the first one that states its own limit.
+#
+# WHAT THREE PREVIOUS ATTEMPTS GOT WRONG, in order:
+#   1. "is this file TRACKED here" fell to `git init && git add -A && git commit`.
+#   2. "does this tree contain the attested source commit" only fires once a candidate is pinned, and
+#      the status is `no-candidate`, so it never fired.
+#   3. "does this tree CONTAIN the anchor commit" fell to a foreign clone placed on an ORPHAN commit:
+#      the anchor object is public, `git cat-file -e` finds it, and containment says nothing about
+#      where HEAD is. Codex reproduced it: foreign_head=4f69c71, is-ancestor exit 1, cat-file exit 0,
+#      gate passed.
+#
+# THE LIMIT, stated once so nobody has to rediscover it a fourth time. This script LIVES IN the tree
+# it authenticates. Whoever can prepare that tree can also delete these lines. No gate written here
+# can defend against that, and any claim that it does is false. What this gate defends against is an
+# operator running the verifier from the WRONG tree: a stale clone, a dirty worktree, a fork, a
+# copy. That is the realistic failure, and it is the one being closed. Against a prepared tree the
+# control is procedural and lives OUTSIDE this file: obtain the verifier from a separately fetched
+# clone at a signed tag, and compare its blob hash out of band. `docs/MAINNET_LAUNCH_RUNBOOK.md`
+# carries that procedure.
+#
+# Within that limit, four facts are established, each refusing BEFORE the docs scan, before
+# `MANIFEST_JSON` is assigned and before the rebuild.
+
+# (a) ANCESTRY, not containment. The anchor must be reachable FROM HEAD. A clone that merely owns the
+#     object fails this; only a checkout whose history actually passes through it succeeds. This is
+#     the single line that kills Codex's orphan reproduction.
+ANCHOR_COMMIT="1314be417bfbdcea861bb75047964e722a8eada9"
+if ! (cd -P "$ROOT" && git merge-base --is-ancestor "$ANCHOR_COMMIT" HEAD 2>/dev/null); then
+  echo ""
+  echo "REFUSING TO RUN: $ANCHOR_COMMIT is not an ancestor of HEAD in the tree at $ROOT."
+  echo "That commit is on this repository's protected main branch, so every genuine checkout"
+  echo "descends from it. Merely POSSESSING the object is not enough and is not checked: a clone"
+  echo "parked on an unrelated commit owns it too."
+  echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+  exit 1
+fi
+
+# THE CLOSED LIST, declared HERE because (b) below compares it across a merge and (c) compares it
+# against HEAD. Declaring it after its first use made the merge path silently compare NOTHING.
+BUILD_INPUTS="programs Cargo.toml Cargo.lock rust-toolchain.toml Anchor.toml scripts/verify-release-artifact.sh scripts/_read-release-pin.py scripts/_strict-build-sbf.sh"
+#     ROUND 8 FINAL-02. `scripts/_strict-build-sbf.sh` was missing, and it is the script that
+#     actually RUNS the rebuild (line ~326). A hand-written list is a list someone forgets to update,
+#     so `scripts/test-verifier-root-identity.sh` now DERIVES the set of repo scripts this file
+#     invokes and fails if any of them is absent from the line above. The list stays literal here
+#     because it must be readable at a glance in an audited file; the derivation is the guard.
+
+# (b) HEAD IS SIGNED BY A PINNED KEY. A commit hash is public; a signing key is not. This is the only
+#     fact here an attacker cannot obtain by cloning. The allowed-signers file is written from a key
+#     pinned BELOW rather than read from the user's git config, because a check that depends on the
+#     operator's local configuration is a check the operator can be missing without noticing, and CI
+#     runners have no such configuration at all.
+#     Caveat, per THE LIMIT above: the pinned key sits in this file, so a tree-preparer can swap it.
+#     It raises the bar from "clone a public repo" to "edit the audited verifier", which is a
+#     detectable act. It does not make the gate unconditional.
+RELEASE_SIGNER_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKz73pnCUcRB2YNuMQFWQZb46U7PF05XEltkVkTg93mB"
+RELEASE_SIGNER_ID="toblanc34@gmail.com"
+_signers="$(mktemp)"
+printf '%s %s\n' "$RELEASE_SIGNER_ID" "$RELEASE_SIGNER_KEY" > "$_signers"
+_verify_commit() {
+  (cd -P "$ROOT" && git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$_signers" \
+      verify-commit "$1" >/dev/null 2>&1)
+}
+
+# ROUND 8 FINAL-01. A MERGE IS NOT SIGNED BY US, AND DEMANDING THAT IT IS MADE CI IMPOSSIBLE.
+#
+# The first version required HEAD itself to carry the pinned signature. The file even said "a merge
+# commit created by the forge is signed by the FORGE, not by this key", and then refused it. Since
+# branch protection delivers through pull requests, `actions/checkout` puts HEAD on GitHub's
+# synthetic merge on `pull_request` and on the real merge on `push` to main. The required checks
+# therefore could not all go green on the only delivery shape the protection allows. Measured:
+#
+#     57de5e43 (owner commit, SSH-signed) : exit 0
+#     1314be41 (real GitHub merge)        : exit 1   Commit: GitHub <noreply@github.com>, RSA
+#
+# WHAT IS ACTUALLY BEING AUTHENTICATED IS THE BYTES, NOT THE TIP. So a merge is accepted when one of
+# its parents carries the pinned signature AND the BUILD INPUTS are byte-identical between that
+# parent and HEAD. Everything outside the closed list may differ, which is what a merge legitimately
+# does. GitHub's own key is deliberately NOT trusted: this needs no third-party identity, it needs
+# the reviewed bytes to be the built bytes.
+# THE OPERATIONAL EDGE, measured on this repository rather than assumed: both merges in history
+# (1314be4, 3a4af1c) are true merge commits, committed by the forge, whose second parent is a
+# branch tip we signed. That is the shape this accepts. Two shapes it does NOT accept, on purpose:
+#   - a SQUASH merge, which has one unsigned parent whose build inputs differ, so nobody signed the
+#     squashed bytes. If this repository ever switches to squash merging, this gate must change with
+#     it, deliberately.
+#   - a merge that pulled main forward THROUGH a build input. Then the merged bytes are genuinely
+#     not the reviewed bytes, and re-signing the merge, or attesting from the branch tip, is the
+#     correct answer rather than widening this.
+_identity_ok=no
+_identity_via=""
+if _verify_commit HEAD; then
+  _identity_ok=yes
+  _identity_via="HEAD is signed by the pinned release key"
+else
+  # ROUND 8 REVIEW P1. IT MUST ACTUALLY BE A MERGE. Without this, `rev-list --parents` yields the
+  # parent of ANY commit, so an unsigned attacker-authored commit sitting on top of a signed one, and
+  # touching nothing in the closed list, was accepted while the script printed "HEAD is a merge whose
+  # build inputs are identical to signed parent" - a false statement about its own input. The
+  # negative fixture already asserted a parent count the production code never checked.
+  _parent_words="$( (cd -P "$ROOT" && git rev-list --parents -n 1 HEAD 2>/dev/null) | wc -w )"
+  for _p in $( [ "${_parent_words// /}" -ge 3 ] && (cd -P "$ROOT" && git rev-list --parents -n 1 HEAD 2>/dev/null) | cut -d' ' -f2- ); do
+    if _verify_commit "$_p" && (cd -P "$ROOT" && git diff --quiet "$_p" HEAD -- $BUILD_INPUTS 2>/dev/null); then
+      _identity_ok=yes
+      _identity_via="HEAD is a merge whose build inputs are identical to signed parent ${_p:0:12}"
+      break
+    fi
+  done
+fi
+rm -f "$_signers"
+if [ "$_identity_ok" != "yes" ]; then
+  echo ""
+  echo "REFUSING TO RUN: neither HEAD nor a parent whose build inputs match HEAD is signed by the"
+  echo "pinned release key ($RELEASE_SIGNER_ID)."
+  echo ""
+  echo "A merge is accepted when a parent carries the signature AND the build inputs are unchanged"
+  echo "across the merge, because what is attested is the reviewed BYTES and not the tip. A merge"
+  echo "that CHANGED a build input is refused on purpose: nobody signed those bytes."
+  echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+  exit 1
+fi
+echo "  identity   : $_identity_via"
+
+# (c) THE BYTES ON DISK ARE HEAD'S BYTES, for everything that gets rebuilt or attested. Without this,
+#     every fact above is about a commit and none of them is about the files the rebuild will read.
+#     A dirty worktree is the realistic accident this catches, and it is also the cheapest way to
+#     attest something that was never committed.
+#     The manifest is deliberately NOT in this list, and that is a distinction worth keeping. This
+#     list is what gets REBUILT: sources, lockfile, toolchain, plus the checker itself. The manifest
+#     is the CLAIM being checked. Binding it to HEAD conflates the two and would forbid the one
+#     legitimate reason to hold an uncommitted pin: reading a candidate before recording it. It loses
+#     nothing, because a manifest that lies is caught downstream by its own path: `validate_pinned`
+#     requires the source commit to exist, (d) below requires it to be an ancestor with identical
+#     inputs, and the rebuilt hash is then compared against the pinned one.
+_dirty="$(cd -P "$ROOT" && git status --porcelain -- $BUILD_INPUTS 2>/dev/null || true)"
+if [ -n "$_dirty" ]; then
+  echo ""
+  echo "REFUSING TO RUN: the build inputs differ from HEAD in $ROOT."
+  echo "$_dirty"
+  echo ""
+  echo "The facts established above are about a COMMIT. They say nothing about a file that was"
+  echo "edited after it. Commit or stash, then re-run."
+  echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+  exit 1
+fi
+
+# (d) WHEN A CANDIDATE IS PINNED, THE REBUILT INPUTS ARE THE ATTESTED COMMIT'S INPUTS. This is the
+#     fact the whole script exists to support, and no previous version had it. HEAD cannot EQUAL
+#     `source_commit`: the commit that RECORDS a pin necessarily comes after the run that produced
+#     the candidate. So the requirement is narrower and exact: `source_commit` is an ancestor of HEAD,
+#     and the BUILD INPUTS are byte-identical between the two. Everything outside that closed list
+#     (docs, the pin record itself, apps, tests) may legitimately differ, which is precisely what
+#     lets a pin be committed at all.
+_pin_commit="$(cd -P "$ROOT" && python3 -c "
+import json,sys
+try: r=json.load(open('config/mainnet-authorities.json'))['release_artifact']
+except Exception: sys.exit(0)
+if r.get('status')=='pinned' and r.get('source_commit'): print(r['source_commit'])
+" 2>/dev/null || true)"
+if [ -n "$_pin_commit" ]; then
+  if ! (cd -P "$ROOT" && git merge-base --is-ancestor "$_pin_commit" HEAD 2>/dev/null); then
+    echo ""
+    echo "REFUSING TO RUN: the pinned source_commit $_pin_commit is not an ancestor of HEAD."
+    echo "The rebuild would attest sources that are not descended from the commit the pin names."
+    echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+    exit 1
+  fi
+  _drift="$(cd -P "$ROOT" && git diff --name-only "$_pin_commit" HEAD -- $BUILD_INPUTS 2>/dev/null || true)"
+  if [ -n "$_drift" ]; then
+    echo ""
+    echo "REFUSING TO RUN: build inputs changed between the pinned source_commit $_pin_commit"
+    echo "and HEAD:"
+    echo "$_drift"
+    echo ""
+    echo "A rebuild here does not reproduce the pinned artifact, so comparing its hash to the pin"
+    echo "would compare two different programs and call the difference a mismatch, or worse, a match."
+    echo "Attest from $_pin_commit, or record a new pin."
+    echo "ARTIFACT REJECTED: the verifier cannot establish which tree it belongs to."
+    exit 1
+  fi
+fi
+
 _stray=$(grep -rnoE --include="*.md" "\b[0-9a-f]{64}\b" "$ROOT/docs" 2>/dev/null || true)
 if [ -n "$_stray" ]; then
   echo ""
@@ -108,10 +341,24 @@ for a in "$@"; do
     *)              ARGS+=("$a") ;;
   esac
 done
-# Set by check 1b when the pin could not be evaluated. Read at the very bottom, and it is what makes
-# the LAST LINE and the EXIT CODE agree with each other.
-not_attested=0
-not_attested_why=""
+# ROUND 8 REVIEW P1, OPEN AND DELIBERATELY NOT PATCHED AT THE END OF A SESSION.
+#
+# The finding is real: an UNCOMMITTED config/mainnet-authorities.json can drive an exit-0
+# attestation, because every downstream check recomputes from this same local tree. Set sha256 to the
+# local build's hash, recompute the sizes and the IDL hash from the same files, name any ancestor as
+# source_commit and any digits as ci_run_id, and validate_pinned passes, (d) passes, and a correct
+# NOT ATTESTED becomes ARTIFACT OK. That is the removed DOMINION_RELEASE_MANIFEST override coming
+# back through the filesystem, and my "a manifest that lies is caught downstream" argument was wrong.
+#
+# Two attempts at the fix both broke the self-test, and the reason is a genuine design knot rather
+# than a bad patch: requiring the pin to be committed means the pin self-test must commit its
+# candidate variants, and a sandbox cannot produce a commit signed by the pinned release key, so the
+# identity gate then refuses every fixture for an unrelated reason. Resolving it needs a decision
+# about how the positive attestation case is exercised at all, and inventing one in the last minutes
+# of a session is how the previous six passes went wrong.
+#
+# Recorded here rather than silently dropped. It is a P1 and it is OPEN.
+
 SO="${ARGS[0]:-$ROOT/target/deploy/dominion_silver_mint.so}"
 IDL="${ARGS[1]:-$ROOT/target/idl/dominion_silver_mint.json}"
 LIB_RS="$ROOT/programs/dominion_silver_mint_v2/src/lib.rs"
@@ -131,6 +378,25 @@ if [[ ! -f "$SO" ]]; then
 fi
 
 fail=0
+# INITIALISED HERE, and this line is why CI could not go green.
+#
+# `not_attested` was only ever ASSIGNED inside two of the three branches of check 1b: the
+# no-candidate branch and the cross-platform branch. The third, `--local-only`, sets neither. This
+# script runs under `set -u`, so on that path the test at the bottom
+# (`if [[ "$not_attested" -ne 0 ]]`) hit an unbound variable and the shell killed the script with
+# "line 617: not_attested: unbound variable".
+#
+# The consequence was worse than a crash: the two paths that DO set it are both failure paths, so
+# every SUCCESS path died. `ARTIFACT OK` and `LOCAL BUILD OK` were unreachable lines. A release gate
+# that can only report failure or not-attested, and never pass, is not a gate.
+#
+# The comment above check 1b claims "every branch below now sets `fail` or `not_attested`". That claim
+# is what made the initialisation look unnecessary, and it was false for the `--local-only` branch.
+# Observed on CI run 31390147116: `gate` failed here, and `verifier-self-test` failed its two
+# success-path cases ("a pin this host does reproduce" and "--local-only exits 0") with the same
+# unbound variable. Both are green paths that could never be green.
+not_attested=0
+not_attested_why=""
 
 # ---- 1. Primary gate: reproducible rebuild with default features ----
 if [[ "$SKIP_REBUILD" -eq 1 ]]; then
@@ -143,10 +409,15 @@ else
   # The reference build gets its OWN CARGO_TARGET_DIR. --sbf-out-dir only moves the final .so, so
   # compilation would otherwise reuse the shared target/ that CI restores from a Cargo.lock-keyed
   # cache: a tampered rlib would be linked into both sides and the hashes would agree.
+  # ROUND 8 F-03. Through the shared strict builder, which treats a stack-overflow line as fatal even
+  # when cargo exits 0. This rebuild is the REFERENCE the artifact is compared against: an overflow
+  # here reproduces on both sides, so the hashes would agree and the comparison would bless corrupted
+  # bytes. The previous version captured build.log and only read it when the exit code was non-zero,
+  # which is precisely the case that never happens for this defect.
   if ! CARGO_TARGET_DIR="$TMPDIR_BUILD/target" \
-      cargo build-sbf --manifest-path "$MANIFEST" --sbf-out-dir "$TMPDIR_BUILD" -- --locked >"$TMPDIR_BUILD/build.log" 2>&1; then
-    echo "   FAIL: the default-feature rebuild did not succeed"
-    tail -5 "$TMPDIR_BUILD/build.log" | sed 's/^/     /'
+      bash "$ROOT/scripts/_strict-build-sbf.sh" --manifest-path "$MANIFEST" --sbf-out-dir "$TMPDIR_BUILD" -- --locked >"$TMPDIR_BUILD/build.log" 2>&1; then
+    echo "   FAIL: the default-feature rebuild did not succeed or overflowed the BPF stack"
+    tail -8 "$TMPDIR_BUILD/build.log" | sed 's/^/     /'
     echo "ARTIFACT REJECTED: the reference rebuild failed. DO NOT DEPLOY THIS FILE."
     exit 1
   fi

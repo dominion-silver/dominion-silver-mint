@@ -86,15 +86,31 @@ DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/probe-lazer-fee
 
 **Blockers to clear by hand:**
 
-- [ ] Deployer `2Lp91Fy…` funded with **~9.2 SOL** on mainnet (rent is recoverable via
-      `solana program close`; measured, not estimated).
+- [ ] Deployer `2Lp91Fy…` funded with **~9.2 SOL** on mainnet. Measured, not estimated:
+      the devnet rehearsal of 2026-08-10 locked **8.62 SOL** of ProgramData rent for the
+      1,237,728-byte artifact, plus fees.
+      **This line used to add "rent is recoverable via `solana program close`". It was
+      deleted on 2026-08-10 and must never come back.** It is true about the lamports and
+      catastrophic as advice: closing a program id destroys it FOREVER, and this project
+      has already done it once. `gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc` answers
+      "has been closed" to this day. Closing `3ucji6…` would lose the mainnet id, and with
+      it `declare_id!`, the IDL, every PDA and the whole audited surface. There is no
+      situation in this runbook where closing is the right answer: a bad deploy is fixed
+      by `solana program deploy` again, which performs an upgrade in place.
 - [ ] The Pyth key in Vercel Production has the **`pyth-indices` entitlement** for feed
       3154. Test: `curl -X POST https://<app>/api/lazer -d '{}'` must return a price,
       not a 403.
 - [ ] Sunrise has confirmed they accept a Token-2022 mint carrying **freeze authority +
       permanent delegate**. If not, there is no venue and the launch model fails.
-- [ ] `https://dominion.market/silv-metadata.json` resolves (it is baked into the mint
-      permanently).
+- [ ] `https://app.dominion.market/silv-metadata.json` serves the JSON. **The host changed on
+      2026-08-11 and the reason matters: `dominion.market` is a separate property (Mark's, on
+      GCP, Namecheap DNS) that we cannot publish to, so the file now lives in THIS repo at
+      `apps/public/public/silv-metadata.json` and is served by our own app on the `app.`
+      subdomain.** Verify with the readiness gate, not by eye: it fetches the URI AND a path
+      that cannot exist and demands they differ, because the old apex answers 200 with
+      identical HTML for every path and made a status-code check incapable of failing. The URI
+      is baked into the mint permanently: changing it afterwards costs a 24h timelock
+      (`propose_update_metadata` / `execute_update_metadata`).
 - [ ] Site copy discloses the **freeze and seize** powers (SolidProof MEDIUM #2, and the
       head-dev's requirement). Fix the over-claimed Chainlink PoR while you are there.
 - [ ] At least 2 guardian keys exist, held independently, on hardware.
@@ -136,7 +152,8 @@ npx tsx scripts/verify-mainnet-readiness.ts --stage=<the step you are about to d
 **ROUND 3 P1: this instruction was missing entirely.** The gate existed, `--stage` existed, and no step of
 this runbook ever called it, so an operator following the page never ran it. Worse, the mandatory fee-vault
 creation sat outside the numbered sequence (in the PREREQUISITES section), so step 10 could open the public
-mint with no vault and make every mint and every redeem revert `AccountNotInitialized`.
+mint with no vault and make every mint and every redeem revert `AccountNotInitialized`. Round 8 moved that
+deadline earlier still, to step 8's unpause, and `ceremony-step8.ts` now enforces it in code.
 
 `--stage=N` reports anything due before N as OVERDUE and exits 1. Without it the gate cannot tell "not yet"
 from "skipped", so a mid-ceremony run reads falsely reassuring.
@@ -301,8 +318,14 @@ print("pinned idl:", pin)
 assert pin is not None, "release_artifact.idl_sha256 is null: step 2c did not record it"
 assert a == pin, "the local IDL is not the one CI attested"
 EOF
-diff <(python3 -m json.tool /tmp/onchain-idl.json) \
-     <(python3 -m json.tool target/idl/dominion_silver_mint.json) \
+# --sort-keys IS REQUIRED, measured on the devnet rehearsal 2026-08-10. `anchor idl fetch` returns
+# the SAME bytes count and the same content, but with the top-level keys in a different ORDER than
+# the file on disk (it leads with `accounts`, the file leads with `address`). Without --sort-keys
+# this diff reports a 67-line mismatch on a perfectly correct upload, and the ceremony stops on a
+# false alarm at the step right after the irreversible deploy. Content equality is what is being
+# asserted here; byte-for-byte equality of the serialised form is not a property anchor offers.
+diff <(python3 -m json.tool --sort-keys /tmp/onchain-idl.json) \
+     <(python3 -m json.tool --sort-keys target/idl/dominion_silver_mint.json) \
   && echo "on-chain IDL matches the attested file"
 ```
 
@@ -321,8 +344,19 @@ DOMINION_RPC=https://api.mainnet-beta.solana.com \
 DOMINION_INTENT=initialize \
 DOMINION_PROGRAM_ID=<PROGRAM_ID> \
 DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json \
+DOMINION_SILV_MINT_KEYPAIR=~/.config/solana/dominion-silv-mint.json \
 npx tsx scripts/t1-hostile-bootstrap.ts
 ```
+
+**`DOMINION_SILV_MINT_KEYPAIR` is on that list because the SILV address is ANNOUNCED before this step
+runs.** `SiLVFMgD3eD2rgK628NbTBq9MnuJF5FW2CRaVyTB35L` is pinned in
+`config/mainnet-authorities.json` (`mint_creation_ceremony.pregenerated_mint`) and pre-validated on
+aggregators, so without this variable T1 would call `Keypair.generate()` and create the token at a
+random address, permanently, while buyers hold the announced one. The script now refuses on mainnet
+when an address is pinned and no keypair is supplied, and refuses again if the keypair supplied is not
+the pinned one. Neither refusal depends on the file being at the path above: point it wherever the key
+actually is. The retired `dominion-silv-mint-RETIRED-4vdwEdyr.json` sits in the same directory on
+purpose, so read the path before you press enter.
 
 **`DOMINION_INTENT=initialize` is on that list because RULE 2 demands it and this page did not have it.**
 `initialize` is classified irreversible, and T1's case 5 performs it. The guard now fires BEFORE the mint is
@@ -407,8 +441,15 @@ spl-token display <SILV_MINT> -u mainnet-beta
 
 Check by eye: decimals 6, mint authority = the `silv_mint_authority` PDA, freeze
 authority = compliance vault, extensions exactly {PermanentDelegate, MetadataPointer,
-TokenMetadata}, `paused = true`, `public_mint_enabled = false`,
-`redemptions_enabled = false`, `max_silv_supply = 150000000000` (150,000 oz).
+TokenMetadata}, `paused = true`, **`public_mint_enabled = true`**,
+**`redemptions_enabled = true`**, `max_silv_supply = 150000000000` (150,000 oz).
+
+**Those two flags read `false` on this page until 2026-08-10 and that was wrong.** Round 8
+inverted the launch posture: `initialize` writes both TRUE, `config/mainnet-authorities.json`
+`launch_posture` says true, and the devnet rehearsal confirmed the chain writes true. An
+operator checking this list verbatim would have seen a mismatch on the one step designed to
+catch a botched `initialize`, and the only available conclusion would have been to re-run a
+one-shot instruction. What holds the launch is the PAUSE, not these flags.
 
 ### 6c. Write the REAL mint into both apps. BLOCKING for 6b.
 
@@ -443,20 +484,25 @@ npx tsx scripts/verify-mainnet-readiness.ts --stage=7   # must NOT report SILV_M
 `--stage=7` is the point: readiness reads the on-chain `config.silv_mint` and requires both apps to
 equal it exactly. Before T1 there is nothing to compare and it says so; from step 7 it blocks.
 
-### 6b. Deploy the admin panel. BLOCKING for steps 7 and 8.
+### 6b. Deploy the admin panel. BLOCKING for step 8.
 
 **Round 5 P0-03, decision D3.** This used to be step 11, after the two steps that need it. `config.admin`
 is the Ops Squads vault `65g5nNXTtqtFz3jggKAqyvS6oCoVUXuXqAU9B8jHqPPS`, which is OFF-CURVE: no private
 key exists for it, so `has_one = admin` can never be satisfied by a keypair. The panel is the only
 thing in this repo that wraps a dominion instruction into a Squads vault transaction, collects
-approvals and executes it. Deploying it after steps 7 and 8 left those steps with no executable path
-and forced improvisation on exactly the actions that set the launch posture.
+approvals and executes it. Deploying it after step 8 left that step with no executable path and forced
+improvisation on exactly the actions that set the launch posture.
 
 ```bash
 # Vercel env for apps/admin:
 #   NEXT_PUBLIC_HELIUS_RPC     = a mainnet RPC
-#   NEXT_PUBLIC_OPS_SQUADS     = 65g5nNXTtqtFz3jggKAqyvS6oCoVUXuXqAU9B8jHqPPS
-#   NEXT_PUBLIC_UPGRADE_SQUADS = FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3
+#   NEXT_PUBLIC_OPS_SQUADS     = 9BwMVmjMwjppJyBn5Kj6vTae8Rc7NUamH5H2Tq7H5VtU
+#   ^^^ THE MULTISIG, NOT THE VAULT. Corrected 2026-08-12: this said 65g5nNX..., the vault
+#   (= config.admin). squads.ts consumes this as the MULTISIG and derives the vault FROM it, so pasting
+#   the vault makes adminAuthority() return a vault OF the vault: fetchMultisig throws on a 0-byte
+#   account, no proposal can be created, and the go-live unpause is unexecutable. Vercel already holds
+#   the correct value; do not "fix" it from an older copy of this page.
+#   NEXT_PUBLIC_UPGRADE_SQUADS = BjbtdEcy324Xdmt9182D8FZYGiH2nhTLFHP7EaAEXLAi   # THE MULTISIG, not FqFNX (the vault)
 (cd apps/admin && vercel --prod --yes)
 ```
 
@@ -467,54 +513,130 @@ point), so the panel is inert.
 **Confirm before continuing:** connect a Squads member wallet, and check the panel reports the Ops
 multisig as configured and you as an active member. A panel that loads is not a panel that can propose.
 
-### 7. Propose the public-mint open NOW, so the 24h runs during setup
+### 7. RETIRED in round 8. Nothing to do. Go to step 8.
 
-Do this immediately, not at the end. It costs nothing and saves a day.
+**This step used to propose the public-mint open so its 24h ran during setup. There is no longer
+anything to open.** The round-8 launch posture (owner, 2026-08-09) has `initialize` write
+`public_mint_enabled = true` and `redemptions_enabled = true`, so no base setting costs a 24h wait
+during the ceremony. `scripts/ceremony-step7.ts` is deleted with the step: run against the new
+posture it would propose a value the config already holds and revert `PublicMintUnchanged`.
 
-The script EMITS the instructions; the panel executes them; the script then reads the result back.
-It cannot send on mainnet and no longer pretends it can.
+**The redeem switch is asymmetric on purpose, and the asymmetry survives the open posture.**
+Closing redemptions is instant on two lanes; opening them is refused on both and can only
+happen through the 24h timelock, which a guardian can cancel. The two closing lanes are
+`set_redemptions_enabled(false)`, which the admin signs alone, and the emergency tighten lane, which
+also disarms any queued open so a pending loosening cannot land moments after an incident response.
+Neither lane can set the switch back to true: the program refuses it in bytecode from BOTH states, so
+there is no sequence of instant calls that reopens payouts. The only path back is
+`propose_set_redeem_limits({ redemptionsEnabled: true })`, the 24h wait, then execute, and during
+that window any active guardian can cancel it alone. Operationally: closing needs **THREE signatures** at 3am, reopening is a decision the whole quorum
+sees coming for a day.
 
-`DOMINION_ALLOW_MAINNET=i-understand` is on every line, including the read-only ones. RULE 1 is checked
-before the mode branch, so an emit against mainnet is refused without it. That is deliberate: the guard
-also cross-checks the genesis hash, and a ceremony artifact built against the wrong chain is worse than
-no artifact.
+> **CORRECTED 2026-08-12. This said "one signature at 3am" and that is false on the mainnet shape.**
+> `pause` accepts `config.admin` OR an active guardian, and both are 3-of-5 Squads vaults over the same
+> five members. `set_redemptions_enabled(false)` wants `config.admin`, so 3-of-5 too. **No single
+> signature can stop this protocol.** And the guardian veto is not exercisable by any tooling here: the
+> panel's guardian cards sign with the connected wallet and a vault PDA cannot connect, while
+> `runAction` hardcodes `role: "ops"` so the panel cannot even propose on the upgrade multisig where
+> that guardian's authority lives. Treat the ADMIN pause as the only reachable brake, and make sure
+> three signers are reachable out of hours.
+`scripts/test-security-posture-docs.ts` runs the on-chain tests that demonstrate each half of this
+paragraph and fails if this text and those tests ever stop agreeing.
 
-```bash
-# 1. Emit. No network writes, no keypair needed.
-DOMINION_ALLOW_MAINNET=i-understand \
-DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/ceremony-step7.ts
-#    -> writes ceremony-out/step7.json with the exact instruction, accounts and data
+**What holds the launch instead is THE PAUSE, and the pause is now guarded.** `unpause` requires an
+ACTIVE guardian distinct from the admin, so the transition to live cannot happen before an
+independent party can pause and can cancel a timelocked action. That is why step 8 registers the
+guardians BEFORE it unpauses, in that order.
 
-# 2. Execute through the admin panel: propose_set_public_mint(true), approve to threshold, execute.
-#    Diff what the panel is about to propose against ceremony-out/step7.json before approving.
+**ROUND 8 REVIEW: THIS IS NO LONGER ONE STEP, AND RUNNING IT AS ONE PRODUCES A REVERT.**
+`add_guardian` increments `config.guardian_count`, and the unpause commits to a digest that includes
+it, so a batch carrying both builds an unpause the chain refuses with `StaleReadinessDigest`, after
+the registrations have already landed. Step 8 therefore registers the guardians and STOPS, printing
+why. **Re-run step 8**: the registrations then read as already done, the config is re-read, and the
+unpause is emitted with a digest that matches the state it will meet. Do NOT run `--verify` between
+the two runs: the protocol is still paused, which is correct, and `--verify` would report that
+correct state as a failure.
 
-# 3. Read the chain back. This is the only step that proves anything.
-DOMINION_ALLOW_MAINNET=i-understand \
-DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/ceremony-step7.ts --verify
-```
+**The number is kept deliberately.** `verify-mainnet-readiness.ts --stage=N` and several checks in
+this page are keyed to these numbers; renumbering would silently move every `dueStep` deadline. A
+retired step that says so is safer than a renumbered sequence.
 
-**`treasury_min_float_usdc` is NOT proposed here, by decision.** D5 (owner, 2026-08-07) sets it to 0
+**`treasury_min_float_usdc` is NOT proposed at launch, by decision.** D5 (owner, 2026-08-07) sets it to 0
 in full knowledge: no floor opposes an admin withdrawal, so one can drain the whole USDC treasury,
 the balance that backs user redemptions. That is SolidProof LOW #4, open by choice. What still defends
 it: `withdraw_usdc` is 24h-timelocked and a guardian can cancel it inside that window, so a withdrawal
 is announced a day ahead and vetoable. The float was a second belt, not the first. It stays changeable
 at any time via `propose_set_treasury_min_float`.
 
-This page previously called a non-zero float a BLOCKER while the decision said zero, and
+This page previously called a non-zero float a BLOCKER while the decision said zero, and the retired
 `ceremony-step7.ts` refused to run without one. Round 5 P1-06: two sources of truth giving
-incompatible orders. To propose a float anyway, set `DOMINION_TREASURY_MIN_FLOAT_USDC=<micro-USDC>`
-before step 1 above.
+incompatible orders. To propose a float, use `propose_set_treasury_min_float` from the admin panel.
 
-### 8. Register the guardians, set the inventory wallet, unpause
+### 8. Unpause. `add_guardian` is NOT a step.
+
+> **CORRECTED 2026-08-12.** `initialize` itself creates the first guardian's account and sets
+> `guardian_count = 1` (`initialize.rs:148-159`, `:427`), and the manifest has no `additional_guardians`
+> key, so `ceremony-step8.ts` marks the guardian `alreadyDone` and emits **only the unpause, in the
+> first run**. The two-run "add_guardian x2 then STOP then re-run" choreography below never happens.
+> Two consequences it is worth stating: the launch ships with ONE guardian, which is the same vault as
+> the upgrade authority and compliance; and `MIN_ACTIVE_GUARDIANS = 1` with a count of 1 makes
+> `finalize_guardian_removal` permanently impossible, so that guardian cannot be rotated without adding
+> a second one first.
+
+> **ORDRE OBLIGATOIRE A L'INTERIEUR DE CETTE ETAPE, sinon l'unpause reverte.**
+>
+> Construire la proposition Squads d'`unpause` **EN DERNIER**, apres que les gardiens soient ajoutes et
+> que `min_publishers` soit a sa valeur finale. Raison: `unpause` porte une empreinte de readiness qui
+> couvre `guardian_count` et `min_publishers`, et Squads scelle l'empreinte au moment ou la transaction
+> de coffre est **creee**, pas executee. Une proposition d'unpause creee avant l'ajout des gardiens est
+> donc invalidee par l'ajout lui-meme, et elle echoue sur `E_STALE_READINESS` a l'execution, apres que
+> trois personnes l'aient approuvee.
+>
+> Il n'y a **aucune contrainte de temps** sur les approbations: le `timeLock` Squads des deux multisigs
+> vaut 0 (verifie on-chain le 2026-08-12), donc une proposition en attente n'expire jamais et les
+> signataires prennent le temps qu'il faut. La seule chose qui la perime est un changement de config,
+> d'ou l'ordre ci-dessus.
+
+
 
 ```
 add_guardian(<guardian 1>)                 # instant
 add_guardian(<guardian 2>)                 # instant
-set_inventory_wallet(EkDhR65JUL8tGhxRhnueaqri6zNzxMEJ82UU35pQ7V56)   # instant
-unpause                                    # instant
+unpause                                    # instant, and REFUSED until a guardian above exists
 ```
 
-Same three-phase shape as step 7, and for the same reason:
+**DO STEP 9b (the fee vault) BEFORE THE UNPAUSE.** The numbers no longer match the order, and this is
+the one place it matters. Under the old posture the unpause did not make the priced path usable: the
+public mint stayed closed until step 10, so the vault only had to exist before THAT. Round 8 opens
+both switches at `initialize`, so the unpause IS the go-live, and `mint_silv` and `redeem_silv` both
+take the fee vault as a REQUIRED account. The real order is:
+
+```
+8   add_guardian x N          (instant, no side effect on users)
+9b  create the fee vault      (one ATA, permanent, no program instruction)
+8   unpause                   (THE GO-LIVE: mint and redeem are already open)
+9   admin_premint             (requires !paused, so it comes after the unpause)
+10  prove the priced path with real money
+```
+
+`ceremony-step8.ts` ENFORCES this rather than trusting the reader: it refuses to emit the unpause
+while the fee vault is missing, and says which script to run. The numbers are kept because
+`verify-mainnet-readiness.ts --stage=N` is keyed to them.
+
+**THE GUARDIAN ORDER IS ALSO THE POINT, not a convenience.** `unpause` now takes a `GuardianAccount` and refuses
+both an empty guardian set (`NoActiveGuardian`) and a guardian that is the current admin
+(`GuardianNotIndependent`). With mint and redeem already open in the initialized config, an unpause
+before that brake exists would switch on every flow with nobody able to stop it. `ceremony-step8.ts`
+emits the instructions in this order and points the unpause at the first guardian it registers.
+
+**`set_inventory_wallet` is GONE from this step, and from the program.** Round 8 T8-03: the pre-mint
+destination is an argument of `initialize` (step 5), bound atomically and validated non-default, and
+the only writer afterwards is `propose_set_inventory_wallet` plus the 24h timelock. Step 8 now
+CHECKS it instead of setting it: if `config.inventory_wallet` is not the address in
+`config/mainnet-authorities.json`, the script REFUSES the whole step rather than unpausing over a
+destination this ceremony did not choose.
+
+Same three-phase shape as the other ceremony steps:
 
 ```bash
 DOMINION_ALLOW_MAINNET=i-understand \
@@ -532,6 +654,9 @@ registered alongside the ones you did.
 2026-08-07 found no such instruction in the IDL. The real pair is `propose_set_treasury_min_float` /
 `execute_set_treasury_min_float`, 24h-timelocked. See step 7 for why it is not part of the launch lot.
 
+**After this step the protocol is LIVE.** There is no later step that opens anything: the unpause
+above is the last gate. Do not run it until steps 9 and 9b are ready to follow immediately.
+
 ### 9. Pre-mint and seed the pool
 
 The plan is **$6.75M worth of SILV** (Thomas 2026-07-29). Do NOT reuse a figure agreed
@@ -544,23 +669,115 @@ DOMINION_RPC=https://api.mainnet-beta.solana.com npx tsx scripts/premint-sizing.
 
 At $58.34 spot that is **~115,705 oz**, i.e. `admin_premint(115705029311)`, and 77% of the
 150,000 oz cap. The script prints the atomic value (an off-by-1e6 there is a 1,000,000x
-error) and refuses if the cap could not absorb it.
+error) and refuses if the cap could not absorb it. That figure is an EXAMPLE at one spot
+price: re-run the sizing and use what it prints. On 2026-08-10 spot was $63.61 and the same
+budget was ~106,115 oz.
 
-**Two consequences to hold in mind:**
+Then SEND it with the tranche script, which takes the atomic figure the sizing printed:
 
-- It leaves ~34,300 oz of headroom, and `mint_silv` draws on the SAME cap. So site sales
-  are hard-capped at roughly **$2.03M** before `SupplyCapExceeded`, and raising the cap
-  then needs a program upgrade.
-- Only ~1,750 oz (~$100k) goes into the Sunrise pool. The other ~114,000 oz (~$6.65M)
-  would sit in the inventory wallet, which is a **single-signer key**. Consider
-  pre-minting in tranches instead: `admin_premint` is callable as often as you like, so
-  there is no need to create supply before it has a use.
+```bash
+DOMINION_ALLOW_MAINNET=i-understand DOMINION_RPC=<mainnet> \
+  DOMINION_KEYPAIR=<the key that IS config.admin> DOMINION_INTENT=admin_premint \
+  npx tsx scripts/premint.ts --atomic <tranche1> --dry-run   # resolve, send nothing
+DOMINION_ALLOW_MAINNET=i-understand DOMINION_RPC=<mainnet> \
+  DOMINION_KEYPAIR=<the key that IS config.admin> DOMINION_INTENT=admin_premint \
+  npx tsx scripts/premint.ts --atomic <tranche1>
+```
+
+**`DOMINION_INTENT=admin_premint` is required** since 2026-08-10, when `admin_premint` was
+reclassified `irreversible` in `_guard.ts`. It had been `reversible` on the grounds that
+"the cap bounds it". The cap bounds the TOTAL and is not an undo: there is no admin burn in
+this program at all, the only burn needs the holder's signature and runs inside
+`redeem_silv`, which pays out treasury USDC. An over-mint has no undo.
+
+**READ THIS BEFORE YOU RUN IT IF `config.admin` IS THE SQUADS VAULT.** `premint.ts` is a
+DIRECT sender: it signs with a local keypair. The recommended `initialize` binds
+`config.admin` to the Ops Squads vault `65g5nNX…`, which is OFF-CURVE, so no private key
+exists for it and `has_one = admin` can never be satisfied by any keypair. The script now
+calls `assertSendable` and refuses up front with that explanation, but **it has no emit
+mode**, so on that configuration this step has no tooling and the pre-mint must go through
+the admin panel like the other Squads actions. The 2026-08-10 devnet rehearsal could not
+surface this: devnet's admin is a single key. Decide before the ceremony which shape you
+are in, and if it is the vault, budget for the panel path.
+
+**Run `--dry-run` first, every time.** It prints the resolved destination, the cap, the
+headroom that would be left, refuses the whole plan if the tranches do not fit, and
+cross-checks `config.inventory_wallet` against `config/mainnet-authorities.json` the same
+way step 8 does.
+
+**If a run stops part-way**, it keeps a record at `ceremony-out/premint-state.json`, names
+the tranches that landed and the ones that did not, and a plain re-run REFUSES. Finish it
+with `--resume`. Never re-issue the original command: the cap catches a duplicated 106,115
+oz plan, but it does NOT catch a duplicated ~1,750 oz operational tranche, which would
+silently double-mint into the hot wallet.
+
+Three things about that record an operator meets at the worst moment, so read them now:
+
+- **A tranche can be IN FLIGHT**, if the process died between sending and recording the
+  signature. `--resume` reconciles it against the inventory ATA balance before sending
+  anything: `before + amount` means it landed, `before` exactly means it did not.
+- **Any other balance REFUSES and asks you to decide.** Something else moved the account
+  (an inbound transfer, or the permanent delegate). Find the transaction, then hand-edit
+  `ceremony-out/premint-state.json`: move the tranche into `landed` if it landed, or delete
+  `inFlight` if it did not. The script will not guess, because one guess double-mints and
+  the other silently skips a tranche.
+- **A completed run is ARCHIVED, not deleted**, to `premint-<timestamp>.done.json`, and
+  re-running the SAME plan within 30 minutes refuses. That is the up-arrow-enter guard. A
+  deliberate second pre-mint passes `--again`.
+
+The script exists because this step had NO tooling until the devnet rehearsal of
+2026-08-10: the runbook said "run admin_premint" and the only senders in the repo were a
+test pinned at 1000 oz and the admin panel. It takes tranches, repeatable, because that is
+the shape of D11 below, and it asserts both the supply delta AND the inventory ATA delta
+after each one, since a mint that lands in the wrong account still moves supply.
+
+**D11, 2026-08-09: PRE-MINT THE OPERATIONAL TRANCHE ONLY. This is now a rule, not advice.**
+
+The paragraph below used to say "consider pre-minting in tranches instead". Opening
+redemptions at launch turned that suggestion into a requirement, because it changed what
+the inventory key is worth.
+
+While `redemptions_enabled` was false, whoever held `EkDhR65J...` held SILV and nothing
+else. With redemptions open they hold a **direct claim on treasury USDC**: they sign
+`redeem_silv` themselves, with no admin instruction, no redirection of the inventory
+wallet, and **no timelock**. Fixing the binding at `initialize` closes the Ops path to
+that wallet; it does nothing about the tokens once they are in it. Blocking the inventory
+address inside `redeem_silv` would not help either: SILV is fungible and can be moved to
+another address first.
+
+The only code bound on the drain is the rolling window, and cite the REAL one:
+`redeem_window.rs` documents and tests that an adversarial alignment lets nearly **2x the
+budget** out in one window-length slice, i.e. about **40,000 USDC in 24h** at the default,
+then about 20,000 per day for as long as nobody pauses. Pause is a human reaction, not an
+automatic stop.
+
+**So:**
+
+- Pre-mint **only what the pool needs now**, and re-run `admin_premint` later when there
+  is a new use. It is callable as often as you like, and the cap is a ceiling rather than
+  a target.
+- The **reserve does not go to the hot key**. It goes to a Squads vault, or it is not
+  minted at all.
+- The size of the operational tranche must be compatible with the maximum loss you accept
+  over your detection-and-reaction SLA, computed with the **2x** bound. **That number is
+  Thomas's input and is not fixed yet.** The natural starting point is the pool
+  requirement itself, ~1,750 oz (~$100k) below, which is 1.5% of what the old plan would
+  have left exposed.
+
+Full rationale, including what this decision does NOT close, is recorded in
+`config/mainnet-authorities.json` under `launch_posture._premint_custody_note`.
+
+**One consequence to hold in mind either way:**
+
+- The full plan leaves ~34,300 oz of headroom, and `mint_silv` draws on the SAME cap. So
+  site sales are hard-capped at roughly **$2.03M** before `SupplyCapExceeded`, and raising
+  the cap then needs a program upgrade.
 
 Then from the inventory wallet, create the Sunrise SILV/USDC pool with the SILV and your
 100,000 USDC. The inventory wallet is a **plain single-signer wallet** and will hold the
 entire pre-minted supply, so treat its key as equal in value to the pool.
 
-### 9b. Create the fee vault. BLOCKING for step 10.
+### 9b. Create the fee vault. BLOCKING for step 8's UNPAUSE, so do it BEFORE that.
 
 ```bash
 DOMINION_ALLOW_MAINNET=i-understand DOMINION_RPC=<mainnet> DOMINION_INTENT=create_fee_vault \
@@ -573,17 +790,24 @@ mint and EVERY redeem reverts `AccountNotInitialized`, which reads like a broken
 in the PREREQUISITES section outside the numbered steps, which is round 3's P1: the operator following the
 sequence never reached it and step 10 could open the mint on top of a missing vault.
 
-### 10. Execute the public-mint open (24h after step 7)
+**ROUND 8 MOVED THE DEADLINE EARLIER, and the number stayed.** With mint and redeem open from
+`initialize`, the go-live is step 8's unpause, not step 10, so the vault must exist before the
+unpause. `ceremony-step8.ts` refuses to emit the unpause without it rather than leaving that to the
+order of two headings, because a prerequisite nobody numbers is a prerequisite somebody skips and
+this exact vault is the one that proved it.
 
-```
-execute_set_public_mint(<nonce>)   # through the admin panel, same Squads path as step 7
-```
+### 10. Prove the priced path with real money
 
-One proposal, not three. This page and both ceremony scripts used to say "the three proposals": the
-redeem open was removed from the launch lot in round 4 (P0-04) and the treasury float is not part of
-it either (D5), so the launch lot is ONE. Round 5 P3-01.
+**No `execute_set_public_mint` here any more.** This step used to execute the proposal step 7 queued
+24 hours earlier; round 8 opens both switches at `initialize`, so by the time step 8's unpause lands
+the priced path is already live. What remains is the part that always mattered: proving it works
+against the real feed, with real funds, at the smallest amount the program accepts.
 
-Then prove the priced path works with real money, smallest possible amount:
+The launch lot went from three proposals to one to none. The redeem open left it in round 4 (P0-04),
+the treasury float was never in it (D5), and the public-mint open left it in round 8 with the posture
+change. Round 5 P3-01 recorded the middle state; this is the end of that line.
+
+Prove the priced path works with real money, smallest possible amount:
 
 ```bash
 DOMINION_ALLOW_MAINNET=i-understand \
@@ -621,14 +845,14 @@ mainnet finance en SOL et en USDC.
 
 ### 11. Deploy the PUBLIC app, pointed at mainnet
 
-The admin panel went live at step 6b, because steps 7 and 8 cannot be executed without it. Only the
+The admin panel went live at step 6b, because step 8 cannot be executed without it. Only the
 public app is left.
 
 ```bash
 # Vercel env for apps/public:
 #   NEXT_PUBLIC_HELIUS_RPC   = a mainnet RPC (the public endpoint will rate-limit you)
-#   NEXT_PUBLIC_OPS_SQUADS   = 65g5nNXTtqtFz3jggKAqyvS6oCoVUXuXqAU9B8jHqPPS
-#   NEXT_PUBLIC_UPGRADE_SQUADS = FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3
+#   NEXT_PUBLIC_OPS_SQUADS   = 9BwMVmjMwjppJyBn5Kj6vTae8Rc7NUamH5H2Tq7H5VtU   # THE MULTISIG, not the vault
+#   NEXT_PUBLIC_UPGRADE_SQUADS = BjbtdEcy324Xdmt9182D8FZYGiH2nhTLFHP7EaAEXLAi   # THE MULTISIG, not FqFNX (the vault)
 #   PYTH_LAZER_API_KEY       = the entitled key (public app only)
 (cd apps/public && vercel --prod --yes)
 
@@ -655,7 +879,7 @@ Only after everything above works. `initialize` needed the deployer to be the up
 authority, so this cannot come earlier.
 
 ```bash
-solana program set-upgrade-authority <PROGRAM_ID> \
+solana program set-upgrade-authority --skip-new-upgrade-authority-signer-check <PROGRAM_ID> \
   --new-upgrade-authority FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3 \
   -k ~/.config/solana/dominion-dev.json -u mainnet-beta
 

@@ -57,10 +57,15 @@ has_string() {
   rm -f "$tmp"; return 1
 }
 
+# ROUND 8 F-03. The BPF stack-overflow guard moved to scripts/_strict-build-sbf.sh so that EVERY
+# path which builds, compares or publishes a .so uses the same barrier. It lived only here, and the
+# release paths still called `cargo build-sbf` raw.
+strict_build() { bash scripts/_strict-build-sbf.sh "$@"; }
+
 if [[ "$DO_BUILD" -eq 1 ]]; then
   echo "[1/3] build dominion with the DEFAULT feature set -> $SO"
   # `anchor build` is broken in this repo; --locked is mandatory.
-  cargo build-sbf --manifest-path "$MANIFEST" -- --locked
+  strict_build --manifest-path "$MANIFEST" -- --locked
 else
   echo "[1/3] build SKIPPED (--no-build): testing whatever artifact is already at $SO"
 fi
@@ -71,7 +76,7 @@ fi
 # never target/deploy, for the same reason tools/lazer-harness/run.sh does it: nothing that is not the
 # release artifact may land on the path `solana program deploy` reads.
 echo "      + mock-lazer -> target/harness (the anti-replay persistence tests need a Lazer that runs)"
-cargo build-sbf --manifest-path tools/mock-lazer/Cargo.toml --sbf-out-dir target/harness
+strict_build --manifest-path tools/mock-lazer/Cargo.toml --sbf-out-dir target/harness
 # A missing mock is a hard failure and not a skip. The tests that need it would otherwise panic on a
 # read, or worse, a future refactor could make them skip silently, which is the exact false-green
 # class this harness exists to close.
@@ -127,7 +132,16 @@ rm -f "$tmp_out"
 # number, so this runner exited 1 in TWO blocking jobs (gate, reproducible-build). The commit
 # message quoted 154, measured with `cargo test` directly, which is precisely the path that does
 # not go through the check whose error text says to update this in the SAME commit.
-EXPECTED_STATE_TESTS=164
+# ROUND 8 lot 1. 164 -> 166: two `option_a_` scenarios plus the zero-inventory and timelocked-reopen
+# tests, minus the two tests of the deleted `set_inventory_wallet` first binding.
+# ROUND 8 lot 1 FIX PACK. 166 -> 178: tools/state-harness/tests/launch_open_posture.rs, the twelve
+# scenarios that qualify the open posture (Codex L1-04). They were the gap that let the posture ship
+# with no test of the posture.
+# ROUND 8 FINAL-03. 178 -> 179: a_prebuilt_unpause_is_refused_after_a_matured_action_changed_the_
+# approved_state, the acceptance test Codex specified. It builds the unpause once, executes a matured
+# feed change while paused, asserts the action DISARMED itself (which is what made the previous
+# counter guard blind), then submits the pre-built instruction unchanged.
+EXPECTED_STATE_TESTS=181
 if [[ "$executed" -ne 0 && "$executed" -ne "$EXPECTED_STATE_TESTS" && ${#ARGS[@]} -eq 0 ]]; then
   echo >&2
   echo "FAIL: $executed test(s) executes, $EXPECTED_STATE_TESTS attendus (sans filtre)." >&2

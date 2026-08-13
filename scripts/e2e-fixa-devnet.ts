@@ -4,6 +4,7 @@
  * timelock, no dev-hatch bypass in the release build); propose + cancel of that path are.
  * Run: DOMINION_KEYPAIR=~/.config/solana/dominion-dev.json npx tsx scripts/e2e-fixa-devnet.ts
  */
+import { readinessDigestFromConfig } from "./_readiness-digest";
 import * as anchor from "@coral-xyz/anchor";
 import { AnchorProvider, Program, BN, Wallet, Idl } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
@@ -71,22 +72,60 @@ async function main() {
   console.log("SILV mint (from the live config):", SILV_MINT.toBase58());
   console.log("Initial: paused =", cfg.paused, "| publicMint =", cfg.publicMintEnabled, "| redeem =", cfg.redemptionsEnabled);
 
-  // 1. unpause
-  await program.methods.unpause().accounts({ config: configPda, admin }).rpc();
+  // 1. unpause. ROUND 8: the handler now demands an ACTIVE guardian distinct from the admin, so one
+  // has to exist before the protocol can go live. `add_guardian` is instant and reversible, and it
+  // refuses the admin itself, so the guardian is a separate key: DOMINION_E2E_GUARDIAN when the
+  // operator has one, otherwise a throwaway that only ever occupies the account slot (a guardian
+  // never signs anything here; unpause only READS the account).
+  // ROUND 8 L1-02: the appointee CO-SIGNS its own appointment, so this needs the KEYPAIR and not just
+  // a pubkey. DOMINION_E2E_GUARDIAN_KEYPAIR points at a keypair file when the operator has one to
+  // keep; otherwise a fresh one, held for the length of this run.
+  const guardianKp = process.env.DOMINION_E2E_GUARDIAN_KEYPAIR
+    ? loadKp(process.env.DOMINION_E2E_GUARDIAN_KEYPAIR)
+    : Keypair.generate();
+  const guardianKey = guardianKp.publicKey;
+  const [guardianAcct] = PublicKey.findProgramAddressSync(
+    [Buffer.from("guardian"), guardianKey.toBuffer()],
+    PROGRAM_ID,
+  );
+  if ((await conn.getAccountInfo(guardianAcct)) === null) {
+    assertReversible("add_guardian", INTENT);
+    await program.methods
+      .addGuardian(guardianKey)
+      .accounts({
+        config: configPda,
+        admin,
+        payer: admin,
+        guardianAccount: guardianAcct,
+        systemProgram: anchor.web3.SystemProgram.programId,
+      })
+      .rpc();
+  }
+  await program.methods
+    .unpause(readinessDigestFromConfig(await acct.fetch(configPda)))
+    .accounts({ config: configPda, admin, guardian: guardianAcct })
+    .rpc();
   cfg = await acct.fetch(configPda);
   ok("unpause: paused == false", cfg.paused === false);
+  ok("unpause required a registered guardian", cfg.guardianCount > 0);
 
-  // 2. set_inventory_wallet(admin). Captured first so step 11 can restore it.
-  const inventoryBefore: PublicKey | null = cfg.inventoryWallet.equals(PublicKey.default)
-    ? null
-    : cfg.inventoryWallet;
-  await program.methods.setInventoryWallet(admin).accounts({ config: configPda, admin }).rpc();
-  cfg = await acct.fetch(configPda);
-  ok("set_inventory_wallet", cfg.inventoryWallet.toBase58() === admin.toBase58());
+  // 2. ROUND 8 T8-03: there is nothing to set. `initialize` bound `config.inventory_wallet`
+  // atomically and `set_inventory_wallet` is deleted, so the pre-mint destination is whatever the
+  // ceremony chose and this script READS it. The old version pointed it at the admin for the
+  // convenience of step 3 and restored it at step 11; that convenience was exactly the redirect the
+  // audit refused, and it is no longer expressible.
+  const inventoryWallet: PublicKey = cfg.inventoryWallet;
+  ok(
+    "inventory wallet is bound (initialize is the only thing that could have bound it)",
+    !inventoryWallet.equals(PublicKey.default),
+    inventoryWallet.toBase58(),
+  );
 
-  // 3. inventory SILV ATA (Token-2022, owner = admin)
-  const invAta = getAssociatedTokenAddressSync(SILV_MINT, admin, false, TOKEN_2022_PROGRAM_ID);
-  await createAssociatedTokenAccountIdempotent(conn, kp, SILV_MINT, admin, {}, TOKEN_2022_PROGRAM_ID);
+  // 3. inventory SILV ATA (Token-2022), owned by the CONFIGURED wallet rather than by the admin.
+  // Creating an ATA needs no signature from its owner, so the premint below lands where the config
+  // says it must and the destination check in premint.rs is exercised for real.
+  const invAta = getAssociatedTokenAddressSync(SILV_MINT, inventoryWallet, true, TOKEN_2022_PROGRAM_ID);
+  await createAssociatedTokenAccountIdempotent(conn, kp, SILV_MINT, inventoryWallet, {}, TOKEN_2022_PROGRAM_ID);
 
   // 4. admin_premint 1000 oz -> supply + inventory balance
   const supplyBefore = (await getMint(conn, SILV_MINT, "confirmed", TOKEN_2022_PROGRAM_ID)).supply;
@@ -221,24 +260,74 @@ async function main() {
   cfg = await acct.fetch(configPda);
   ok("FIX A cancel clears pending nonce", cfg.pendingRedeemLimitsNonce === null);
 
-  // 11. restore the inventory wallet. Step 2 had to point it at the admin (the premint destination
-  // ATA must be owned by config.inventory_wallet). The fallback is load-bearing: a fresh config has
-  // no previous wallet, which is exactly the run this step exists for.
-  const INTENDED_INVENTORY = new PublicKey(
-    process.env.DOMINION_INVENTORY_WALLET ||
-      "EkDhR65JUL8tGhxRhnueaqri6zNzxMEJ82UU35pQ7V56",
+  // 11. ROUND 8 T8-06: the inventory wallet A -> B change, on the ONLY path that still exists.
+  //
+  // There is no restore step any more, because step 2 no longer redirects anything. What replaces it
+  // is the recovery path an operator would actually use for a key rotation: propose, observe that
+  // nothing moved, watch the early execute be refused, and cancel.
+  //
+  // HONEST LIMIT: `admin_timelock_seconds` has a hard floor of 86400, so a single run cannot reach
+  // the post-delay execute. This run proves everything before the wait and then CANCELS, leaving the
+  // live config exactly as it found it.
+  //
+  // ROUND 8 L1-05. The matured execute and the read-back of B are NOT claimed here. They belong to
+  // `scripts/e2e-inventory-change-devnet.ts`, which persists {cluster, program, admin, nonce,
+  // timelock PDA, A, B, proposed_at}, refuses to resume against anything that drifted, and executes
+  // on a second run a real day later. An earlier version of this file offered
+  // DOMINION_E2E_INVENTORY_KEEP=1 and called it a resume path; it only left the proposal armed and
+  // printed a command, and a second run started a fresh proposal. That claim was withdrawn.
+  const targetB = process.env.DOMINION_E2E_INVENTORY_B
+    ? new PublicKey(process.env.DOMINION_E2E_INVENTORY_B)
+    : Keypair.generate().publicKey;
+  const invNonce = new BN(cfg.nextTimelockNonce);
+  const [invTlPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("timelock"), Uint8Array.from(invNonce.toArrayLike(Buffer, "le", 8))],
+    PROGRAM_ID,
   );
-  const restoreTo = inventoryBefore ?? INTENDED_INVENTORY;
-  if (restoreTo.toBase58() !== admin.toBase58()) {
+  await program.methods
+    .proposeSetInventoryWallet(targetB)
+    .accounts({ config: configPda, admin, timelock: invTlPda, systemProgram: anchor.web3.SystemProgram.programId })
+    .rpc();
+  cfg = await acct.fetch(configPda);
+  ok(
+    "inventory change: propose arms the single slot",
+    cfg.pendingInventoryWalletNonce !== null && new BN(cfg.pendingInventoryWalletNonce).eq(invNonce),
+    `nonce ${invNonce.toString()}`,
+  );
+  ok(
+    "inventory change: proposing moves nothing (this is the veto window)",
+    cfg.inventoryWallet.toBase58() === inventoryWallet.toBase58(),
+  );
+
+  await expectRevert("inventory change: execute before the delay reverts", "TimelockNotElapsed", () =>
+    program.methods
+      .executeSetInventoryWallet(invNonce)
+      .accounts({ config: configPda, admin, timelock: invTlPda, rentRecipient: admin })
+      .rpc(),
+  );
+  cfg = await acct.fetch(configPda);
+  ok(
+    "inventory change: the refused execute left A in place",
+    cfg.inventoryWallet.toBase58() === inventoryWallet.toBase58(),
+  );
+
+  if (process.env.DOMINION_E2E_INVENTORY_KEEP === "1") {
+    console.log(
+      `\n  LEFT ARMED: nonce ${invNonce.toString()} -> ${targetB.toBase58()}.\n` +
+        `  This script cannot resume it. Use the two-phase runner for the full A -> B:\n` +
+        `    npx tsx scripts/e2e-inventory-change-devnet.ts --propose --to <B>\n` +
+        `    npx tsx scripts/e2e-inventory-change-devnet.ts --execute   # >= 24h later`,
+    );
+  } else {
     await program.methods
-      .setInventoryWallet(restoreTo)
-      .accounts({ config: configPda, admin })
+      .cancelTimelockedAction(invNonce)
+      .accounts({ config: configPda, timelock: invTlPda, rentRecipient: admin, signer: admin, guardian: null as never })
       .rpc();
     cfg = await acct.fetch(configPda);
     ok(
-      "inventory wallet restored (or set to the intended launch wallet)",
-      cfg.inventoryWallet.toBase58() === restoreTo.toBase58(),
-      restoreTo.toBase58(),
+      "inventory change: cancel releases the slot and leaves A bound",
+      cfg.pendingInventoryWalletNonce === null &&
+        cfg.inventoryWallet.toBase58() === inventoryWallet.toBase58(),
     );
   }
 

@@ -148,6 +148,11 @@ function main() {
     "claimRedemption",
     "adminSettleRedemptionOffchain",
     "closeSettledRedemption",
+    // ROUND 8 T8-03. Deleted, not restricted: `initialize` binds the pre-mint destination atomically
+    // and the only remaining writer is the 24h-timelocked pair. A client still calling this would
+    // send eight bytes the dispatcher no longer answers, and the operator would read the failure as
+    // an outage rather than as a removed capability.
+    "setInventoryWallet",
   ];
 
   const files = SCAN_DIRS.flatMap((d) => walk(d));
