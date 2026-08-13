@@ -154,28 +154,11 @@ function pin(label: string, got: unknown, want: unknown): void {
   if (String(got) !== String(want)) alert(`${label} CHANGED: now ${got}, pinned ${want}`);
 }
 
-/** Fetch a gated JSON route, authenticating only while the gate is still up. */
-async function fetchGated(path: string, init?: RequestInit): Promise<unknown | null> {
-  const url = `${PUBLIC_URL}${path}`;
-  const first = await fetch(url, init).catch(() => null);
-  if (first?.ok) return first.json().catch(() => null);
-  if (first?.status === 401 && process.env.SITE_PASSWORD) {
-    const cookie = await fetch(`${PUBLIC_URL}/api/gate`, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: `password=${encodeURIComponent(process.env.SITE_PASSWORD)}`,
-      redirect: "manual",
-    })
-      .then((r) => (r.headers.get("set-cookie") ?? "").match(/dominion_gate=[a-f0-9]+/)?.[0])
-      .catch(() => undefined);
-    if (!cookie) return null;
-    const retry = await fetch(url, {
-      ...init,
-      headers: { ...(init?.headers as Record<string, string> | undefined), cookie },
-    }).catch(() => null);
-    return retry?.ok ? retry.json().catch(() => null) : null;
-  }
-  return null;
+/** Fetch a JSON route from the public site. Anonymous: the pre-launch password gate is gone, so a
+ *  non-ok answer here is a real fault and never a missing credential. */
+async function fetchJson(path: string, init?: RequestInit): Promise<unknown | null> {
+  const res = await fetch(`${PUBLIC_URL}${path}`, init).catch(() => null);
+  return res?.ok ? res.json().catch(() => null) : null;
 }
 
 async function main(): Promise<void> {
@@ -364,7 +347,7 @@ async function main(): Promise<void> {
   console.log("");
   console.log("== oracle ==");
   const before = alerts.length;
-  const lazer = (await fetchGated("/api/lazer", {
+  const lazer = (await fetchJson("/api/lazer", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: "{}",

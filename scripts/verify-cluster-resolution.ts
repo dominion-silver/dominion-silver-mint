@@ -302,6 +302,8 @@ for (const rpc of [
   ]);
   // Everything else. Listed by name so ADDING a script is recorded, not silently blessed by a regex.
   const NON_SENDERS = new Set([
+    // Measures the fee exemption by simulating a mint twice, with and without it. Sends nothing.
+    "prove-fee-exemption.ts",
     // Read-only monitors. They query the chain and the live site and send no transaction, so they
     // must NOT be forced through the transaction guard.
     "health-monitor.ts",

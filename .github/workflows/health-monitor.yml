@@ -56,7 +56,11 @@ jobs:
           RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          # Only needed while the site is still password-gated; the script stops using it once it is not.
+          # REQUIRED WHILE THE SITE IS PASSWORD-GATED, and dropping it is not harmless. The oracle check
+          # goes through `/api/lazer`, deliberately, because that is the path a user takes. Behind the gate
+          # that route answers 401, the script reads "no signed envelope", and it would post a FALSE
+          # "every mint and redeem reverts" alert every ten minutes. The script stops needing this the
+          # moment the gate comes down; leaving it set after that is harmless.
           SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
           HEARTBEAT_URL: ${{ secrets.HEARTBEAT_URL }}
         run: |
