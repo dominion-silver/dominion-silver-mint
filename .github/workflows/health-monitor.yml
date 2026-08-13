@@ -1,0 +1,75 @@
+name: Health monitor
+
+# THE OPERATIONAL ALARM. Separate workflow from redeem-monitor.yml on purpose: that one answers "is the
+# redemption outflow abnormal", this one answers "is someone attacking us and can we still pay". Sharing
+# a workflow would mean one failing step hides the other's result.
+#
+# GITHUB'S SCHEDULER IS NOT RELIABLE AND THIS FILE SHOULD NOT PRETEND OTHERWISE. Measured on 2026-08-13:
+# after redeem-monitor.yml reached the default branch at 10:29Z, its first scheduled run fired at 12:26Z,
+# nearly two hours late. Scheduled events are queued and dropped under load, and `schedule` registers
+# from the DEFAULT BRANCH only. So a missed window is normal, and silence proves nothing.
+#
+# That is what HEARTBEAT_URL is for: the script pings it on every completed run, and an external
+# dead-man's-switch (healthchecks.io or equivalent) alerts when the pings stop. Without that secret,
+# nothing anywhere notices this monitor dying, which is the failure mode that matters most because it
+# looks exactly like "no problems found".
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    # Every ten minutes. GitHub's floor is five, and runs are queued, so treat this as "about every ten".
+    - cron: "*/10 * * * *"
+    # The weekly digest: Monday 09:00 UTC. A trend to read, not an alarm to react to, which is why it is
+    # a separate entry rather than a branch inside the ten-minute job.
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+    inputs:
+      weekly:
+        description: "Send the weekly digest instead of only alerting"
+        type: boolean
+        default: false
+
+concurrency:
+  # Never let two runs overlap: they would double-count the window and could double-post an alert.
+  group: health-monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4
+        with:
+          node-version: 20
+
+      # Root deps only. The monitor reads the IDL committed under apps/*, so no Rust toolchain and no
+      # app install are needed: building an IDL for a ten-minute cron would cost twenty minutes a run.
+      - name: Install
+        run: npm ci
+
+      - name: Health check
+        env:
+          RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          # Only needed while the site is still password-gated; the script stops using it once it is not.
+          SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
+          HEARTBEAT_URL: ${{ secrets.HEARTBEAT_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RPC_MAINNET}" ]; then
+            echo "::error::RPC_MAINNET is not set, so this check did not run."
+            # A monitor that cannot check must not report success. Same posture as the script's exit 2.
+            exit 1
+          fi
+          # The Monday 09:00 cron sends the digest; every other trigger only alerts. `github.event.schedule`
+          # carries the cron expression that fired, which is the only way to tell the two apart.
+          WEEKLY=""
+          if [ "${{ github.event.schedule }}" = "0 9 * * 1" ] || [ "${{ inputs.weekly }}" = "true" ]; then
+            WEEKLY="--weekly"
+          fi
+          DOMINION_RPC="${RPC_MAINNET}" npx tsx scripts/health-monitor.ts ${WEEKLY}
