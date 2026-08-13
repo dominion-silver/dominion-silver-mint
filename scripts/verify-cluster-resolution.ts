@@ -302,6 +302,9 @@ for (const rpc of [
   ]);
   // Everything else. Listed by name so ADDING a script is recorded, not silently blessed by a regex.
   const NON_SENDERS = new Set([
+    // Reads the chain and fetches the deployed bundles to prove the frontends resolve MAINNET.
+    // Sends nothing, so it must NOT be forced through the transaction guard.
+    "verify-post-deploy.ts",
     // ROUND 8 REVIEW. Three files this gate had never seen. `_readiness-digest.ts` and
     // `_run-state.ts` are pure: no Connection, no keypair, no send. `test-security-posture-docs.ts`
     // shells out to the litesvm harness and reads files, and touches no cluster.
