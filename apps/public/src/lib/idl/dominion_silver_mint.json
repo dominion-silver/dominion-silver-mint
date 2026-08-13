@@ -1855,6 +1855,37 @@
           "address": "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
         },
         {
+          "name": "first_guardian",
+          "docs": [
+            "ROUND 8 L1-02. The FIRST guardian's account, created here so the independent brake exists in",
+            "the same authenticated transaction as `config.admin` rather than in a later admin-only call.",
+            "The seed is `args.guardian`, so the account address is a function of the argument and cannot",
+            "be pointed at some other key."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  117,
+                  97,
+                  114,
+                  100,
+                  105,
+                  97,
+                  110
+                ]
+              },
+              {
+                "kind": "arg",
+                "path": "args.guardian"
+              }
+            ]
+          }
+        },
+        {
           "name": "system_program",
           "address": "11111111111111111111111111111111"
         }
@@ -4105,56 +4136,6 @@
       ]
     },
     {
-      "name": "set_inventory_wallet",
-      "docs": [
-        "Binds the pre-mint destination ONCE. Refuses if one is already set: use the two above."
-      ],
-      "discriminator": [
-        145,
-        245,
-        215,
-        189,
-        240,
-        207,
-        205,
-        219
-      ],
-      "accounts": [
-        {
-          "name": "config",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "admin",
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        }
-      ],
-      "args": [
-        {
-          "name": "wallet",
-          "type": "pubkey"
-        }
-      ]
-    },
-    {
       "name": "set_kyc_operator",
       "discriminator": [
         90,
@@ -4460,6 +4441,10 @@
     },
     {
       "name": "unpause",
+      "docs": [
+        "ROUND 8 FINAL-03. `expected_readiness_digest` is the digest of the config fields the go-live",
+        "decision read WHEN THIS INSTRUCTION WAS BUILT. See `ConfigAccount::readiness_digest`."
+      ],
       "discriminator": [
         169,
         144,
@@ -4496,9 +4481,51 @@
           "relations": [
             "config"
           ]
+        },
+        {
+          "name": "guardian",
+          "docs": [
+            "ROUND 8, the conditional P2 that comes with the open launch posture. `unpause` used to check",
+            "the admin signature and nothing else, while `initialize` leaves `guardian_count = 0`. With",
+            "mint and redeem now OPEN in the initial state, that sequence lets a ceremony slip or a",
+            "compromised admin switch every flow on before any independent party can pause or cancel. The",
+            "timelocks and the emergency response both assume that party exists."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  103,
+                  117,
+                  97,
+                  114,
+                  100,
+                  105,
+                  97,
+                  110
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "guardian.guardian",
+                "account": "GuardianAccount"
+              }
+            ]
+          }
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "expected_readiness_digest",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
     },
     {
       "name": "withdraw_fees",
@@ -5674,12 +5701,12 @@
     {
       "code": 12085,
       "name": "PublicMintDisabled",
-      "msg": "Public direct mint is disabled (closed at launch; opens with KYC in Phase 1)"
+      "msg": "Public direct mint is disabled. ROUND 8: it ships OPEN and this fires only after an emergency close; reopening is 24h-timelocked"
     },
     {
       "code": 12086,
       "name": "InventoryWalletNotSet",
-      "msg": "Inventory wallet is not set; call set_inventory_wallet first"
+      "msg": "Inventory wallet is not set; initialize binds it and only the 24h timelock can change it"
     },
     {
       "code": 12087,
@@ -5689,7 +5716,7 @@
     {
       "code": 12088,
       "name": "RedemptionsEnableBlocked",
-      "msg": "Enabling redemptions is blocked at launch; it opens with the Phase 1 KYC/redeem upgrade"
+      "msg": "Enabling redemptions on this lane is blocked. ROUND 8: redeem ships OPEN, and REOPENING after a close rides propose/execute_set_redeem_limits and the 24h timelock, not an upgrade"
     },
     {
       "code": 12089,
@@ -5865,6 +5892,21 @@
       "code": 12123,
       "name": "InventoryWalletUnchanged",
       "msg": "the proposed inventory wallet is the one already configured"
+    },
+    {
+      "code": 12124,
+      "name": "NoActiveGuardian",
+      "msg": "no active guardian is registered: unpause would enable every flow with no independent brake"
+    },
+    {
+      "code": 12125,
+      "name": "GuardianNotIndependent",
+      "msg": "the supplied guardian is the current admin, so it is not an independent brake"
+    },
+    {
+      "code": 12126,
+      "name": "StaleReadinessDigest",
+      "msg": "the config changed after this unpause was built: the launch-readiness decision that authorised it is stale, so re-read the chain and rebuild it"
     }
   ],
   "types": [
@@ -6769,6 +6811,49 @@
           {
             "name": "max_guardian_count",
             "type": "u8"
+          },
+          {
+            "name": "inventory_wallet",
+            "docs": [
+              "ROUND 8 T8-03, option A. The pre-mint DESTINATION, bound ATOMICALLY with the rest of the",
+              "configuration, and the instant setter that used to bind it is DELETED.",
+              "",
+              "The round-7 shape kept a one-shot instant binding on the argument that with the field unset",
+              "there was \"nothing to steal\". That argument was wrong, and the refutation is clean: compromise",
+              "the Ops key DURING the ceremony, BEFORE the legitimate binding. The attacker binds their own",
+              "wallet, unpauses, and issues up to the whole hard cap into their ATA, with no delay and no",
+              "guardian veto. It confused supply already minted with issuance power still available.",
+              "",
+              "Appended LAST, so the 142-byte prefix of the previous layout is untouched and the only",
+              "difference on the wire is 32 more bytes."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "guardian",
+            "docs": [
+              "ROUND 8 L1-02. The FIRST guardian, appointed in this transaction.",
+              "",
+              "WHY IT IS AN ARGUMENT AND NOT A LATER CALL. `unpause` demands an active GuardianAccount whose",
+              "key differs from the admin, and that closes the two syntactic holes (no guardian at all, and a",
+              "guardian that IS the admin). It does not establish that an independent brake exists, because",
+              "`add_guardian` was admin-only: a compromised Ops could mint its own guardian keys, fill the",
+              "slots, present one to `unpause` and hold every power the timelocks assume somebody else holds.",
+              "A second keypair created by Ops is not independence.",
+              "",
+              "No on-chain check can PROVE independence. What this moves is the trust boundary. Binding the",
+              "first guardian here puts it in the same authenticated transaction as `config.admin`, under the",
+              "DOM-001 chain, inside the ceremony artifact that is reviewed and diffed before it is signed.",
+              "It becomes evidence somebody audits, instead of a call Ops can make later and alone. Every",
+              "LATER appointment additionally requires the named key to sign (`add_guardian`), so the set can",
+              "never grow without the consent of the key being added.",
+              "",
+              "Validated non-default and distinct from `admin`: a zero would leave `guardian_count = 1` with",
+              "no usable brake, and an admin-held slot is a brake wired to the same lever.",
+              "",
+              "Appended LAST for the same reason as the field above."
+            ],
+            "type": "pubkey"
           }
         ]
       }
@@ -6776,8 +6861,10 @@
     {
       "name": "InventoryWalletChanged",
       "docs": [
-        "SolidProof MEDIUM #3 asked specifically for this one: the pre-mint destination",
-        "can be redirected instantly, so the redirect must at least be observable."
+        "SolidProof MEDIUM #3 asked for this back when the destination could be changed with no delay.",
+        "ROUND 8 A-05: it cannot any more. The only writer after `initialize` is",
+        "`execute_set_inventory_wallet`, after 24h and cancellable by a guardian. The event stays because",
+        "a timelocked redirect still has to be observable when it lands."
       ],
       "type": {
         "kind": "struct",
@@ -7230,9 +7317,9 @@
           {
             "name": "by",
             "docs": [
-              "SOLIDPROOF T-006. The signer that minted. `inventory` is the DESTINATION, and the admin",
-              "chooses it via `set_inventory_wallet`, so without this field the event records where supply",
-              "went but not who sent it.",
+              "SOLIDPROOF T-006. The signer that minted. `inventory` is the DESTINATION, bound at",
+              "`initialize` and changeable only through the 24h timelocked pair, so without this field the",
+              "event records where supply went but not who sent it.",
               "",
               "LAST, after `timestamp`, and that placement is the whole point. The first version of this",
               "change put `by` between `supply_post` and `timestamp` while its comment claimed an append",

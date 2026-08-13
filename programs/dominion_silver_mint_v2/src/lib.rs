@@ -162,8 +162,10 @@ pub mod dominion_silver_mint {
         instructions::emergency::pause::pause_handler(ctx)
     }
 
-    pub fn unpause(ctx: Context<Unpause>) -> Result<()> {
-        instructions::emergency::pause::unpause_handler(ctx)
+    /// ROUND 8 FINAL-03. `expected_readiness_digest` is the digest of the config fields the go-live
+    /// decision read WHEN THIS INSTRUCTION WAS BUILT. See `ConfigAccount::readiness_digest`.
+    pub fn unpause(ctx: Context<Unpause>, expected_readiness_digest: [u8; 32]) -> Result<()> {
+        instructions::emergency::pause::unpause_handler(ctx, expected_readiness_digest)
     }
 
     // === Admin: instant ===
@@ -203,7 +205,9 @@ pub mod dominion_silver_mint {
     }
 
     // Pre-mint supply model: admin_premint mints SILV against the hard cap into the inventory wallet
-    // with no USDC and no oracle read; set_inventory_wallet sets the destination (late-binding).
+    // with no USDC and no oracle read. ROUND 8 A-05: the destination is bound at `initialize` and is
+    // NOT late-binding. `set_inventory_wallet` no longer exists; the pair below is the only writer
+    // after init, behind the 24h timelock.
     /// ROUND 7. Propose a CHANGE of the pre-mint destination. 24h, guardian-cancellable.
     pub fn propose_set_inventory_wallet(
         ctx: Context<ProposeInventoryWallet>,
@@ -219,10 +223,8 @@ pub mod dominion_silver_mint {
         instructions::admin::execute::execute_set_inventory_wallet_handler(ctx, nonce)
     }
 
-    /// Binds the pre-mint destination ONCE. Refuses if one is already set: use the two above.
-    pub fn set_inventory_wallet(ctx: Context<SetInventoryWallet>, wallet: Pubkey) -> Result<()> {
-        instructions::admin::premint::set_inventory_wallet_handler(ctx, wallet)
-    }
+    // ROUND 8 T8-03: `set_inventory_wallet` is REMOVED from the program surface. The destination is
+    // an `initialize` argument, and the only post-initialize writer is the timelocked pair above.
 
     pub fn admin_premint(ctx: Context<AdminPremint>, amount: u64) -> Result<()> {
         instructions::admin::premint::premint_handler(ctx, amount)

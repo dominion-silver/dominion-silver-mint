@@ -456,10 +456,22 @@ pub struct Fixture {
     pub holder: Keypair,
     pub holder2: Keypair,
     pub stranger: Keypair,
+    /// ROUND 8. `unpause` now demands an ACTIVE guardian distinct from the admin, so a running
+    /// protocol is no longer one admin signature away. This is the key `ensure_unpause_guardian`
+    /// installs on demand, kept OUT of `initialize` on purpose: a fresh deploy must still read
+    /// `guardian_count = 0`, and the guardian-budget tests need all three slots free.
+    pub guardian: Keypair,
     pub freeze_authority: Pubkey,
     pub permanent_delegate: Pubkey,
     pub usdc_mint: Pubkey,
     pub silv_mint: Pubkey,
+    /// ROUND 8 T8-03. Bound at `initialize` and never settable afterwards, so the fixture has to
+    /// carry it: tests that assert on the pre-mint destination read this rather than a default.
+    pub inventory_wallet: Pubkey,
+    /// ROUND 8 L1-02 / the P1 custody finding. The KEY behind `inventory_wallet`, because the
+    /// conditional P1 is precisely that its holder can sign `redeem_silv` itself, with no admin
+    /// instruction and no timelock. A test that could not sign as this key could not demonstrate it.
+    pub inventory: Keypair,
 }
 
 impl Fixture {
@@ -483,7 +495,19 @@ impl Fixture {
         let holder = Keypair::new();
         let holder2 = Keypair::new();
         let stranger = Keypair::new();
-        for k in [&deployer, &admin, &attestor, &holder, &holder2, &stranger] {
+        let guardian = Keypair::new();
+        let inventory = Keypair::new();
+        let inventory_wallet = inventory.pubkey();
+        for k in [
+            &deployer,
+            &admin,
+            &attestor,
+            &holder,
+            &holder2,
+            &stranger,
+            &guardian,
+            &inventory,
+        ] {
             svm.airdrop(&k.pubkey(), 100_000_000_000).unwrap();
         }
 
@@ -558,10 +582,13 @@ impl Fixture {
             holder,
             holder2,
             stranger,
+            guardian,
             freeze_authority,
             permanent_delegate,
             usdc_mint,
             silv_mint,
+            inventory_wallet,
+            inventory,
         };
         f.initialize();
         f
@@ -589,6 +616,13 @@ impl Fixture {
         args.extend_from_slice(&3154u32.to_le_bytes()); // pyth_lazer_feed_id
         args.extend_from_slice(&ADMIN_TIMELOCK_SECONDS.to_le_bytes());
         args.push(3); // max_guardian_count
+        // ROUND 8 T8-03: the pre-mint destination is now bound ATOMICALLY here. There is no
+        // instruction that can set it afterwards, only the 24h-timelocked change.
+        args.extend_from_slice(self.inventory_wallet.as_ref());
+        // ROUND 8 L1-02: the FIRST guardian, appointed in this same transaction. The fixture
+        // therefore starts with guardian_count = 1 and an active brake, which is the state a real
+        // deployment is in the instant `initialize` returns.
+        args.extend_from_slice(self.guardian.pubkey().as_ref());
 
         let usdc_treasury = ata(
             &self.usdc_mint,
@@ -609,6 +643,7 @@ impl Fixture {
                 AccountMeta::new_readonly(pk(CLASSIC_TOKEN_PROGRAM), false),
                 AccountMeta::new_readonly(pk(TOKEN_2022_PROGRAM), false),
                 AccountMeta::new_readonly(pk(ASSOCIATED_TOKEN_PROGRAM), false),
+                AccountMeta::new(guardian_pda(&self.guardian.pubkey()), false),
                 AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
             ],
             data: ix_data("initialize", &args),
@@ -629,9 +664,25 @@ impl Fixture {
             "config.admin_timelock_seconds"
         );
         assert_eq!(c.max_guardian_count, 3, "config.max_guardian_count");
+        // ROUND 8, launch posture decided 2026-08-09. Mint and redeem are OPEN in the initial
+        // configuration so that no base setting costs a 24h wait during the ceremony. What still
+        // guards the launch is the PAUSE: nothing flows until somebody unpauses, and `unpause` now
+        // demands an active guardian distinct from the admin. The two flags being open is not the
+        // same thing as the protocol being live, and this trio asserts exactly that distinction.
         assert!(c.paused, "a fresh deploy must be PAUSED");
-        assert!(!c.redemptions_enabled, "redemptions must be CLOSED at launch");
-        assert!(!c.public_mint_enabled, "public mint must be CLOSED at launch");
+        assert!(
+            c.redemptions_enabled,
+            "redemptions must be OPEN at initialize (round 8 posture)"
+        );
+        assert!(
+            c.public_mint_enabled,
+            "public mint must be OPEN at initialize (round 8 posture)"
+        );
+        assert_ne!(
+            Pubkey::new_from_array(c.inventory_wallet),
+            Pubkey::default(),
+            "T8-03: initialize must bind the inventory wallet atomically"
+        );
         assert_eq!(c.kyc_scope_flags, 0, "the KYC gate must be DORMANT at launch");
         assert!(!c.kyc_enforced, "kyc_enforced must be false at launch");
         assert_eq!(c.kyc_attestation_count, 0, "the roster must be empty at launch");
@@ -755,52 +806,136 @@ impl Fixture {
         self.send(&[ix], &[signer])
     }
 
-    // ------------------------------------------------------------ the mint call site
+    // ------------------------------------------------------------ guardian and unpause
 
-    /// Unpause and open the public mint through the 24h timelock, which is the ONLY path that can
-    /// open it: `set_public_mint_enabled` refuses to enable instantly.
-    pub fn open_public_mint(&mut self) {
-        let admin = self.admin.insecure_clone();
-        let pid = program_id();
-        let unpause = Instruction {
-            program_id: pid,
+    /// `add_guardian`, signed by `signer` in BOTH the admin and the payer slot.
+    ///
+    /// ROUND 8 F-02: the appointee's co-signature was REMOVED. It bought participation rather than
+    /// independence and made the instruction unexecutable through the Squads ceremony.
+    pub fn add_guardian_as(&mut self, signer: &Keypair, guardian: &Keypair) -> TxOutcome {
+        let ix = Instruction {
+            program_id: program_id(),
             accounts: vec![
                 AccountMeta::new(config_pda(), false),
-                AccountMeta::new_readonly(admin.pubkey(), true),
-            ],
-            data: ix_data("unpause", &[]),
-        };
-        expect_ok(self.send(&[unpause], &[&admin]), "open_public_mint: unpause");
-
-        let nonce = self.config().next_timelock_nonce;
-        let propose = Instruction {
-            program_id: pid,
-            accounts: vec![
-                AccountMeta::new(config_pda(), false),
-                AccountMeta::new(admin.pubkey(), true),
-                AccountMeta::new(timelock_pda(nonce), false),
+                AccountMeta::new_readonly(signer.pubkey(), true),
+                AccountMeta::new(signer.pubkey(), true),
+                AccountMeta::new(guardian_pda(&guardian.pubkey()), false),
                 AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
             ],
-            data: ix_data("propose_set_public_mint", &[1]),
+            data: ix_data("add_guardian", guardian.pubkey().as_ref()),
         };
-        expect_ok(self.send(&[propose], &[&admin]), "open_public_mint: propose");
+        self.send(&[ix], &[signer])
+    }
 
-        self.warp(ADMIN_TIMELOCK_SECONDS as i64 + 1);
-        let execute = Instruction {
-            program_id: pid,
+    pub fn add_guardian(&mut self, guardian: &Keypair) -> TxOutcome {
+        let admin = self.admin.insecure_clone();
+        self.add_guardian_as(&admin, guardian)
+    }
+
+    /// True when a GuardianAccount exists at that PDA. Mirrors the emptiness test `kyc` uses:
+    /// litesvm answers a never-created PDA with a zero-lamport, zero-length account rather than None.
+    pub fn guardian_registered(&self, guardian: &Pubkey) -> bool {
+        self.svm
+            .get_account(&guardian_pda(guardian))
+            .map(|a| !a.data.is_empty() && a.lamports > 0)
+            .unwrap_or(false)
+    }
+
+    /// Install `self.guardian` if it is not already registered, and return its key. Idempotent, so a
+    /// test may call it directly (to control WHEN the appointment happens, which matters before an
+    /// admin transfer) or let `unpause_as` call it.
+    ///
+    /// `signer` is the CURRENT admin: `add_guardian` is `has_one = admin`, and `self.admin` goes
+    /// stale the moment a test moves admin-ship.
+    pub fn ensure_unpause_guardian_as(&mut self, signer: &Keypair) -> Pubkey {
+        let g = self.guardian.insecure_clone();
+        if !self.guardian_registered(&g.pubkey()) {
+            expect_ok(
+                self.add_guardian_as(signer, &g),
+                "ensure_unpause_guardian: add_guardian",
+            );
+        }
+        g.pubkey()
+    }
+
+    pub fn ensure_unpause_guardian(&mut self) -> Pubkey {
+        let admin = self.admin.insecure_clone();
+        self.ensure_unpause_guardian_as(&admin)
+    }
+
+    /// `unpause` presenting an EXPLICIT guardian slot. The primitive, because the negative cases are
+    /// exactly about which account lands in that slot: a guardian that is the admin, a guardian in
+    /// cooldown, another guardian's PDA.
+    pub fn unpause_with(&mut self, signer: &Keypair, guardian_slot: Pubkey) -> TxOutcome {
+        // ROUND 8 FINAL-03. Read the digest NOW, which is what an honest caller does: build the
+        // instruction against the state it just read. `unpause_with_digest` is the primitive the
+        // staleness tests need, because proving the gap requires a digest read EARLIER than the send.
+        let d = self.readiness_digest();
+        self.unpause_with_digest(signer, guardian_slot, d)
+    }
+
+    /// ROUND 8 FINAL-03. The digest of the config fields the go-live decision reads, computed the
+    /// same way `ConfigAccount::readiness_digest` does on-chain. Mirrored rather than imported so a
+    /// test can capture it at T0 and submit it at T2.
+    pub fn readiness_digest(&self) -> [u8; 32] {
+        let c = self.config();
+        let mut buf = Vec::with_capacity(128);
+        buf.extend_from_slice(c.admin.as_ref());
+        buf.extend_from_slice(c.silv_mint.as_ref());
+        buf.extend_from_slice(c.inventory_wallet.as_ref());
+        buf.push(c.public_mint_enabled as u8);
+        buf.push(c.redemptions_enabled as u8);
+        buf.push(c.guardian_count);
+        buf.extend_from_slice(&c.min_publishers.to_le_bytes());
+        buf.extend_from_slice(&c.pyth_lazer_feed_id.to_le_bytes());
+        solana_sdk::hash::hash(&buf).to_bytes()
+    }
+
+    /// `unpause` carrying an EXPLICIT digest, so a test can build at T0 and submit at T2.
+    pub fn unpause_with_digest(
+        &mut self,
+        signer: &Keypair,
+        guardian_slot: Pubkey,
+        digest: [u8; 32],
+    ) -> TxOutcome {
+        let ix = Instruction {
+            program_id: program_id(),
             accounts: vec![
                 AccountMeta::new(config_pda(), false),
-                AccountMeta::new_readonly(admin.pubkey(), true),
-                AccountMeta::new(timelock_pda(nonce), false),
-                AccountMeta::new(admin.pubkey(), false),
+                AccountMeta::new_readonly(signer.pubkey(), true),
+                AccountMeta::new_readonly(guardian_slot, false),
             ],
-            data: ix_data("execute_set_public_mint", &nonce.to_le_bytes()),
+            data: ix_data("unpause", &digest),
         };
-        expect_ok(self.send(&[execute], &[&admin]), "open_public_mint: execute");
+        self.send(&[ix], &[signer])
+    }
+
+    /// `unpause` signed by `signer`, presenting the fixture's own guardian, installed on demand.
+    pub fn unpause_as(&mut self, signer: &Keypair) -> TxOutcome {
+        let g = self.ensure_unpause_guardian();
+        self.unpause_with(signer, guardian_pda(&g))
+    }
+
+    /// `unpause` signed by the admin. The one every fixture helper wants.
+    pub fn unpause(&mut self) -> TxOutcome {
+        let admin = self.admin.insecure_clone();
+        self.unpause_as(&admin)
+    }
+
+    // ------------------------------------------------------------ the mint call site
+
+    /// Bring the protocol to the state where a public mint can land. ROUND 8: `initialize` already
+    /// leaves `public_mint_enabled = true`, so the only remaining step is the unpause, and the
+    /// unpause is now what carries the guardian requirement. The 24h path that OPENS a closed public
+    /// mint still exists and is still the only opener; it is exercised in caps.rs, from a state this
+    /// helper no longer has to manufacture.
+    pub fn open_public_mint(&mut self) {
+        expect_ok(self.unpause(), "open_public_mint: unpause");
         assert!(
             self.config().public_mint_enabled,
-            "open_public_mint left the public mint closed"
+            "round 8 posture: initialize must leave the public mint OPEN"
         );
+        assert!(!self.config().paused, "open_public_mint left the protocol paused");
     }
 
     /// Create the two token accounts `mint_silv` requires to exist (its own SILV ATA is
@@ -1158,11 +1293,20 @@ impl Fixture {
         expect_ok(self.send(&[ix], &[&admin]), "set_min_operation_usdc");
     }
 
-    /// Open redemptions the ONLY way the program allows: the 24h-timelocked SetRedeemLimits action
-    /// carrying `redemptions_enabled = Some(true)`. `set_redemptions_enabled` refuses `true` by
-    /// construction, so a test that needs an open redeem path has to go the long way, and going the
-    /// long way is also what proves the path exists.
-    pub fn open_redemptions(&mut self) {
+    /// Reopen redemptions the ONLY way the program allows: the 24h-timelocked SetRedeemLimits action
+    /// carrying `redemptions_enabled = Some(true)`. Both instant setters refuse `true` by
+    /// construction, so a test that needs to go from CLOSED to OPEN has to go the long way, and going
+    /// the long way is also what proves the path exists.
+    ///
+    /// ROUND 8: `initialize` now leaves redemptions OPEN, so this is a REOPENER and it asserts that.
+    /// Calling it on the launch state would be a 24h warp that proves nothing; `require_redemptions_open`
+    /// is what a test that merely needs an open redeem path should call.
+    pub fn reopen_redemptions(&mut self) {
+        assert!(
+            !self.config().redemptions_enabled,
+            "reopen_redemptions was called on an already-open protocol, so it would have proved \
+             nothing; close redemptions first, or call require_redemptions_open"
+        );
         let admin = self.admin.insecure_clone();
         let pid = program_id();
         // Borsh of RedeemLimitsArgs: four None tags then Some(true).
@@ -1178,7 +1322,7 @@ impl Fixture {
             ],
             data: ix_data("propose_set_redeem_limits", &args),
         };
-        expect_ok(self.send(&[propose], &[&admin]), "open_redemptions: propose");
+        expect_ok(self.send(&[propose], &[&admin]), "reopen_redemptions: propose");
 
         self.warp(ADMIN_TIMELOCK_SECONDS as i64 + 1);
         let execute = Instruction {
@@ -1191,10 +1335,20 @@ impl Fixture {
             ],
             data: ix_data("execute_set_redeem_limits", &nonce.to_le_bytes()),
         };
-        expect_ok(self.send(&[execute], &[&admin]), "open_redemptions: execute");
+        expect_ok(self.send(&[execute], &[&admin]), "reopen_redemptions: execute");
         assert!(
             self.config().redemptions_enabled,
-            "open_redemptions left redemptions closed"
+            "reopen_redemptions left redemptions closed"
+        );
+    }
+
+    /// ROUND 8 posture: assert the redeem path is open rather than manufacture it. This is the
+    /// replacement for the old `open_redemptions()` at call sites that only wanted a live redeem
+    /// path; it deliberately does NOT warp, and several oracle tests stamp envelopes right after it.
+    pub fn require_redemptions_open(&self) {
+        assert!(
+            self.config().redemptions_enabled,
+            "round 8 posture: initialize must leave redemptions OPEN"
         );
     }
 }

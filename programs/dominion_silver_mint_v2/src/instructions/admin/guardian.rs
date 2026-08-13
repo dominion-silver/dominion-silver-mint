@@ -17,6 +17,24 @@ pub struct AddGuardian<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
 
+    // ROUND 8, F-02: THE APPOINTEE'S CO-SIGNATURE WAS REMOVED, and this note is the record of why.
+    //
+    // It was added so the guardian set could not grow without the consent of the key being added.
+    // The property is real but small: nothing stops a compromised Ops from generating the key AND
+    // signing for it, so it never proved independence, only participation. Its COST turned out to be
+    // large: `config.admin` is the Ops Squads vault, so `add_guardian` became a two-signer
+    // transaction, and the Squads execution path has no moment at which an external key can sign.
+    // The instruction was correct on chain and unexecutable through the documented ceremony.
+    //
+    // Owner decision, 2026-08-09: remove it rather than build a co-signing flow for something that
+    // runs two to four times in the protocol's life and buys participation rather than independence.
+    //
+    // What still holds, and is where the real protection lives: the FIRST guardian is an argument of
+    // `initialize`, so the launch brake is fixed in the DOM-001-authenticated transaction and lands
+    // in the reviewed ceremony artifact instead of a later invisible call. `add_guardian` still
+    // refuses the current admin and the incoming admin, `unpause` still demands an ACTIVE guardian
+    // distinct from the admin, and removal is still deferred by the full timelock so a guardian
+    // cannot be dropped the moment it becomes inconvenient.
     #[account(
         init_if_needed,
         payer = payer,

@@ -22,6 +22,7 @@ const E_LOOSENING_REQUIRES_TIMELOCK: u32 = 12090;
 const E_REDEEM_LIMITS_ALL_NONE: u32 = 12091;
 const E_SUPPLY_CAP_BELOW_SUPPLY: u32 = 12098;
 const E_PUBLIC_MINT_UNCHANGED: u32 = 12101;
+const E_TIMELOCK_NOT_ELAPSED: u32 = 12028;
 const E_PUBLIC_MINT_OPEN_REQUIRES_TIMELOCK: u32 = 12102;
 
 const DEFAULT_MAX_SILV_SUPPLY: u64 = 150_000_000_000;
@@ -196,35 +197,27 @@ fn propose_premium_mint(f: &mut Fixture, bps: u16) -> (TxOutcome, u64) {
 
 // ---------------------------------------------------------------- fixture helpers
 
+/// ROUND 8: routed through the common helper, which installs the independent guardian that
+/// `unpause` now demands.
 fn unpause_once(f: &mut Fixture) {
     if !f.config().paused {
         return;
     }
-    let admin = f.admin.insecure_clone();
-    let ix = Instruction {
-        program_id: program_id(),
-        accounts: vec![
-            AccountMeta::new(config_pda(), false),
-            AccountMeta::new_readonly(admin.pubkey(), true),
-        ],
-        data: ix_data("unpause", &[]),
-    };
-    expect_ok(f.send(&[ix], &[&admin]), "unpause");
+    expect_ok(f.unpause(), "unpause");
 }
 
-/// Turn redemptions ON, which is only reachable through the 24h-timelocked SetRedeemLimits: both
-/// instant setters refuse `true`. Needed by every test of the instant CLOSE direction.
-fn enable_redemptions(f: &mut Fixture) {
+/// Reach a CLOSED redeem state. ROUND 8 inverted the starting point: `initialize` now leaves
+/// redemptions open, so the state these tests need is one instant close away rather than one 24h
+/// timelock away. The close is itself the permitted direction, so this helper asserts it landed.
+fn close_redemptions(f: &mut Fixture) {
     unpause_once(f);
-    let (r, nonce) = propose_redeem_limits(f, &Limits::enabled(true));
-    expect_ok(r, "enable_redemptions: propose");
-    f.warp(ADMIN_TIMELOCK_SECONDS as i64 + 1);
-    expect_ok(execute_redeem_limits(f, nonce), "enable_redemptions: execute");
+    expect_ok(set_redemptions_enabled(f, false), "close_redemptions");
     assert!(
-        f.config().redemptions_enabled,
-        "enable_redemptions left redemptions closed"
+        !f.config().redemptions_enabled,
+        "close_redemptions left redemptions open"
     );
 }
+
 
 /// Patch the live SILV mint's `supply` field (bytes 36..44 of the SPL mint body). `set_max_silv_supply`
 /// reads the REAL mint rather than a tracked counter, so a non-zero supply cannot be reached any other
@@ -370,8 +363,9 @@ fn only_the_admin_may_tighten_the_supply_cap() {
 #[test]
 fn redemptions_close_instantly_and_the_switch_persists() {
     // The tighten direction of the redeem switch, and the only proof the write survives Anchor's exit.
+    // ROUND 8: the launch state is already OPEN, so the close is one instruction from `new()`.
     let mut f = Fixture::new();
-    enable_redemptions(&mut f);
+    f.require_redemptions_open();
 
     expect_ok(set_redemptions_enabled(&mut f, false), "close redemptions");
     assert!(
@@ -384,28 +378,34 @@ fn redemptions_close_instantly_and_the_switch_persists() {
 fn redemptions_cannot_be_opened_instantly_from_either_state() {
     // Opening is the largest loosening the program has, so it is refused in bytecode whatever the
     // current state, and must ride the 24h timelock instead.
+    // ROUND 8 reversed the order of the two states, not the property: the launch state is now OPEN,
+    // so the open-state case comes first and the closed-state case follows the instant close. Both
+    // states are still covered, and neither needs a 24h warp to reach.
     let mut f = Fixture::new();
-    expect_error(
-        set_redemptions_enabled(&mut f, true),
-        E_REDEMPTIONS_ENABLE_BLOCKED,
-        "open redemptions while closed",
-    );
-    assert!(!f.config().redemptions_enabled, "the refused open flipped the switch");
-
-    enable_redemptions(&mut f);
+    f.require_redemptions_open();
     expect_error(
         set_redemptions_enabled(&mut f, true),
         E_REDEMPTIONS_ENABLE_BLOCKED,
         "open redemptions while already open",
     );
     assert!(f.config().redemptions_enabled, "the refused open flipped the switch");
+
+    close_redemptions(&mut f);
+    expect_error(
+        set_redemptions_enabled(&mut f, true),
+        E_REDEMPTIONS_ENABLE_BLOCKED,
+        "open redemptions while closed",
+    );
+    assert!(!f.config().redemptions_enabled, "the refused open flipped the switch");
 }
 
 #[test]
 fn closing_already_closed_redemptions_must_not_wipe_a_queued_proposal() {
     // The handler disarms pending_redeem_limits_nonce, so without the no-op guard a defensive
     // "confirm redemptions are off" click silently destroys a queued proposal and costs 24 hours.
+    // ROUND 8: the closed state is now reached by closing, not by doing nothing.
     let mut f = Fixture::new();
+    close_redemptions(&mut f);
     let (r, nonce) = propose_redeem_limits(&mut f, &Limits::enabled(true));
     expect_ok(r, "queue an open");
     assert_eq!(f.config().pending_redeem_limits_nonce, Some(nonce), "propose did not arm the slot");
@@ -429,7 +429,7 @@ fn an_instant_close_disarms_a_queued_open() {
     // The tighten direction must also revoke the announced open, or it lands hours later with no
     // fresh decision.
     let mut f = Fixture::new();
-    enable_redemptions(&mut f);
+    f.require_redemptions_open();
     let (r, nonce) = propose_redeem_limits(&mut f, &Limits::budget(DEFAULT_INSTANT_REDEEM_BUDGET_USDC * 2));
     expect_ok(r, "queue a loosening");
     assert_eq!(f.config().pending_redeem_limits_nonce, Some(nonce), "propose did not arm the slot");
@@ -441,9 +441,54 @@ fn an_instant_close_disarms_a_queued_open() {
 }
 
 #[test]
+fn a_closed_redeem_switch_can_only_be_reopened_through_the_24h_timelock() {
+    // ROUND 8. The launch posture flipped the STARTING state, not the asymmetry, and this is the
+    // test that says so out loud: from the state an operator actually reaches after an incident
+    // close, the only way back is propose, wait the full delay, execute. Both instant lanes are
+    // proved shut from that same state, and the early execute is proved shut at the boundary.
+    let mut f = Fixture::new();
+    close_redemptions(&mut f);
+
+    expect_error(
+        set_redemptions_enabled(&mut f, true),
+        E_REDEMPTIONS_ENABLE_BLOCKED,
+        "reopening through the direct setter",
+    );
+    expect_error(
+        tighten(&mut f, &Limits::enabled(true)),
+        E_LOOSENING_REQUIRES_TIMELOCK,
+        "reopening through the emergency lane",
+    );
+    assert!(!f.config().redemptions_enabled, "a refused reopen opened redemptions");
+
+    let (r, nonce) = propose_redeem_limits(&mut f, &Limits::enabled(true));
+    expect_ok(r, "propose the reopen");
+    assert!(
+        !f.config().redemptions_enabled,
+        "proposing the reopen opened redemptions immediately, so there is no veto window"
+    );
+
+    // One second short of the delay. The boundary is the property, not the ballpark.
+    f.warp(ADMIN_TIMELOCK_SECONDS as i64 - 1);
+    expect_error(
+        execute_redeem_limits(&mut f, nonce),
+        E_TIMELOCK_NOT_ELAPSED,
+        "executing the reopen one second early",
+    );
+    assert!(!f.config().redemptions_enabled, "the early execute reopened redemptions");
+
+    f.warp(2);
+    expect_ok(execute_redeem_limits(&mut f, nonce), "execute the reopen");
+    assert!(
+        f.config().redemptions_enabled,
+        "the matured execute reported success and applied nothing"
+    );
+}
+
+#[test]
 fn only_the_admin_may_move_the_redeem_switch() {
     let mut f = Fixture::new();
-    enable_redemptions(&mut f);
+    f.require_redemptions_open();
     let stranger = f.stranger.insecure_clone();
 
     expect_error(
@@ -475,26 +520,31 @@ fn the_public_mint_closes_instantly_and_the_switch_persists() {
 fn the_public_mint_cannot_be_opened_instantly_from_either_state() {
     // Opening wakes the oracle path and lets the public consume the cap headroom, so it must be
     // announced and guardian-cancellable. The direction check runs before the no-op check.
+    // ROUND 8: the launch state is now OPEN, so the two states are visited in the other order. The
+    // closed state is reached by the instant close, which is the permitted direction.
     let mut f = Fixture::new();
-    expect_error(
-        set_public_mint_enabled(&mut f, true),
-        E_PUBLIC_MINT_OPEN_REQUIRES_TIMELOCK,
-        "open the public mint while closed",
-    );
-    assert!(!f.config().public_mint_enabled, "the refused open flipped the switch");
-
-    f.open_public_mint();
+    assert!(f.config().public_mint_enabled, "round 8 posture: the launch state is open");
     expect_error(
         set_public_mint_enabled(&mut f, true),
         E_PUBLIC_MINT_OPEN_REQUIRES_TIMELOCK,
         "open the public mint while already open",
     );
     assert!(f.config().public_mint_enabled, "the refused open closed the mint");
+
+    expect_ok(set_public_mint_enabled(&mut f, false), "close the public mint");
+    expect_error(
+        set_public_mint_enabled(&mut f, true),
+        E_PUBLIC_MINT_OPEN_REQUIRES_TIMELOCK,
+        "open the public mint while closed",
+    );
+    assert!(!f.config().public_mint_enabled, "the refused open flipped the switch");
 }
 
 #[test]
 fn closing_an_already_closed_public_mint_is_refused_as_a_no_op() {
+    // ROUND 8: the first close is now a real change, so the no-op under test is the SECOND one.
     let mut f = Fixture::new();
+    expect_ok(set_public_mint_enabled(&mut f, false), "close the public mint");
     expect_error(
         set_public_mint_enabled(&mut f, false),
         E_PUBLIC_MINT_UNCHANGED,
@@ -577,7 +627,9 @@ fn the_emergency_lane_refuses_a_window_shrink() {
 fn the_emergency_lane_refuses_to_open_redemptions() {
     // The redeem switch rides RedeemLimitsArgs, so the instant lane must reject Some(true) or it
     // becomes a second, undelayed way to open the only path that pays out treasury cash.
+    // ROUND 8: the request has to be a real open to mean anything, so redemptions are closed first.
     let mut f = Fixture::new();
+    close_redemptions(&mut f);
     expect_error(
         tighten(&mut f, &Limits::enabled(true)),
         E_LOOSENING_REQUIRES_TIMELOCK,
@@ -594,7 +646,7 @@ fn the_emergency_lane_actually_closes_redemptions_and_disarms_a_queued_open() {
     // The apply arm for redemptions_enabled. Without it the transaction succeeds, emits its event and
     // leaves redemptions paying out: a silent no-op on an emergency lever.
     let mut f = Fixture::new();
-    enable_redemptions(&mut f);
+    f.require_redemptions_open();
     let (r, nonce) = propose_redeem_limits(&mut f, &Limits::budget(DEFAULT_INSTANT_REDEEM_BUDGET_USDC * 2));
     expect_ok(r, "queue a loosening");
     assert_eq!(f.config().pending_redeem_limits_nonce, Some(nonce), "propose did not arm the slot");

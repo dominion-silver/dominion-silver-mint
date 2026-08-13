@@ -18,6 +18,30 @@ const nextConfig: NextConfig = {
   transpilePackages: [],
   async headers() {
     return [
+      // The SILV token metadata. Served from THIS app on purpose: the URI is baked into the mint at
+      // creation and dominion.market is a separate property we do not control, so hosting it here is
+      // what makes the address ours to keep working. It needs CORS because explorers and wallets fetch
+      // it from the browser, cross-origin, and a /public file sends no Access-Control-Allow-Origin by
+      // default: the fetch would be blocked and the token would render unnamed for exactly the clients
+      // that matter. Read-only public JSON, so `*` is the correct value and not a concession.
+      {
+        source: "/silv-metadata.json",
+        headers: [
+          { key: "Access-Control-Allow-Origin", value: "*" },
+          { key: "Content-Type", value: "application/json; charset=utf-8" },
+          { key: "Cache-Control", value: "public, max-age=300, s-maxage=3600" },
+        ],
+      },
+      // The logo the metadata points at. An <img> tag needs no CORS, but anything that draws the
+      // token icon through a canvas does, and a tainted canvas throws rather than degrading. Same
+      // reasoning as the JSON above: this asset is consumed by third-party UIs we do not control.
+      {
+        source: "/silv.png",
+        headers: [
+          { key: "Access-Control-Allow-Origin", value: "*" },
+          { key: "Cache-Control", value: "public, max-age=3600, s-maxage=86400" },
+        ],
+      },
       {
         source: "/:path*",
         headers: [

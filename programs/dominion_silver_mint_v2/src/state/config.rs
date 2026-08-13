@@ -60,7 +60,10 @@ pub const DEFAULT_ADMIN_TIMELOCK_SECONDS: u32 = 86400; // 24 hours
 // The ONLY bound on unbacked SILV, NOT an initialize arg (get it right pre-mainnet), ONE-WAY RATCHET.
 pub const DEFAULT_MAX_SILV_SUPPLY: u64 = 150_000_000_000; // 150,000 oz at 6 decimals
 
-pub const DEFAULT_PUBLIC_MINT_ENABLED: bool = false; // opening direct mint is 24h-timelocked
+// ROUND 8, posture decided 2026-08-09. UNUSED at launch and kept as the shape of the CLOSED state:
+// `initialize` writes `public_mint_enabled = true` directly. Reopening after an emergency close is
+// still 24h-timelocked, which is the asymmetry this constant used to describe.
+pub const DEFAULT_PUBLIC_MINT_ENABLED: bool = false;
 
 // ROUND 5 P1-04, the floor on a single mint, atomic USDC (6dec). See ConfigAccount::min_operation_usdc
 // for why it exists. $10 makes capturing every Lazer print cost 10 USDC of working capital per second
@@ -204,8 +207,8 @@ pub struct ConfigAccount {
     // The ONLY way to LOOSEN the redeem throttles; instant tightening is emergency_tighten_redeem_limits.
     pub pending_redeem_limits_nonce: Option<u64>,
 
-    pub inventory_wallet: Pubkey, // the admin pre-mints against the cap into this wallet
-    pub public_mint_enabled: bool, // CLOSED at launch, opens with KYC
+    pub inventory_wallet: Pubkey, // pre-mint destination, bound by initialize, changed only via the 24h timelock
+    pub public_mint_enabled: bool, // ROUND 8: OPEN at launch; closing is instant, reopening is 24h
 
     pub kyc_operator: Pubkey,
     pub kyc_enforced: bool,
@@ -279,6 +282,38 @@ pub struct ConfigAccount {
 }
 
 impl ConfigAccount {
+    /// ROUND 8 FINAL-03. THE FIELDS THE GO-LIVE DECISION READS, HASHED.
+    ///
+    /// `unpause` is built at one moment and executed at another: it is a Squads proposal, approved
+    /// and executed later. Between those two moments a matured timelocked action can execute while
+    /// the protocol is paused, where auto-pause is idempotent, so nothing invalidates the approved
+    /// unpause and it lands on a config the readiness decision never saw.
+    ///
+    /// The first attempt refused an unpause while any slot was armed. Codex showed that does not
+    /// close it: the guard reads the CURRENT counter, and an action that executes and disarms in the
+    /// gap brings the counter back to zero before the unpause lands. A counter is not historical.
+    ///
+    /// So the caller carries a DIGEST of the state it approved, and this recomputes it. A digest was
+    /// chosen over a revision counter for one reason: a counter has to be incremented at every
+    /// mutation site, and one forgotten site makes it silently permissive. This is derived from the
+    /// fields themselves, so a new field is a deliberate edit HERE rather than a silent omission.
+    ///
+    /// The set is exactly what `scripts/_launch-readiness.ts` reads off the config. `paused` is
+    /// deliberately EXCLUDED: the unpause is what changes it, so including it would make every
+    /// unpause stale by construction.
+    pub fn readiness_digest(&self) -> [u8; 32] {
+        let mut buf = Vec::with_capacity(128);
+        buf.extend_from_slice(self.admin.as_ref());
+        buf.extend_from_slice(self.silv_mint.as_ref());
+        buf.extend_from_slice(self.inventory_wallet.as_ref());
+        buf.push(self.public_mint_enabled as u8);
+        buf.push(self.redemptions_enabled as u8);
+        buf.push(self.guardian_count);
+        buf.extend_from_slice(&self.min_publishers.to_le_bytes());
+        buf.extend_from_slice(&self.pyth_lazer_feed_id.to_le_bytes());
+        anchor_lang::solana_program::hash::hash(&buf).to_bytes()
+    }
+
     // 8-byte discriminator + struct size, pinned at 800 below: the account must never change size.
     pub const SIZE: usize = 8
         + 32                  // admin

@@ -170,7 +170,7 @@ export function WalletAuthGate({ children }: { children: ReactNode }) {
             <button
               onClick={doSign}
               disabled={signing}
-              className="rounded-md bg-accent px-6 py-3 font-semibold text-bg transition hover:bg-accentDim disabled:opacity-60"
+              className="rounded-md bg-cta px-6 py-3 font-semibold text-bg transition hover:brightness-110 disabled:opacity-60"
             >
               {signing ? "Waiting for signature…" : "Sign to continue"}
             </button>

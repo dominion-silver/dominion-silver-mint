@@ -165,19 +165,15 @@ fn cancel_transfer_as(f: &mut Fixture, signer: &Keypair, guardian_slot: Option<P
     f.send(&[ix], &[signer])
 }
 
+/// ROUND 8: routed through the common helper, which installs the independent guardian `unpause` now
+/// demands. Callers in this file MUST install it while the ORIGINAL admin still holds the office:
+/// `add_guardian` is `has_one = admin`, so an appointment attempted after a handover is refused.
 fn unpause_as(f: &mut Fixture, signer: &Keypair) -> TxOutcome {
-    let ix = Instruction {
-        program_id: program_id(),
-        accounts: vec![
-            AccountMeta::new(config_pda(), false),
-            AccountMeta::new_readonly(signer.pubkey(), true),
-        ],
-        data: ix_data("unpause", &[]),
-    };
-    f.send(&[ix], &[signer])
+    f.unpause_as(signer)
 }
 
-fn add_guardian(f: &mut Fixture, g: Pubkey) -> TxOutcome {
+/// ROUND 8 L1-02: the appointee co-signs, so this takes the Keypair rather than the Pubkey.
+fn add_guardian(f: &mut Fixture, g: &Keypair) -> TxOutcome {
     let admin = f.admin.insecure_clone();
     let ix = Instruction {
         program_id: program_id(),
@@ -185,10 +181,10 @@ fn add_guardian(f: &mut Fixture, g: Pubkey) -> TxOutcome {
             AccountMeta::new(config_pda(), false),
             AccountMeta::new_readonly(admin.pubkey(), true),
             AccountMeta::new(admin.pubkey(), true),
-            AccountMeta::new(guardian_pda(&g), false),
+            AccountMeta::new(guardian_pda(&g.pubkey()), false),
             AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
         ],
-        data: ix_data("add_guardian", g.as_ref()),
+        data: ix_data("add_guardian", g.pubkey().as_ref()),
     };
     f.send(&[ix], &[&admin])
 }
@@ -357,6 +353,10 @@ fn the_transfer_lifecycle_refuses_an_early_accept_then_moves_the_admin_on_chain(
     let mut f = Fixture::new();
     let incoming = funded(&mut f);
     let old_admin = f.admin.insecure_clone();
+    // ROUND 8: the unpause guardian is appointed HERE, before the handover, because `add_guardian` is
+    // admin-only and the old admin is about to lose that office. The unpause assertions at the end of
+    // this test are about who may CALL unpause, not about who may appoint.
+    f.ensure_unpause_guardian();
     expect_ok(propose_transfer(&mut f, incoming.pubkey()), "propose the handover");
 
     // FIX B: without the eta gate a compromised admin proposes and accepts in the same block and
@@ -474,7 +474,7 @@ fn a_pending_transfer_stops_being_acceptable_once_it_expires() {
 fn cancel_admin_transfer_is_admin_or_guardian_only() {
     let mut f = Fixture::new();
     let g = funded(&mut f);
-    expect_ok(add_guardian(&mut f, g.pubkey()), "add_guardian");
+    expect_ok(add_guardian(&mut f, &g), "add_guardian");
     let incoming = funded(&mut f);
     let stranger = f.stranger.insecure_clone();
     let admin = f.admin.insecure_clone();
@@ -586,8 +586,8 @@ fn cancel_timelocked_action_binds_the_stored_nonce_to_the_argument() {
 fn finalize_removal_refuses_a_desynced_pending_counter() {
     let mut f = Fixture::new();
     let (g1, g2) = (funded(&mut f), funded(&mut f));
-    expect_ok(add_guardian(&mut f, g1.pubkey()), "add g1");
-    expect_ok(add_guardian(&mut f, g2.pubkey()), "add g2");
+    expect_ok(add_guardian(&mut f, &g1), "add g1");
+    expect_ok(add_guardian(&mut f, &g2), "add g2");
     let payer = funded(&mut f);
     expect_ok(remove_guardian(&mut f, g1.pubkey()), "notice g1");
     assert_eq!(f.config().pending_removal_count, 1);
@@ -602,14 +602,15 @@ fn finalize_removal_refuses_a_desynced_pending_counter() {
         "finalize against a pending_removal_count that is already zero",
     );
     let c = f.config();
-    assert_eq!(c.guardian_count, 2, "the aborted finalize shrank the set anyway");
+    // 3, not 2: `initialize` appointed the fixture's own guardian before these two (ROUND 8 L1-02).
+    assert_eq!(c.guardian_count, 3, "the aborted finalize shrank the set anyway");
     assert_eq!(c.pending_removal_count, 0);
 
     // Positive control: with the counter back in sync the same finalize lands.
     edit_config(&mut f, |c| c.pending_removal_count = 1);
     expect_ok(finalize_removal(&mut f, &payer, g1.pubkey()), "finalize g1");
     let c = f.config();
-    assert_eq!(c.guardian_count, 1, "finalize did not persist the decrement");
+    assert_eq!(c.guardian_count, 2, "finalize did not persist the decrement");
     assert_eq!(c.pending_removal_count, 0);
 }
 
@@ -617,8 +618,8 @@ fn finalize_removal_refuses_a_desynced_pending_counter() {
 fn cancel_removal_refuses_a_desynced_pending_counter() {
     let mut f = Fixture::new();
     let (g1, g2) = (funded(&mut f), funded(&mut f));
-    expect_ok(add_guardian(&mut f, g1.pubkey()), "add g1");
-    expect_ok(add_guardian(&mut f, g2.pubkey()), "add g2");
+    expect_ok(add_guardian(&mut f, &g1), "add g1");
+    expect_ok(add_guardian(&mut f, &g2), "add g2");
     let admin = f.admin.insecure_clone();
     expect_ok(remove_guardian(&mut f, g1.pubkey()), "notice g1");
 

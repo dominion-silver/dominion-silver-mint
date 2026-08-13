@@ -44,9 +44,9 @@ pub struct PremintEvent {
     pub amount: u64,
     pub supply_post: u64,
     pub timestamp: i64,
-    /// SOLIDPROOF T-006. The signer that minted. `inventory` is the DESTINATION, and the admin
-    /// chooses it via `set_inventory_wallet`, so without this field the event records where supply
-    /// went but not who sent it.
+    /// SOLIDPROOF T-006. The signer that minted. `inventory` is the DESTINATION, bound at
+    /// `initialize` and changeable only through the 24h timelocked pair, so without this field the
+    /// event records where supply went but not who sent it.
     ///
     /// LAST, after `timestamp`, and that placement is the whole point. The first version of this
     /// change put `by` between `supply_post` and `timestamp` while its comment claimed an append
@@ -375,8 +375,10 @@ pub struct RedeemLimitsTightened {
     pub by: Pubkey,
 }
 
-/// SolidProof MEDIUM #3 asked specifically for this one: the pre-mint destination
-/// can be redirected instantly, so the redirect must at least be observable.
+/// SolidProof MEDIUM #3 asked for this back when the destination could be changed with no delay.
+/// ROUND 8 A-05: it cannot any more. The only writer after `initialize` is
+/// `execute_set_inventory_wallet`, after 24h and cancellable by a guardian. The event stays because
+/// a timelocked redirect still has to be observable when it lands.
 #[event]
 pub struct InventoryWalletChanged {
     pub old_wallet: Pubkey,

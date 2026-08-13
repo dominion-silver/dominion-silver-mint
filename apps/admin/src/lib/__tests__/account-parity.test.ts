@@ -143,3 +143,43 @@ describe("admin builder account parity with the IDL", () => {
     expect(long.degraded[0].length).toBeLessThan(200);
   });
 });
+
+/**
+ * ROUND 8 A-05. The generated IDL must not carry claims the program no longer honours.
+ *
+ * T8-03 removed `set_inventory_wallet` from the program surface, but four doc comments kept saying
+ * the setter chooses the destination, that the first binding takes an instant path, and that the
+ * wallet can be redirected instantly. Anchor exports doc comments into the IDL, so those sentences
+ * shipped to every integrator that reads it, describing an instruction that does not exist.
+ *
+ * A negative grep is the right shape here: nothing can assert that prose is TRUE, but a specific
+ * false claim that was already made once can be forbidden by name.
+ */
+describe("the generated IDL does not describe the deleted instant setter", () => {
+  const FORBIDDEN = [
+    "set_inventory_wallet sets the destination",
+    "takes the instant path",
+    "redirected instantly",
+    "chooses it via `set_inventory_wallet`",
+  ];
+
+  it("carries none of the four claims T8-03 made false", () => {
+    const raw = JSON.stringify(idl);
+    for (const phrase of FORBIDDEN) {
+      expect(
+        raw.includes(phrase),
+        `the IDL still says ${JSON.stringify(phrase)}. That instruction was deleted in round 8; ` +
+          `correct the doc comment in the program and regenerate all three IDL copies.`,
+      ).toBe(false);
+    }
+  });
+
+  it("exposes no instruction named set_inventory_wallet", () => {
+    const names = (idl.instructions as Array<{ name: string }>).map((i) => i.name);
+    expect(names).not.toContain("set_inventory_wallet");
+    // The timelocked pair is what replaced it, and it must still be there: a test that only forbids
+    // is satisfied by an empty IDL.
+    expect(names).toContain("propose_set_inventory_wallet");
+    expect(names).toContain("execute_set_inventory_wallet");
+  });
+});

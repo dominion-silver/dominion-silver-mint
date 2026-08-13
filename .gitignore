@@ -50,3 +50,7 @@ release-manifest.json
 # Kept OUT of the repo because it is per-ceremony and per-cluster, and a committed copy would be
 # read as the canonical one long after the ceremony it came from.
 ceremony-out/
+
+# ROUND 8 A-04. A tracked .pyc puts an opaque binary in the release verifier trust path.
+__pycache__/
+*.pyc

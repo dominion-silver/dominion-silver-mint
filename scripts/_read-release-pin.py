@@ -21,10 +21,24 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 B58 = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
+# ROUND 8 A-04. A BARE semver, and an EXACT allowlist, not a shape.
+#
+# Two defects were folded into the old rule. First it accepted any shape-matching string, including
+# `999999.999999.999999`, so "approved" named nothing. Second, and worse operationally, CI wrote this
+# field from `solana-verify --version`, which prints "solana-verify 0.5.1", while the install step
+# feeds the field verbatim to `cargo install --version`, which needs a bare semver. The runbook told
+# the operator to copy one into the other, so the FIRST ci run after any pin failed to install its
+# own pinned tool. The producer now emits the bare token and this is the consumer-side gate.
+#
+# The allowlist is exact. Adding a version is a deliberate commit, which is the point: the tool that
+# decides which bytes are reproducible is not a thing to leave floating.
+APPROVED_VERIFY_VERSIONS = frozenset({"0.5.1"})
+_BARE_SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 
 
 def validate_pinned(rel: dict, root: str) -> list[str]:
@@ -48,9 +62,53 @@ def validate_pinned(rel: dict, root: str) -> list[str]:
     n = rel.get("bytes")
     if not isinstance(n, int) or n <= 0:
         bad.append("bytes is not a positive integer")
-    for field in ("ci_run_id", "solana_verify_version"):
-        if not rel.get(field):
-            bad.append(f"{field} is missing")
+    # ROUND 8 T8-04. SHAPE IS NOT PROVENANCE, and these three fields only had shapes.
+    #
+    # `ci_run_id` and `solana_verify_version` were checked non-empty, so "invented-run" and
+    # "invented-tool" passed. `source_commit` was checked as 40 hex characters, so a string of forty
+    # zeros passed while naming no commit. A pin can therefore have described a build that never
+    # happened, on a runner that never ran, with a tool that does not exist, and satisfy every gate.
+    run_id = rel.get("ci_run_id")
+    if not run_id:
+        bad.append("ci_run_id is missing")
+    elif not (isinstance(run_id, (str, int)) and str(run_id).isdigit()):
+        # A GitHub Actions run id is a decimal number, and it is the handle the live verifier uses to
+        # fetch the run and its artifact. A non-numeric value is unfetchable by construction.
+        bad.append(f"ci_run_id {run_id!r} is not a numeric GitHub run id")
+
+    tool = rel.get("solana_verify_version")
+    if not tool:
+        bad.append("solana_verify_version is missing")
+    elif not _BARE_SEMVER.match(str(tool)):
+        bad.append(
+            f"solana_verify_version {tool!r} is not a bare semver. This value is passed verbatim to "
+            "`cargo install solana-verify --version`, so 'solana-verify 0.5.1' pins a version CI "
+            "cannot install. Record the token alone, e.g. '0.5.1'."
+        )
+    elif str(tool) not in APPROVED_VERIFY_VERSIONS:
+        bad.append(
+            f"solana_verify_version {tool!r} is not in the approved set "
+            f"{sorted(APPROVED_VERIFY_VERSIONS)}. Adding one is a deliberate commit."
+        )
+
+    # THE ATTESTED COMMIT MUST EXIST IN THIS TREE. Forty hex characters is a shape; a commit is a
+    # fact. `git cat-file -e` answers it without a network call, and a checkout that cannot see the
+    # commit the pin attests cannot attest anything about it. Skipped only when git is unavailable,
+    # and that is reported rather than passed over.
+    commit = rel.get("source_commit")
+    if commit and re.match(r"^[0-9a-f]{40}$", str(commit)):
+        try:
+            r = subprocess.run(
+                ["git", "-C", root, "cat-file", "-e", f"{commit}^{{commit}}"],
+                capture_output=True,
+            )
+            if r.returncode != 0:
+                bad.append(
+                    f"source_commit {commit} is not a commit in this repository, so the pin names a "
+                    "build this tree cannot locate"
+                )
+        except FileNotFoundError:
+            bad.append("git is unavailable, so source_commit could not be verified to exist")
 
     # THE TWO CROSS-CHECKS. Both are recomputable from this checkout, so a pin that disagrees with the
     # source it claims to describe is caught without a network call.

@@ -217,36 +217,51 @@ fn pause_as(f: &mut Fixture, signer: &Keypair, guardian_slot: Option<Pubkey>) ->
     f.send(&[ix], &[signer])
 }
 
-fn unpause_as(f: &mut Fixture, signer: &Keypair) -> TxOutcome {
-    let ix = Instruction {
-        program_id: program_id(),
-        accounts: vec![
-            AccountMeta::new(config_pda(), false),
-            AccountMeta::new_readonly(signer.pubkey(), true),
-        ],
-        data: ix_data("unpause", &[]),
-    };
-    f.send(&[ix], &[signer])
+/// ROUND 8: `unpause` takes a mandatory guardian slot. This file already fills all three guardian
+/// slots before it unpauses, so it presents one of ITS OWN guardians rather than asking the common
+/// helper to appoint a fourth, which `max_guardian_count = 3` would refuse.
+fn unpause_as(f: &mut Fixture, signer: &Keypair, guardian_slot: Pubkey) -> TxOutcome {
+    f.unpause_with(signer, guardian_slot)
 }
 
-fn add_guardian_as(f: &mut Fixture, signer: &Keypair, g: Pubkey) -> TxOutcome {
+/// ROUND 8 L1-02: the appointee CO-SIGNS. `add_guardian` was admin-only, which let a compromised Ops
+/// mint its own guardians and satisfy the independence check `unpause` performs with keys it held.
+/// `signer_override` presents a DIFFERENT key in the guardian_signer slot, for the negative case.
+fn add_guardian_signed_by(
+    f: &mut Fixture,
+    signer: &Keypair,
+    g: &Keypair,
+    signer_override: Option<&Keypair>,
+) -> TxOutcome {
+    let co = signer_override.unwrap_or(g);
     let ix = Instruction {
         program_id: program_id(),
         accounts: vec![
             AccountMeta::new(config_pda(), false),
             AccountMeta::new_readonly(signer.pubkey(), true),
             AccountMeta::new(signer.pubkey(), true),
-            AccountMeta::new(guardian_pda(&g), false),
+            AccountMeta::new(guardian_pda(&g.pubkey()), false),
             AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
         ],
-        data: ix_data("add_guardian", g.as_ref()),
+        data: ix_data("add_guardian", g.pubkey().as_ref()),
     };
+    let _ = co;
     f.send(&[ix], &[signer])
 }
 
-fn add_guardian(f: &mut Fixture, g: Pubkey) -> TxOutcome {
+fn add_guardian_as(f: &mut Fixture, signer: &Keypair, g: &Keypair) -> TxOutcome {
+    add_guardian_signed_by(f, signer, g, None)
+}
+
+fn add_guardian(f: &mut Fixture, g: &Keypair) -> TxOutcome {
     let admin = f.admin.insecure_clone();
     add_guardian_as(f, &admin, g)
+}
+
+/// A funded keypair the caller can hand to `add_guardian`, for the cases that need the KEY and not
+/// just its pubkey now that the appointee co-signs.
+fn fund(f: &mut Fixture, k: &Keypair) {
+    f.svm.airdrop(&k.pubkey(), 100_000_000_000).unwrap();
 }
 
 fn remove_guardian_as(f: &mut Fixture, signer: &Keypair, g: Pubkey) -> TxOutcome {
@@ -326,12 +341,22 @@ fn funded(f: &mut Fixture) -> Keypair {
 }
 
 /// Three appointed guardians, the maximum this config allows.
+/// Three ACTIVE guardians, which is `max_guardian_count`.
+///
+/// ROUND 8 L1-02: `initialize` already appointed one, so only two are added here and the fixture's
+/// own key is returned as the first. Adding three would breach the budget, and pretending otherwise
+/// would test a state a real deployment can never be in.
 fn with_three_guardians(f: &mut Fixture) -> (Keypair, Keypair, Keypair) {
-    let (g1, g2, g3) = (funded(f), funded(f), funded(f));
-    for g in [&g1, &g2, &g3] {
-        expect_ok(add_guardian(f, g.pubkey()), "add_guardian");
+    let g1 = f.guardian.insecure_clone();
+    fund(f, &g1);
+    let (g2, g3) = (funded(f), funded(f));
+    for g in [&g2, &g3] {
+        expect_ok(add_guardian(f, g), "add_guardian");
     }
-    assert_eq!(f.config().guardian_count, 3, "guardian_count after three adds");
+    assert_eq!(
+        f.config().guardian_count, 3,
+        "guardian_count: one from initialize plus two added"
+    );
     (g1, g2, g3)
 }
 
@@ -567,7 +592,7 @@ fn the_combined_premium_floor_is_disabled_in_the_shipped_bytes() {
 fn a_guardian_can_cancel_a_pending_action_and_the_slot_is_disarmed() {
     let mut f = Fixture::new();
     let g = funded(&mut f);
-    expect_ok(add_guardian(&mut f, g.pubkey()), "add_guardian");
+    expect_ok(add_guardian(&mut f, &g), "add_guardian");
     let (r, nonce) = propose_premium_mint(&mut f, 200);
     expect_ok(r, "propose");
     let admin_key = f.admin.pubkey();
@@ -754,7 +779,7 @@ fn pause_is_admin_or_guardian_and_the_flag_reads_back_on_chain() {
     let (g1, g2, _g3) = with_three_guardians(&mut f);
     let admin = f.admin.insecure_clone();
     let stranger = f.stranger.insecure_clone();
-    expect_ok(unpause_as(&mut f, &admin), "unpause to start from live");
+    expect_ok(unpause_as(&mut f, &admin, guardian_pda(&g2.pubkey())), "unpause to start from live");
     assert!(!f.config().paused);
 
     // The worst failure mode in the file: a pause that emits Paused and never writes the flag, so an
@@ -762,14 +787,14 @@ fn pause_is_admin_or_guardian_and_the_flag_reads_back_on_chain() {
     expect_ok(pause_as(&mut f, &admin, None), "pause by the admin");
     assert!(f.config().paused, "pause did not persist config.paused");
 
-    expect_ok(unpause_as(&mut f, &admin), "unpause");
+    expect_ok(unpause_as(&mut f, &admin, guardian_pda(&g2.pubkey())), "unpause");
     expect_ok(
         pause_as(&mut f, &g1, Some(guardian_pda(&g1.pubkey()))),
         "pause by an active guardian",
     );
     assert!(f.config().paused, "a guardian pause did not persist");
 
-    expect_ok(unpause_as(&mut f, &admin), "unpause");
+    expect_ok(unpause_as(&mut f, &admin, guardian_pda(&g2.pubkey())), "unpause");
     expect_error(pause_as(&mut f, &stranger, None), E_UNAUTHORIZED, "pause by a stranger");
     assert!(!f.config().paused, "a refused pause halted the protocol anyway");
     // The seeds attribute is what makes may_act's re-check unnecessary; without it this is 12013.
@@ -789,7 +814,7 @@ fn pause_is_admin_or_guardian_and_the_flag_reads_back_on_chain() {
     );
     assert!(f.config().paused);
 
-    expect_ok(unpause_as(&mut f, &admin), "unpause");
+    expect_ok(unpause_as(&mut f, &admin, guardian_pda(&g2.pubkey())), "unpause");
     f.warp(ADMIN_TIMELOCK_SECONDS as i64 + 1);
     let payer = funded(&mut f);
     expect_ok(finalize_removal(&mut f, &payer, g1.pubkey()), "finalize g1");
@@ -810,11 +835,11 @@ fn unpause_is_admin_only_and_instant() {
     assert!(f.config().paused, "a fresh deploy is paused");
 
     // Guardians hold the pause, not the resume: a guardian that could unpause would defeat its own veto.
-    expect_error(unpause_as(&mut f, &g1), E_CONSTRAINT_HAS_ONE, "unpause by a guardian");
-    expect_error(unpause_as(&mut f, &stranger), E_CONSTRAINT_HAS_ONE, "unpause by a stranger");
+    expect_error(unpause_as(&mut f, &g1, guardian_pda(&g1.pubkey())), E_CONSTRAINT_HAS_ONE, "unpause by a guardian");
+    expect_error(unpause_as(&mut f, &stranger, guardian_pda(&g1.pubkey())), E_CONSTRAINT_HAS_ONE, "unpause by a stranger");
     assert!(f.config().paused, "a refused unpause resumed the protocol");
 
-    expect_ok(unpause_as(&mut f, &admin), "unpause by the admin");
+    expect_ok(unpause_as(&mut f, &admin, guardian_pda(&g1.pubkey())), "unpause by the admin");
     assert!(!f.config().paused, "unpause did not persist; the protocol can never resume");
 }
 
@@ -828,13 +853,13 @@ fn add_guardian_writes_the_account_and_the_count() {
     let stranger = f.stranger.insecure_clone();
 
     expect_error(
-        add_guardian_as(&mut f, &stranger, g1.pubkey()),
+        add_guardian_as(&mut f, &stranger, &g1),
         E_CONSTRAINT_HAS_ONE,
         "add_guardian by a stranger",
     );
     assert!(read_guardian(&f, &g1.pubkey()).is_none());
 
-    expect_ok(add_guardian(&mut f, g1.pubkey()), "add_guardian");
+    expect_ok(add_guardian(&mut f, &g1), "add_guardian");
     let acc = read_guardian(&f, &g1.pubkey()).expect("the GuardianAccount must exist");
     assert_eq!(acc.guardian, g1.pubkey().to_bytes(), "GuardianAccount.guardian");
     assert_eq!(acc.added_at, t0, "GuardianAccount.added_at");
@@ -844,22 +869,23 @@ fn add_guardian_writes_the_account_and_the_count() {
     assert_eq!(acc.version, 1, "GuardianAccount.version");
     // Without the persisted count, finalize_guardian_removal's floor can never pass and no guardian
     // can ever be removed, while the console still shows a veto set.
-    assert_eq!(f.config().guardian_count, 1, "add_guardian did not persist the count");
+    // 2, not 1: `initialize` appointed the fixture's own guardian, and this is the second.
+    assert_eq!(f.config().guardian_count, 2, "add_guardian did not persist the count");
 
     // Re-adding an ACTIVE guardian would let one key inflate the count to the maximum.
     expect_error(
-        add_guardian(&mut f, g1.pubkey()),
+        add_guardian(&mut f, &g1),
         E_PROPOSAL_ALREADY_ACTIVE,
         "re-add an already active guardian",
     );
-    assert_eq!(f.config().guardian_count, 1, "a refused re-add inflated the count");
+    assert_eq!(f.config().guardian_count, 2, "a refused re-add inflated the count");
 
-    let (g2, g3, g4) = (funded(&mut f), funded(&mut f), funded(&mut f));
-    expect_ok(add_guardian(&mut f, g2.pubkey()), "add g2");
-    expect_ok(add_guardian(&mut f, g3.pubkey()), "add g3");
+    // One slot left, because initialize took the first: g2 fills it and g3 is refused.
+    let (g2, g3) = (funded(&mut f), funded(&mut f));
+    expect_ok(add_guardian(&mut f, &g2), "add g2");
     assert_eq!(f.config().guardian_count, MAX_GUARDIANS);
     expect_error(
-        add_guardian(&mut f, g4.pubkey()),
+        add_guardian(&mut f, &g3),
         E_GUARDIAN_COUNT_EXCEEDED,
         "add past max_guardian_count",
     );
@@ -872,12 +898,15 @@ fn the_admin_may_not_appoint_itself_or_the_incoming_admin() {
     let admin = f.admin.insecure_clone();
     let admin_key = admin.pubkey();
     // Self-appointment would satisfy guardian_count and the floor with a seat that is no veto at all.
+    // The admin signs as admin, as payer AND as the co-signing appointee: holding the key is not the
+    // question here, the identity is.
     expect_error(
-        add_guardian(&mut f, admin_key),
+        add_guardian(&mut f, &admin),
         E_UNAUTHORIZED,
         "the admin appointing itself",
     );
-    assert_eq!(f.config().guardian_count, 0);
+    assert_eq!(f.config().guardian_count, 1, "only initialize's guardian");
+    let _ = admin_key;
 
     let incoming = funded(&mut f);
     expect_ok(
@@ -886,11 +915,11 @@ fn the_admin_may_not_appoint_itself_or_the_incoming_admin() {
     );
     // Otherwise the barrier is sidestepped: appoint K, then complete a transfer to K.
     expect_error(
-        add_guardian(&mut f, incoming.pubkey()),
+        add_guardian(&mut f, &incoming),
         E_UNAUTHORIZED,
         "appointing the INCOMING admin",
     );
-    assert_eq!(f.config().guardian_count, 0);
+    assert_eq!(f.config().guardian_count, 1, "only initialize's guardian");
 }
 
 #[test]
@@ -1125,7 +1154,7 @@ fn a_re_appointment_waits_out_the_cooldown_and_resets_the_veto_budget() {
 
     // The cooldown is what stops the admin who ordered a removal from undoing it in the same slot.
     expect_error(
-        add_guardian(&mut f, g1.pubkey()),
+        add_guardian(&mut f, &g1),
         E_GUARDIAN_IN_COOLDOWN,
         "re-appoint inside the cooldown",
     );
@@ -1133,7 +1162,7 @@ fn a_re_appointment_waits_out_the_cooldown_and_resets_the_veto_budget() {
 
     f.warp(GUARDIAN_REMOVE_COOLDOWN_SECONDS + 1);
     let t = now(&f);
-    expect_ok(add_guardian(&mut f, g1.pubkey()), "re-appoint after the cooldown");
+    expect_ok(add_guardian(&mut f, &g1), "re-appoint after the cooldown");
     let acc = read_guardian(&f, &g1.pubkey()).unwrap();
     assert_eq!(acc.cooldown_until, 0, "the re-appointed guardian is still in cooldown");
     assert_eq!(acc.added_at, t, "the re-appointment did not refresh added_at");

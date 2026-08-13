@@ -1,8 +1,8 @@
 import { PublicKey } from "@solana/web3.js";
 
-// Program ID: fresh devnet deploy 2026-07-25 (wave-0 audit remediation changed the
-// ConfigAccount + GuardianAccount layout, and initialize can only ever run once
-// per program id, so a new id was required). Retired: AX7seVo6..., GDN5ktEm...
+// Program ID: MAINNET deploy 2026-08-12 (tx pgWbEKnP..., slot 438841839). The same id served the
+// 2026-07-25 devnet deploy. `initialize` can only ever run once per program id, so any
+// ConfigAccount + GuardianAccount layout change forces a new id. Retired: AX7seVo6..., GDN5ktEm...
 export const PROGRAM_ID = new PublicKey("3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ");
 
 // Token programs.
@@ -10,13 +10,13 @@ export const TOKEN_PROGRAM_ID = new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9
 export const TOKEN_2022_PROGRAM_ID = new PublicKey("TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb");
 export const ASSOCIATED_TOKEN_PROGRAM_ID = new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL");
 
-// USDC on devnet (Circle's USDC devnet mint) - matches the live V2 devnet deploy.
-// For mainnet swap to: EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
-export const USDC_MINT = new PublicKey("4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU");
+// USDC on MAINNET (Circle). Devnet was 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU.
+export const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
 
-// SILV mint - created by the 2026-07-25 init (scripts/t1-hostile-bootstrap.ts case 5).
+// SILV mint - the MAINNET announced vanity address, bound by `initialize` on 2026-08-12.
 // Must be updated after every fresh init: read it back with scripts/read-config.ts.
-export const SILV_MINT = new PublicKey("G5zez3JWETJMfG3hnCQbdPm7usXMnmKUpajdGJYB5JFF");
+// Devnet was CebhMovXRM5hEhFDTyq7Y1ez8h11UzFSGjELbyQeJExv.
+export const SILV_MINT = new PublicKey("SiLVFMgD3eD2rgK628NbTBq9MnuJF5FW2CRaVyTB35L");
 
 // AUDIT FINDING P-06: `PYTH_XAG_USD_FEED_ID` (the retired Pyth Core XAG/USD feed) was exported here
 // with zero call sites. The program reads Pyth LAZER feed 3154 via a signed message; there is no Core
