@@ -54,7 +54,7 @@ const {
   VersionedTransaction,
   LAMPORTS_PER_SOL,
 } = r("@solana/web3.js");
-const { getAssociatedTokenAddressSync, TOKEN_2022_PROGRAM_ID } = r("@solana/spl-token");
+const { getAssociatedTokenAddressSync, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } = r("@solana/spl-token");
 const multisig = r("@sqds/multisig");
 const anchor = r("@coral-xyz/anchor");
 
@@ -101,7 +101,7 @@ function readinessDigest(c: any): Buffer {
 }
 
 type Args = {
-  action: "unpause" | "premint";
+  action: "unpause" | "premint" | "deposit";
   amount?: bigint;
   create: boolean;
   approve: boolean;
@@ -119,11 +119,13 @@ function parseArgs(): Args {
     return i >= 0 ? a[i + 1] : undefined;
   };
   const action = get("--action");
-  if (action !== "unpause" && action !== "premint") {
-    throw new Error("--action must be 'unpause' or 'premint'");
+  if (action !== "unpause" && action !== "premint" && action !== "deposit") {
+    throw new Error("--action must be 'unpause', 'premint' or 'deposit'");
   }
   const amountRaw = get("--amount");
-  if (action === "premint" && !amountRaw) throw new Error("--action premint requires --amount (atomic, 6 decimals)");
+  if ((action === "premint" || action === "deposit") && !amountRaw) {
+    throw new Error(`--action ${action} requires --amount (atomic, 6 decimals)`);
+  }
   const idx = get("--index");
   return {
     action,
@@ -166,7 +168,10 @@ async function main(): Promise<void> {
   // signature inside redeem_silv, so an over-mint cannot be undone. Executing it therefore needs
   // DOMINION_INTENT=admin_premint spelled out, which is exactly the friction that classification was
   // added for.
-  if (args.execute) assertReversible(args.action === "unpause" ? "unpause" : "admin_premint", intentFromEnv());
+  if (args.execute) {
+    const named = args.action === "unpause" ? "unpause" : args.action === "premint" ? "admin_premint" : "deposit_usdc";
+    assertReversible(named, intentFromEnv());
+  }
   else if (args.create) assertReversible("propose_any", intentFromEnv());
 
   const conn = new Connection(CLUSTER.rpc, "confirmed");
@@ -248,7 +253,7 @@ async function main(): Promise<void> {
     // The guardian is a plain account here, NOT a signer (unpause IDL). So this is an ops-only
     // 3-of-5, not a coordination of both multisigs. It still has to be an INDEPENDENT guardian.
     innerIx = await buildUnpauseIx();
-  } else {
+  } else if (args.action === "premint") {
     const amount = args.amount!;
     if (amount <= BigInt(0)) throw new Error("--amount must be > 0 (admin_premint reverts ZeroAmount)");
     const inventory = new PublicKey(String(cfg.inventoryWallet));
@@ -301,6 +306,50 @@ async function main(): Promise<void> {
         inventorySilvAta: ata,
         silvMintAuthority: mintAuthority,
         token2022Program: TOKEN_2022_PROGRAM_ID,
+      })
+      .instruction();
+  } else {
+    // DEPOSIT. `deposit_usdc` is permissionless (`pub user: Signer`, no admin constraint), so this
+    // path exists only because the SOURCE is the ops vault's own USDC account: moving tokens out of a
+    // Squads vault needs the vault's signature, and that is the 3-of-5. A partner replenishing the
+    // treasury from their OWN wallet needs no proposal at all - they sign `deposit_usdc` themselves.
+    //
+    // Why route a partner's USDC through the vault instead: `config.usdc_treasury` is a TOKEN account
+    // and off-curve, so pasting it into a wallet or an exchange withdrawal form is at best a loud
+    // failure and at worst an ATA derived from it that nothing can sign for. A Squads vault is a
+    // normal, documented deposit address, and the funds stay under 3-of-5 the whole way.
+    const amount = args.amount!;
+    if (amount <= BigInt(0)) throw new Error("--amount must be > 0");
+    if (amount < BigInt(1_000_000)) {
+      throw new Error("deposit_usdc refuses below 1 USDC (MIN_DEPOSIT_USDC in deposit_usdc.rs)");
+    }
+    const usdcMint = new PublicKey(String(cfg.usdcMint));
+    const treasury = new PublicKey(String(cfg.usdcTreasury));
+    // allowOwnerOffCurve: the vault is a PDA.
+    const vaultUsdcAta = getAssociatedTokenAddressSync(usdcMint, vault, true, TOKEN_PROGRAM_ID);
+    const src = await conn.getTokenAccountBalance(vaultUsdcAta, "finalized").catch(() => null);
+    if (!src) {
+      throw new Error(`the vault has no USDC account at ${vaultUsdcAta.toBase58()}. Send USDC to the vault first.`);
+    }
+    const held = BigInt(src.value.amount);
+    if (held < amount) {
+      throw new Error(
+        `the vault holds ${Number(held) / 1e6} USDC at ${vaultUsdcAta.toBase58()}, needs ${Number(amount) / 1e6}.`,
+      );
+    }
+    const treBal = await conn.getTokenAccountBalance(treasury, "finalized");
+    console.log(`  source    : ${vaultUsdcAta.toBase58()} (vault USDC), holds ${Number(held) / 1e6}`);
+    console.log(`  treasury  : ${treasury.toBase58()}, holds ${treBal.value.uiAmountString}`);
+    console.log(`  amount    : ${amount} atomic = ${Number(amount) / 1e6} USDC`);
+    innerIx = await program.methods
+      .depositUsdc(new anchor.BN(amount.toString()))
+      .accounts({
+        config: configPda,
+        user: vault,
+        usdcMint,
+        usdcTreasury: treasury,
+        userUsdcAta: vaultUsdcAta,
+        classicTokenProgram: TOKEN_PROGRAM_ID,
       })
       .instruction();
   }
