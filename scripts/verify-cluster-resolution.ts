@@ -208,6 +208,11 @@ for (const rpc of [
     // terms as _t1-mint-helper: a helper that contained a send primitive would NOT belong here, and
     // the check below verifies that claim rather than trusting this comment.
     "_guardian.ts",
+    // Telegram and heartbeat delivery for the monitors. It resolves no cluster, opens no Connection and
+    // touches no Solana RPC at all: its only network calls are api.telegram.org and a ping URL. Exempt on
+    // the same terms as the helpers above, and the send-primitive check below verifies that rather than
+    // trusting this comment.
+    "_telegram.ts",
     "verify-cluster-resolution.ts",
   ]);
 
