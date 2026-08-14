@@ -19,7 +19,6 @@
  * deploy that is still wrong cannot be waved through by someone reading a screenshot at 14:55.
  *
  * Run: DOMINION_RPC=<mainnet> npx tsx scripts/verify-post-deploy.ts
- *      SITE_PASSWORD=... to also exercise the gated /api/lazer price route.
  */
 import { Connection, PublicKey, Keypair } from "@solana/web3.js";
 import { AnchorProvider, Idl, Program, Wallet } from "@coral-xyz/anchor";
@@ -55,14 +54,13 @@ function ok(name: string, cond: boolean, detail = ""): void {
 
 /** Fetch every JS chunk the page references, plus the HTML, so an inlined constant cannot hide in a
  *  lazily-loaded chunk. That is how the original bug was found and how it must be confirmed gone. */
-async function fetchBundle(url: string, cookie?: string): Promise<string | null> {
-  const headers: Record<string, string> = cookie ? { cookie } : {};
-  const res = await fetch(url, { headers });
+async function fetchBundle(url: string): Promise<string | null> {
+  const res = await fetch(url);
   if (!res.ok) return null;
   const html = await res.text();
   const paths = [...new Set([...html.matchAll(/\/_next\/static\/chunks\/[a-zA-Z0-9._/-]+\.js/g)].map((m) => m[0]))];
   const chunks = await Promise.all(
-    paths.map((p) => fetch(new URL(p, url).toString(), { headers }).then((r) => (r.ok ? r.text() : "")).catch(() => "")),
+    paths.map((p) => fetch(new URL(p, url).toString()).then((r) => (r.ok ? r.text() : "")).catch(() => "")),
   );
   return html + chunks.join("");
 }
@@ -120,24 +118,13 @@ async function main(): Promise<void> {
   // ---- 3. THE BUNDLES. /api/health speaks for the server; this speaks for what the browser runs.
   // They can disagree: the route reads the same constants, but a stale CDN copy of a chunk would not.
   console.log("\n== 3. the bundles the browser actually downloads ==");
-  const gateCookie = process.env.SITE_PASSWORD
-    ? await fetch(`${PUBLIC_URL}/api/gate`, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: `password=${encodeURIComponent(process.env.SITE_PASSWORD)}`,
-        redirect: "manual",
-      })
-        .then((r) => (r.headers.get("set-cookie") ?? "").match(/dominion_gate=[a-f0-9]+/)?.[0])
-        .catch(() => undefined)
-    : undefined;
-
-  for (const [label, url, cookie] of [
-    ["public", PUBLIC_URL, gateCookie],
-    ["admin", ADMIN_URL, undefined],
-  ] as Array<[string, string, string | undefined]>) {
-    const bundle = await fetchBundle(url, cookie);
+  for (const [label, url] of [
+    ["public", PUBLIC_URL],
+    ["admin", ADMIN_URL],
+  ] as Array<[string, string]>) {
+    const bundle = await fetchBundle(url);
     if (!bundle) {
-      ok(`${label}: bundle fetched`, false, "page did not load (gated without SITE_PASSWORD?)");
+      ok(`${label}: bundle fetched`, false, "page did not load");
       continue;
     }
     ok(`${label}: carries the mainnet SILV mint`, bundle.includes(EXPECT.silvMint));
@@ -160,31 +147,30 @@ async function main(): Promise<void> {
   }
 
   // ---- 4. the price route, which every priced operation depends on -------------------------
+  // UNCONDITIONAL. It used to skip itself when SITE_PASSWORD was absent, which meant the one check every
+  // priced operation depends on asserted nothing and still exited 0. Now that the pre-launch gate is gone
+  // the route answers anonymously, so there is no configuration under which this may opt out.
   console.log("\n== 4. the price proxy ==");
-  if (!gateCookie) {
-    console.log("  skipped: set SITE_PASSWORD to exercise the gated /api/lazer route");
-  } else {
-    const lz = await fetch(`${PUBLIC_URL}/api/lazer`, {
-      method: "POST",
-      headers: { "content-type": "application/json", cookie: gateCookie },
-      body: "{}",
-    })
-      .then((r) => (r.ok ? r.json() : null))
-      .catch(() => null);
-    const p = (lz as any)?.price;
-    ok("/api/lazer returns a signed envelope", Boolean((lz as any)?.envelopeBase64));
-    ok(
-      "the publisher count meets the on-chain floor",
-      Boolean(p) && Number(p.publisherCount) >= Number(cfg.minPublishers),
-      p ? `${p.publisherCount} publishers, floor ${Number(cfg.minPublishers)}` : "no price",
-    );
-    if (p) console.log(`  price $${Number(p.priceUsd).toFixed(4)}/oz`);
-  }
+  const lz = await fetch(`${PUBLIC_URL}/api/lazer`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  })
+    .then((r) => (r.ok ? r.json() : null))
+    .catch(() => null);
+  const p = (lz as any)?.price;
+  ok("/api/lazer returns a signed envelope", Boolean((lz as any)?.envelopeBase64));
+  ok(
+    "the publisher count meets the on-chain floor",
+    Boolean(p) && Number(p.publisherCount) >= Number(cfg.minPublishers),
+    p ? `${p.publisherCount} publishers, floor ${Number(cfg.minPublishers)}` : "no price",
+  );
+  if (p) console.log(`  price $${Number(p.priceUsd).toFixed(4)}/oz`);
 
   console.log(`\n==== ${pass} passed, ${fail} failed ====`);
   if (fail > 0) {
     console.log("A failure here means the deployed frontends do NOT agree with the chain.");
-    console.log("Do NOT remove SITE_PASSWORD while this is red: every user mint would revert.");
+    console.log("The site is open to the public, so a red here is user-visible right now.");
   }
   process.exit(fail === 0 ? 0 : 1);
 }

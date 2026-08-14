@@ -8,18 +8,75 @@
 
 html,
 body {
-  background: #0a0a0a;
-  color: #e5e5e5;
+  /* dominion.market, the same values apps/public carries: rgb(11,12,14) ground, rgb(199,203,210)
+     text. This file held #0a0a0a / #e5e5e5, which was the pre-rebrand palette. Close enough to look
+     deliberate side by side and different enough to look like two products. */
+  background: #0b0c0e;
+  color: #c7cbd2;
   min-height: 100vh;
+  font-family: var(--font-jost), system-ui, sans-serif;
 }
 
-/* Wallet adapter button overrides */
+/* THE WORDMARK GETS THE DISPLAY SERIF; NOTHING ELSE DOES.
+   dominion.market sets every heading in Cormorant Garamond at 0.24em tracking, which is beautiful at
+   64px and unreadable at 13px. This console is almost entirely small labels over numbers, so the
+   serif is confined to the brand mark in the header and section headings stay in Jost. */
+h2,
+h3 {
+  font-family: var(--font-jost), system-ui, sans-serif;
+  letter-spacing: 0.005em;
+  color: #f4f5f7;
+}
+
+/* Numbers must line up in columns: this console is read by comparing figures between rows, and
+   proportional digits make two balances of the same magnitude look different lengths. */
+.font-mono,
+.tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- wallet adapter, restyled here because it is a third-party component ---- */
+
 .wallet-adapter-button {
-  background-color: #22c55e !important;
-  color: #0a0a0a !important;
+  /* The site's "Buy SILV" CTA, stop for stop. Was flat green-500 with near-black text. */
+  background-image: linear-gradient(#c9daf3 0%, #8badda 50%, #6e93c4 100%) !important;
+  background-color: transparent !important;
+  color: #0b0c0e !important;
   font-weight: 600 !important;
-  transition: background-color 150ms ease;
+  border-radius: 6px !important;
+  font-family: var(--font-jost), system-ui, sans-serif !important;
+  transition:
+    filter 150ms ease,
+    opacity 150ms ease;
 }
 .wallet-adapter-button:not(.wallet-adapter-button-trigger):hover {
-  background-color: #16a34a !important;
+  /* Brightening the gradient rather than swapping a flat colour keeps the metal feel on hover. */
+  filter: brightness(1.08);
+}
+
+/* The modal is the same component family and would otherwise keep its default light chrome on a
+   near-black page. */
+.wallet-adapter-modal-wrapper {
+  background-color: #15161a !important;
+  border: 1px solid #232427 !important;
+}
+.wallet-adapter-modal-title {
+  color: #f4f5f7 !important;
+  font-family: var(--font-jost), system-ui, sans-serif !important;
+}
+.wallet-adapter-modal-list li button {
+  /* `background-image: none` IS THE LOAD-BEARING LINE, and it is here because apps/public shipped
+     without it and the bug was found by screenshotting the open modal rather than by reading the
+     file. The list items are ALSO `.wallet-adapter-button`, so they inherit the CTA gradient above,
+     and `background-color` cannot override a `background-image`: the gradient paints on top. The
+     result is pale wallet names on a pale periwinkle gradient, so "Phantom", "Solflare", "Ledger"
+     and "Coinbase Wallet" are close to unreadable on the first interaction anyone has with the app.
+     Copied deliberately: adopting the gradient without this reproduces that bug here. */
+  background-image: none !important;
+  background-color: #0b0c0e !important;
+  border: 1px solid #232427 !important;
+  color: #c7cbd2 !important;
+}
+.wallet-adapter-modal-list li button:hover {
+  border-color: #8badda !important;
 }

@@ -52,6 +52,7 @@ const {
   PublicKey,
   TransactionMessage,
   VersionedTransaction,
+  SystemProgram,
   LAMPORTS_PER_SOL,
 } = r("@solana/web3.js");
 const { getAssociatedTokenAddressSync, TOKEN_2022_PROGRAM_ID, TOKEN_PROGRAM_ID } = r("@solana/spl-token");
@@ -101,7 +102,7 @@ function readinessDigest(c: any): Buffer {
 }
 
 type Args = {
-  action: "unpause" | "premint" | "deposit";
+  action: "unpause" | "premint" | "deposit" | "fee-exempt";
   amount?: bigint;
   create: boolean;
   approve: boolean;
@@ -109,6 +110,10 @@ type Args = {
   skipSimulation: boolean;
   /** Simulate an unpause IMMEDIATELY BEFORE this action, in the same simulated transaction. */
   withUnpause: boolean;
+  /** fee-exempt only. */
+  wallet?: string;
+  flags?: number;
+  expiresAt?: number;
   index?: bigint;
 };
 
@@ -119,8 +124,8 @@ function parseArgs(): Args {
     return i >= 0 ? a[i + 1] : undefined;
   };
   const action = get("--action");
-  if (action !== "unpause" && action !== "premint" && action !== "deposit") {
-    throw new Error("--action must be 'unpause', 'premint' or 'deposit'");
+  if (action !== "unpause" && action !== "premint" && action !== "deposit" && action !== "fee-exempt") {
+    throw new Error("--action must be 'unpause', 'premint', 'deposit' or 'fee-exempt'");
   }
   const amountRaw = get("--amount");
   if ((action === "premint" || action === "deposit") && !amountRaw) {
@@ -129,6 +134,9 @@ function parseArgs(): Args {
   const idx = get("--index");
   return {
     action,
+    wallet: get("--wallet"),
+    flags: get("--flags") ? Number(get("--flags")) : undefined,
+    expiresAt: get("--expires-at") ? Number(get("--expires-at")) : undefined,
     amount: amountRaw ? BigInt(amountRaw) : undefined,
     create: a.includes("--create"),
     approve: a.includes("--approve-with-deployer"),
@@ -169,7 +177,14 @@ async function main(): Promise<void> {
   // DOMINION_INTENT=admin_premint spelled out, which is exactly the friction that classification was
   // added for.
   if (args.execute) {
-    const named = args.action === "unpause" ? "unpause" : args.action === "premint" ? "admin_premint" : "deposit_usdc";
+    const named =
+      args.action === "unpause"
+        ? "unpause"
+        : args.action === "premint"
+          ? "admin_premint"
+          : args.action === "deposit"
+            ? "deposit_usdc"
+            : "set_fee_exempt";
     assertReversible(named, intentFromEnv());
   }
   else if (args.create) assertReversible("propose_any", intentFromEnv());
@@ -308,7 +323,7 @@ async function main(): Promise<void> {
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
       .instruction();
-  } else {
+  } else if (args.action === "deposit") {
     // DEPOSIT. `deposit_usdc` is permissionless (`pub user: Signer`, no admin constraint), so this
     // path exists only because the SOURCE is the ops vault's own USDC account: moving tokens out of a
     // Squads vault needs the vault's signature, and that is the 3-of-5. A partner replenishing the
@@ -350,6 +365,69 @@ async function main(): Promise<void> {
         usdcTreasury: treasury,
         userUsdcAta: vaultUsdcAta,
         classicTokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .instruction();
+  }
+
+  if (args.action === "fee-exempt") {
+    // FEE EXEMPTION. `set_fee_exempt(wallet, flags, expires_at)`, admin-only, so a 3-of-5.
+    //
+    // `flags` is a Side bitfield (state/side.rs): bit 0 mint, bit 1 redeem, 3 both. The handler itself
+    // notes that BOTH bits set, a term near the cap, or a self-grant by the admin are worth alerting on,
+    // so those are decisions to make explicitly rather than defaults to inherit.
+    //
+    // `expires_at` is MANDATORY and every part of that is enforced (audit C-01): unix SECONDS, strictly
+    // in the future, at most MAX_FEE_EXEMPT_TERM_SECONDS (2 years) away, and ZERO IS REFUSED because zero
+    // is not an indefinite term. A 13-digit millisecond paste is rejected by the same rail, which is why
+    // the digit count is checked here too: the revert message is clear but it arrives after three people
+    // have approved.
+    const wallet = args.wallet;
+    if (!wallet) throw new Error("--action fee-exempt requires --wallet <pubkey>");
+    const flags = args.flags;
+    if (flags === undefined || !Number.isInteger(flags) || flags < 1 || flags > 3) {
+      throw new Error("--flags must be 1 (mint), 2 (redeem) or 3 (both)");
+    }
+    const expiresAt = args.expiresAt;
+    if (expiresAt === undefined || !Number.isInteger(expiresAt)) {
+      throw new Error("--expires-at is MANDATORY: a unix timestamp in SECONDS (zero is refused on chain)");
+    }
+    if (String(expiresAt).length !== 10) {
+      throw new Error(
+        `--expires-at ${expiresAt} has ${String(expiresAt).length} digits. Seconds are 10; a 13-digit ` +
+          `millisecond value is refused on chain and would waste a 3-of-5 round.`,
+      );
+    }
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (expiresAt <= nowSec) throw new Error(`--expires-at ${expiresAt} is not in the future`);
+    const MAX_TERM = 2 * 365 * 86400;
+    if (expiresAt - nowSec > MAX_TERM) {
+      throw new Error(`--expires-at is ${((expiresAt - nowSec) / 86400).toFixed(0)} days away, the cap is 730`);
+    }
+    const walletPk = new PublicKey(wallet);
+    const [feeExemptPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("fee_exempt"), walletPk.toBuffer()],
+      PROGRAM_ID,
+    );
+    const already = await conn.getAccountInfo(feeExemptPda, "finalized");
+    console.log(`  wallet    : ${wallet}`);
+    console.log(`  fee_exempt: ${feeExemptPda.toBase58()}${already ? " (ALREADY EXISTS, this overwrites it)" : ""}`);
+    console.log(
+      `  flags     : ${flags} (${flags & 1 ? "mint" : ""}${flags === 3 ? "+" : ""}${flags & 2 ? "redeem" : ""})`,
+    );
+    console.log(
+      `  expires   : ${expiresAt} = ${new Date(expiresAt * 1000).toISOString().slice(0, 16).replace("T", " ")}Z` +
+        ` (${((expiresAt - nowSec) / 86400).toFixed(0)} days)`,
+    );
+    if (walletPk.equals(vault)) {
+      console.log("  *** this wallet IS the admin vault: a self-grant, which the handler flags as notable.");
+    }
+    innerIx = await program.methods
+      .setFeeExempt(walletPk, flags, new anchor.BN(expiresAt))
+      .accounts({
+        config: configPda,
+        admin: vault,
+        feeExempt: feeExemptPda,
+        systemProgram: SystemProgram.programId,
       })
       .instruction();
   }

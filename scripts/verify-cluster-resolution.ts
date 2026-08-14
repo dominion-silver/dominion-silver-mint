@@ -208,6 +208,11 @@ for (const rpc of [
     // terms as _t1-mint-helper: a helper that contained a send primitive would NOT belong here, and
     // the check below verifies that claim rather than trusting this comment.
     "_guardian.ts",
+    // Telegram and heartbeat delivery for the monitors. It resolves no cluster, opens no Connection and
+    // touches no Solana RPC at all: its only network calls are api.telegram.org and a ping URL. Exempt on
+    // the same terms as the helpers above, and the send-primitive check below verifies that rather than
+    // trusting this comment.
+    "_telegram.ts",
     "verify-cluster-resolution.ts",
   ]);
 
@@ -302,6 +307,11 @@ for (const rpc of [
   ]);
   // Everything else. Listed by name so ADDING a script is recorded, not silently blessed by a regex.
   const NON_SENDERS = new Set([
+    // Measures the fee exemption by simulating a mint twice, with and without it. Sends nothing.
+    "prove-fee-exemption.ts",
+    // Read-only monitors. They query the chain and the live site and send no transaction, so they
+    // must NOT be forced through the transaction guard.
+    "health-monitor.ts",
     // Reads the chain and fetches the deployed bundles to prove the frontends resolve MAINNET.
     // Sends nothing, so it must NOT be forced through the transaction guard.
     "verify-post-deploy.ts",
