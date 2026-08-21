@@ -97,8 +97,24 @@ for path in list(idls):
         print(f"   skip: {path} not built yet (gitignored; run anchor idl build)")
         continue
     raw = p.read_bytes()
-    digests[path] = hashlib.sha256(raw).hexdigest()
-    addr = _json_or_die(raw, p).get("address")
+    # DIGEST THE NORMALISED FORM, not the raw bytes. The committed app copies have their `docs`
+    # stripped, because Anchor lifts Rust doc comments into the IDL and the apps bundle it, so
+    # internal engineering prose was reaching every visitor of the public site. `target/idl` is a
+    # fresh generation and still carries them, so raw bytes can no longer be equal by construction.
+    # Normalising every copy through the same function keeps this check about CONTENT, which is what
+    # it was always for: the apps must describe the program that ships.
+    parsed = _json_or_die(raw, p)
+
+    def _strip_docs(node):
+        if isinstance(node, dict):
+            return {k: _strip_docs(v) for k, v in node.items() if k != "docs"}
+        if isinstance(node, list):
+            return [_strip_docs(v) for v in node]
+        return node
+
+    normalised = json.dumps(_strip_docs(parsed), indent=2, ensure_ascii=False, sort_keys=True)
+    digests[path] = hashlib.sha256(normalised.encode("utf-8")).hexdigest()
+    addr = parsed.get("address")
     check(addr == DECLARED, f"{path} address == declare_id!")
 if len(digests) < 2:
     check(False,
@@ -108,7 +124,7 @@ if len(digests) >= 2:
     # `>= 2`, never `== 3`: with target/idl absent this is the ONLY comparison between the app copies.
     uniq = set(digests.values())
     check(len(uniq) == 1,
-          f"all {len(digests)} present IDL copies are byte-identical"
+          f"all {len(digests)} present IDL copies are identical once normalised"
           + ("" if len(uniq) == 1 else f" (got {len(uniq)} distinct digests)"))
     if len(uniq) == 1:
         print(f"        sha256 {next(iter(uniq))}")

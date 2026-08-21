@@ -224,15 +224,24 @@ jobs:
       - name: Assert the regenerated IDL matches the committed copies (BLOCKING)
         # The apps bundle their own IDL copy. If a regeneration differs from what is
         # committed, the console is describing a program that is not the one being
-        # deployed. verify-constants-consistency.sh proves the three COMMITTED copies
+        # deployed. verify-constants-consistency.sh proves the COMMITTED copies
         # agree with each other; this proves they agree with a FRESH build.
+        #
+        # BOTH SIDES ARE NORMALISED THROUGH THE SAME SCRIPT, which strips `docs`.
+        # Anchor lifts Rust doc comments into the IDL, the apps bundle the IDL, and
+        # Next inlines it, so internal engineering prose was being served to every
+        # visitor of the public site: 13 matches for "ROUND <n>" in a live chunk on
+        # 2026-08-21. The committed copies are stripped now. Normalising both sides
+        # rather than editing one keeps this comparison about CONTENT: a raw diff
+        # against a fresh, unstripped regeneration would fail forever, and
+        # re-serialising only one side would fail on formatting.
         run: |
-          diff -u apps/admin/src/lib/idl/dominion_silver_mint.json \
-                  target/idl/dominion_silver_mint.json \
-            || { echo "::error::the committed admin IDL differs from a fresh regeneration"; exit 1; }
-          diff -u apps/public/src/lib/idl/dominion_silver_mint.json \
-                  target/idl/dominion_silver_mint.json \
-            || { echo "::error::the committed public IDL differs from a fresh regeneration"; exit 1; }
+          python3 scripts/_strip-idl-docs.py target/idl/dominion_silver_mint.json /tmp/idl-fresh.json
+          for app in admin public; do
+            python3 scripts/_strip-idl-docs.py "apps/$app/src/lib/idl/dominion_silver_mint.json" "/tmp/idl-$app.json"
+            diff -u "/tmp/idl-$app.json" /tmp/idl-fresh.json \
+              || { echo "::error::the committed $app IDL differs from a fresh regeneration"; exit 1; }
+          done
 
       - name: Verify the release artifact (BLOCKING - audit A-33)
         # Refuses any binary that does not match a clean default-feature rebuild,

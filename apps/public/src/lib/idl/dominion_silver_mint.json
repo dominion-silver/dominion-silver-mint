@@ -219,9 +219,6 @@
     },
     {
       "name": "attest_kyc",
-      "docs": [
-        "`reference` is a HASH of the provider's record id. NEVER PII, not even hashed PII."
-      ],
       "discriminator": [
         73,
         151,
@@ -336,11 +333,6 @@
         },
         {
           "name": "guardian",
-          "docs": [
-            "Optional guardian PDA tied to `signer` via PDA seeds (no spoofing).",
-            "Required when signer != admin. FIX B: a guardian can kill a malicious",
-            "admin-transfer proposal during the 24h delay window."
-          ],
           "optional": true,
           "pda": {
             "seeds": [
@@ -369,9 +361,6 @@
     },
     {
       "name": "cancel_guardian_removal",
-      "docs": [
-        "Cancels a scheduled removal. Admin OR the targeted guardian itself."
-      ],
       "discriminator": [
         71,
         152,
@@ -506,9 +495,6 @@
         },
         {
           "name": "guardian",
-          "docs": [
-            "Optional guardian PDA tied to `signer` via PDA seeds (no spoofing). Required when signer != admin."
-          ],
           "optional": true,
           "pda": {
             "seeds": [
@@ -1608,11 +1594,6 @@
         },
         {
           "name": "recipient_ata",
-          "docs": [
-            "Recipient USDC ATA. Owner is asserted manually in handler against action_data.recipient.",
-            "Anchor `token::authority` constraint cannot reference action_data, so we deserialize",
-            "and check manually with a dedicated error."
-          ],
           "writable": true
         },
         {
@@ -1649,9 +1630,6 @@
     },
     {
       "name": "finalize_guardian_removal",
-      "docs": [
-        "Applies a scheduled removal after its window. Permissionless on purpose."
-      ],
       "discriminator": [
         201,
         46,
@@ -1856,12 +1834,6 @@
         },
         {
           "name": "first_guardian",
-          "docs": [
-            "ROUND 8 L1-02. The FIRST guardian's account, created here so the independent brake exists in",
-            "the same authenticated transaction as `config.admin` rather than in a later admin-only call.",
-            "The seed is `args.guardian`, so the account address is a function of the argument and cannot",
-            "be pointed at some other key."
-          ],
           "writable": true,
           "pda": {
             "seeds": [
@@ -2339,10 +2311,6 @@
         },
         {
           "name": "guardian",
-          "docs": [
-            "Optional guardian PDA tied to `signer` via PDA seeds. Required when signer != admin.",
-            "The seeds constraint forces the PDA to belong to the signer (no spoofing)."
-          ],
           "optional": true,
           "pda": {
             "seeds": [
@@ -2574,9 +2542,6 @@
     },
     {
       "name": "propose_set_inventory_wallet",
-      "docs": [
-        "ROUND 7. Propose a CHANGE of the pre-mint destination. 24h, guardian-cancellable."
-      ],
       "discriminator": [
         148,
         68,
@@ -2893,9 +2858,6 @@
     },
     {
       "name": "propose_set_public_mint",
-      "docs": [
-        "Propose OPENING the public mint (24h timelock, guardian-cancellable)."
-      ],
       "discriminator": [
         18,
         101,
@@ -3849,10 +3811,6 @@
     },
     {
       "name": "remove_guardian",
-      "docs": [
-        "SCHEDULES a removal, does not apply it. The guardian keeps full powers for",
-        "admin_timelock_seconds and may cancel its own removal, so one admin signature cannot clear the veto."
-      ],
       "discriminator": [
         72,
         117,
@@ -3994,11 +3952,6 @@
     },
     {
       "name": "set_fee_exempt",
-      "docs": [
-        "`expires_at` is MANDATORY: a unix timestamp in SECONDS, strictly in the future, capped at",
-        "MAX_FEE_EXEMPT_TERM_SECONDS. Zero is refused (C-01), so every waiver carries a term and is",
-        "renewed by one instant transaction. That renewal IS the review the term exists to force."
-      ],
       "discriminator": [
         224,
         228,
@@ -4085,11 +4038,6 @@
     },
     {
       "name": "set_fee_routing_enabled",
-      "docs": [
-        "The fee-vault ESCAPE HATCH, instant in both directions. With routing off the premium stays in",
-        "the treasury. It exists because USDC carries a Circle freeze authority and the premium transfer",
-        "is unconditional, so a frozen vault would otherwise brick mint AND redeem for non-exempt wallets."
-      ],
       "discriminator": [
         101,
         222,
@@ -4184,10 +4132,6 @@
     },
     {
       "name": "set_kyc_scope",
-      "docs": [
-        "`flags` is a Side bitfield: bit 0 mint, bit 1 redeem, 0 = off. Instant in BOTH",
-        "directions; the handler explains why that inverts the usual asymmetry."
-      ],
       "discriminator": [
         247,
         144,
@@ -4273,11 +4217,7 @@
           ]
         },
         {
-          "name": "silv_mint",
-          "docs": [
-            "Read-only, pinned to the configured SILV mint so the supply cannot be",
-            "spoofed by passing a different mint."
-          ]
+          "name": "silv_mint"
         }
       ],
       "args": [
@@ -4289,13 +4229,6 @@
     },
     {
       "name": "set_min_operation_usdc",
-      "docs": [
-        "ROUND 5 P1-04. The minimum size of a priced operation, atomic USDC: `amount_usdc` on the mint",
-        "side, the gross USDC value of `amount_silv` on the redeem side. Instant in BOTH directions,",
-        "bounded by `MIN_OPERATION_CEILING_USDC`; zero disables the floor. It is an availability",
-        "control on the strict-anti-replay slot, not a value control, which is why it carries no",
-        "timelock. Full reasoning at `caps::set_min_operation_usdc_handler`."
-      ],
       "discriminator": [
         161,
         213,
@@ -4343,10 +4276,6 @@
     },
     {
       "name": "set_public_mint_enabled",
-      "docs": [
-        "Instant CLOSE of the public mint. FALSE-ONLY; opening goes through the",
-        "24h timelock (propose_set_public_mint / execute_set_public_mint)."
-      ],
       "discriminator": [
         100,
         19,
@@ -4441,10 +4370,6 @@
     },
     {
       "name": "unpause",
-      "docs": [
-        "ROUND 8 FINAL-03. `expected_readiness_digest` is the digest of the config fields the go-live",
-        "decision read WHEN THIS INSTRUCTION WAS BUILT. See `ConfigAccount::readiness_digest`."
-      ],
       "discriminator": [
         169,
         144,
@@ -4484,13 +4409,6 @@
         },
         {
           "name": "guardian",
-          "docs": [
-            "ROUND 8, the conditional P2 that comes with the open launch posture. `unpause` used to check",
-            "the admin signature and nothing else, while `initialize` leaves `guardian_count = 0`. With",
-            "mint and redeem now OPEN in the initial state, that sequence lets a ceremony slip or a",
-            "compromised admin switch every flow on before any independent party can pause or cancel. The",
-            "timelocks and the emergency response both assume that party exists."
-          ],
           "pda": {
             "seeds": [
               {
@@ -4529,10 +4447,6 @@
     },
     {
       "name": "withdraw_fees",
-      "docs": [
-        "Sweep accrued premium out of the program-owned fee vault to a destination chosen per call.",
-        "Instant: the vault backs nothing and `config.admin` is already a multisig."
-      ],
       "discriminator": [
         198,
         212,
@@ -6005,11 +5919,6 @@
         "fields": [
           {
             "name": "cancelled_pending_admin",
-            "docs": [
-              "The admin-elect whose handover was just cancelled. None is impossible in",
-              "practice (the handler requires a pending transfer) but the field is an",
-              "Option so the event cannot lie if that ever changes."
-            ],
             "type": {
               "option": "pubkey"
             }
@@ -6382,48 +6291,14 @@
           },
           {
             "name": "kyc_attestation_count",
-            "docs": [
-              "Live count of `KycAccount`s (`attest_kyc` creates, `revoke_kyc` closes). `set_kyc_scope` refuses",
-              "to arm at zero. Zero at rest holds only while the gate is dormant: else backfill before upgrading."
-            ],
             "type": "u32"
           },
           {
             "name": "min_operation_usdc",
-            "docs": [
-              "ROUND 5 P1-04. The MINIMUM SIZE OF A PRICED OPERATION, atomic USDC (6dec). It applies to",
-              "`amount_usdc` on the mint side and to the gross USDC value of `amount_silv` on the redeem side,",
-              "which is why it is not called `min_mint_amount`: it was, for one review cycle, and the name was",
-              "half of why the redeem side went unprotected.",
-              "",
-              "It is an AVAILABILITY control, not a value control, and it exists because D2 made the",
-              "anti-replay STRICT: `last_used_feed_update_timestamp_us` is a single global slot in this",
-              "writable config, written by `mint_silv` AND `redeem_silv`, so the first operation to consume a",
-              "Lazer print blocks every other one until the next print.",
-              "",
-              "Measured cost of capture with no floor, at $58.34/oz:",
-              "mint,   100 bps: `fee_from_amount` ceils, so 60 micro-USDC pays a 1 micro-USDC fee, leaves 59",
-              "net, and `mint_silv_out` floors 59/58.34 to exactly 1 atomic SILV, which",
-              "clears `silv_out > 0`. Cost: 0.00006 USDC.",
-              "redeem, 150 bps: 1 atomic SILV is worth 58 micro-USDC gross, pays a 1 micro-USDC fee and",
-              "returns 57. NET cost: about 0.0000013 USDC, thirty times cheaper still.",
-              "Either one bought a permissionless global denial of the priced path.",
-              "",
-              "Zero DISABLES the floor, which is what an in-place upgrade of an already-initialised config",
-              "decodes out of `reserved`, per THE RULE above. `initialize` writes `DEFAULT_MIN_OPERATION_USDC`."
-            ],
             "type": "u64"
           },
           {
             "name": "pending_inventory_wallet_nonce",
-            "docs": [
-              "ROUND 7. The active `SetInventoryWallet` proposal, or None. Carved out of `reserved` per THE",
-              "RULE above, so an in-place upgrade decodes None, which is the correct \"no proposal pending\".",
-              "",
-              "WHY THIS FIELD EXISTS AT ALL, rather than relying on MAX_ACTIVE_PROPOSALS: one armed proposal",
-              "per action kind is what makes a guardian's job tractable. Without it an admin could queue five",
-              "redirects to five wallets and the guardian would have to cancel all five within the window."
-            ],
             "type": {
               "option": "u64"
             }
@@ -6442,12 +6317,6 @@
     },
     {
       "name": "DevParamSet",
-      "docs": [
-        "SC-M7: dev-only handler audit trail. Emitted on dev_set_max_staleness",
-        "and dev_set_premiums calls so devnet operators have a log of what",
-        "changed and when. param: 1 = max_staleness_seconds, 2 = premiums.",
-        "value_a/value_b are the new values (interpretation depends on param)."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -6476,32 +6345,15 @@
     },
     {
       "name": "FeeExemptAccount",
-      "docs": [
-        "Waives the mint premium, the redeem premium, or both, for ONE wallet. One account per wallet,",
-        "PDA-derived FROM that wallet, so the seeds bind it and nothing can be spoofed. Mint and redeem",
-        "take it as an OPTION: omitting it pays the full fee, which is the safe default.",
-        "",
-        "Grant and revoke are both INSTANT, and the exposure is NOT nil. A wallet exempt on BOTH sides",
-        "mints and redeems at exact spot, so its round trip is free and it holds a free option on oracle",
-        "movement paid by the treasury: normally a round trip must clear the ~2.485% fee band first.",
-        "Prefer `SIDE_MINT_BIT` alone, which leaves the redeem fee as the cost of closing the loop."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "wallet",
-            "docs": [
-              "The exempt wallet. Always equals the PDA seed; re-checked in `exempts`."
-            ],
             "type": "pubkey"
           },
           {
             "name": "flags",
-            "docs": [
-              "Bitfield over `Side` (state/side.rs): 1 = mint, 2 = redeem, 3 = both. Never zero, since a",
-              "zero-flag exemption would be dead rent that still shows up in a roster."
-            ],
             "type": "u8"
           },
           {
@@ -6510,9 +6362,6 @@
           },
           {
             "name": "added_by",
-            "docs": [
-              "Who granted it. Kept for forensics, since the event alone ages out with the RPC logs."
-            ],
             "type": "pubkey"
           },
           {
@@ -6521,21 +6370,10 @@
           },
           {
             "name": "expires_at",
-            "docs": [
-              "Unix timestamp after which this exemption stops applying. MANDATORY, strictly in the future,",
-              "at most `MAX_FEE_EXEMPT_TERM_SECONDS` out. **0 grants NOTHING** (see `is_expired`).",
-              "",
-              "The term bounds FORGETTING (an arrangement that ends, a launch-window favour nobody revisits),",
-              "not a compromised admin, who picks the number. An indefinite arrangement is renewed by one",
-              "instant transaction, and that renewal is the review the term exists to force."
-            ],
             "type": "i64"
           },
           {
             "name": "reserved",
-            "docs": [
-              "Room for a future per-wallet fee OVERRIDE (a reduced rate rather than zero)."
-            ],
             "type": {
               "array": [
                 "u8",
@@ -6557,10 +6395,6 @@
           },
           {
             "name": "previous_flags",
-            "docs": [
-              "The flags in force at revocation, so a log reader can see what was withdrawn",
-              "without correlating against the earlier grant."
-            ],
             "type": "u8"
           },
           {
@@ -6576,9 +6410,6 @@
     },
     {
       "name": "FeeExemptSet",
-      "docs": [
-        "Emitted on both grant and update. `flags` is a `Side` bitfield (state/side.rs)."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -6592,10 +6423,6 @@
           },
           {
             "name": "expires_at",
-            "docs": [
-              "Always a future timestamp: C-01 made the term mandatory, so zero cannot occur. Emitted so a",
-              "monitor can alert on an unusually long term, which is the shape a compromised admin would use."
-            ],
             "type": "i64"
           },
           {
@@ -6611,11 +6438,6 @@
     },
     {
       "name": "FeeRoutingChanged",
-      "docs": [
-        "Premium routing turned on or off. The highest-signal fee event: with routing OFF the premium",
-        "stays in the treasury, so revenue analytics that read `fee_usdc` will correctly see zeros, and",
-        "anyone reconciling the fee vault needs to know when the switch moved."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -6649,10 +6471,6 @@
           },
           {
             "name": "remaining",
-            "docs": [
-              "Vault balance AFTER the sweep. Makes \"was this the whole balance or a partial",
-              "sweep?\" answerable from the event alone."
-            ],
             "type": "u64"
           },
           {
@@ -6814,45 +6632,10 @@
           },
           {
             "name": "inventory_wallet",
-            "docs": [
-              "ROUND 8 T8-03, option A. The pre-mint DESTINATION, bound ATOMICALLY with the rest of the",
-              "configuration, and the instant setter that used to bind it is DELETED.",
-              "",
-              "The round-7 shape kept a one-shot instant binding on the argument that with the field unset",
-              "there was \"nothing to steal\". That argument was wrong, and the refutation is clean: compromise",
-              "the Ops key DURING the ceremony, BEFORE the legitimate binding. The attacker binds their own",
-              "wallet, unpauses, and issues up to the whole hard cap into their ATA, with no delay and no",
-              "guardian veto. It confused supply already minted with issuance power still available.",
-              "",
-              "Appended LAST, so the 142-byte prefix of the previous layout is untouched and the only",
-              "difference on the wire is 32 more bytes."
-            ],
             "type": "pubkey"
           },
           {
             "name": "guardian",
-            "docs": [
-              "ROUND 8 L1-02. The FIRST guardian, appointed in this transaction.",
-              "",
-              "WHY IT IS AN ARGUMENT AND NOT A LATER CALL. `unpause` demands an active GuardianAccount whose",
-              "key differs from the admin, and that closes the two syntactic holes (no guardian at all, and a",
-              "guardian that IS the admin). It does not establish that an independent brake exists, because",
-              "`add_guardian` was admin-only: a compromised Ops could mint its own guardian keys, fill the",
-              "slots, present one to `unpause` and hold every power the timelocks assume somebody else holds.",
-              "A second keypair created by Ops is not independence.",
-              "",
-              "No on-chain check can PROVE independence. What this moves is the trust boundary. Binding the",
-              "first guardian here puts it in the same authenticated transaction as `config.admin`, under the",
-              "DOM-001 chain, inside the ceremony artifact that is reviewed and diffed before it is signed.",
-              "It becomes evidence somebody audits, instead of a call Ops can make later and alone. Every",
-              "LATER appointment additionally requires the named key to sign (`add_guardian`), so the set can",
-              "never grow without the consent of the key being added.",
-              "",
-              "Validated non-default and distinct from `admin`: a zero would leave `guardian_count = 1` with",
-              "no usable brake, and an admin-held slot is a brake wired to the same lever.",
-              "",
-              "Appended LAST for the same reason as the field above."
-            ],
             "type": "pubkey"
           }
         ]
@@ -6860,12 +6643,6 @@
     },
     {
       "name": "InventoryWalletChanged",
-      "docs": [
-        "SolidProof MEDIUM #3 asked for this back when the destination could be changed with no delay.",
-        "ROUND 8 A-05: it cannot any more. The only writer after `initialize` is",
-        "`execute_set_inventory_wallet`, after 24h and cancellable by a guardian. The event stays because",
-        "a timelocked redirect still has to be observable when it lands."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -6886,17 +6663,11 @@
     },
     {
       "name": "KycAccount",
-      "docs": [
-        "A per-wallet KYC attestation. The account existing IS the approval. Never holds PII."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "wallet",
-            "docs": [
-              "The approved wallet. Always equals the PDA seed; re-checked in `attests`."
-            ],
             "type": "pubkey"
           },
           {
@@ -6905,16 +6676,10 @@
           },
           {
             "name": "attestor",
-            "docs": [
-              "The key that wrote this record. Per record, so rotating the operator does not reassign past approvals."
-            ],
             "type": "pubkey"
           },
           {
             "name": "reference",
-            "docs": [
-              "Hash of the PROVIDER'S RECORD ID, never PII. All-zero means \"no reference supplied\"."
-            ],
             "type": {
               "array": [
                 "u8",
@@ -6928,9 +6693,6 @@
           },
           {
             "name": "reserved",
-            "docs": [
-              "Room for an expiry or a risk tier without changing the account size."
-            ],
             "type": {
               "array": [
                 "u8",
@@ -6956,9 +6718,6 @@
           },
           {
             "name": "reference",
-            "docs": [
-              "Hash of the provider's record id. NEVER PII: see state/kyc.rs."
-            ],
             "type": {
               "array": [
                 "u8",
@@ -7019,10 +6778,6 @@
     },
     {
       "name": "KycScopeChanged",
-      "docs": [
-        "The KYC gate being armed or disarmed. This is the highest-signal admin event in the",
-        "program for a holder: arming it can lock people out of redeeming."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -7060,10 +6815,6 @@
           },
           {
             "name": "live_supply",
-            "docs": [
-              "Live mint supply at the moment of the change, so the \"how much headroom",
-              "was just removed\" question is answerable from the log alone."
-            ],
             "type": "u64"
           },
           {
@@ -7101,11 +6852,6 @@
     },
     {
       "name": "MinOperationChanged",
-      "docs": [
-        "ROUND 5 P1-04. The mint floor is the availability control on the strict-anti-replay slot, so a",
-        "monitor needs the transition: raising it prices small users out, lowering it re-cheapens print",
-        "capture. Same old/new/by shape as the other instant setters, for the same LOW #3 reason."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -7135,10 +6881,6 @@
           },
           {
             "name": "amount_usdc",
-            "docs": [
-              "TOTAL USDC the user authorised, i.e. gross. The treasury received",
-              "`amount_usdc - fee_usdc`; the fee vault received `fee_usdc`."
-            ],
             "type": "u64"
           },
           {
@@ -7147,43 +6889,14 @@
           },
           {
             "name": "price_used_scaled",
-            "docs": [
-              "The oracle price, now PURE SPOT. Before 2026-08-05 the premium was folded into a",
-              "marked-up price and this field carried the raw oracle read anyway, so its meaning is",
-              "unchanged; what changed is that `amount_silv` is computed directly from it."
-            ],
             "type": "u128"
           },
           {
             "name": "premium_bps_used",
-            "docs": [
-              "The premium ACTUALLY applied. 0 when the caller holds a mint-side fee exemption, so",
-              "this is the field to read when auditing whitelist usage rather than",
-              "`config.premium_bps_mint`."
-            ],
             "type": "u16"
           },
           {
             "name": "fee_usdc",
-            "docs": [
-              "Premium routed to the fee vault (2026-08-05).",
-              "",
-              "CORRECTION. An earlier version of this comment said \"appended, so older decoders that",
-              "stop after `timestamp` still parse the prefix\". THAT WAS FALSE and it is worth spelling",
-              "out, because the comment actively authorised a mistake:",
-              "",
-              "This field is at index 4 of 6, BEFORE `timestamp`, not appended. Borsh is positional, so",
-              "a decoder built against the pre-upgrade IDL reads these 8 bytes AS `timestamp`. A $100",
-              "mint would decode as `timestamp = 1000000`, i.e. January 1970. It does not error, it",
-              "silently produces a plausible wrong number, which is the worst failure shape available.",
-              "",
-              "There is no in-repo decoder, so nothing is broken today. But ANY off-chain indexer,",
-              "dashboard or analytics job must be rebuilt against the new IDL before it reads",
-              "MintEvent or RedeemEvent again. Do not assume a prefix-compatible read.",
-              "",
-              "Left in place rather than moved to the end: moving it would change the IDL again for no",
-              "benefit now that the hazard is documented, and every reader has to be rebuilt either way."
-            ],
             "type": "u64"
           },
           {
@@ -7316,18 +7029,6 @@
           },
           {
             "name": "by",
-            "docs": [
-              "SOLIDPROOF T-006. The signer that minted. `inventory` is the DESTINATION, bound at",
-              "`initialize` and changeable only through the 24h timelocked pair, so without this field the",
-              "event records where supply went but not who sent it.",
-              "",
-              "LAST, after `timestamp`, and that placement is the whole point. The first version of this",
-              "change put `by` between `supply_post` and `timestamp` while its comment claimed an append",
-              "kept the offsets stable. That was false in exactly the way `MintEvent::fee_usdc` above",
-              "documents: a positional decoder would have read the first 8 bytes of this pubkey as the",
-              "timestamp and produced a plausible wrong number rather than an error. Appending for real",
-              "costs nothing here, because the field has never shipped."
-            ],
             "type": "pubkey"
           }
         ]
@@ -7359,11 +7060,6 @@
     },
     {
       "name": "PublicMintEnabledChanged",
-      "docs": [
-        "\"Mint at launch\" phase. Emitted by BOTH the timelocked open and the instant close,",
-        "so a monitor sees every transition of the single most consequential public-facing",
-        "flag in the program."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
@@ -7397,20 +7093,6 @@
           },
           {
             "name": "amount_usdc",
-            "docs": [
-              "USDC the user RECEIVED, i.e. net.",
-              "",
-              "The treasury's TOTAL outflow is `amount_usdc + fee_usdc` **only while fee routing is on**.",
-              "",
-              "AUDIT D-04: this said the treasury always paid `amount_usdc + fee_usdc`, \"because the premium",
-              "leg also comes from the treasury\". That is false whenever `config.fee_routing_disabled` is",
-              "true: the premium is then RETAINED, so `redeem_silv.rs` debits the budget by the user's leg",
-              "alone and the treasury pays exactly `amount_usdc`. An alerting rule built on the old sentence",
-              "would over-count outflow by the premium during precisely the incident that turns routing off.",
-              "",
-              "To reconstruct the real outflow from this event alone you cannot: you need the config flag as",
-              "of that slot. `FeeRoutingChanged` is the event that tells you when it moved."
-            ],
             "type": "u64"
           },
           {
@@ -7419,18 +7101,10 @@
           },
           {
             "name": "premium_bps_used",
-            "docs": [
-              "The premium ACTUALLY applied. 0 when the caller holds a redeem-side exemption."
-            ],
             "type": "u16"
           },
           {
             "name": "fee_usdc",
-            "docs": [
-              "Premium routed to the fee vault (2026-08-05). NOT appended: it sits before `timestamp`,",
-              "so a decoder on the pre-upgrade IDL reads it AS the timestamp. See the long note on",
-              "`MintEvent::fee_usdc`. Rebuild every off-chain reader against the new IDL."
-            ],
             "type": "u64"
           },
           {
@@ -7459,29 +7133,18 @@
           },
           {
             "name": "large_redeem_threshold_usdc",
-            "docs": [
-              "DEAD since 2026-08-05 (removed with the queue). Still accepted and still written to the",
-              "now-unread config field, because removing it would change this struct's borsh layout."
-            ],
             "type": {
               "option": "u64"
             }
           },
           {
             "name": "redeem_queue_delay_seconds",
-            "docs": [
-              "DEAD since 2026-08-05 (there is no queue). Same reasoning."
-            ],
             "type": {
               "option": "u32"
             }
           },
           {
             "name": "redemptions_enabled",
-            "docs": [
-              "THE REDEEM SWITCH. Enabling redemptions is a LOOSENING, so it rides this timelocked action;",
-              "`Some(false)` is a tighten and is also accepted by `emergency_tighten_redeem_limits`."
-            ],
             "type": {
               "option": "bool"
             }
@@ -7491,10 +7154,6 @@
     },
     {
       "name": "RedeemLimitsTightened",
-      "docs": [
-        "The instant tighten fast lane. Every field is Option in the args, so the event",
-        "reports the resulting values rather than only what was supplied."
-      ],
       "type": {
         "kind": "struct",
         "fields": [
