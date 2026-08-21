@@ -34,8 +34,7 @@ const jetbrainsMono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "Dominion Silver - Admin",
   description: "Administrative console for Dominion Silver protocol. Squads-gated.",
-  // KEPT. This console exposes every emergency lever and has no password gate, so the one thing
-  // standing between it and a search result is this header. Removing it would be a real regression.
+  // Keep. An operator console has no reason to be indexed.
   robots: "noindex, nofollow",
 };
 

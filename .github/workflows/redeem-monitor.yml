@@ -1,38 +1,20 @@
 name: RedeemEvent monitor
 
-# THE D11 COMPENSATING CONTROL, on a schedule.
+# Watches the redemption outflow: is it abnormal, and can the treasury still serve it.
 #
-# D11 accepted a hot single-signer inventory wallet holding the pre-mint while redemptions are open, and
-# named an automatic alert on RedeemEvent and on budget-consumption rate as one of the two things that
-# make that acceptable. The script existed and was proven against a real redemption; nothing ran it.
+# It runs on a schedule here rather than on a workstation so the alarm survives a closed lid.
 #
-# WHY GITHUB ACTIONS RATHER THAN A LAPTOP CRON. The alert has to survive a closed lid, and launch day is
-# exactly when the operator's machine is least predictable.
+# WHAT IT COSTS IN PRIVACY, since this repository is PUBLIC: the run log shows redemption amounts and
+# the redeemer's address. All of it is already on chain and readable by anyone, so this publishes
+# nothing that was private. What must NOT reach the log is the RPC credential, and it does not: the
+# script prints the endpoint through `redactRpc`, which strips the query string and the path.
 #
-# THE "FREE ALERT CHANNEL" IDEA WAS WRONG AND THIS IS THE CORRECTION. The original note here said a
-# non-zero exit fails the run, a failed run mails whoever watches the repository, and that this bought
-# paging with no webhook and no third party. It bought a mail storm instead: the alarm was LEVEL
-# triggered, so one true condition mailed every ten minutes until it stopped being true. Measured on
-# 2026-08-21: 100 of the last 100 runs red, and the alerts themselves reached nobody because
-# REDEEM_MONITOR_WEBHOOK was never set. Alerts now go to the same Telegram channel as the health
-# monitor, only when something CHANGES. A red run means this check could not run or could not deliver.
+# A RED RUN MEANS THIS CHECK IS BROKEN, not that the protocol is. Alerts go to Telegram, and only when
+# something changes. The job's own status is reserved for "the check could not be completed".
 #
-# WHAT IT COSTS IN PRIVACY, since this repository is PUBLIC: the run log will show redemption amounts and
-# the redeemer's address. All of it is already on chain and readable by anyone, so this publishes nothing
-# that was private. What must NOT reach the log is the RPC credential, and it does not: the script prints
-# the endpoint through `redactRpc`, which strips the query string and the path.
-#
-# IT IS DORMANT UNTIL THIS FILE IS ON `main`. Measured, not assumed: `gh workflow run` against this
-# branch answered `HTTP 404: workflow redeem-monitor.yml not found on the default branch`. GitHub
-# registers `schedule` and `workflow_dispatch` from the DEFAULT branch only, so a monitor living on a
-# feature branch never fires and nothing says so. Until this lands on main, the alarm is code, not a
-# control, and the D11 item stays open.
-#
-# GRANULARITY, honestly. GitHub's minimum is 5 minutes and scheduled runs are queued, so under load the
-# real spacing is 10 to 20 minutes. That is fine here and it is worth saying why: the protocol's own
-# rolling window is what bounds a drain (~40,000 USDC over 24h, twice the nominal budget because the
-# sliding counter admits close to 2x across a boundary), not the speed of this alarm. The alarm exists to
-# put a human in the loop well inside that window, and `pause` carries multisig latency anyway.
+# GRANULARITY, honestly. The scheduler's minimum is 5 minutes and runs are queued, so the real spacing
+# is 10 to 20 minutes. What bounds a drain is the protocol's own rolling budget, not the speed of this
+# alarm, and pausing carries multisig latency regardless. This exists to put a human in the loop.
 
 on:
   schedule:

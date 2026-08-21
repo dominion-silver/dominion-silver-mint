@@ -1249,13 +1249,10 @@ export function AdminActions() {
                   #{p.transactionIndex.toString()} - {p.status} -{" "}
                   {p.approvals}/{p.threshold} approvals
                 </span>
-                {/* STALE ROWS ARE LABELLED AND DISABLED, added 2026-08-12. Squads voids every proposal at
-                    or below `staleTransactionIndex` whenever membership or the threshold changes, and both
-                    multisigs sit exactly there today. Index 6 on the ops vault is an `AddMember` at
-                    `Approved` with 2 of 3, so the old rendering showed live Approve and Execute buttons
-                    reading "one signature short" on the highest-privilege change that exists, right next
-                    to the real ceremony rows. Clicking either wastes a fee on `StaleProposal` (0x1777) and
-                    leaves the operator unsure what still needs signing. */}
+                {/* Squads voids every proposal at or below `staleTransactionIndex` whenever membership
+                    or the threshold changes. A voided row must not offer Approve or Execute: the click
+                    wastes a fee on `StaleProposal` (0x1777) and leaves the operator unsure what still
+                    needs signing. */}
                 {p.stale ? (
                   <span className="rounded border border-border px-2 py-1 text-[10px] text-muted">
                     stale, voided by a later config change
