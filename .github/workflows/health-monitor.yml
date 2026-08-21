@@ -13,6 +13,12 @@ name: Health monitor
 # dead-man's-switch (healthchecks.io or equivalent) alerts when the pings stop. Without that secret,
 # nothing anywhere notices this monitor dying, which is the failure mode that matters most because it
 # looks exactly like "no problems found".
+#
+# A RED RUN HERE MEANS THE MONITOR IS BROKEN, NOT THAT THE PROTOCOL IS. That distinction was learned the
+# expensive way: this workflow used to exit non-zero on every alert, so GitHub mailed a failure notice
+# every ten minutes for as long as any condition stayed true. On 2026-08-21 that was 100 of the last 100
+# runs, all red, all for the same three lines. Alerts belong in Telegram and they are sent on a
+# TRANSITION only; the job's own status is reserved for "the check could not be completed".
 
 permissions:
   contents: read
@@ -51,6 +57,17 @@ jobs:
       - name: Install
         run: npm ci
 
+      # THE ALERT MEMORY. Without it every run is a first run, and a first run treats every open
+      # condition as new, which is precisely the flood this restores away. A cache MISS is safe by
+      # design: it degrades to one duplicate message, never to silence. The key carries the run id
+      # because a cache entry cannot be overwritten; `restore-keys` then picks the most recent one.
+      - name: Restore alert state
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .monitor-state
+          key: health-alert-state-${{ github.run_id }}
+          restore-keys: health-alert-state-
+
       - name: Health check
         env:
           RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
@@ -77,3 +94,12 @@ jobs:
             WEEKLY="--weekly"
           fi
           DOMINION_RPC="${RPC_MAINNET}" npx tsx scripts/health-monitor.ts ${WEEKLY}
+
+      # `always()`: the state must survive a failed check, otherwise a transient RPC error re-announces
+      # every open condition on the next run.
+      - name: Save alert state
+        if: always()
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .monitor-state
+          key: health-alert-state-${{ github.run_id }}

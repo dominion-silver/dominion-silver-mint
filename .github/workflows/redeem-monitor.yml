@@ -7,9 +7,15 @@ name: RedeemEvent monitor
 # make that acceptable. The script existed and was proven against a real redemption; nothing ran it.
 #
 # WHY GITHUB ACTIONS RATHER THAN A LAPTOP CRON. The alert has to survive a closed lid, and launch day is
-# exactly when the operator's machine is least predictable. A scheduled workflow also gives the alert
-# channel for free: the monitor exits 1 on ALERT and 2 on could-not-tell, a non-zero exit fails the run,
-# and a failed run on a repository you watch sends mail. No webhook, no third party, no new secret.
+# exactly when the operator's machine is least predictable.
+#
+# THE "FREE ALERT CHANNEL" IDEA WAS WRONG AND THIS IS THE CORRECTION. The original note here said a
+# non-zero exit fails the run, a failed run mails whoever watches the repository, and that this bought
+# paging with no webhook and no third party. It bought a mail storm instead: the alarm was LEVEL
+# triggered, so one true condition mailed every ten minutes until it stopped being true. Measured on
+# 2026-08-21: 100 of the last 100 runs red, and the alerts themselves reached nobody because
+# REDEEM_MONITOR_WEBHOOK was never set. Alerts now go to the same Telegram channel as the health
+# monitor, only when something CHANGES. A red run means this check could not run or could not deliver.
 #
 # WHAT IT COSTS IN PRIVACY, since this repository is PUBLIC: the run log will show redemption amounts and
 # the redeemer's address. All of it is already on chain and readable by anyone, so this publishes nothing
@@ -62,6 +68,16 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
 
+      # The alert memory. A miss costs one duplicate message; see health-monitor.yml for the reasoning.
+      # A DIFFERENT KEY from the health monitor's on purpose: sharing one would let either monitor
+      # "resolve" the other's open conditions, which is a silence bug and the worst kind.
+      - name: Restore alert state
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .monitor-state
+          key: redeem-alert-state-${{ github.run_id }}
+          restore-keys: redeem-alert-state-
+
       - name: Check the redemption budget and the RedeemEvent stream
         env:
           # REQUIRED SECRETS, and the run FAILS LOUDLY without them rather than silently checking devnet:
@@ -72,6 +88,11 @@ jobs:
           # workflow never runs on a fork PR.
           RPC_MAINNET: ${{ secrets.RPC_MAINNET }}
           RPC_DEVNET: ${{ secrets.RPC_DEVNET }}
+          # The channel the alerts actually reach. Without these the script says so and exits 1, which
+          # is the correct reading: an undelivered alert is a broken monitor.
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          HEARTBEAT_URL: ${{ secrets.HEARTBEAT_URL }}
           WANT: ${{ inputs.cluster || 'mainnet' }}
           REDEEM_ALERT_SINGLE_PCT: "25"
           REDEEM_ALERT_BUDGET_PCT: "60"
@@ -84,10 +105,17 @@ jobs:
           if [ -z "${RPC}" ]; then
             echo "::error::the ${WANT} RPC secret is not set, so this check did not run."
             echo "::error::Set RPC_MAINNET (and RPC_DEVNET) in the repository's Actions secrets."
-            # A monitor that cannot check must not report success. This is the same posture as the
-            # script's own exit 2: could-not-tell is not silence.
+            # A monitor that cannot check must not report success. This is now the ONLY meaning of a
+            # red run here: could-not-tell is not silence.
             exit 1
           fi
           # NEVER echo $RPC. It carries the provider key.
           echo "checking ${WANT}"
           DOMINION_RPC="${RPC}" npx tsx scripts/redeem-monitor.ts
+
+      - name: Save alert state
+        if: always()
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .monitor-state
+          key: redeem-alert-state-${{ github.run_id }}

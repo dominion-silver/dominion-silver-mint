@@ -28,8 +28,17 @@
  *   DOMINION_RPC=... npx tsx scripts/redeem-monitor.ts --json      # for a scheduler
  *   REDEEM_MONITOR_WEBHOOK=https://... npx tsx scripts/redeem-monitor.ts
  *
- * EXIT CODE IS THE ALARM: 0 quiet, 1 ALERT, 2 could not tell. A scheduler that treats non-zero as a
- * failure gets paging for free, and "could not tell" is deliberately not silence.
+ * THE EXIT CODE REPORTS ON THE CHECK, NOT ON THE CHAIN, and the original design here is what taught us
+ * why. "A scheduler that treats non-zero as a failure gets paging for free" was true and it backfired:
+ * exiting 1 on every alert made 100 of the last 100 scheduled runs red, and each red run mails everyone
+ * watching the repository. With a condition that stays true, that is an email every ten minutes for days.
+ * Alerts go to Telegram now, on a TRANSITION only (see scripts/_alert-state.ts). Exit 1 is reserved for
+ * the monitor itself failing: it could not read the chain, or it could not deliver.
+ *
+ * REDEMPTIONS ARE JUDGED ONLY INSIDE A TIME WINDOW, for the same reason. The per-redemption rule compares
+ * an outflow against the ROLLING budget, so applying it to a redemption from last week is meaningless
+ * twice over: that outflow no longer sits in the window it is being measured against. Measured on
+ * 2026-08-21, this alerted on a redemption from 14 August on every single run, seven days running.
  *
  * WHAT THIS CANNOT DO, stated here because a monitor that implies otherwise is dangerous: it does not
  * pause anything. `pause` accepts admin OR guardian, and on mainnet both are Squads vaults, so the
@@ -43,6 +52,8 @@ import { AnchorProvider, BorshCoder, Idl, Program, Wallet } from "@coral-xyz/anc
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import { getAccount, getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { loadIdl, PROGRAM_ID } from "./_program-id";
+import { diffAlerts } from "./_alert-state";
+import { pingHeartbeat, sendTelegram, telegramFromEnv } from "./_telegram";
 import { resolveCluster } from "./_cluster";
 import { adversarialBound, rollWindow } from "./_redeem-window";
 import { redactRpc } from "./_redact";
@@ -100,6 +111,12 @@ const SINGLE_ALERT_PCT = Number(process.env.REDEEM_ALERT_SINGLE_PCT ?? 10);
  * The fetch below is batched; this bound is the second half of the fix. Raise it on a paid RPC.
  */
 const SCAN_LIMIT = Number(process.env.REDEEM_SCAN_LIMIT ?? 25);
+/**
+ * How far back a redemption may be and still be judged, in minutes. Defaults to 1440, one day, which is
+ * the rolling budget window the per-redemption percentages are measured against. Older redemptions are
+ * still LISTED, because the list is how an operator reads history, but they no longer raise anything.
+ */
+const LOOKBACK_MIN = Number(process.env.REDEEM_LOOKBACK_MIN ?? 1440);
 
 const pda = (seed: string) => PublicKey.findProgramAddressSync([Buffer.from(seed)], PROGRAM_ID)[0];
 
@@ -232,7 +249,10 @@ async function main() {
       what: `${usedPct.toFixed(2)}% of the rolling redeem budget is consumed (threshold ${BUDGET_ALERT_PCT}%)`,
     });
   }
-  for (const r of redeems) {
+  const cutoff = Math.floor(Date.now() / 1000) - LOOKBACK_MIN * 60;
+  const recent = redeems.filter((r) => (r.blockTime ?? 0) >= cutoff);
+  const aged = redeems.length - recent.length;
+  for (const r of recent) {
     const share = budget === 0n ? 0 : Number((outflow(r) * 10000n) / budget) / 100;
     if (share >= SINGLE_ALERT_PCT) {
       findings.push({
@@ -310,7 +330,11 @@ async function main() {
         ` sliding counter admits close to 2x across a boundary`,
     );
     console.log(`  treasury: ${report.treasuryUsdc} USDC | fee routing ${routingOn ? "ON" : "OFF"}`);
-    console.log(`  scanned : ${sigs.length} signatures, found ${redeems.length} RedeemEvent(s)`);
+    console.log(
+      `  scanned : ${sigs.length} signatures, found ${redeems.length} RedeemEvent(s), ` +
+        `${recent.length} inside the ${LOOKBACK_MIN}-minute judging window` +
+        (aged > 0 ? ` (${aged} older, listed but not judged)` : ""),
+    );
     for (const r of report.redeems) {
       console.log(
         `    ${r.at ?? "?"}  ${r.oz} oz -> ${r.usdcToUser} USDC (fee ${r.feeUsdc}, ${r.premiumBps}bps) by ${r.user}`,
@@ -322,6 +346,11 @@ async function main() {
     console.log(`\n  VERDICT: ${report.verdict}`);
   }
 
+  const alertTexts = findings.filter((f) => f.level === "alert").map((f) => f.what);
+  let deliveryFailed = false;
+
+  // The webhook stays supported for Slack/Discord, but it is no longer the only channel: it was never
+  // configured, so every alert this monitor raised for a week reached a human only as a red CI badge.
   const hook = process.env.REDEEM_MONITOR_WEBHOOK;
   if (hook && report.verdict === "ALERT") {
     try {
@@ -334,18 +363,67 @@ async function main() {
       // A 2xx is the only thing that means delivered. Slack and Discord both answer 4xx with a body
       // explaining the rejection, and swallowing that would leave a channel that looks configured and
       // delivers nothing.
-      if (!r.ok) console.error(`  webhook REJECTED the payload: ${(await r.text()).slice(0, 200)}`);
+      if (!r.ok) {
+        console.error(`  webhook REJECTED the payload: ${(await r.text()).slice(0, 200)}`);
+        deliveryFailed = true;
+      }
     } catch (e) {
       // A failed webhook must NOT turn an alert into a pass, and must not hide the alert either.
       console.error(`  webhook FAILED: ${String(e).slice(0, 140)}`);
+      deliveryFailed = true;
     }
   }
 
-  process.exit(report.verdict === "ALERT" ? 1 : 0);
+  // Telegram, on transitions only. `--json` is for a machine, so it never sends.
+  if (!JSON_OUT) {
+    const tr = diffAlerts(alertTexts);
+    console.log(
+      `  transitions: ${tr.fresh.length} new, ${tr.reminders.length} reminder(s), ${tr.resolved.length} resolved`,
+    );
+    const tg = telegramFromEnv();
+    const send = async (text: string): Promise<void> => {
+      if (!tg) {
+        console.error("  TELEGRAM NOT CONFIGURED: this message reached nobody.");
+        deliveryFailed = true;
+        return;
+      }
+      if (await sendTelegram(tg, text)) console.log("  telegram: delivered");
+      else deliveryFailed = true;
+    };
+    const foot = `treasury ${report.treasuryUsdc} USDC | budget ${usedPct.toFixed(1)}% of ${report.budgetUsdc} used`;
+    if (tr.fresh.length > 0 || tr.reminders.length > 0) {
+      await send(
+        [
+          "DOMINION REDEEM ALERT",
+          "",
+          ...tr.fresh.map((a) => `- ${a}`),
+          ...tr.reminders.map((r) => `- STILL OPEN ${r.hoursOpen.toFixed(0)}h: ${r.text}`),
+          "",
+          foot,
+          "",
+          "This alarm does not pause anything: pausing needs a guardian or admin signature.",
+        ].join("\n"),
+      );
+    }
+    if (tr.resolved.length > 0) {
+      await send(["DOMINION REDEEM RESOLVED", "", ...tr.resolved.map((a) => `- no longer true: ${a}`), "", foot].join("\n"));
+    }
+    if (tr.quiet && alertTexts.length > 0) {
+      console.log(`  nothing to send: ${alertTexts.length} alert(s) open but unchanged since the last run.`);
+    }
+    await pingHeartbeat();
+  }
+
+  if (deliveryFailed) {
+    console.error("  EXIT 1: an alert could not be delivered.");
+    process.exit(1);
+  }
+  process.exit(0);
 }
 
 main().catch((e) => {
-  // Exit 2, never 0: "the monitor could not tell" must not read as "nothing is wrong".
+  // Non-zero, never 0: "the monitor could not tell" must not read as "nothing is wrong". This is the one
+  // remaining meaning of a red run, which is what makes a red run worth reading again.
   console.error("MONITOR ERROR (this is not an all-clear):", e.message || e);
-  process.exit(2);
+  process.exit(1);
 });

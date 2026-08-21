@@ -54,3 +54,7 @@ ceremony-out/
 # ROUND 8 A-04. A tracked .pyc puts an opaque binary in the release verifier trust path.
 __pycache__/
 *.pyc
+
+# Monitor alert memory (scripts/_alert-state.ts). Restored by actions/cache, never committed: it is
+# per-environment runtime state, and a committed copy would be stale on every run.
+.monitor-state/

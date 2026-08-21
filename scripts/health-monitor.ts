@@ -37,9 +37,18 @@
  * Supply against the cap is a TREND, not an incident, so it lives in the weekly digest (--weekly) rather
  * than in a ten-minute alarm.
  *
- * EXIT CODE IS THE ALARM: 0 quiet, 1 alert, 2 could-not-tell. Two is not silence.
- * TELEGRAM ONLY ON ALERT, in English. A channel that says "all good" every ten minutes gets muted, and a
- * muted channel is worse than none because it looks like coverage.
+ * THE EXIT CODE ANSWERS "DID THE CHECK RUN", NOT "IS THERE A PROBLEM", and the first version had this
+ * backwards with a measurable cost. It exited 1 on every alert, a non-zero exit fails the workflow, and a
+ * failed workflow mails everyone watching the repository. So a single true-and-unchanging condition sent
+ * a Telegram message AND an email every ten minutes: 100 of the last 100 runs were red on 2026-08-21.
+ * The alert channel is Telegram. CI status is reserved for the monitor itself being broken.
+ *   0  the check ran, whatever it found
+ *   1  the check could not be completed, or an alert could not be delivered. Investigate the monitor.
+ *
+ * TELEGRAM ONLY ON A TRANSITION, in English, via `_alert-state.ts`. A condition that is still true is
+ * silent until `MONITOR_RENOTIFY_HOURS` has passed. A channel that says "all good" every ten minutes gets
+ * muted, and a channel that repeats the same true alarm every ten minutes gets muted faster, because it
+ * teaches the reader that nothing in it is new.
  *
  * IT DOES NOT PAUSE ANYTHING. `pause` needs admin or a guardian, both Squads vaults, so every reaction
  * carries 3-of-5 latency. The rolling budget is the brake; this is only the sensor.
@@ -52,6 +61,7 @@ import { getMint, getPermanentDelegate, TOKEN_2022_PROGRAM_ID } from "@solana/sp
 import { loadIdl, PROGRAM_ID } from "./_program-id";
 import { redactRpc } from "./_redact";
 import { pingHeartbeat, sendTelegram, telegramFromEnv } from "./_telegram";
+import { diffAlerts } from "./_alert-state";
 
 const RPC = process.env.DOMINION_RPC;
 const PUBLIC_URL = process.env.PUBLIC_URL || "https://app.dominion.market";
@@ -64,6 +74,12 @@ const T = {
   mintSpikeOz: Number(process.env.HEALTH_MINT_SPIKE_OZ ?? 2_000),
   redeemSpikeOz: Number(process.env.HEALTH_REDEEM_SPIKE_OZ ?? 500),
   maxRevertPct: Number(process.env.HEALTH_MAX_REVERT_PCT ?? 30),
+  /**
+   * The smallest sample a revert PERCENTAGE may be computed over. Without this, one reverted transaction
+   * in a quiet hour reads as "100% of program traffic is failing", which is arithmetically true and
+   * operationally meaningless. It fired exactly that way on a window containing a single transaction.
+   */
+  minRevertSample: Number(process.env.HEALTH_MIN_REVERT_SAMPLE ?? 5),
   scanLimit: Number(process.env.HEALTH_SCAN_LIMIT ?? 200),
   /** How many successful transactions to open for instruction and volume tallying. */
   deepScan: Number(process.env.HEALTH_DEEP_SCAN ?? 60),
@@ -97,7 +113,13 @@ const PINNED = {
    */
   upgradeAuthority: "2Lp91FyJUb8MQ1yteFLKh345Umb5f1RgCCwwDFNCYEcD",
   deploySlot: 438841839,
-  premiumBpsMint: 100,
+  /**
+   * 5 bps since 2026-08-21, down from 100. Applied through the 24h timelock as proposal #36
+   * (`execute_set_premium_mint`), and pinned the same day. Left at 100 for a few hours after the change
+   * landed, which made the monitor page on our own deliberate act every ten minutes: pinning a value
+   * means updating it in the SAME change that alters the chain, not afterwards.
+   */
+  premiumBpsMint: 5,
   premiumBpsRedeem: 150,
   maxSilvSupplyAtomic: "150000000000",
   pythLazerFeedId: 3154,
@@ -337,8 +359,11 @@ async function main(): Promise<void> {
     }
     if (mintOz > T.mintSpikeOz) alert(`mint volume spike: +${mintOz.toFixed(0)} oz in the scanned window.`);
     if (redeemOz > T.redeemSpikeOz) alert(`redeem volume spike: -${redeemOz.toFixed(0)} oz in the scanned window.`);
-    if (revertPct > T.maxRevertPct) {
+    if (revertPct > T.maxRevertPct && sigs.length >= T.minRevertSample) {
       alert(`${failed} of ${sigs.length} program transactions REVERTED (${revertPct.toFixed(0)}%): broken for users, or probing.`);
+    } else if (revertPct > T.maxRevertPct) {
+      // Reported, not alerted: the ratio is real but the sample cannot support it.
+      okLine(`${failed} of ${sigs.length} reverted, below the ${T.minRevertSample}-transaction sample floor for a rate alert`);
     }
     info.push(`+${mintOz.toFixed(1)} oz minted, -${redeemOz.toFixed(1)} oz redeemed, ${revertPct.toFixed(0)}% reverts`);
   }
@@ -399,30 +424,73 @@ async function main(): Promise<void> {
     else console.error("  TELEGRAM NOT CONFIGURED: the weekly digest reached nobody.");
   }
 
-  if (alerts.length > 0) {
+  // Only TRANSITIONS are sent. `diffAlerts` persists the open set, so a condition that is still true
+  // stays silent until MONITOR_RENOTIFY_HOURS has elapsed. See scripts/_alert-state.ts for why.
+  const tr = diffAlerts(alerts);
+  const footer = `supply ${supplyOz.toLocaleString("en-US")} oz | treasury ${
+    Number.isNaN(treasuryUsdc) ? "?" : treasuryUsdc.toLocaleString("en-US")
+  } USDC | 24h budget ${usedPct.toFixed(0)}% used`;
+
+  console.log(
+    `  transitions: ${tr.fresh.length} new, ${tr.reminders.length} still-open reminder(s), ` +
+      `${tr.resolved.length} resolved${tr.hadStateFile ? "" : " (no previous state: treating open alerts as new)"}`,
+  );
+
+  let deliveryFailed = false;
+  const send = async (text: string): Promise<void> => {
+    if (!tg) {
+      console.error("  TELEGRAM NOT CONFIGURED: this message reached nobody.");
+      deliveryFailed = true;
+      return;
+    }
+    if (await sendTelegram(tg, text)) console.log("  telegram: delivered");
+    else deliveryFailed = true;
+  };
+
+  if (tr.fresh.length > 0 || tr.reminders.length > 0) {
     const lines = [
-      "DOMINION ALERT",
+      tr.fresh.length > 0 ? "DOMINION ALERT" : "DOMINION ALERT still open",
       "",
-      ...alerts.slice(0, 8).map((a) => `- ${a}`),
-      ...(alerts.length > 8 ? [`- ...and ${alerts.length - 8} more`] : []),
+      ...tr.fresh.slice(0, 8).map((a) => `- ${a}`),
+      ...(tr.fresh.length > 8 ? [`- ...and ${tr.fresh.length - 8} more`] : []),
+      ...(tr.reminders.length > 0 ? [""] : []),
+      ...tr.reminders
+        .slice(0, 6)
+        .map((r) => `- STILL OPEN ${r.hoursOpen.toFixed(0)}h: ${r.text}`),
       "",
-      `supply ${supplyOz.toLocaleString("en-US")} oz | treasury ${
-        Number.isNaN(treasuryUsdc) ? "?" : treasuryUsdc.toLocaleString("en-US")
-      } USDC | 24h budget ${usedPct.toFixed(0)}% used`,
+      footer,
       "",
       "This monitor does not pause anything. `pause` needs admin or a guardian, both Squads vaults,",
       "so every reaction carries 3-of-5 latency. The rolling redeem budget is the real brake.",
     ];
-    if (!tg) console.error("  TELEGRAM NOT CONFIGURED: this alert reached nobody.");
-    else if (await sendTelegram(tg, lines.join("\n"))) console.log("  telegram: alert delivered");
-    else console.error("  the alert could not be delivered; the exit code is the only signal left.");
+    await send(lines.join("\n"));
   }
 
-  process.exit(alerts.length === 0 ? 0 : couldNotTell ? 2 : 1);
+  // Recovery is news. Sent separately so it can never be mistaken for a new problem.
+  if (tr.resolved.length > 0) {
+    await send(["DOMINION RESOLVED", "", ...tr.resolved.map((a) => `- no longer true: ${a}`), "", footer].join("\n"));
+  }
+
+  if (tr.quiet) {
+    console.log(
+      alerts.length === 0
+        ? "  nothing to send: no alerts."
+        : `  nothing to send: ${alerts.length} alert(s) open but unchanged since the last run.`,
+    );
+  }
+
+  // The exit code reports on the CHECK, not on the chain. `couldNotTell` means a probe failed and the
+  // answer is unknown, which is a monitor fault. A delivered alert is a working monitor.
+  if (couldNotTell || deliveryFailed) {
+    console.error("  EXIT 1: the check was incomplete or an alert could not be delivered.");
+    process.exit(1);
+  }
+  process.exit(0);
 }
 
+
 main().catch((e) => {
-  // A crash is could-not-tell, never quiet.
+  // A crash is a monitor fault: the one thing the exit code still reports.
   console.error(`health-monitor CRASHED: ${e instanceof Error ? e.message : e}`);
-  process.exit(2);
+  process.exit(1);
 });

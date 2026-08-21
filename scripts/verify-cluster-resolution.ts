@@ -307,6 +307,9 @@ for (const rpc of [
   ]);
   // Everything else. Listed by name so ADDING a script is recorded, not silently blessed by a regex.
   const NON_SENDERS = new Set([
+    // Walks every program transaction since launch and reconciles it against on-chain state.
+    // Read-only: it sends nothing and needs no keypair.
+    "audit-since-launch.ts",
     // Measures the fee exemption by simulating a mint twice, with and without it. Sends nothing.
     "prove-fee-exemption.ts",
     // Read-only monitors. They query the chain and the live site and send no transaction, so they
@@ -323,6 +326,12 @@ for (const rpc of [
     // it. No Connection, no keypair. Extracted from redeem-monitor.ts precisely BECAUSE that file runs
     // its main() at import time, so importing the helper from there executed a whole monitor run.
     "_redact.ts",
+    // The monitors' alert memory: reads and writes one small JSON file under .monitor-state so an alarm
+    // can fire on a TRANSITION instead of on a level. No Connection, no keypair, no network at all, so
+    // it must not be forced through the transaction guard. Registered in the SAME change that created
+    // it: `_telegram.ts` was added without a registration once and this gate went red on the commit,
+    // which is the gate working and a round-trip that did not need to happen.
+    "_alert-state.ts",
     "_run-state.ts",
     "test-security-posture-docs.ts",
     // Pure unit tests over premint.ts's two exported decisions (argv -> atomic, run record ->
