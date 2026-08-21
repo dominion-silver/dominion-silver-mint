@@ -5,6 +5,7 @@
  * VERIFIED address for must THROW, never fall back to the devnet one: `initialize` succeeds once per
  * program id, so a quiet devnet fallback mid-ceremony costs the deploy.
  */
+import { describeUnparseable } from "./_redact";
 import { Connection, PublicKey } from "@solana/web3.js";
 import fs from "fs";
 import path from "path";
@@ -45,7 +46,7 @@ export function classifyCluster(rpc: string): Cluster {
     host = new URL(rpc).hostname.toLowerCase();
   } catch {
     throw new Error(
-      `DOMINION_RPC is not a valid URL: ${JSON.stringify(rpc)}.\n` +
+      `DOMINION_RPC is not a valid URL: ${describeUnparseable(rpc)}.\n` +
         `Refusing to guess a cluster from an unparseable endpoint.`,
     );
   }

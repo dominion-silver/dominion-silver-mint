@@ -28,3 +28,20 @@ export function redactRpc(rpc: string): string {
     return "(unparseable endpoint, redacted)";
   }
 }
+
+/**
+ * Describe an endpoint that could not be parsed, without echoing it.
+ *
+ * `classifyCluster` used to put the raw value in its error via JSON.stringify, on the reasonable
+ * assumption that an unparseable string cannot be a working endpoint. It can still CONTAIN a working
+ * credential: one typo in the scheme, `htp://mainnet.helius-rpc.com/?api-key=<real key>`, fails to parse
+ * and carries the live key into the error text. So the diagnostic keeps only what helps find a typo, the
+ * scheme and host shape, and drops everything from the first `?` or the path onward.
+ */
+export function describeUnparseable(rpc: string): string {
+  const head = rpc.split("?")[0].split("#")[0];
+  const parts = head.split("/");
+  // scheme + "" + host, when the shape is scheme://host; otherwise just the leading fragment.
+  const shape = parts.length >= 3 ? `${parts[0]}//${parts[2]}` : parts[0];
+  return `${JSON.stringify(shape.slice(0, 60))} (${rpc.length} chars, remainder withheld: it may carry a key)`;
+}

@@ -13,6 +13,7 @@ import {
   classifyCluster,
   resolveClusterFor,
 } from "./_cluster";
+import { redactRpc } from "./_redact";
 
 export type ActionCost =
   | "reversible"
@@ -100,6 +101,13 @@ export const ACTION_COST: Record<string, ActionCost> = {
 
   set_max_silv_supply: "irreversible", // tighten-only, by design
   initialize: "irreversible", // ONE SHOT per program id
+  /**
+   * `irreversible` was already the right call; this is why, now that we are actually about to use it.
+   * The undo is CONDITIONAL ON THE DESTINATION. Send it to the multisig's VAULT and the undo is a 3-of-5.
+   * Send it to a typo, to the multisig ACCOUNT rather than its vault, or to None, and there is no undo at
+   * all, by anyone, ever: the program can never be upgraded or fixed again. See
+   * scripts/transfer-upgrade-authority.ts, which derives the destination instead of trusting it.
+   */
   set_upgrade_authority: "irreversible",
   close_program: "irreversible",
   withdraw_fees: "irreversible", // funds leave to a caller-supplied address; a script cannot assume it
@@ -128,7 +136,12 @@ export function guardConsentOnly(rpc: string, scriptName = "this script"): void 
   if (isDevnet(rpc)) return;
   if (process.env.DOMINION_ALLOW_MAINNET === "i-understand") {
     console.log(
-      `\n  !! ${scriptName} is running against a NON-DEVNET cluster (${rpc}) !!`,
+      // REDACTED, and this line used to print `rpc` raw. That put a live Helius API key in the first
+      // line of output of every mainnet ceremony: on a terminal that gets screenshotted, pasted into a
+      // handover doc, or copied into a chat while asking "is this right?". `_redact.ts` was written for
+      // exactly this and this call site did not use it. Found on 2026-08-21 by reading the output of a
+      // dry run rather than by reading the code.
+      `\n  !! ${scriptName} is running against a NON-DEVNET cluster (${redactRpc(rpc)}) !!`,
     );
     console.log("  !! DOMINION_ALLOW_MAINNET is set. Every action is real. !!\n");
     return;

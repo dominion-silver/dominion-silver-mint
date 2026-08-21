@@ -228,6 +228,9 @@ for (const rpc of [
 
   // THE MANIFEST. Every script here sends transactions and must call requireSanctionedCluster.
   const SENDERS = new Set([
+    // Hands the program's upgrade authority to the Squads vault. One instruction, unrecoverable if the
+    // destination is wrong, so it guards the cluster like every other sender.
+    "transfer-upgrade-authority.ts",
     // The initialize-only recovery path (review finding P0-5). Sends initialize against an EXISTING mint
     // when T1 died between creating the mint and initialising. Guarded like every sender.
     "initialize-only-recovery.ts",
