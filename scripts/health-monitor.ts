@@ -106,12 +106,20 @@ const PINNED = {
   freezeAuthority: "FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3",
   permanentDelegate: "FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3",
   /**
-   * STILL THE DEPLOYER, a single hot key, not the upgrade Squads vault. Whoever holds it can replace the
-   * entire program with no multisig and no timelock. Pinned as-is so the alarm reflects reality rather
-   * than the intention. UPDATE THIS LITERAL when the authority is handed to the multisig, otherwise the
-   * handover itself pages.
+   * The upgrade Squads vault, 3-of-5, since 2026-08-21. It was the deployer's single hot key until
+   * then: whoever held it could replace the entire program with no multisig and no timelock, while
+   * every authority downstream of it was already a 3-of-5.
+   *
+   * Moved to the vault with scripts/transfer-upgrade-authority.ts, and this literal is updated in the
+   * SAME change rather than afterwards. That ordering is enforced by the script, which refuses to send
+   * while this pin is stale: leaving it behind is what made the mint-premium change page every ten
+   * minutes for hours earlier the same day.
+   *
+   * NOTE it is the same vault as the freeze authority and the permanent delegate, so one 3-of-5 quorum
+   * can both replace the program and move anyone's SILV. Squads manages program upgrades from vault
+   * index 0, which is why the emergency path stays inside its UI.
    */
-  upgradeAuthority: "2Lp91FyJUb8MQ1yteFLKh345Umb5f1RgCCwwDFNCYEcD",
+  upgradeAuthority: "FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3",
   deploySlot: 438841839,
   /**
    * 5 bps since 2026-08-21, down from 100. Applied through the 24h timelock as proposal #36
