@@ -102,7 +102,7 @@ function readinessDigest(c: any): Buffer {
 }
 
 type Args = {
-  action: "unpause" | "premint" | "deposit" | "fee-exempt";
+  action: "unpause" | "premint" | "deposit" | "fee-exempt" | "premium-mint" | "premium-mint-execute";
   amount?: bigint;
   create: boolean;
   approve: boolean;
@@ -113,6 +113,8 @@ type Args = {
   /** fee-exempt only. */
   wallet?: string;
   flags?: number;
+  /** premium-mint only, in basis points. */
+  bps?: number;
   expiresAt?: number;
   index?: bigint;
 };
@@ -124,17 +126,24 @@ function parseArgs(): Args {
     return i >= 0 ? a[i + 1] : undefined;
   };
   const action = get("--action");
-  if (action !== "unpause" && action !== "premint" && action !== "deposit" && action !== "fee-exempt") {
-    throw new Error("--action must be 'unpause', 'premint', 'deposit' or 'fee-exempt'");
+  // `as const` so the includes() check NARROWS the type: without it TypeScript keeps `action` as a
+  // plain string and the Args assignment below fails, which is the compiler correctly refusing to trust
+  // a runtime check it cannot see through.
+  const ALLOWED = ["unpause", "premint", "deposit", "fee-exempt", "premium-mint", "premium-mint-execute"] as const;
+  type Action = (typeof ALLOWED)[number];
+  if (!action || !ALLOWED.includes(action as Action)) {
+    throw new Error(`--action must be one of: ${ALLOWED.join(", ")}`);
   }
+  const act = action as Action;
   const amountRaw = get("--amount");
-  if ((action === "premint" || action === "deposit") && !amountRaw) {
-    throw new Error(`--action ${action} requires --amount (atomic, 6 decimals)`);
+  if ((act === "premint" || act === "deposit") && !amountRaw) {
+    throw new Error(`--action ${act} requires --amount (atomic, 6 decimals)`);
   }
   const idx = get("--index");
   return {
-    action,
+    action: act,
     wallet: get("--wallet"),
+    bps: get("--bps") ? Number(get("--bps")) : undefined,
     flags: get("--flags") ? Number(get("--flags")) : undefined,
     expiresAt: get("--expires-at") ? Number(get("--expires-at")) : undefined,
     amount: amountRaw ? BigInt(amountRaw) : undefined,
@@ -184,7 +193,11 @@ async function main(): Promise<void> {
           ? "admin_premint"
           : args.action === "deposit"
             ? "deposit_usdc"
-            : "set_fee_exempt";
+            : args.action === "fee-exempt"
+              ? "set_fee_exempt"
+              : args.action === "premium-mint"
+                ? "propose_set_premium_mint"
+                : "execute_set_premium_mint";
     assertReversible(named, intentFromEnv());
   }
   else if (args.create) assertReversible("propose_any", intentFromEnv());
@@ -262,12 +275,15 @@ async function main(): Promise<void> {
       .instruction();
   };
 
-  let innerIx: any;
+  // AN ARRAY, not one instruction. A Squads vault transaction carries as many instructions as fit, so
+  // changing two whitelists costs ONE 3-of-5 round instead of two. The simulation below runs the whole
+  // batch, so a batch that would revert is refused before anyone is asked to approve.
+  let innerIxs: any[] = [];
   if (args.action === "unpause") {
     if (!cfg.paused) throw new Error("config.paused is already false. Nothing to unpause.");
     // The guardian is a plain account here, NOT a signer (unpause IDL). So this is an ops-only
     // 3-of-5, not a coordination of both multisigs. It still has to be an INDEPENDENT guardian.
-    innerIx = await buildUnpauseIx();
+    innerIxs = [await buildUnpauseIx()];
   } else if (args.action === "premint") {
     const amount = args.amount!;
     if (amount <= BigInt(0)) throw new Error("--amount must be > 0 (admin_premint reverts ZeroAmount)");
@@ -312,7 +328,7 @@ async function main(): Promise<void> {
       console.log("  *** config.paused is TRUE. admin_premint reverts Paused (premint.rs:60).");
       console.log("  *** The unpause has to execute FIRST. Order: unpause -> premint.");
     }
-    innerIx = await program.methods
+    innerIxs = [await program.methods
       .adminPremint(new anchor.BN(amount.toString()))
       .accounts({
         config: configPda,
@@ -322,7 +338,7 @@ async function main(): Promise<void> {
         silvMintAuthority: mintAuthority,
         token2022Program: TOKEN_2022_PROGRAM_ID,
       })
-      .instruction();
+      .instruction()];
   } else if (args.action === "deposit") {
     // DEPOSIT. `deposit_usdc` is permissionless (`pub user: Signer`, no admin constraint), so this
     // path exists only because the SOURCE is the ops vault's own USDC account: moving tokens out of a
@@ -356,7 +372,7 @@ async function main(): Promise<void> {
     console.log(`  source    : ${vaultUsdcAta.toBase58()} (vault USDC), holds ${Number(held) / 1e6}`);
     console.log(`  treasury  : ${treasury.toBase58()}, holds ${treBal.value.uiAmountString}`);
     console.log(`  amount    : ${amount} atomic = ${Number(amount) / 1e6} USDC`);
-    innerIx = await program.methods
+    innerIxs = [await program.methods
       .depositUsdc(new anchor.BN(amount.toString()))
       .accounts({
         config: configPda,
@@ -366,7 +382,112 @@ async function main(): Promise<void> {
         userUsdcAta: vaultUsdcAta,
         classicTokenProgram: TOKEN_PROGRAM_ID,
       })
-      .instruction();
+      .instruction()];
+  }
+
+  if (args.action === "premium-mint-execute") {
+    // EXECUTE the queued premium change. This applies the new value AND clears
+    // `pending_premium_mint_nonce`, which is what actually lets minting resume: the timelock elapsing
+    // is NOT enough on its own, by design, or mints would restart at the OLD premium in the gap.
+    const nonce = cfg.pendingPremiumMintNonce;
+    if (nonce === null) {
+      throw new Error("no mint-premium change is queued: pending_premium_mint_nonce is null. Nothing to execute.");
+    }
+    const n = BigInt(nonce.toString());
+    const nonceLe = Buffer.alloc(8);
+    nonceLe.writeBigUInt64LE(n);
+    const [timelockPda] = PublicKey.findProgramAddressSync([Buffer.from("timelock"), nonceLe], PROGRAM_ID);
+
+    // Read the queued value out of the timelock account rather than taking it on trust from a flag.
+    const tl: any = await (program.account as any).timelockQueueAccount.fetch(timelockPda);
+    const queuedBps = Buffer.from(tl.actionData).readUInt16LE(0);
+    const executableAt = Number(tl.executableAt);
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    console.log(`  queued    : ${Number(cfg.premiumBpsMint)} bps -> ${queuedBps} bps`);
+    console.log(`  nonce     : ${n}   timelock PDA ${timelockPda.toBase58()}`);
+    console.log(
+      `  executable: ${new Date(executableAt * 1000).toISOString().slice(0, 16).replace("T", " ")}Z` +
+        `  (${nowSec >= executableAt ? `elapsed ${Math.floor((nowSec - executableAt) / 60)} min ago` : `in ${Math.ceil((executableAt - nowSec) / 60)} min`})`,
+    );
+    if (tl.cancelled) throw new Error("this timelocked action was CANCELLED; it cannot execute.");
+    if (tl.executedAt !== null) throw new Error("this timelocked action has ALREADY executed.");
+    if (nowSec < executableAt) {
+      throw new Error(`the timelock has NOT elapsed: reverts TimelockNotElapsed. Wait ${Math.ceil((executableAt - nowSec) / 60)} more minutes.`);
+    }
+    console.log("");
+    console.log("  This RESUMES minting: it clears pending_premium_mint_nonce, which is the check still");
+    console.log("  refusing every mint even though mint_paused_until has passed.");
+    console.log("");
+
+    innerIxs = [
+      await program.methods
+        .executeSetPremiumMint(new anchor.BN(n.toString()))
+        .accounts({
+          config: configPda,
+          admin: vault,
+          timelock: timelockPda,
+          // Rent from the closed timelock account goes back to the vault that paid for it.
+          rentRecipient: new PublicKey(String(tl.rentPayer)),
+        })
+        .instruction(),
+    ];
+  }
+
+  if (args.action === "premium-mint") {
+    // PROPOSE a new mint premium. This is the ONE action here that takes a service DOWN, so the
+    // console shouts about it rather than printing a diff.
+    const bps = args.bps;
+    if (bps === undefined || !Number.isInteger(bps) || bps < 0) {
+      throw new Error("--bps is required, an integer number of basis points (5 = 0.05%)");
+    }
+    const CEILING = 500; // PREMIUM_BPS_MINT_CEILING, config.rs:4
+    if (bps > CEILING) throw new Error(`--bps ${bps} exceeds PREMIUM_BPS_MINT_CEILING ${CEILING}`);
+    const current = Number(cfg.premiumBpsMint);
+    if (bps === current) throw new Error(`--bps ${bps} equals the current premium: reverts ProposalNoOp`);
+    if (cfg.pendingPremiumMintNonce !== null) {
+      throw new Error(
+        `a mint-premium proposal is ALREADY active (nonce ${String(cfg.pendingPremiumMintNonce)}). ` +
+          `Reverts ProposalAlreadyActive. Execute or cancel it first.`,
+      );
+    }
+    const MAX_ACTIVE = 10; // MAX_ACTIVE_PROPOSALS, config.rs:12
+    const active = Number(cfg.activeProposalCount ?? 0);
+    if (active >= MAX_ACTIVE) throw new Error(`active_proposal_count is ${active}, the cap is ${MAX_ACTIVE}`);
+
+    // The timelock account is created by the instruction at seeds ["timelock", next_timelock_nonce].
+    const nonce = BigInt(cfg.nextTimelockNonce.toString());
+    const nonceLe = Buffer.alloc(8);
+    nonceLe.writeBigUInt64LE(nonce);
+    const [timelockPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("timelock"), nonceLe],
+      PROGRAM_ID,
+    );
+    const timelockSecs = Number(cfg.adminTimelockSeconds);
+    const executableAt = new Date((Math.floor(Date.now() / 1000) + timelockSecs) * 1000);
+
+    console.log(`  premium   : ${current} bps -> ${bps} bps  (${(current / 100).toFixed(2)}% -> ${(bps / 100).toFixed(2)}%)`);
+    console.log(`  timelock  : ${timelockSecs}s, executable from ${executableAt.toISOString().slice(0, 16).replace("T", " ")}Z`);
+    console.log(`  nonce     : ${nonce}   timelock PDA ${timelockPda.toBase58()}`);
+    console.log("");
+    console.log("  *** THIS PAUSES ALL MINTING THE MOMENT IT LANDS, AND UNTIL IT EXECUTES.");
+    console.log("  *** mint_silv refuses on both `mint_paused_until` and `pending_premium_mint_nonce`");
+    console.log("  *** (mint_silv.rs:139-146), so the site, the market makers and any direct call all");
+    console.log("  *** revert with MintPaused for at least the timelock above. Redemptions keep working.");
+    console.log("  *** Undoing it is cancel_timelocked_action, another 3-of-5, and mints stay down until then.");
+    console.log("");
+
+    innerIxs = [
+      await program.methods
+        .proposeSetPremiumMint(bps)
+        .accounts({
+          config: configPda,
+          admin: vault,
+          timelock: timelockPda,
+          systemProgram: SystemProgram.programId,
+        })
+        .instruction(),
+    ];
   }
 
   if (args.action === "fee-exempt") {
@@ -381,8 +502,9 @@ async function main(): Promise<void> {
     // is not an indefinite term. A 13-digit millisecond paste is rejected by the same rail, which is why
     // the digit count is checked here too: the revert message is clear but it arrives after three people
     // have approved.
-    const wallet = args.wallet;
-    if (!wallet) throw new Error("--action fee-exempt requires --wallet <pubkey>");
+    // COMMA-SEPARATED, so several wallets go in ONE proposal and cost ONE 3-of-5 round.
+    const wallets = (args.wallet ?? "").split(",").map((w) => w.trim()).filter(Boolean);
+    if (wallets.length === 0) throw new Error("--action fee-exempt requires --wallet <pubkey>[,<pubkey>...]");
     const flags = args.flags;
     if (flags === undefined || !Number.isInteger(flags) || flags < 1 || flags > 3) {
       throw new Error("--flags must be 1 (mint), 2 (redeem) or 3 (both)");
@@ -403,14 +525,6 @@ async function main(): Promise<void> {
     if (expiresAt - nowSec > MAX_TERM) {
       throw new Error(`--expires-at is ${((expiresAt - nowSec) / 86400).toFixed(0)} days away, the cap is 730`);
     }
-    const walletPk = new PublicKey(wallet);
-    const [feeExemptPda] = PublicKey.findProgramAddressSync(
-      [Buffer.from("fee_exempt"), walletPk.toBuffer()],
-      PROGRAM_ID,
-    );
-    const already = await conn.getAccountInfo(feeExemptPda, "finalized");
-    console.log(`  wallet    : ${wallet}`);
-    console.log(`  fee_exempt: ${feeExemptPda.toBase58()}${already ? " (ALREADY EXISTS, this overwrites it)" : ""}`);
     console.log(
       `  flags     : ${flags} (${flags & 1 ? "mint" : ""}${flags === 3 ? "+" : ""}${flags & 2 ? "redeem" : ""})`,
     );
@@ -418,18 +532,39 @@ async function main(): Promise<void> {
       `  expires   : ${expiresAt} = ${new Date(expiresAt * 1000).toISOString().slice(0, 16).replace("T", " ")}Z` +
         ` (${((expiresAt - nowSec) / 86400).toFixed(0)} days)`,
     );
-    if (walletPk.equals(vault)) {
-      console.log("  *** this wallet IS the admin vault: a self-grant, which the handler flags as notable.");
+    innerIxs = [];
+    for (const w of wallets) {
+      const walletPk = new PublicKey(w);
+      const [feeExemptPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("fee_exempt"), walletPk.toBuffer()],
+        PROGRAM_ID,
+      );
+      const already = await conn.getAccountInfo(feeExemptPda, "finalized");
+      let currentFlags = "";
+      if (already) {
+        // Show what is being REPLACED. `set_fee_exempt` is `init_if_needed` and the handler rewrites
+        // every field, so this overwrites rather than failing, and there is no window where the wallet
+        // pays full price on both sides. Printing the old flags makes the change auditable at a glance.
+        const acc: any = await (program.account as any).feeExemptAccount.fetch(feeExemptPda);
+        currentFlags = ` flags ${Number(acc.flags)} -> ${flags}`;
+      }
+      console.log(`  wallet    : ${w}`);
+      console.log(`  fee_exempt: ${feeExemptPda.toBase58()}${already ? ` (EXISTS,${currentFlags}, overwritten)` : " (new)"}`);
+      if (walletPk.equals(vault)) {
+        console.log("  *** this wallet IS the admin vault: a self-grant, which the handler flags as notable.");
+      }
+      innerIxs.push(
+        await program.methods
+          .setFeeExempt(walletPk, flags, new anchor.BN(expiresAt))
+          .accounts({
+            config: configPda,
+            admin: vault,
+            feeExempt: feeExemptPda,
+            systemProgram: SystemProgram.programId,
+          })
+          .instruction(),
+      );
     }
-    innerIx = await program.methods
-      .setFeeExempt(walletPk, flags, new anchor.BN(expiresAt))
-      .accounts({
-        config: configPda,
-        admin: vault,
-        feeExempt: feeExemptPda,
-        systemProgram: SystemProgram.programId,
-      })
-      .instruction();
   }
 
   // ---- SIMULATE THE INNER INSTRUCTION ------------------------------------------------------
@@ -454,7 +589,7 @@ async function main(): Promise<void> {
       simIxs.push(await buildUnpauseIx());
     }
   }
-  simIxs.push(innerIx);
+  simIxs.push(...innerIxs);
   console.log(
     `  simulation de ${simIxs.length} instruction(s) (sigVerify off, vault en payeur) ...`,
   );
@@ -501,7 +636,7 @@ async function main(): Promise<void> {
       const innerMessage = new TransactionMessage({
         payerKey: vault,
         recentBlockhash: bh,
-        instructions: [innerIx],
+        instructions: innerIxs,
       });
       const sig1 = await multisig.rpc.vaultTransactionCreate({
         connection: conn,

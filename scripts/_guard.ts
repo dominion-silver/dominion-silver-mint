@@ -34,6 +34,18 @@ export const ACTION_COST: Record<string, ActionCost> = {
   // `propose_withdraw_usdc` then `execute_withdraw_usdc`, a 24h `admin_timelock_seconds` window and a
   // 3-of-5 on each leg. Money in is same-day; money out is next-day at best, so the honest cost is
   // timelocked-undo and the operator has to name it.
+  // PROPOSING a mint-premium change. NOT `reversible`, and the reason is the D30 front-run defence:
+  // `propose_set_premium_mint` sets `mint_paused_until = now + admin_timelock_seconds` AND
+  // `pending_premium_mint_nonce`, and `mint_silv` refuses on either (mint_silv.rs:139-146). So the
+  // instant this lands, EVERY mint reverts `MintPaused` - the site, the market makers, any direct
+  // call - for 24h minimum. Undoing it is `cancel_timelocked_action`, another 3-of-5, and the service
+  // stays down until that lands. A pause on a running protocol is not a reversible action in the sense
+  // this table means, so it must be named as an intent rather than inherited by default.
+  propose_set_premium_mint: "timelocked-undo",
+  // EXECUTING it. This is the action that both applies the new premium AND lifts the mint pause, so it
+  // is the one that RESTORES service. Undoing it means proposing the old value again, which pauses mints
+  // for another 24h, so it is timelocked-undo rather than reversible.
+  execute_set_premium_mint: "timelocked-undo",
   deposit_usdc: "timelocked-undo",
   propose_set_inventory_wallet: "reversible", // a proposal can be cancelled instantly
   execute_set_inventory_wallet: "timelocked-undo", // moving it back costs another full window
