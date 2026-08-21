@@ -1,33 +1,17 @@
 {
   "_README": [
-    "MAINNET authority assignment for the Dominion SILV launch. Confirmed by Thomas 2026-07-26.",
+    "MAINNET authority assignment for Dominion SILV. This file is the published record of which",
+    "address holds which power over the protocol.",
     "",
-    "This file is the SINGLE SOURCE OF TRUTH for the mainnet deploy ceremony. Every one of",
-    "these decisions is IRREVERSIBLE or expensive to undo, so they are recorded here rather",
-    "than typed at a terminal. Verify with: scripts/verify-mainnet-authorities.ts",
-    "",
-    "These are PUBLIC KEYS. Publishing them is safe (they are on-chain regardless) and",
-    "desirable: anyone can check that the deployed program's authorities match what was",
-    "announced. No secret material belongs in this file, ever."
+    "These are PUBLIC KEYS. Publishing them is safe, they are on chain regardless, and it is the point:",
+    "anyone can check that the deployed program's authorities match what was announced. Verify with",
+    "scripts/verify-mainnet-authorities.ts. No secret material belongs in this file, ever."
   ],
   "cluster": "mainnet-beta",
   "program_id": "3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ",
   "_program_id_note": [
-    "ROUND 5. Genere le 2026-08-08 (runbook etape 1). Keypair a",
-    "~/.config/solana/dominion-mainnet-program.json, mode 600, JAMAIS dans ce depot.",
-    "",
-    "UN SEUL ID POUR TOUS LES CLUSTERS, deliberement. declare_id! est un litteral unique, donc une",
-    "repetition devnet sur un autre id ne peut qu exercer un binaire DIFFERENT de celui qui shippe.",
-    "Le tour 5 a conclu NO-GO en partie parce que le candidat mainnet n existait pas encore; garder",
-    "un id de repetition separe aurait conserve exactement ce trou.",
-    "",
-    "L id devnet precedent HXaptAcaXBoEAsNuEv4ZwYrciHbMxSpip2VScRVDjo1Z reste DEPLOYE sur devnet avec",
-    "trois propositions timelockees en vol. Il est anterieur a la remediation du tour 5, donc c est un",
-    "enregistrement historique et pas une cible. A fermer (solana program close) une fois la",
-    "repetition passee sous le nouvel id, ce qui recupere son loyer.",
-    "",
-    "CE N EST PAS ENCORE DEPLOYE, sur aucun cluster. Le keypair existe, le source le declare, et rien",
-    "n a ete envoye."
+    "One program id across all clusters, deliberately. declare_id! is a single literal, so rehearsing on",
+    "a different id can only ever exercise a DIFFERENT binary from the one that ships."
   ],
   "authorities": {
     "ops_admin": {

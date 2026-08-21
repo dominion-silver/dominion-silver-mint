@@ -44,13 +44,27 @@ const fail = (m: string) => {
   failed++;
 };
 
+/**
+ * The runbook moved to `private/internal-docs/` on 2026-08-21: it is an internal operational document
+ * and this repository is PUBLIC. This test still checks it when it is present, and SKIPS rather than
+ * fails when it is not, because a public clone legitimately does not have it. Silence here is not a
+ * pass: `skipped` is reported and counted separately, so a private checkout still gets the assertion.
+ */
+const RUNBOOK_MOVED = "private/internal-docs/MAINNET_LAUNCH_RUNBOOK.md";
+let skipped = 0;
+
 function read(rel: string): string {
-  const p = resolve(ROOT, rel);
-  if (!existsSync(p)) {
-    fail(`${rel} does not exist. A posture claim cannot be anchored to a file that is gone.`);
+  for (const cand of rel === RUNBOOK ? [RUNBOOK_MOVED, rel] : [rel]) {
+    const p = resolve(ROOT, cand);
+    if (existsSync(p)) return readFileSync(p, "utf8");
+  }
+  if (rel === RUNBOOK) {
+    console.log(`SKIP: ${RUNBOOK_MOVED} is not in this checkout (it is internal), so its claims are unchecked.`);
+    skipped++;
     return "";
   }
-  return readFileSync(p, "utf8");
+  fail(`${rel} does not exist. A posture claim cannot be anchored to a file that is gone.`);
+  return "";
 }
 
 /**
