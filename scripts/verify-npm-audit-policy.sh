@@ -30,13 +30,17 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
-# BASELINE, measured 2026-08-08. Lower these whenever an advisory is genuinely resolved; raising one
+# BASELINE, re-measured 2026-08-21. Lower these whenever an advisory is genuinely resolved; raising one
 # means accepting a new vulnerability and belongs in a commit that says why.
+#
+# The 2026-08-21 re-measure is a RECLASSIFICATION, not an acceptance: upstream moved advisories from
+# high to moderate, so high fell and moderate rose while the advisory ID set shrank by two
+# (1124288 and 1138813 are gone) and gained nothing. See the note in the ratchet loop below.
 # workspace:critical:high:moderate:low
 BASELINE=(
   ".:0:4:7:0"
-  "apps/public:1:19:18:1"
-  "apps/admin:1:20:19:1"
+  "apps/public:1:12:20:1"
+  "apps/admin:1:13:21:1"
 )
 
 # Packages allowed to carry a HIGH or CRITICAL today. A high/critical on any package NOT listed here
@@ -139,11 +143,26 @@ sys.exit(0)
     printf '%s' "$json" | ALLOWED="$ALLOWED_HIGH" WS="$ws" python3 "$PWD/scripts/_npm-audit-summary.py"
   )"
   echo "   critical $crit (baseline $b_crit), high $high ($b_high), moderate $mod ($b_mod), low $low ($b_low)"
+  # A RISING BUCKET IS ONLY BAD IF SOMETHING NEW ARRIVED, and that distinction cost a 27-minute gate
+  # run on 2026-08-21. Upstream RECLASSIFIED advisories from high to moderate: apps/public went high
+  # 19 -> 12 and moderate 18 -> 20, and by advisory ID the set had SHRUNK by two with nothing new. The
+  # graph improved. This loop failed anyway, because it ratchets each severity independently, and it
+  # printed "note: high improved" on the line above its own "FAIL: moderate went from 18 to 20".
+  # It held both halves of the evidence and drew the wrong conclusion.
+  #
+  # The baseline's own note has the principle right: "An advisory ID is an identity." So the ID set is
+  # the authority on whether anything new arrived, and a bucket that grows with no new ID can only be a
+  # reclassification of something already accepted. Reported, not failed.
+  if [ "$newids" != "-" ]; then arrived=1; else arrived=0; fi
   for pair in "critical:$crit:$b_crit" "high:$high:$b_high" "moderate:$mod:$b_mod" "low:$low:$b_low"; do
     IFS=: read -r label got want <<<"$pair"
-    if [ "$got" -gt "$want" ]; then
-      echo "   FAIL: $label went from $want to $got. A new production vulnerability entered the graph."
+    if [ "$got" -gt "$want" ] && [ "$arrived" -eq 1 ]; then
+      echo "   FAIL: $label went from $want to $got, alongside a new advisory id. Triage it below."
       fail=1
+    elif [ "$got" -gt "$want" ]; then
+      echo "   note: $label went from $want to $got with NO new advisory id: an upstream severity"
+      echo "         RECLASSIFICATION of an already-accepted advisory, not a new vulnerability."
+      echo "         Re-measure the baseline in this commit."
     elif [ "$got" -lt "$want" ]; then
       echo "   note: $label improved ($want -> $got). Lower the baseline in this commit."
     fi

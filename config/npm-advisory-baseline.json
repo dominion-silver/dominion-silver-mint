@@ -16,7 +16,7 @@
     "by re-reading the FAIL output of scripts/verify-npm-audit-policy.sh, which prints every id",
     "it refused. An earlier note pointed at a --print-baseline flag that was never implemented."
   ],
-  "measured": "2026-08-14",
+  "measured": "2026-08-21",
   "workspaces": {
     ".": [
       1103747,
@@ -37,12 +37,10 @@
       1123944,
       1124066,
       1124252,
-      1124288,
       1130709,
       1138808,
       1138809,
       1138811,
-      1138813,
       1139427,
       1139510
     ],
@@ -57,12 +55,10 @@
       1123944,
       1124066,
       1124252,
-      1124288,
       1130709,
       1138808,
       1138809,
       1138811,
-      1138813,
       1139427,
       1139510
     ]
