@@ -9,7 +9,7 @@
 //     execute.rs). This closes the head-dev "one-block drain": an admin can no
 //     longer strip the redemption rate-limits in a single instant tx.
 //   - set_min_operation_usdc: BOTH directions instant, bounded by
-//     MIN_OPERATION_CEILING_USDC (). The one setter here with no
+//     MIN_OPERATION_CEILING_USDC. The one setter here with no
 //     direction asymmetry, because neither direction risks value; the reasoning is
 //     written out at the handler.
 // The four individual instant throttle setters (set_instant_redeem_budget /
@@ -82,7 +82,7 @@ pub fn set_max_silv_supply_handler(ctx: Context<SetMaxSupply>, new_max: u64) -> 
 }
 
 /// The whole decision, extracted so it is unit-testable without a Context.
-/// review of daac4ac (P1, raised by two reviewers): a comment in
+/// review of (P1, raised by two reviewers): a comment in
 /// `scripts/e2e-fixa-devnet.ts` claimed the success branch of the invariant below was
 /// "covered by the caps.rs unit tests instead". It was not. This file had no test
 /// module at all, so `>=` written as `>` would have shipped undetected, taking with it
@@ -189,7 +189,7 @@ pub fn set_public_mint_enabled_handler(ctx: Context<SetParam>, enabled: bool) ->
     // true, so a pending open can only exist while the mint is CLOSED, and this handler requires
     // `old_enabled != enabled`, so it reverts PublicMintUnchanged when the mint is already closed.
     // The two states are mutually exclusive.
-    // Kept for uniformity with the redeem switch, and harmless. But commit 1851324's headline
+    // Kept for uniformity with the redeem switch, and harmless. But commit 's headline
     // justification for the A7 bind ("closing the public mint did not disarm a pending open, so the
     // mint would re-open on its own schedule") described a sequence that cannot occur. The bind is
     // still right and still buys a redundant second reason for a cancelled proposal to fail; it was
@@ -223,7 +223,7 @@ pub fn set_public_mint_enabled_handler(ctx: Context<SetParam>, enabled: bool) ->
 /// and restore it, all inside one slot with no window for a guardian to cancel.
 /// It is still not timelocked, deliberately, and the reason is proportion rather than symmetry: the
 /// worst case is a denial of the priced path, which that key can already achieve instantly and more
-/// completely with `set_public_mint_enabled(false)` plus `pause()`. A twelfth `TimelockAction` would
+/// completely with `set_public_mint_enabled(false)` plus `pause`. A twelfth `TimelockAction` would
 /// put more new surface in the mainnet binary than that buys. What the asymmetry does buy is
 /// OBSERVABILITY, which is why `MinOperationChanged` carries the old value, the new value and the
 /// signer: an admin that zeroes the floor is visible in one event.
@@ -257,8 +257,8 @@ pub(crate) fn validate_min_operation(current: u64, requested: u64) -> Result<()>
 /// throttle in the safe (tighten) direction vs the current config, else
 /// `LooseningRequiresTimelock`; loosening any of them goes through the
 /// 24h-timelocked `propose_set_redeem_limits` / `execute_set_redeem_limits`.
-/// Covers: instant_redeem_budget_usdc (), instant_redeem_window_seconds (),
-/// large_redeem_threshold_usdc (), redeem_queue_delay_seconds (). It does
+/// Covers: instant_redeem_budget_usdc, instant_redeem_window_seconds,
+/// large_redeem_threshold_usdc, redeem_queue_delay_seconds. It does
 /// NOT touch max_silv_supply (raise-blocked via set_max_silv_supply) or
 /// redemptions_enabled (enable-blocked via set_redemptions_enabled) - those keep
 /// their stricter dedicated setters.

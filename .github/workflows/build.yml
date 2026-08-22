@@ -87,7 +87,7 @@ jobs:
           toolchain: 1.89.0
           components: rustfmt
 
-      # AUDIT review of daac4ac (P1, security reviewer): `target` was cached under a key
+      # AUDIT review of (P1, security reviewer): `target` was cached under a key
       # that hashes only Cargo.lock, never the source. verify-release-artifact.sh
       # compares the artifact against a "clean" rebuild, and both used to compile
       # through this same shared target dir, so a stale or tampered intermediate would
@@ -140,7 +140,7 @@ jobs:
         # though cargo exits 0 and emits a .so.
         run: bash scripts/_strict-build-sbf.sh --manifest-path programs/dominion_silver_mint_v2/Cargo.toml -- --locked
 
-      # AUDIT review of daac4ac (P0, integration reviewer, proved by execution): this
+      # AUDIT review of (P0, integration reviewer, proved by execution): this
       # job could NEVER have passed on a fresh runner. `cargo build-sbf` does not
       # create target/idl (it makes deploy/, release/, sbpf-solana-solana/ only) and
       # target/ is gitignored, so the shell failed the redirect before anchor ran. The
@@ -250,7 +250,7 @@ jobs:
         # in src/state/. An adversarial pass measured 192 handler-level mutations that leave all 158 unit
         # tests green; this suite catches the ones that matter.
         # nothing under .github/ referenced this runner. The suite existed, passed locally,
-        # and gated no merge. The 19 P0 mutations closed in f9c7112 were unprotected in CI from the moment
+        # and gated no merge. The 19 P0 mutations closed in were unprotected in CI from the moment
         # they were written.
         # It must run AFTER the release artifact is built and BEFORE the Lazer harness, which rebuilds into
         # target/harness with --features test-harness. The runner asserts the artifact it loads is
@@ -335,7 +335,7 @@ jobs:
       - name: Production npm advisories may not get worse (BLOCKING)
         run: bash scripts/verify-npm-audit-policy.sh
 
-  # and it is its OWN JOB on purpose ().
+  # and it is its OWN JOB on purpose.
   # `scripts/test-verify-release-artifact.sh` runs the verifier END TO END across ten cases (eleven invocations: case 10 runs it twice), and
   # each FULL run
   # rebuilds the program into a fresh isolated CARGO_TARGET_DIR that nothing reuses. That is the price
@@ -562,7 +562,7 @@ jobs:
         #      rustc (pyth never fixed it through HEAD; solana-program
         #      2.3.0 MSRV rust 1.79 vs that >=~1.84 ceiling => no clean
         #      single toolchain). Resolved by vendoring + minimally
-        #      patching pyth (commit 39a62e7, triple-reviewed SHIP,
+        #      patching pyth (commit , triple-reviewed SHIP,
         #      serialization byte-equivalent, supply-chain-diff clean).
         #  (2) NOT a CI-fixable issue: anchor 0.31.1's `anchor build`
         #      (SBF AND IDL) re-resolves the dep graph UNLOCKED, ignoring
@@ -871,7 +871,7 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # THE PIN COMPARISON, and it is the ONLY authority on the pin (). The gate no longer
+      # THE PIN COMPARISON, and it is the ONLY authority on the pin. The gate no longer
       # makes this claim, because a native build cannot.
       - name: Compare the verifiable build against the pinned release artifact (BLOCKING)
         run: |
@@ -918,7 +918,7 @@ jobs:
               ;;
           esac
 
-      # PUBLISH LAST (). Everything above has now run against this exact file: the tests,
+      # PUBLISH LAST. Everything above has now run against this exact file: the tests,
       # the probe scan, the hashes and the pin. Publishing before them is what let a red run leave two
       # downloadable binaries behind for 90 days.
       # And only from a PUSH to main or a tag. The workflow also runs on pull_request, where anyone

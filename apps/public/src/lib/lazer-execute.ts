@@ -138,7 +138,7 @@ async function _impl(
 
   // 6. Confirm. confirmTransaction resolves on INCLUSION, not success: a tx that
   //    lands then reverts (stale oracle, pause, slippage, treasury race) has a
-  //    non-null value.err. Inspect it + surface the real failure ().
+  //    non-null value.err. Inspect it + surface the real failure.
   const blockhash = signed.recentBlockhash!;
   const lastValidBlockHeight =
     signed.lastValidBlockHeight ??

@@ -35,7 +35,7 @@ export function silvMetadataAuthorityPda(): PublicKey {
 /**
  * Authority of the premium fee vault. Seeds = [b"fee_vault"].
  * The VAULT is this PDA's USDC associated token account, NOT this address. Derive it with
- * `getAssociatedTokenAddressSync(USDC_MINT, feeVaultPda(), true, TOKEN_PROGRAM_ID)` and note
+ * `getAssociatedTokenAddressSync(USDC_MINT, feeVaultPda, true, TOKEN_PROGRAM_ID)` and note
  * that the third argument (allowOwnerOffCurve) is MANDATORY: the owner is a PDA, so omitting
  * it throws TokenOwnerOffCurveError. That mistake has already cost this project a debugging
  * session on the treasury ATA.

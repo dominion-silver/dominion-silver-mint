@@ -90,7 +90,7 @@ fn map_policy_err(e: LazerPolicyError) -> Error {
     }
 }
 
-/// Price-delta circuit breaker ().
+/// Price-delta circuit breaker.
 /// If the last recorded price is newer than the decay window, reject big moves.
 /// Initial state (last_recorded_price == 0) bypasses (first tx bootstraps).
 pub fn check_price_delta(config: &ConfigAccount, new_price: u128, now: i64) -> Result<()> {

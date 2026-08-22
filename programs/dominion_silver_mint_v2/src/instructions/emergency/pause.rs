@@ -26,7 +26,7 @@ pub fn pause_handler(ctx: Context<Pause>) -> Result<()> {
 
     let admin_key = config.admin;
     let is_admin = signer == admin_key;
-    // review of daac4ac: `may_act` also refuses a guardian key that IS the
+    // review of : `may_act` also refuses a guardian key that IS the
     // current admin. add_guardian cannot prevent that overlap on its own, because
     // admin-ship can move after the appointment.
     let is_guardian = match &ctx.accounts.guardian {

@@ -6,7 +6,7 @@
  * `admin-actions.ts`, decodes it with the real IDL coder, and checks the bytes and the account list.
  * The catalog test drives the descriptor `AdminActions.tsx` actually renders, through its own
  * `build` closure, so a card that was left pointing at a deleted builder fails here.
- * Everything is offline. `.instruction()` never touches the RPC; the only read the propose path
+ * Everything is offline. `.instruction` never touches the RPC; the only read the propose path
  * performs is `config.next_timelock_nonce`, and the fake connection below answers it with a
  * zero-filled account, which Borsh decodes as every pubkey default, every bool false, every Option
  * None and every integer 0. That makes the nonce deterministically 0 and the timelock PDA
@@ -45,7 +45,7 @@ function fakeConnection(): Connection {
   };
   // A REAL Connection with the two reads stubbed, not a hand-rolled stand-in: `rpcEndpoint` and
   // `commitment` are getters on the prototype, and Anchor reads both. Nothing here ever dials out,
-  // because these two methods are the only ones an offline `.instruction()` build reaches.
+  // because these two methods are the only ones an offline `.instruction` build reaches.
   const conn = new Connection("http://127.0.0.1:8899", "confirmed");
   (conn as any).getAccountInfo = async () => account;
   (conn as any).getAccountInfoAndContext = async () => ({

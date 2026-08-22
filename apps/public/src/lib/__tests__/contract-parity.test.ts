@@ -2,7 +2,7 @@
  * Parity between this client and the on-chain program.
  * Everything here exists because the batch of 2026-08-05 shipped four bugs of the same shape: the
  * program changed and the client kept using the old formula or the old account list, and NOTHING
- * caught it. The method builders go through `as any`, and `.accounts()` is NOT strict in Anchor
+ * caught it. The method builders go through `as any`, and `.accounts` is NOT strict in Anchor
  * 0.31.1 (it delegates to `accountsPartial`), so neither TypeScript nor Anchor rejects a wrong
  * account list. A test is the only mechanical guard on this path.
  * The two classes covered:

@@ -140,7 +140,7 @@ export function MintRedeemCard() {
 
   // the quote uses the premiums THIS WALLET pays, not the global config values, so a whitelisted
   // wallet can see the terms it was granted before signing. `effectivePremiumBps` mirrors
-  // `state/fee_exempt.rs::effective_premium_bps`, including a zero expiry counting as expired ().
+  // `state/fee_exempt.rs::effective_premium_bps`, including a zero expiry counting as expired.
   // Falling back to the CONFIGURED bps when the exemption is unknown is the safe direction: `minSilvOut`
   // comes from this same number, so an over-optimistic quote is a hard SlippageExceeded, not a surprise.
   const premiumBpsMint =
@@ -759,7 +759,7 @@ export function MintRedeemCard() {
           redeemRoute === "otc" ||
           redeemRoute === "limit" ||
           redeemRoute === "kyc" ||
-          // NOT-YET-KNOWN blocks too, and it must: `fetchTreasuryBalance` throws on an RPC failure (),
+          // NOT-YET-KNOWN blocks too, and it must: `fetchTreasuryBalance` throws on an RPC failure,
           // so `treasury` becomes undefined and `redeemRoute` becomes null. null matches none of the cases
           // above, and `handleSubmit` would then fall through every guard straight to the instant send.
           // Same tri-state doctrine as `kycAttested`: unknown is not permission.

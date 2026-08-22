@@ -511,7 +511,7 @@ impl Fixture {
             svm.airdrop(&k.pubkey(), 100_000_000_000).unwrap();
         }
 
-        // `svm.add_program` installs the program under loader v2, for which `programdata_address()`
+        // `svm.add_program` installs the program under loader v2, for which `programdata_address`
         // returns None and the chain in `initialize` can never pass. Rewrite it into the
         // upgradeable shape. Order matters: litesvm re-loads the ELF out of the programdata account
         // (offset 45) for any executable account owned by the upgradeable loader, so programdata
@@ -1337,7 +1337,7 @@ impl Fixture {
     }
 
     /// posture: assert the redeem path is open rather than manufacture it. This is the
-    /// replacement for the old `open_redemptions()` at call sites that only wanted a live redeem
+    /// replacement for the old `open_redemptions` at call sites that only wanted a live redeem
     /// path; it deliberately does NOT warp, and several oracle tests stamp envelopes right after it.
     pub fn require_redemptions_open(&self) {
         assert!(

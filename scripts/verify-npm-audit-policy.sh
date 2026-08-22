@@ -48,7 +48,7 @@ BASELINE=(
 # (B) REACHABLE, and no fix exists that does not break the product. `npm audit fix` offers
 #     @sqds/multisig 1.3.1 for the 2.1.4 we use: a MAJOR DOWNGRADE to the pre-v4 API the entire admin
 #     Squads path is built on. Taking it would remove the only working mainnet ceremony path to remove
-#     a transitive advisory in bigint-buffer's toBigIntLE(), whose input here is RPC account data
+#     a transitive advisory in bigint-buffer's toBigIntLE, whose input here is RPC account data
 #     bounded by the account size. That is a worse trade, and it is recorded as a trade rather than
 #     dressed up as a non-issue.
 ALLOWED_HIGH=$(cat <<'EOF'

@@ -740,7 +740,7 @@ fn a_prebuilt_unpause_is_refused_after_a_matured_action_changed_the_approved_sta
 fn the_readiness_digest_moves_on_every_config_field_the_decision_reads() {
     // FINAL-03 is closed by a digest, and a digest is only worth what it covers. This walks the
     // decision in `scripts/_launch-readiness.ts` input by input and asserts, on the real chain, that
-    // each CONFIG input moves the digest. A field silently dropped from `readiness_digest()` makes
+    // each CONFIG input moves the digest. A field silently dropped from `readiness_digest` makes
     // the whole mechanism permissive again, and nothing else would notice.
     // THE THREE INPUTS THE DECISION READS THAT ARE NOT CONFIG, and why a config digest not covering
     // them is sound rather than an omission:
@@ -808,7 +808,7 @@ fn the_readiness_digest_moves_on_every_config_field_the_decision_reads() {
 /// and its copy in the admin app. Only the harness mirror was proven, and only transitively: it
 /// submits its digests to the real program, so a drift there fails 180 tests loudly.
 /// The TypeScript pair was proven by NOTHING. Its only assertion was that the output is 32 bytes
-/// long, which is true of any hash of anything. Adding a field to `readiness_digest()` regenerates
+/// long, which is true of any hash of anything. Adding a field to `readiness_digest` regenerates
 /// a byte-identical IDL (`[u8; 32]` does not change), keeps the args-parity test at 40 bytes, and
 /// leaves both TypeScript copies silently wrong. The failure would have surfaced for the first time
 /// as a reverted mainnet go-live transaction.
@@ -822,7 +822,7 @@ fn the_readiness_digest_mirror_matches_the_declared_layout() {
     // can only fail if someone edits the test. The reviewer proved it by mutation: adding a byte to
     // the mirror in common/mod.rs left this test GREEN while six real tests went red. The docblock
     // claimed it pinned the encoders; it observed neither.
-    // This one calls `Fixture::readiness_digest()`, the mirror, over the LIVE config, and compares it
+    // This one calls `Fixture::readiness_digest`, the mirror, over the LIVE config, and compares it
     // to a preimage rebuilt here from the same live values. A field added on one side and not the
     // other makes the two diverge. The mirror is in turn pinned to the PROGRAM by every `unpause` in
     // the suite, since the chain recomputes it and refuses a mismatch. So the chain is:

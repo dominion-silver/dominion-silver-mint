@@ -6,7 +6,7 @@
  * live would have been rejected before reaching its handler.
  * The account-parity suites already catch a missing ACCOUNT. Nothing caught a missing ARGUMENT, and
  * the two failure modes are identical in cause: the program changed and a builder did not.
- * This builds every affected instruction OFFLINE (Anchor's `.instruction()` never touches the RPC)
+ * This builds every affected instruction OFFLINE (Anchor's `.instruction` never touches the RPC)
  * and compares the encoded data LENGTH against the length the committed IDL says those args occupy.
  * 8 versus 40 is exactly what it catches.
  */
@@ -98,7 +98,7 @@ describe("built instructions carry the arguments the IDL declares", () => {
    * THE SAME FROZEN VECTOR the Rust test asserts, in
    * tools/state-harness/tests/launch_open_posture.rs. This is the ONLY thing tying the TypeScript
    * encoder to the on-chain one. Before it, the only TS assertion was "the output is 32 bytes",
-   * which is true of any hash of anything: a field added to `readiness_digest()` regenerates an
+   * which is true of any hash of anything: a field added to `readiness_digest` regenerates an
    * identical IDL, leaves this suite at 40 bytes, and makes the ceremony build an unpause the chain
    * always rejects. That would have surfaced first at the mainnet go-live.
    */

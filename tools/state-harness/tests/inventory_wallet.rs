@@ -367,7 +367,7 @@ fn a_change_cannot_be_executed_through_the_wrong_action_slot() {
 }
 
 // ================================================================ OPTION A
-// RED PHASE FIRST. These scenarios are written against `1314be4`, WITHOUT the production fix, and
+// RED PHASE FIRST. These scenarios are written against ``, WITHOUT the production fix, and
 // they must fail on their RESULT rather than on a missing symbol. common proof rule is
 // explicit: "une erreur de compilation causee seulement par un import de symbole qui n existe pas
 // n est pas suffisante". So neither test names a field or an instruction that does not exist yet.

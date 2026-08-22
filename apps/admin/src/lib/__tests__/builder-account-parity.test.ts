@@ -12,7 +12,7 @@
  * THE FIX IS THE LAST TEST IN THIS FILE. The table below must name every exported builder, and
  * `every builder is covered` fails when one is added without a case. Forgetting is no longer possible
  * without a red test, which is the only version of this guarantee that survives the next ABI change.
- * Everything is offline: `.instruction()` never dials out, and the fake connection answers the two
+ * Everything is offline: `.instruction` never dials out, and the fake connection answers the two
  * reads a builder can perform (the config, for the timelock nonce and the admin, and the guardian
  * roster) from bytes constructed here.
  */

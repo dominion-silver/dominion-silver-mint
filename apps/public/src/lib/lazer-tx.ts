@@ -312,7 +312,7 @@ export interface BuildLazerMintTxArgs {
 }
 
 /** The mint_silv account set, as a pure function of the caller and their optional per-wallet accounts.
- *  EXPORTED SO IT CAN BE TESTED, and a test is the ONLY guard on this list: `.accounts()` is not strict in
+ *  EXPORTED SO IT CAN BE TESTED, and a test is the ONLY guard on this list: `.accounts` is not strict in
  *  Anchor 0.31.1 (it delegates to `accountsPartial`), so a missing key is silently derived from the IDL seeds,
  *  and for an OPTIONAL account that derivation yields a real address for an account that does not exist,
  *  which the program then fails to deserialize. `opt` must come from a resolver that used `usable`. */

@@ -91,7 +91,7 @@ pub struct Initialize<'info> {
     // is a separate transaction from `solana program deploy`, so an unconstrained Signer let ANY key
     // seize the single [CONFIG_SEED] PDA and make itself `config.admin`.
     // Every link is chained so a forged ProgramData cannot be substituted: `Program<..>` forces this
-    // account to equal `crate::ID`; `programdata_address()` derives the expected ProgramData address
+    // account to equal `crate::ID`; `programdata_address` derives the expected ProgramData address
     // from the PROGRAM account's own state (Some only under bpf_loader_upgradeable); the constraint
     // pins the supplied `program_data` to it; `Account<ProgramData>` enforces the loader as owner and
     // the ProgramData variant; and the handler requires upgrade_authority_address == Some(deployer).
@@ -288,7 +288,7 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
         );
 
         // verify the PermanentDelegate AT INIT, not on the first user instruction. It is the one
-        // privileged compliance capability (), so it must match the expected Ops vault from block 0.
+        // privileged compliance capability, so it must match the expected Ops vault from block 0.
         let pd = mint_with_ext
             .get_extension::<PermanentDelegate>()
             .map_err(|_| error!(DominionError::PermanentDelegateMismatch))?;

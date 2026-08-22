@@ -91,7 +91,7 @@ pub mod dominion_silver_mint {
     // Both instant: the worst case is foregone revenue, not lost principal. Rationale at the handlers.
 
     /// `expires_at` is MANDATORY: a unix timestamp in SECONDS, strictly in the future, capped at
-    /// MAX_FEE_EXEMPT_TERM_SECONDS. Zero is refused (), so every waiver carries a term and is
+    /// MAX_FEE_EXEMPT_TERM_SECONDS. Zero is refused, so every waiver carries a term and is
     /// renewed by one instant transaction. That renewal IS the review the term exists to force.
     pub fn set_fee_exempt(
         ctx: Context<SetFeeExempt>,
@@ -309,7 +309,7 @@ pub mod dominion_silver_mint {
     // Freeze / thaw are NOT Dominion instructions, deliberately. The SILV mint's freeze_authority is
     // the compliance multisig, so freezing or thawing an account is done with direct Token-2022
     // FreezeAccount / ThawAccount transactions signed by that multisig, exactly as seize/clawback goes
-    // directly through the PermanentDelegate (). Neither changes the authorities assertions.rs pins.
+    // directly through the PermanentDelegate. Neither changes the authorities assertions.rs pins.
 
     // === Admin: timelocked propose/execute ===
 
@@ -442,7 +442,7 @@ pub mod dominion_silver_mint {
     // === Rent reclaim ===
     // `close_timelock_account` is REMOVED, and it was the last member of this
     // section. It swept a timelock account left behind by a cancel or an execute, and it required
-    // `cancelled || executed_at.is_some()`. Both writers of those fields close the account in the
+    // `cancelled || executed_at.is_some`. Both writers of those fields close the account in the
     // same transaction: `CancelTimelocked` carries `close = rent_recipient`, and so does every one of
     // the ten `Execute*` contexts. Anchor's close runs on exit, drains the lamports and zeroes the
     // account, so no LIVE account can ever hold the state this instruction demanded.

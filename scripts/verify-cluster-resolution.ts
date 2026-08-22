@@ -1,5 +1,5 @@
 /**
- * GATE: cluster selection is driven by the ENVIRONMENT and never falls back to devnet ().
+ * GATE: cluster selection is driven by the ENVIRONMENT and never falls back to devnet.
  * ASSERTS the properties, not the implementation: an unset DOMINION_RPC still resolves to devnet; an
  * explicit OR UNRECOGNISED mainnet RPC resolves to mainnet-beta and to mainnet ADDRESSES, never the
  * devnet USDC mint; a URL merely containing "devnet" is classified by HOST; the transaction guard
@@ -243,7 +243,7 @@ for (const rpc of [
     "verify-post-deploy.ts",
     // Pure string function: strips provider credentials out of an RPC endpoint before anything prints
     // it. No Connection, no keypair. Extracted from redeem-monitor.ts precisely BECAUSE that file runs
-    // its main() at import time, so importing the helper from there executed a whole monitor run.
+    // its main at import time, so importing the helper from there executed a whole monitor run.
     "_redact.ts",
     // The monitors' alert memory: reads and writes one small JSON file under .monitor-state so an alarm
     // can fire on a TRANSITION instead of on a level. No Connection, no keypair, no network at all, so
@@ -368,7 +368,7 @@ for (const rpc of [
 // This used to point the PRODUCTION reader at the copy with `DOMINION_MAINNET_CONFIG`
 //    (plus, briefly, a second variable pretending to be an authority check). The seam is now in the
 //    signature: `readMainnetConfigFrom(path)` and `mainnetAddressFrom(cfg, field)` are pure, this test
-//    hands them what it built, and `mainnetConfig()` in production reads one path with no way to be
+//    hands them what it built, and `mainnetConfig` in production reads one path with no way to be
 //    redirected. The property under test is unchanged; the hole it needed is gone.
 const original = fs.readFileSync(SOT, "utf8");
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "dominion-sot-"));

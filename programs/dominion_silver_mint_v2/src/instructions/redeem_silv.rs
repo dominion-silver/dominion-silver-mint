@@ -140,7 +140,7 @@ pub fn handler(
         &user_key,
     )?;
 
-    // 2. Zero guard. The global rolling-window budget below is the only size limit ().
+    // 2. Zero guard. The global rolling-window budget below is the only size limit.
     require!(amount_silv > 0, DominionError::ZeroAmount);
 
     let lazer_program_ai = ctx.accounts.lazer_program.to_account_info();
@@ -283,7 +283,7 @@ pub fn handler(
         .checked_add(total_out)
         .ok_or(error!(DominionError::ArithmeticOverflow))?;
 
-    // 9. Dust-filter price update (). Pre-premium value, i.e. `gross_usdc`, so the threshold holds.
+    // 9. Dust-filter price update. Pre-premium value, i.e. `gross_usdc`, so the threshold holds.
     maybe_update_last_price(config, oracle_price, gross_usdc, now);
 
     silv_burn_from_user(

@@ -75,7 +75,7 @@ for cluster in ("localnet", "devnet"):
         check(False, f"[programs.{cluster}] has no active dominion_silver_mint entry")
         continue
     check(got == DECLARED, f"[programs.{cluster}] == declare_id!")
-# mainnet must stay absent until the mainnet ceremony ().
+# mainnet must stay absent until the mainnet ceremony.
 active_mainnet = section_entry("mainnet")
 if active_mainnet:
     check(active_mainnet == DECLARED, "[programs.mainnet] (present) == declare_id!")
@@ -271,7 +271,7 @@ for _path in _instr_files:
             _orphan_structs.append(f"{_path.name}: {_name}")
             continue
         _hb = _decomment(_hm.group(0))
-        # `&mut ctx.accounts.X.to_account_info()` is a borrow of a fresh AccountInfo, NOT a write to X.
+        # `&mut ctx.accounts.X.to_account_info` is a borrow of a fresh AccountInfo, NOT a write to X.
         # Demanding `mut` for it would be an IDL/ABI change that widens write locks for every client.
         _hb = re.sub(r"&mut ctx\.accounts\.\w+\.to_account_info\(\)", " ", _hb)
         for _field in sorted(_nonmut):

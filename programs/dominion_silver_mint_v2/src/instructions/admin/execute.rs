@@ -4,7 +4,7 @@
 //   - Re-validates args at execute (state may have shifted during the window).
 //   - Requires config.pending_<kind>_nonce == nonce, so clearing that slot cancels the proposal.
 //   - Clears pending_*_nonce, decrements active_proposal_count; premium_mint clears mint_paused_until.
-//   - withdraw also reverts if paused (), bounded by the treasury minimum FLOAT ().
+//   - withdraw also reverts if paused, bounded by the treasury minimum FLOAT.
 //   - pyth_feed, oracle_guards and compliance_mode atomically set paused = true.
 
 use anchor_lang::prelude::*;
@@ -15,7 +15,7 @@ use crate::cpi::usdc_transfer_treasury_to_user;
 use crate::errors::DominionError;
 use crate::events::*;
 use crate::state::*;
-// Withdraw reads no oracle: the float check () is a price-independent USDC floor, which keeps the
+// Withdraw reads no oracle: the float check is a price-independent USDC floor, which keeps the
 // reserve-price-manipulation surface out of the withdraw path entirely.
 
 // === Execute SetPremium (mint or redeem) ===
@@ -433,13 +433,13 @@ pub fn execute_set_oracle_guards_handler(
         config.max_price_delta_bps = v;
     }
     if let Some(v) = g.decay_seconds {
-        // Spec-silent; defensive (). Min 60s so decay=0 cannot disable the
+        // Spec-silent; defensive. Min 60s so decay=0 cannot disable the
         // breaker (elapsed > 0 would always "decay"); max 7 days so it re-arms.
         require!(v >= 60 && v <= 7 * 86400, DominionError::AboveMaximum);
         config.price_delta_decay_seconds = v;
     }
     if let Some(v) = g.dust_filter_min_usdc {
-        // Spec-silent; defensive (). Cap at $1M so the dust filter cannot be
+        // Spec-silent; defensive. Cap at $1M so the dust filter cannot be
         // set so high that last_recorded_price never updates (breaker stale).
         require!(v <= 1_000_000_000_000, DominionError::AboveMaximum);
         config.price_update_min_amount_usdc = v;

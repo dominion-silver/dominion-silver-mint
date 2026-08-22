@@ -136,7 +136,7 @@ export async function assertClusterMatchesChain(ctx: ClusterContext): Promise<vo
 }
 
 /** Read a ceremony value out of `config/mainnet-authorities.json`, the source of truth. Ceremony values are
- *  READ, never retyped into a script, so there is exactly one place to be wrong (). */
+ *  READ, never retyped into a script, so there is exactly one place to be wrong. */
 export function mainnetConfig(): Record<string, unknown> {
   // THERE IS NO OVERRIDE. Not an env var, not a pair of env vars.
   // deleted `DOMINION_RELEASE_MANIFEST` for redirecting which file a gate trusts. This sibling
@@ -221,7 +221,7 @@ export function resolveCluster(): ClusterContext {
   };
 }
 
-/** The context for an ARBITRARY rpc: `resolveCluster()` reads DOMINION_RPC, while the guard validates a URL
+/** The context for an ARBITRARY rpc: `resolveCluster` reads DOMINION_RPC, while the guard validates a URL
  *  handed to it. Both share this classifier and address table, so they cannot disagree about the cluster. */
 export function resolveClusterFor(rpc: string): ClusterContext {
   const cluster = classifyCluster(rpc);

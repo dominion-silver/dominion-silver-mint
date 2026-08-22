@@ -1,6 +1,6 @@
 /**
  * THE ONE TypeScript implementation of `ConfigAccount::readiness_digest`.
- * The program's `unpause` now takes `expected_readiness_digest: [u8; 32]` (). Every caller
+ * The program's `unpause` now takes `expected_readiness_digest: [u8; 32]`. Every caller
  * outside the program kept building an argument-less instruction: 8 bytes of discriminator instead
  * of 40. The unpause would have been REJECTED before reaching the handler, on the one instruction
  * that takes the protocol live.

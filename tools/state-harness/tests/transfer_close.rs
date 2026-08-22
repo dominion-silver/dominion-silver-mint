@@ -526,7 +526,7 @@ fn cancel_admin_transfer_is_admin_or_guardian_only() {
 // Two tests lived here, for `close_timelock_account`. Both had to FABRICATE
 // their subject with `clone_timelock(.., |tl| tl.cancelled = true)`, under the comment "Cancel closes
 // the account, so that state is placed directly". That comment was written down and not
-// read: the instruction required `cancelled || executed_at.is_some()`, and every writer of either
+// read: the instruction required `cancelled || executed_at.is_some`, and every writer of either
 // field closes the account in the same transaction, so no live account could ever satisfy it. The
 // instruction is deleted. What replaces the two tests is the invariant that makes it unnecessary,
 // asserted against real state instead of placed state.
@@ -602,7 +602,7 @@ fn finalize_removal_refuses_a_desynced_pending_counter() {
         "finalize against a pending_removal_count that is already zero",
     );
     let c = f.config();
-    // 3, not 2: `initialize` appointed the fixture's own guardian before these two ().
+    // 3, not 2: `initialize` appointed the fixture's own guardian before these two.
     assert_eq!(c.guardian_count, 3, "the aborted finalize shrank the set anyway");
     assert_eq!(c.pending_removal_count, 0);
 

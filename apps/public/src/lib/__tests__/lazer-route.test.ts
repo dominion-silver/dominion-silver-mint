@@ -9,7 +9,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 
 const UPSTREAM = "https://pyth-lazer.dourolabs.app/v1/latest_price";
 
-/** A minimal stand-in for NextRequest: the route only ever calls `req.json()`. */
+/** A minimal stand-in for NextRequest: the route only ever calls `req.json`. */
 function req(body: unknown): { json: () => Promise<unknown> } {
   return { json: async () => body };
 }
@@ -227,7 +227,7 @@ describe("the Lazer proxy rate-limits", () => {
  * cached path, and the defect lived exactly in the branch none of them entered.
  * The audit measured it: 40 concurrent `fresh` requests produced 30 x 200, 10 x 429 and 2 upstream
  * calls, because a waiter that joined an in-flight call skipped both cache checks (`!fresh` guarded
- * them), fell through to `allowRequest()`, and paid a token for a call it had not made.
+ * them), fell through to `allowRequest`, and paid a token for a call it had not made.
  * The first fix answered 409 to a contended caller. A showed that turned an
  * unauthenticated endpoint into a free product-wide denial (one curl per second claims every print),
  * so contention is now ADVISORY: everybody is served, and `contended` says whether this caller was

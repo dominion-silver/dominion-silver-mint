@@ -23,10 +23,10 @@ export type SquadsRole = "ops" | "upgrade";
 
 // Configured at deploy time (provides the real multisig addresses).
 // Until then these are placeholders so the app builds; every flow that
-// needs a real multisig checks `isConfigured()` first.
+// needs a real multisig checks `isConfigured` first.
 // parse defensively. A typo in the env value (the exact
 // moment real vaults get wired) must fall back to the placeholder so
-// `isConfigured()` shows the clean "not configured" banner, NEVER throw at
+// `isConfigured` shows the clean "not configured" banner, NEVER throw at
 // module load and white-screen the whole admin app.
 function configuredPk(envValue: string | undefined): PublicKey {
   const PLACEHOLDER = "11111111111111111111111111111111";

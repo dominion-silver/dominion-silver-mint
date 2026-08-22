@@ -332,7 +332,7 @@ export function classifyRedeem(
   // "verification required" flipping to "Redeem" once the lookup lands is self-correcting, whereas a promised
   // "instant" that reverts KycRequired costs the user a Lazer fee to discover.
   if (((cfg.kycScopeFlags ?? 0) & 2) !== 0 && kycAttested !== true) return "kyc";
-  // Both limits are on TREASURY OUTFLOW, which equals the gross only while fee routing is on ().
+  // Both limits are on TREASURY OUTFLOW, which equals the gross only while fee routing is on.
   const outflow = redeemOutflowForGross(cfg, grossUsdc, effectiveBpsRedeem);
   if (
     effectiveRedeemUsed(cfg, nowUnixSecs)
@@ -386,7 +386,7 @@ export function isBelowMinimumError(errText: string): boolean {
 /** The program splits `LazerReplayed` (12121) from `LazerCarriedForward` (12082)
  *  precisely because the two have OPPOSITE remediations, and the UI mapped neither: both landed on
  *  the generic "Transaction reverted on-chain".
- *  REPLAYED means another operation consumed the same signed print. Under strict anti-replay () one
+ *  REPLAYED means another operation consumed the same signed print. Under strict anti-replay one
  *  envelope prices exactly one operation, so this is normal contention and the answer is RETRY with a
  *  fresh price. Telling the user nothing here makes a working protocol look like a broken feed.
  */
@@ -467,7 +467,7 @@ export function errorToText(e: unknown): string {
 // scientific notation ("2e3") and these run inside a render-time useMemo, so a `new BN("2e3")` throw would
 // crash the page via the error boundary. Anything but a plain decimal returns 0, which callers already guard.
 function parseDecimalToAtomic6(input: string): BN {
-  // TRIM ONCE, then use the trimmed value. The regex tested `input.trim()` while the split used the RAW
+  // TRIM ONCE, then use the trimmed value. The regex tested `input.trim` while the split used the RAW
   // input, so " ", "\t" and "\n" passed the guard (the regex allows an empty string) and then reached
   // `new BN(" ")`, whose `words` is null: a TypeError from inside a render-time useMemo, which is exactly
   // the error-boundary crash the comment above says this function exists to prevent. Unreachable today

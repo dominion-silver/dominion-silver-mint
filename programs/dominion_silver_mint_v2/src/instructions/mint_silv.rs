@@ -5,7 +5,7 @@
 // The two differ by bps^2/1e8, 1bp at the launch 1% and 25bp at the 500bp ceiling, and the public
 // client mirrors this formula: do not paraphrase it as a marked-up price.
 // The premium is ALWAYS charged; only its DESTINATION is conditional on `fee_routing_disabled`.
-// Supply is bounded by one HARD cap (); SILV is backed off-chain, so no on-chain solvency invariant.
+// Supply is bounded by one HARD cap; SILV is backed off-chain, so no on-chain solvency invariant.
 
 use crate::assertions::assert_silv_mint_invariants;
 use crate::cpi::{silv_mint_to, usdc_transfer_user_to_fee_vault, usdc_transfer_user_to_treasury};
@@ -152,7 +152,7 @@ pub fn handler(
         &user_key,
     )?;
 
-    // 3. Zero-amount guard. The HARD supply cap below is the sole mint-side VALUE limit ().
+    // 3. Zero-amount guard. The HARD supply cap below is the sole mint-side VALUE limit.
     require!(amount_usdc > 0, DominionError::ZeroAmount);
 
     // 3b. , the AVAILABILITY floor. The redeem side has the matching check at
@@ -236,7 +236,7 @@ pub fn handler(
 
     require!(silv_out >= min_silv_out, DominionError::SlippageExceeded);
 
-    // 9. HARD supply cap (), in atomic SILV (oz * 1e6). `supply` is the pre-CPI circulating supply.
+    // 9. HARD supply cap, in atomic SILV (oz * 1e6). `supply` is the pre-CPI circulating supply.
     let supply_post = ctx
         .accounts
         .silv_mint

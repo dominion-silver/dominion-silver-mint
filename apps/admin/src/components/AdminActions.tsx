@@ -580,7 +580,7 @@ export const ACTIONS: ActionDesc[] = [
       },
     ],
     tip: "The hot key that writes approvals. It can ONLY add and remove attestations: it cannot mint, pause, move funds, change a fee, or arm the gate. Instant on purpose, because the realistic failure is that this key leaks and a timelock on rotation would mean 24h with a compromised attestor live.",
-    // ONE SIGNATURE. The co-signature-while-armed variant was REVERTED in 184a738, and this comment was
+    // ONE SIGNATURE. The co-signature-while-armed variant was REVERTED in , and this comment was
     // the half of the revert that got left behind: it claimed the contract required the incoming operator
     // to co-sign, on the incident-response rotation card, which is the exact path the revert exists to keep
     // working. An operator reading it would believe rotating a LEAKED attestor key needs a signature from

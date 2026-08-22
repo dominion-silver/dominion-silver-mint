@@ -29,7 +29,7 @@ let silvCache: { at: number; payload: unknown; feedTsUs: number } | null = null;
 // What this CANNOT do, and the reason it says instance and not protocol: the state is per warm
 // instance, and nothing stops a caller fetching envelopes from Pyth directly with their own key.
 // Global fairness is an on-chain property, and the on-chain half of it is `config.min_operation_usdc`
-// (), which is where a cost actually lands on an attacker.
+// which is where a cost actually lands on an attacker.
 let lastClaimedFeedTsUs = 0;
 
 // THE FLOOR ON HOW OFTEN THIS INSTANCE MAY CALL PYTH, whatever callers ask for.
@@ -40,7 +40,7 @@ let lastClaimedFeedTsUs = 0;
 // would serve stale prints, lowering it would buy nothing.
 const MIN_UPSTREAM_INTERVAL_MS = 1000;
 
-// Token bucket (), per warm instance and NOT distributed: it caps what one instance can spend, not a
+// Token bucket, per warm instance and NOT distributed: it caps what one instance can spend, not a
 // many-instance flood. Refills continuously at RATE tokens/second up to BURST.
 const BUCKET_BURST = 30;
 const BUCKET_RATE_PER_SEC = 5;
@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ALLOWLIST, not a numeric filter (). Only 3154 is cached, so any other value is a guaranteed miss
+  // ALLOWLIST, not a numeric filter. Only 3154 is cached, so any other value is a guaranteed miss
   // and therefore one unauthenticated upstream call on our key; walking the integers exhausts the quota.
   let requestedFeed: unknown;
   // `fresh: true` skips the cache. Only the submit path sets it; see the note at the cache check below.
@@ -132,7 +132,7 @@ export async function POST(req: NextRequest) {
   // rather than all being answered 502 (lazer-client.ts throws on any non-ok status, with no retry, and
   // that is the SUBMIT-time fetch).
   // and this is the bug that was here: the two cache checks inside this loop were both
-  // guarded by `!fresh`, so a `fresh` waiter skipped them, fell through to `allowRequest()`, and PAID A
+  // guarded by `!fresh`, so a `fresh` waiter skipped them, fell through to `allowRequest`, and PAID A
   // TOKEN for an upstream call it had not made. Measured by the audit: 40 concurrent `fresh` requests
   // produced 30 x 200, 10 x 429 and only 2 upstream calls. The comment on that line said "waiters never
   // reach this line", which was true for the cached path and false for the one the money flows through.
@@ -261,7 +261,7 @@ export async function POST(req: NextRequest) {
  * AUTHENTICATED reservation, so that a claim costs something and belongs to somebody who will actually
  * submit. That is a product decision, it does not exist here, and no amount of cleverness in an
  * anonymous endpoint substitutes for it. The on-chain half of the same problem is
- * `config.min_operation_usdc` (), which is where the cost actually lands on an attacker.
+ * `config.min_operation_usdc`, which is where the cost actually lands on an attacker.
  * The claim is taken with no `await` between the check and the write, so two concurrent callers on the
  * same instance cannot both be the claimant. This function must stay synchronous for that to hold.
  */

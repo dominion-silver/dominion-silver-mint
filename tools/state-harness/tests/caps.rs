@@ -363,7 +363,7 @@ fn only_the_admin_may_tighten_the_supply_cap() {
 #[test]
 fn redemptions_close_instantly_and_the_switch_persists() {
     // The tighten direction of the redeem switch, and the only proof the write survives Anchor's exit.
-    // the launch state is already OPEN, so the close is one instruction from `new()`.
+    // the launch state is already OPEN, so the close is one instruction from `new`.
     let mut f = Fixture::new();
     f.require_redemptions_open();
 

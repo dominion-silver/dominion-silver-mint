@@ -222,7 +222,7 @@ fn the_attestor_key_may_be_rotated_but_not_to_the_admin_nor_cleared_while_armed(
     let mut f = Fixture::new();
     let admin_key = f.admin.pubkey();
     let attestor_key = f.attestor.pubkey();
-    // Fixture::new() rotated the attestor in; prove the write landed rather than trusting the Ok.
+    // Fixture::new rotated the attestor in; prove the write landed rather than trusting the Ok.
     assert_eq!(
         f.config().kyc_operator_key(),
         attestor_key,

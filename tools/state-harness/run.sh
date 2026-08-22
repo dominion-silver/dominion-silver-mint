@@ -132,7 +132,7 @@ rm -f "$tmp_out"
 # 164 -> 166: two `option_a_` scenarios plus the zero-inventory and timelocked-reopen
 # tests, minus the two tests of the deleted `set_inventory_wallet` first binding.
 # FIX PACK. 166 -> 178: tools/state-harness/tests/launch_open_posture.rs, the twelve
-# scenarios that qualify the open posture (). They were the gap that let the posture ship
+# scenarios that qualify the open posture. They were the gap that let the posture ship
 # with no test of the posture.
 # -03. 178 -> 179: a_prebuilt_unpause_is_refused_after_a_matured_action_changed_the_
 # approved_state, the acceptance test specified. It builds the unpause once, executes a matured

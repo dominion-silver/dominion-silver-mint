@@ -51,7 +51,7 @@ def main() -> None:
     rel["bytes"] = None if nbytes == "-" else int(nbytes)
 
     if status == "pinned":
-        # Fill every field the closed `pinned` schema requires (), from real measurements. A pin
+        # Fill every field the closed `pinned` schema requires, from real measurements. A pin
         # that is complete-but-wrong and a pin that is incomplete are different tests; this helper
         # produces the first, and the self-test drives the second explicitly.
         so = os.path.join(repo, "target/deploy/dominion_silver_mint.so")

@@ -3,7 +3,7 @@
  * real instruction, every `.accounts({...})` key is an account of SOME instruction, every
  * `("ErrorName", 12345)` pair matches the IDL's code, and no removed instruction name appears in a
  * call position. A stale client does not fail at build time, because the method builders are cast to
- * `any` and `.accounts()` is not strict in Anchor 0.31.1 (it delegates to `accountsPartial` and
+ * `any` and `.accounts` is not strict in Anchor 0.31.1 (it delegates to `accountsPartial` and
  * derives a missing account from the IDL seeds); it fails at signing time, in front of a user.
  * It does NOT prove an account list is COMPLETE: it cannot tell which instruction a given
  * `.accounts({...})` belongs to. apps/public/src/lib/__tests__/contract-parity.test.ts asserts the

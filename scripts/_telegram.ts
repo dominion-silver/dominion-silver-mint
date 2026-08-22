@@ -5,7 +5,7 @@
  * webhook-shaped: it wants `POST https://api.telegram.org/bot<TOKEN>/sendMessage` with a `chat_id` in
  * the body. Pointing `REDEEM_MONITOR_WEBHOOK` at Telegram would 400 on every alert, which is the worst
  * possible failure for an alerting path: configured, silent, and only discovered during an incident.
- * NO parse_mode, ON PURPOSE. Telegram's MarkdownV2 requires escaping `_ * [ ] ( ) ~ > # + - = | { } . !`
+ * NO parse_mode, ON PURPOSE. Telegram's MarkdownV2 requires escaping `_ * [ ] ~ > # + - = | { } . !`
  * and an unescaped character makes the API reject the whole message. Alert text here contains
  * addresses, decimals and parentheses, so any formatting attempt turns a real alert into a 400. Plain
  * text always delivers, and delivery beats typography for something read at 3am.

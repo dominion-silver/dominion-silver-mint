@@ -87,7 +87,7 @@ pub fn validate_kyc_arming(flags: u8, operator: Pubkey, attestation_count: u32) 
     Ok(())
 }
 
-/// Whether a wallet may be attested. Rejects only what is PROVABLY unusable as a signer: `Pubkey::default()`
+/// Whether a wallet may be attested. Rejects only what is PROVABLY unusable as a signer: `Pubkey::default`
 /// would fill the roster, satisfy arming's `count > 0`, and admit nobody. Not "the holder is real".
 pub fn validate_kyc_subject(wallet: Pubkey) -> Result<()> {
     require!(
@@ -446,7 +446,7 @@ mod tests {
 
     #[test]
     fn a_provably_unusable_subject_cannot_be_attested() {
-        // No user can present `Pubkey::default()` as the required signer, so attesting it would fill the
+        // No user can present `Pubkey::default` as the required signer, so attesting it would fill the
         // roster, satisfy arming, and admit nobody. Narrow on purpose: only what is PROVABLY unusable.
         assert!(validate_kyc_subject(Pubkey::default()).is_err());
         assert!(validate_kyc_subject(Pubkey::new_from_array([1u8; 32])).is_ok());

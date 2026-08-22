@@ -1,7 +1,7 @@
 /**
  * Strip provider credentials out of an RPC endpoint before printing it.
  * ITS OWN MODULE, and the reason is a measured mistake rather than tidiness. It lived in
- * redeem-monitor.ts, and that file runs `main()` at import time: the first script to import the helper
+ * redeem-monitor.ts, and that file runs `main` at import time: the first script to import the helper
  * silently executed a whole monitor run, polluting its own output with a redemption report and spending
  * RPC calls nobody asked for. A pure function used by more than one caller does not belong inside a
  * script with side effects.

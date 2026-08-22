@@ -127,7 +127,7 @@ export interface ConfigAccount {
   // Split pause flags (mint vs redeem)
   mintPaused: boolean;
   redeemPaused: boolean;
-  // Guardians currently under notice of removal (audit review of daac4ac): the
+  // Guardians currently under notice of removal (audit review of ): the
   // removal floor is evaluated against guardianCount - pendingRemovalCount.
   pendingRemovalCount: number;
   version: number;
@@ -350,12 +350,12 @@ export async function fetchDashboardSnapshot(
 // The queued-redemption READ path (fetchAllRedemptionRequests, RedemptionQueueResult,
 // RedemptionRequestView, RedemptionStatusKind, statusKind) was REMOVED on 2026-08-05 with the
 // queue itself. The `RedemptionRequest` account type no longer exists in the program or the IDL,
-// so the old `program.account.redemptionRequest.all()` call would throw at runtime.
+// so the old `program.account.redemptionRequest.all` call would throw at runtime.
 
 // ---- formatting ----
 
 /** Raw u64 BN (6 decimals) -> display USD string.
- * finding this used `raw.div(1e6).toNumber()`, an INTEGER division
+ * finding this used `raw.div(1e6).toNumber`, an INTEGER division
  * that discarded the fractional part before formatting, so every USD figure in
  * the console silently lost its cents ($1,234.56 rendered as "1,234"). The
  * `maximumFractionDigits: 2` was therefore decorative. Now the atomic amount is
@@ -379,7 +379,7 @@ export function formatUsdc(raw: BN): string {
 
 /** Raw u64 BN (6 decimals) -> display SILV/oz count string. */
 export function formatSilv(raw: BN): string {
-  // `raw.toNumber()` THROWS above 2^53. It is bounded
+  // `raw.toNumber` THROWS above 2^53. It is bounded
   // safe today because MAX_SILV_SUPPLY_CEILING (1e15 atomic) sits under 2^53, but
   // it would throw rather than misformat if that ceiling ever moved, and the whole
   // point of the fix was to stop doing lossy arithmetic on BN before display.
@@ -390,7 +390,7 @@ export function formatSilv(raw: BN): string {
   const whole = Number(abs.div(MICRO).toString()).toLocaleString("en-US");
   const frac = abs.mod(MICRO).toNumber(); // 0..999_999
   if (frac === 0) return `${neg ? "-" : ""}${whole}`;
-  // review of daac4ac (, found independently by all three reviewers): this
+  // review of (, found independently by all three reviewers): this
   // rounded to 4 decimals with `Math.round(frac / 100)`, which can return 10000.
   // padStart(4) leaves "10000" untouched and the trailing-zero strip collapses it to
   // "1", so 1.999999 rendered as "1.1" and 0.999999 as "0.1": roughly 0.9 oz low,
@@ -408,7 +408,7 @@ export function formatSilv(raw: BN): string {
 
 /**
  * Scaled price (1e9 = oracle.rs PRICE_SCALE) -> "$/oz" display.
- * last_recorded_price_scaled is u128 on-chain; BN.toNumber() is safe here
+ * last_recorded_price_scaled is u128 on-chain; BN.toNumber is safe here
  * (a silver price ~ 3e10 scaled << 2^53).
  */
 export function formatPrice(scaled: BN): string {
@@ -420,7 +420,7 @@ export const PROGRAM_ID_STR = PROGRAM_ID.toBase58();
 
 /**
  * One guardian's on-chain state, as the console needs to display it.
- * review of daac4ac (, integration reviewer): `pending_removal_at` is
+ * review of (, integration reviewer): `pending_removal_at` is
  * written on-chain and was read NOWHERE in either app. 's whole security
  * property is "the targeted guardian has admin_timelock_seconds to react", and the
  * console gave that guardian no way to see that a removal had been scheduled, who is
@@ -493,7 +493,7 @@ export async function fetchGuardians(
 
 /**
  * Seconds until `ts`, or null when nothing is scheduled. Negative once elapsed.
- * this called `ts.toNumber()`, which THROWS above 2^53 ("Number
+ * this called `ts.toNumber`, which THROWS above 2^53 ("Number
  * can only safely store up to 53 bits"). It is called twice per row inside the
  * guardian roster's render, so a single out-of-range i64 would unmount the entire
  * Dashboard rather than degrade one cell. The guardian tests assert i64::MAX is

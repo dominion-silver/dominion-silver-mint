@@ -252,7 +252,7 @@ fn live() -> Fixture {
     f
 }
 
-/// `live()`, then both switches CLOSED through their instant setters.
+/// `live`, then both switches CLOSED through their instant setters.
 /// flipped the launch posture: `initialize` now ships `redemptions_enabled` and
 /// `public_mint_enabled` open, so a proposal to open them is a ProposalNoOp and the timelocked OPEN
 /// path becomes untestable from the launch state. The property under test never changed. Only the
@@ -286,7 +286,7 @@ fn warp_past_the_window(f: &mut Fixture) {
 }
 
 /// The four throttles are still at their launch values and the redeem switch is still CLOSED.
-/// Every caller starts from `live_closed()`, so an open switch here means a proposal that was
+/// Every caller starts from `live_closed`, so an open switch here means a proposal that was
 /// refused, pending or disarmed applied itself anyway.
 fn assert_throttles_untouched(f: &Fixture, what: &str) {
     let c = f.config();

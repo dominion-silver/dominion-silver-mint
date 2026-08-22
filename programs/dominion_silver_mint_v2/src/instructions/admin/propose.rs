@@ -4,7 +4,7 @@
 //   - Reverts if proposed value matches current config (no-op).
 //   - Reverts if active_proposal_count >= 10 (cap).
 //   - Allocates nonce from config.next_timelock_nonce, increments tracking.
-//   - propose_set_premium_mint additionally sets mint_paused_until = executable_at ().
+//   - propose_set_premium_mint additionally sets mint_paused_until = executable_at.
 //   - propose_withdraw_usdc may be called even while paused (queueing OK; execute reverts on paused).
 
 use anchor_lang::prelude::*;
@@ -354,7 +354,7 @@ pub struct ProposeInventoryWallet<'info> {
 /// Propose CHANGING the pre-mint destination. condition 4 of the proposal rules.
 /// The payload is the 32-byte destination pubkey. there is no instant path and no
 /// "first binding" here. `initialize` requires a non-zero destination, so the field is never unset
-/// and this pair is the ONLY writer after init. No path returns it to `Pubkey::default()`.
+/// and this pair is the ONLY writer after init. No path returns it to `Pubkey::default`.
 pub fn propose_set_inventory_wallet_handler(
     ctx: Context<ProposeInventoryWallet>,
     new_wallet: Pubkey,

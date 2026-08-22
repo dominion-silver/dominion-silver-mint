@@ -5,7 +5,7 @@
  * batch and it is present only because someone added it by hand. The parity CI gate cannot help,
  * because it only checks that a key is an account of SOME instruction, and the admin builders
  * dispatch by computed name (`[method](...)`) so its chain check does not see them either.
- * These tests build the real instructions offline (no network: Anchor's `.instruction()` never
+ * These tests build the real instructions offline (no network: Anchor's `.instruction` never
  * touches the RPC) and assert the account COUNT and the account NAMES against the committed IDL. A
  * missing account changes the count; a wrong name changes the set.
  */

@@ -117,7 +117,7 @@ def main() -> None:
     # It was called "mismatched run/source/artifact tuples rejected" and it passed `"de" * 20`, which
     # is not a commit in this tree. So it re-ran the "nonexistent source commit" case above under a
     # name that promised something else entirely: that an EXISTING but INCOHERENT tuple is caught.
-    # measured the real behaviour against `validate_pinned` with `1314be4` (a real commit), an
+    # measured the real behaviour against `validate_pinned` with `` (a real commit), an
     # invented numeric run id and an invented semver, and got `invented_numeric_tuple_problems=[]`.
     # Accepted, silently, while the green line claimed the opposite.
     # The honest replacement is NOT another local case. Nothing local can catch it: coherence between
@@ -147,13 +147,13 @@ def main() -> None:
 
     # -06. THE PRODUCER IS EXECUTED, not restated.
     # The previous version wrote its own three strings and called them "the REAL produced string".
-    # A workflow regressing to `.stdout.strip()` would start writing "solana-verify 0.5.1" again while
+    # A workflow regressing to `.stdout.strip` would start writing "solana-verify 0.5.1" again while
     # this test stayed green on its own literal. Both sides now call
     # `scripts/_solana_verify_version.py`, so a regression there turns THIS red.
     sys.path.insert(0, os.path.join(ROOT, "scripts"))
     import _solana_verify_version as svv
 
-    # A fake `solana-verify` on PATH emitting the line the real tool emits, so `measured()` runs the
+    # A fake `solana-verify` on PATH emitting the line the real tool emits, so `measured` runs the
     # whole production path (subprocess included) rather than just its parser.
     with tempfile.TemporaryDirectory() as fake_bin:
         stub = os.path.join(fake_bin, "solana-verify")

@@ -300,7 +300,7 @@ impl Boot {
         d
     }
 
-    /// `svm.add_program` installs the program under loader v2, where `programdata_address()` is None
+    /// `svm.add_program` installs the program under loader v2, where `programdata_address` is None
     /// and the chain can never pass, so a negative test would pass for the wrong reason.
     /// Rewrite it into the upgradeable shape; programdata must exist first or `set_account` fails.
     fn install_loader_v3(&mut self, upgrade_authority: Option<Pubkey>) {
@@ -336,7 +336,7 @@ impl Boot {
     }
 
     /// A second, unrelated account that also deserializes as ProgramData, with an attacker as the
-    /// upgrade authority. This is what the `programdata_address()` constraint exists to reject.
+    /// upgrade authority. This is what the `programdata_address` constraint exists to reject.
     fn forge_program_data(&mut self, authority: Pubkey) -> Pubkey {
         let forged = Pubkey::new_unique();
         let data = self.program_data_bytes(Some(authority));
@@ -774,7 +774,7 @@ fn dom001_a_forged_program_data_account_is_rejected() {
     let mut b = Boot::new();
     let attacker = b.deployer.pubkey();
     // A real, loader-owned account that deserializes as ProgramData and names the caller as the
-    // upgrade authority. Only the `programdata_address()` binding to the PROGRAM account's own state
+    // upgrade authority. Only the `programdata_address` binding to the PROGRAM account's own state
     // stops it, and the handler's authority check would otherwise pass.
     let forged = b.forge_program_data(attacker);
     let real_auth = Some(Pubkey::new_unique());

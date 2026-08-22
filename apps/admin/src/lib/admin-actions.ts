@@ -101,7 +101,7 @@ export interface BuildCtx {
   connection: Connection;
   /** Direct-admin override: when the connected wallet IS `config.admin` (a plain wallet, not the Ops
    *  vault), pass it here to sign directly, with no Squads wrapper. Absent, builders use
-   *  adminAuthority(), the Ops vault PDA. */
+   *  adminAuthority, the Ops vault PDA. */
   admin?: PublicKey;
 }
 type Ix = Promise<TransactionInstruction[]>;

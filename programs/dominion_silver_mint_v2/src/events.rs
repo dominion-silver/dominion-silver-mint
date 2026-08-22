@@ -312,7 +312,7 @@ pub struct DevParamSet {
     pub timestamp: i64,
 }
 
-// action 0.12b (): deferred guardian removal.
+// action 0.12b: deferred guardian removal.
 #[event]
 pub struct GuardianRemovalScheduled {
     pub guardian: Pubkey,

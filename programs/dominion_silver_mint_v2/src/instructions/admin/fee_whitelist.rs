@@ -151,7 +151,7 @@ pub struct WithdrawFees<'info> {
 /// unlike the timelocked treasury this vault backs no outstanding SILV. `amount` is explicit, because
 /// "0 means everything" on an irreversible transfer is how a fat finger sweeps the lot.
 pub fn withdraw_fees_handler(ctx: Context<WithdrawFees>, amount: u64) -> Result<()> {
-    // Refuses while paused, matching `execute_withdraw_usdc` (). NOT a guardian veto: `unpause` is
+    // Refuses while paused, matching `execute_withdraw_usdc`. NOT a guardian veto: `unpause` is
     // admin-only and instant, so `[unpause, withdraw_fees]` in one transaction clears it. It only stops
     // an ordinary sweep landing mid-incident. Accepted: a compromised admin drains the standing
     // balance at once, so sweep on a cadence rather than letting months accrue.

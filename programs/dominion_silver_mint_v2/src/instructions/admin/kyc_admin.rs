@@ -21,7 +21,7 @@ pub struct SetKycOperator<'info> {
 
 /// Set or rotate the attestor key. INSTANT, and that is the point: the key lives on a server, so the realistic
 /// failure is a leak and fast rotation is the whole mitigation. Safe because the operator cannot move funds,
-/// mint, pause, change a fee, or arm the gate. `Pubkey::default()` decommissions it, ONLY while disarmed.
+/// mint, pause, change a fee, or arm the gate. `Pubkey::default` decommissions it, ONLY while disarmed.
 pub fn set_kyc_operator_handler(ctx: Context<SetKycOperator>, operator: Pubkey) -> Result<()> {
     // Both conditions (`operator != admin`, no clearing while armed) live in
     // `state/kyc.rs::validate_kyc_operator_assignment`, so they are unit-tested and the 4c gate can require it.
@@ -92,7 +92,7 @@ pub struct AttestKyc<'info> {
     #[account(mut, seeds = [CONFIG_SEED], bump)]
     pub config: Box<Account<'info, ConfigAccount>>,
 
-    // The hot attestor key, pinned to config. `Pubkey::default()` makes this constraint unsatisfiable (no
+    // The hot attestor key, pinned to config. `Pubkey::default` makes this constraint unsatisfiable (no
     // private key exists for the zero pubkey), so decommissioning the attestor disables this instruction.
     #[account(
         mut,

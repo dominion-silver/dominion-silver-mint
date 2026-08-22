@@ -86,7 +86,7 @@ jobs:
           fi
           DOMINION_RPC="${RPC_MAINNET}" npx tsx scripts/health-monitor.ts ${WEEKLY}
 
-      # `always()`: the state must survive a failed check, otherwise a transient RPC error re-announces
+      # `always`: the state must survive a failed check, otherwise a transient RPC error re-announces
       # every open condition on the next run.
       - name: Save alert state
         if: always()
