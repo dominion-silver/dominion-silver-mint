@@ -248,7 +248,7 @@ fn an_envelope_older_than_the_mark_is_refused_not_merely_an_equal_one() {
 
 #[test]
 fn the_redeem_side_has_the_same_floor_and_a_dust_redeem_cannot_capture_a_print() {
-    // SECOND HALF. The floor shipped on the mint side only, and the review pass that
+    // SECOND HALF. The floor applies on the mint side, and the check that
     // followed pointed out that the slot it protects is shared: `both_sides_share_one_high_water_mark`
     // above proves a print consumed by either handler is gone for the other. So a mint-only floor was
     // not a floor, and redeem was the cheaper door: at $58.34/oz, 1 atomic SILV is 58 micro-USDC gross

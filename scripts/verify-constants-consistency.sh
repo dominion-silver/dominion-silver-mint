@@ -177,7 +177,7 @@ if "SILV_MINT" in a and "SILV_MINT" in p_:
 # the string a human copies into listing forms.
 # THIS GATE IS THE ONE THE LAUNCH PATH RUNS, which is why the checks live here and not only in
 # scripts/test-t1-initialize-args.ts: the runbook calls this script, and it does not call that test.
-# Corrected after a review pass: the first version skipped in TOTAL SILENCE when the field was
+# It must not skip in silence when the field is
 # missing, so renaming the key to `pregenerated_mnt` left this gate at CONSTANTS OK with no line about
 # the pin at all. Failing open is exactly the defect the check was added to remove.
 _manifest_path = pathlib.Path("config/mainnet-authorities.json")
@@ -412,7 +412,7 @@ _RULES = {
     # unpause was BUILT. Registered 2026-08-10: the rule shipped in the readiness-digest batch
     # without a manifest entry, so the completeness sweep failed the deploy gate. It caught it,
     # which is its job.
-    # WHAT THIS ENTRY ACTUALLY BUYS, stated honestly after a review pass measured it by mutation.
+    # WHAT THIS ENTRY ACTUALLY BUYS, measured by mutation rather than assumed.
     # It is a WIRING alarm for one file, nothing more. Mutants that still PASS: deleting the
     # `require!` while keeping the call, making the comparison vacuous, short-circuiting it with
     # `true ||`, and (specific to this rule) deleting the guard from `unpause_handler` while a call
