@@ -1,14 +1,11 @@
 /**
- * ROUND 8 P1. THE DEFECT THIS EXISTS TO MAKE IMPOSSIBLE.
- *
- * `unpause` gained an argument in the program (`expected_readiness_digest: [u8; 32]`, FINAL-03) and
+ * THE DEFECT THIS EXISTS TO MAKE IMPOSSIBLE.
+ * `unpause` gained an argument in the program (`expected_readiness_digest: [u8; 32]`, ) and
  * SEVEN call sites kept building it with none: the ceremony, the admin panel and five runners. The
  * encoded instruction carried 8 bytes instead of 40, so the one instruction that takes the protocol
  * live would have been rejected before reaching its handler.
- *
  * The account-parity suites already catch a missing ACCOUNT. Nothing caught a missing ARGUMENT, and
  * the two failure modes are identical in cause: the program changed and a builder did not.
- *
  * This builds every affected instruction OFFLINE (Anchor's `.instruction()` never touches the RPC)
  * and compares the encoded data LENGTH against the length the committed IDL says those args occupy.
  * 8 versus 40 is exactly what it catches.
@@ -98,7 +95,7 @@ describe("built instructions carry the arguments the IDL declares", () => {
   }
 
   /**
-   * ROUND 8 REVIEW P1. THE SAME FROZEN VECTOR the Rust test asserts, in
+   * THE SAME FROZEN VECTOR the Rust test asserts, in
    * tools/state-harness/tests/launch_open_posture.rs. This is the ONLY thing tying the TypeScript
    * encoder to the on-chain one. Before it, the only TS assertion was "the output is 32 bytes",
    * which is true of any hash of anything: a field added to `readiness_digest()` regenerates an

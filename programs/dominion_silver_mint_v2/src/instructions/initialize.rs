@@ -32,51 +32,43 @@ pub struct InitializeArgs {
     pub admin_timelock_seconds: u32, // default 86400, bounds [86400, 604800] (24h..7d)
     pub max_guardian_count: u8,      // default 3
 
-    /// ROUND 8 T8-03, option A. The pre-mint DESTINATION, bound ATOMICALLY with the rest of the
+    /// option A. The pre-mint DESTINATION, bound ATOMICALLY with the rest of the
     /// configuration, and the instant setter that used to bind it is DELETED.
-    ///
     /// The round-7 shape kept a one-shot instant binding on the argument that with the field unset
     /// there was "nothing to steal". That argument was wrong, and the refutation is clean: compromise
     /// the Ops key DURING the ceremony, BEFORE the legitimate binding. The attacker binds their own
     /// wallet, unpauses, and issues up to the whole hard cap into their ATA, with no delay and no
     /// guardian veto. It confused supply already minted with issuance power still available.
-    ///
     /// Appended LAST, so the 142-byte prefix of the previous layout is untouched and the only
     /// difference on the wire is 32 more bytes.
     pub inventory_wallet: Pubkey,
 
-    /// ROUND 8 L1-02. The FIRST guardian, appointed in this transaction.
-    ///
+    /// The FIRST guardian, appointed in this transaction.
     /// WHY IT IS AN ARGUMENT AND NOT A LATER CALL. `unpause` demands an active GuardianAccount whose
     /// key differs from the admin, and that closes the two syntactic holes (no guardian at all, and a
     /// guardian that IS the admin). It does not establish that an independent brake exists, because
     /// `add_guardian` was admin-only: a compromised Ops could mint its own guardian keys, fill the
     /// slots, present one to `unpause` and hold every power the timelocks assume somebody else holds.
     /// A second keypair created by Ops is not independence.
-    ///
     /// No on-chain check can PROVE independence. What this moves is the trust boundary. Binding the
     /// first guardian here puts it in the same authenticated transaction as `config.admin`, under the
-    /// DOM-001 chain, inside the ceremony artifact that is reviewed and diffed before it is signed.
+    /// chain, inside the ceremony artifact that is reviewed and diffed before it is signed.
     /// It becomes evidence somebody audits, instead of a call Ops can make later and alone. Every
     /// LATER appointment additionally requires the named key to sign (`add_guardian`), so the set can
     /// never grow without the consent of the key being added.
-    ///
     /// Validated non-default and distinct from `admin`: a zero would leave `guardian_count = 1` with
     /// no usable brake, and an admin-held slot is a brake wired to the same lever.
-    ///
     /// Appended LAST for the same reason as the field above.
     pub guardian: Pubkey,
 }
 
 /// EVERY LARGE ACCOUNT HERE IS BOXED, and that is load-bearing rather than stylistic.
-///
-/// ROUND 8 L1-02. Adding `first_guardian` pushed `try_accounts` past the 4KB BPF stack frame:
+/// Adding `first_guardian` pushed `try_accounts` past the 4KB BPF stack frame:
 /// `Account<'info, T>` holds the deserialized `T` INLINE, and `ConfigAccount` alone is 800 bytes.
 /// `cargo build-sbf` reported "Stack offset of 4112 exceeded max offset of 4096 by 16 bytes" and
 /// then EXITED 0. The overflow silently zeroed 16 bytes of a neighbouring account, so the SILV mint
 /// authority read back as the right key with a hole in the middle and `initialize` failed with
 /// SilvMintAuthorityMismatch: a correct check reporting a corrupted input.
-///
 /// The 16 corrupted bytes and the "by 16 bytes" in the warning are the same 16 bytes. Boxing moves
 /// the payloads to the heap. `tools/state-harness/run.sh` now FAILS on that message, because a
 /// warning that exits 0 is a warning nobody reads.
@@ -95,10 +87,9 @@ pub struct Initialize<'info> {
     #[account(mut)]
     pub deployer: Signer<'info>,
 
-    // DOM-001: authenticate the initializer, who must be the program's UPGRADE AUTHORITY. `initialize`
+    // authenticate the initializer, who must be the program's UPGRADE AUTHORITY. `initialize`
     // is a separate transaction from `solana program deploy`, so an unconstrained Signer let ANY key
     // seize the single [CONFIG_SEED] PDA and make itself `config.admin`.
-    //
     // Every link is chained so a forged ProgramData cannot be substituted: `Program<..>` forces this
     // account to equal `crate::ID`; `programdata_address()` derives the expected ProgramData address
     // from the PROGRAM account's own state (Some only under bpf_loader_upgradeable); the constraint
@@ -127,8 +118,7 @@ pub struct Initialize<'info> {
     pub silv_mint: Box<InterfaceAccount<'info, InterfaceMint>>,
 
     // Treasury USDC ATA, owned by treasury_pda.
-    //
-    // DOM-002: `init_if_needed`, not `init`. Creating an ATA is permissionless, so with `init` a third
+    // `init_if_needed`, not `init`. Creating an ATA is permissionless, so with `init` a third
     // party could pre-create exactly this one and make `initialize` fail forever. An already-present
     // account is VALIDATED against the same three constraints below, so it is accepted only if it is
     // what we would have created. The usual `init_if_needed` hazard does not apply: there is no
@@ -145,7 +135,7 @@ pub struct Initialize<'info> {
     pub classic_token_program: Program<'info, Token>,
     pub token_2022_program: Program<'info, Token2022>,
     pub associated_token_program: Program<'info, AssociatedToken>,
-    /// ROUND 8 L1-02. The FIRST guardian's account, created here so the independent brake exists in
+    /// The FIRST guardian's account, created here so the independent brake exists in
     /// the same authenticated transaction as `config.admin` rather than in a later admin-only call.
     /// The seed is `args.guardian`, so the account address is a function of the argument and cannot
     /// be pointed at some other key.
@@ -162,7 +152,7 @@ pub struct Initialize<'info> {
 }
 
 pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
-    // DOM-001, the final link. Checked before any argument validation, so an unauthorized caller
+    // the final link. Checked before any argument validation, so an unauthorized caller
     // learns nothing about the accepted parameters.
     let upgrade_authority = ctx
         .accounts
@@ -207,7 +197,7 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
         DominionError::WrongMint
     );
 
-    // M-02: hard-pin USDC to Circle's official mints. Without this the deployer could pass a fake
+    // hard-pin USDC to Circle's official mints. Without this the deployer could pass a fake
     // "USDC" with 6 decimals that they control, and mint SILV against worthless reserves.
     const USDC_MAINNET: Pubkey =
         anchor_lang::solana_program::pubkey!("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v");
@@ -221,14 +211,14 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
         DominionError::UsdcMintNotAllowed
     );
 
-    // C-01: rug-by-init defense. SILV mint creation is a 2-phase off-chain script, and between the
+    // rug-by-init defense. SILV mint creation is a 2-phase off-chain script, and between the
     // phases the deployer could pre-mint tokens this program cannot tell from legitimate SILV.
     require!(
         ctx.accounts.silv_mint.supply == 0,
         DominionError::SilvMintHasPreexistingSupply
     );
 
-    // C-02: mint_authority must be the silv_mint_authority PDA, so only mint_silv through this program
+    // mint_authority must be the silv_mint_authority PDA, so only mint_silv through this program
     // can produce SILV. Otherwise the deployer could keep it off-chain and mint at will.
     let (silv_mint_auth_pda, _) =
         Pubkey::find_program_address(&[SILV_MINT_AUTHORITY_SEED], ctx.program_id);
@@ -249,7 +239,7 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
         DominionError::SilvFreezeAuthorityMismatch
     );
 
-    // M-01: execute_update_metadata assumes the metadata update authority is the silv_metadata_authority
+    // execute_update_metadata assumes the metadata update authority is the silv_metadata_authority
     // PDA. Without this pin the deployer could keep it off-chain and rename the token outside governance.
     {
         use spl_token_2022::extension::{
@@ -297,8 +287,8 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
             DominionError::SilvMetadataUpdateAuthorityMismatch
         );
 
-        // P1-03: verify the PermanentDelegate AT INIT, not on the first user instruction. It is the one
-        // privileged compliance capability (D12), so it must match the expected Ops vault from block 0.
+        // verify the PermanentDelegate AT INIT, not on the first user instruction. It is the one
+        // privileged compliance capability (), so it must match the expected Ops vault from block 0.
         let pd = mint_with_ext
             .get_extension::<PermanentDelegate>()
             .map_err(|_| error!(DominionError::PermanentDelegateMismatch))?;
@@ -308,7 +298,7 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
             DominionError::PermanentDelegateMismatch
         );
 
-        // P1-03: STRICT allowlist. Any other extension (MintCloseAuthority, DefaultAccountState,
+        // STRICT allowlist. Any other extension (MintCloseAuthority, DefaultAccountState,
         // NonTransferable, TransferHook, TransferFee, ...) can silently alter token behaviour.
         let ext_types = mint_with_ext
             .get_extension_types()
@@ -387,7 +377,7 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.max_silv_supply = DEFAULT_MAX_SILV_SUPPLY;
     config.treasury_min_float_usdc = DEFAULT_TREASURY_MIN_FLOAT_USDC;
     // Public direct redeem is CLOSED at launch: users exit by selling on the DEX.
-    // ROUND 8, launch posture decided by Thomas 2026-08-09: mint AND redeem OPEN at initialize, so
+    // launch posture decided by 2026-08-09: mint AND redeem OPEN at initialize, so
     // no base setting costs a 24h wait during the ceremony. Closing stays instant (the emergency
     // direction); re-opening after a close goes through the timelocked SetRedeemLimits, which is the
     // same asymmetry the public mint already has.
@@ -402,7 +392,7 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
 
     config.admin_timelock_seconds = admin_timelock;
     config.max_guardian_count = max_guardians;
-    // ROUND 8 L1-02. The first guardian is appointed HERE, in the DOM-001-authenticated transaction,
+    // The first guardian is appointed HERE, in the -authenticated transaction,
     // so the independent brake exists before anything can be unpaused and lands in the ceremony
     // artifact that gets reviewed. It used to be 0, and `add_guardian` was admin-only, which let a
     // compromised Ops appoint its own keys later and satisfy `unpause` with a brake it controlled.
@@ -447,7 +437,7 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     config.pending_admin_eta = 0;
     config.pending_max_supply_nonce = None;
     config.pending_redeem_limits_nonce = None;
-    // ROUND 8 T8-03. Bound here, once, atomically. There is no instruction that can set this from
+    // Bound here, once, atomically. There is no instruction that can set this from
     // the default afterwards: the only remaining writer is the 24h-timelocked change.
     require!(
         args.inventory_wallet != Pubkey::default(),
@@ -480,15 +470,15 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     // Premium routing ON at launch (the field is NEGATED, so false = on). Written explicitly rather
     // than relying on zeroing for meaning.
     config.fee_routing_disabled = false;
-    // C-02: no attestations exist on a fresh deployment, so the gate cannot be armed until the
+    // no attestations exist on a fresh deployment, so the gate cannot be armed until the
     // attestor writes one. Explicit because this value is a SAFETY PRECONDITION.
     config.kyc_attestation_count = 0;
-    // ROUND 5 P1-04. Written from the constant, NOT an InitializeArgs field: same treatment as
+    // Written from the constant, NOT an InitializeArgs field: same treatment as
     // max_silv_supply, and for the same reason. An arg would put the availability floor in the hands
     // of whoever types the ceremony command, and the ceremony is exactly where a wrong number is
     // hardest to notice. Change it here, rebuild, re-audit. The instant setter tunes it afterwards.
     config.min_operation_usdc = DEFAULT_MIN_OPERATION_USDC;
-    // ROUND 7. No proposal can exist before the program does.
+    // No proposal can exist before the program does.
     config.pending_inventory_wallet_nonce = None;
     config.reserved = [0u8; 23];
 

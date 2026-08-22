@@ -1,7 +1,6 @@
 // Runtime assertions on the SILV mint, re-run on every user instruction. They are
 // a DRIFT DETECTOR, not a permission: initialize.rs pins all of this once, and
 // re-checking makes a later silent change fail loudly instead.
-//
 // Pinned at init and locked afterwards: mint_authority (the silv_mint_authority
 // PDA), freeze_authority, PermanentDelegate, absence of TransferHook and
 // TransferFee, and an extension set within {MetadataPointer, TokenMetadata,
@@ -37,7 +36,6 @@ pub fn assert_silv_mint_invariants(
     // disclosed (SILV is not censorship resistant), and unrecoverable if that
     // multisig drops below threshold. Freezing one token account does not touch
     // this mint-level authority, so a change here means the key was rotated.
-    // See private/MARK_TOKEN_ACL_DECISION.md.
     let freeze_authority_opt: Option<Pubkey> = silv_mint_account.freeze_authority.into();
     require!(
         freeze_authority_opt == Some(config.freeze_authority_expected),

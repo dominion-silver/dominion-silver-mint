@@ -15,28 +15,24 @@ const SILV_FEED_ID = 3154;
 const CACHE_TTL_MS = 2000;
 let silvCache: { at: number; payload: unknown; feedTsUs: number } | null = null;
 
-// ROUND 5 P1-05. The newest `feedUpdateTimestamp` this instance has handed to a SUBMITTER.
-//
-// D2 made the on-chain anti-replay strict: one signed envelope prices exactly ONE operation, and the
+// The newest `feedUpdateTimestamp` this instance has handed to a SUBMITTER.
+// made the on-chain anti-replay strict: one signed envelope prices exactly ONE operation, and the
 // loser of the race is refused AFTER paying the Lazer verify fee. `fresh: true` was introduced to stop
 // the submit path reusing a CACHED envelope, and the audit was right that this is not the same thing as
 // getting a new timestamp: `latest_price` returns the same fixed print for a whole second, so two
 // submitters served two separate upstream calls inside that second still receive the same envelope.
-//
 // So `fresh` carries an ADVISORY claim on top of the cache bypass: the first caller handed a given
 // print is told `contended: false`, everyone after is served the same envelope with `contended: true`
 // and can go looking for a newer one before asking a human to sign. It is advisory and not a refusal
 // because this endpoint is unauthenticated: a hard refusal would let anyone take the product down with
 // one request per second. See the long note on `claimFresh`.
-//
 // What this CANNOT do, and the reason it says instance and not protocol: the state is per warm
 // instance, and nothing stops a caller fetching envelopes from Pyth directly with their own key.
 // Global fairness is an on-chain property, and the on-chain half of it is `config.min_operation_usdc`
-// (round 5 P1-04), which is where a cost actually lands on an attacker.
+// (), which is where a cost actually lands on an attacker.
 let lastClaimedFeedTsUs = 0;
 
-// ROUND 6 R6-04. THE FLOOR ON HOW OFTEN THIS INSTANCE MAY CALL PYTH, whatever callers ask for.
-//
+// THE FLOOR ON HOW OFTEN THIS INSTANCE MAY CALL PYTH, whatever callers ask for.
 // The feed publishes at `fixed_rate@1000ms`, so calling more often than that cannot return anything
 // new: it spends quota to receive the same print. Before this, `fresh: true` bypassed the cache and
 // each serialised anonymous request became an upstream call, which made Dominion's quota consumable by
@@ -44,7 +40,7 @@ let lastClaimedFeedTsUs = 0;
 // would serve stale prints, lowering it would buy nothing.
 const MIN_UPSTREAM_INTERVAL_MS = 1000;
 
-// Token bucket (P-01), per warm instance and NOT distributed: it caps what one instance can spend, not a
+// Token bucket (), per warm instance and NOT distributed: it caps what one instance can spend, not a
 // many-instance flood. Refills continuously at RATE tokens/second up to BURST.
 const BUCKET_BURST = 30;
 const BUCKET_RATE_PER_SEC = 5;
@@ -75,7 +71,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // ALLOWLIST, not a numeric filter (P-01). Only 3154 is cached, so any other value is a guaranteed miss
+  // ALLOWLIST, not a numeric filter (). Only 3154 is cached, so any other value is a guaranteed miss
   // and therefore one unauthenticated upstream call on our key; walking the integers exhausts the quota.
   let requestedFeed: unknown;
   // `fresh: true` skips the cache. Only the submit path sets it; see the note at the cache check below.
@@ -98,22 +94,19 @@ export async function POST(req: NextRequest) {
   }
   const feedId = SILV_FEED_ID;
 
-  // ROUND 6 R6-04. THE CALLER NO LONGER DRIVES THE UPSTREAM CADENCE.
-  //
+  // THE CALLER NO LONGER DRIVES THE UPSTREAM CADENCE.
   // THE DEFECT. `fresh: true` is unauthenticated and it meant "bypass the cache", so every serialised
   // `{"fresh":true}` request that missed the single-flight window became one authenticated Pyth call on
   // OUR key. An anonymous `while true; do curl ...; done` therefore spent Dominion's quota and
   // entitlement, with no wallet, no gas and no on-chain transaction, and `min_operation_usdc` does not
   // touch it because nothing is submitted. The token bucket bounded it per warm instance, and a
   // serverless deployment multiplies the instances.
-  //
   // THE FIX, and it is a REMOVAL rather than another control: `fresh` no longer decides whether we go
   // upstream. The upstream cadence is now a property of THIS MODULE, `MIN_UPSTREAM_INTERVAL_MS`, set to
   // the feed's own publish period. A caller can never make us call Pyth sooner than the next print is
   // due, whatever it asks for and however many callers ask. What `fresh` still does is what it is for:
   // it refuses to serve a print that this instance already handed to a submitter (`contended`), and it
   // waits for the in-flight refresh rather than reading an aged cache.
-  //
   // WHAT THIS DOES NOT SOLVE, said plainly because the audit was right about it: the state is per warm
   // instance, so N instances still make N times the calls. Making the cadence global needs a shared
   // store (a KV, a lock, one poller) and that is infrastructure, not a code change. This bounds what one
@@ -138,27 +131,23 @@ export async function POST(req: NextRequest) {
   // 429'd for a call it did not make. On a failed shared attempt the waiters loop back and JOIN the retry
   // rather than all being answered 502 (lazer-client.ts throws on any non-ok status, with no retry, and
   // that is the SUBMIT-time fetch).
-  //
-  // ROUND 5 P1-05, and this is the bug that was here: the two cache checks inside this loop were both
+  // and this is the bug that was here: the two cache checks inside this loop were both
   // guarded by `!fresh`, so a `fresh` waiter skipped them, fell through to `allowRequest()`, and PAID A
   // TOKEN for an upstream call it had not made. Measured by the audit: 40 concurrent `fresh` requests
   // produced 30 x 200, 10 x 429 and only 2 upstream calls. The comment on that line said "waiters never
   // reach this line", which was true for the cached path and false for the one the money flows through.
   // A joiner is now served or claim-refused, and never charged.
-  //
   // Two separate bounds, and they are not the same number on purpose. ATTEMPTS bounds how many times a
   // `fresh` caller may go looking for an unclaimed print. MAX_UPSTREAM_FAILURES bounds how many times a
   // DEAD upstream is retried, and it stays at 2: a persistently dead endpoint must answer, not loop, and
   // that bound is what stops one burst from making three rounds of doomed calls on our key.
   // ONE attempt for `fresh`, and this is a correction to the previous version of this fix.
-  //
   // Retrying inside the route was worse than useless. `latest_price` returns the same fixed print for
   // a whole second (see the note at the top), and nothing in this loop sleeps, so a contended caller
   // burned three tokens and made three upstream calls that were guaranteed to return the same
   // timestamp and fail the claim identically. Under the anonymous request loop this endpoint has to
   // survive, that tripled the cost of the attack on OUR key rather than the attacker's: the
   // amplification the 409 revert existed to remove, reintroduced one line lower.
-  //
   // Waiting for a NEW print is the client's job, because only the client can afford to sleep: see
   // CLAIM_RETRY_MS in lib/lazer-execute.ts. The non-fresh path keeps its two passes, which are for
   // JOINING a shared call and retrying a failed one, not for chasing a timestamp.
@@ -204,9 +193,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Now we are the one who will create the upstream call, so now we pay.
-    //
     // The `!inflight` half is belt-and-braces, and honestly labelled as such: a mutation test showed it
-    // is not what closes P1-05. It only fires on the narrow non-fresh fallthrough (a shared call
+    // is not what closes . It only fires on the narrow non-fresh fallthrough (a shared call
     // succeeded, the cache had already aged out, and another request re-created `inflight` in between).
     // The load-bearing join for the submit path is the `if (fresh)` claim block above; removing THAT is
     // what turns "NO fresh waiter is charged a token" red.
@@ -256,29 +244,24 @@ export async function POST(req: NextRequest) {
 }
 
 /**
- * ROUND 5 P1-05. Try to be the FIRST caller handed this print for submission. Returns the response on
+ * Try to be the FIRST caller handed this print for submission. Returns the response on
  * success and null when somebody already took it, which tells the caller to go looking for a newer one.
- *
  * THE CLAIM IS ADVISORY, NOT AN ENTITLEMENT, and that is a deliberate reversal.
- *
- * The first version of this fix answered 409 to every loser. A review pass took the obvious next step
+ * The first version of this fix answered 409 to every loser. A took the obvious next step
  * and pointed a `while true; do curl -XPOST /api/lazer -d '{"fresh":true}'; done` at it: this endpoint
  * has no authentication of any kind, so an anonymous attacker claims every print within milliseconds of
  * publication and every real mint and redeem in the UI dies with "retry in a moment", for as long as the
  * loop runs, at the cost of one HTTP request per second and no wallet, no gas and no account.
- *
  * That trade was backwards. What the loser of a race actually pays without a claim is one Lazer verify
  * fee, bounded by LAZER_FEE_CEILING at 10_000 lamports, plus a transaction fee: a fraction of a cent,
  * on a transaction they chose to send. What the hard refusal bought was a way to take the product down
  * for free. So a contended caller is now SERVED, with `contended: true` so the client knows it is racing
  * and can go looking for a fresher print before it asks a human to sign.
- *
  * What this leaves unsolved, stated plainly rather than papered over: real coordination needs an
  * AUTHENTICATED reservation, so that a claim costs something and belongs to somebody who will actually
  * submit. That is a product decision, it does not exist here, and no amount of cleverness in an
  * anonymous endpoint substitutes for it. The on-chain half of the same problem is
- * `config.min_operation_usdc` (round 5 P1-04), which is where the cost actually lands on an attacker.
- *
+ * `config.min_operation_usdc` (), which is where the cost actually lands on an attacker.
  * The claim is taken with no `await` between the check and the write, so two concurrent callers on the
  * same instance cannot both be the claimant. This function must stay synchronous for that to hold.
  */
@@ -354,10 +337,9 @@ async function fetchAndCache(apiKey: string, feedId: number): Promise<void> {
         }
       : null;
 
-  // ROUND 5 P1-05: the raw microsecond feed timestamp is kept alongside the payload, because it is what
+  // the raw microsecond feed timestamp is kept alongside the payload, because it is what
   // the on-chain high-water mark compares against. `price.publishTimeSec` is a floor to seconds and is
   // for display only; claiming on it would let two prints inside one second look identical.
-  //
   // A payload with no parseable feed timestamp gets 0, which `claimFresh` can never hand to a submitter
   // (`0 <= lastClaimedFeedTsUs` for any claim state, including the initial 0). That is the safe
   // direction: an unclaimable envelope costs a retry, an unverifiable one costs a Lazer fee.

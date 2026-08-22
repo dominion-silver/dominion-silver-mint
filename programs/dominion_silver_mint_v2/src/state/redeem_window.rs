@@ -1,13 +1,10 @@
 //! The redemption rate limiter: a SLIDING window counter over two buckets.
-//!
 //! `effective = current + previous * (window - elapsed_into_bucket) / window`.
-//!
 //! It is an APPROXIMATION: usage inside a bucket is counted as uniformly spread, so usage
 //! concentrated at the end of a bucket is under-counted. The worst case is 2 x budget, reached when
 //! two full drains land `window - 1` seconds apart. A fixed window allowed that same 2x in about one
 //! second, so what the sliding counter buys is the RATE, not a tighter bound. Size
 //! `instant_redeem_budget_usdc` at HALF the maximum outflow you will accept in a day.
-//!
 //! This budget is the only hard brake between a bad oracle print and the treasury: the oracle guards
 //! (staleness, publisher floor, price-delta breaker) are filters, not limiters.
 
@@ -25,10 +22,8 @@ pub struct WindowDecision {
 }
 
 /// Roll the buckets forward to `now` and report the usage that counts against the budget.
-///
 /// Pure: the caller adds the request amount to `rolled_current`, compares `effective_used + amount`
 /// against the budget, and persists all three values only once every other check passes.
-///
 /// `window_seconds` is in SECONDS and must never be zero: at zero this fails OPEN. The setters bound
 /// it to `[INSTANT_WINDOW_MIN_SECONDS, INSTANT_WINDOW_MAX_SECONDS]`.
 pub fn roll_window(

@@ -1,18 +1,14 @@
 //! Which user-facing action a per-wallet flag applies to.
-//!
 //! Two different per-wallet mechanisms landed in the same batch (2026-08-05) and both are
 //! per-SIDE rather than global:
-//!
 //!   - the fee-exemption whitelist, where the admin panel must be able to waive the mint
-//!     fee, the redeem fee, or both (Thomas, 2026-08-05);
+//!     fee, the redeem fee, or both (, 2026-08-05);
 //!   - the dormant KYC gate, where Mark's likely first step is redeem-only, keeping public
 //!     mint open so DEX arbitrage still works.
-//!
 //! Both are stored as a `u8` bitfield, and BOTH USE THE SAME BIT LAYOUT on purpose. This
 //! module is the single place that layout is defined, so the two cannot drift into
 //! disagreeing about which bit means "mint". Without it, `flags & 1` would appear in four
 //! separate files and one of them would eventually be wrong.
-//!
 //! The `Side` enum exists so that call sites pass a MEANING rather than a number. Passing
 //! a raw bit works right up until somebody passes `1` for redeem.
 
@@ -49,15 +45,12 @@ impl Side {
 }
 
 /// Whether `flags` is a usable non-empty selection.
-///
 /// Empty is rejected because both callers treat "no bits" as a mistake rather than as a
 /// value: an exemption account that exempts nothing is dead rent, and it still reads as an
 /// active exemption in any roster listing. Revoking is a separate instruction.
-///
 /// Unknown bits are rejected so a value written today cannot acquire a NEW meaning when a
 /// future version defines bit 2. Storing bits nobody validates is how a dormant flag
 /// becomes a live one by accident during an upgrade.
-///
 /// Returns a plain bool rather than `Result`, and takes no error code, deliberately. Two
 /// reasons: this module stays free of any coupling to `DominionError`, so the bit layout
 /// can be reasoned about on its own; and each caller raises its OWN error as a literal,
@@ -69,7 +62,6 @@ pub fn side_flags_valid_nonempty(flags: u8) -> bool {
 }
 
 /// Whether `flags` carries only defined bits. ALLOWS zero.
-///
 /// Used by the KYC scope, where 0 is meaningful and is in fact the launch posture: KYC
 /// required on neither side. Turning the gate off entirely must not need its own
 /// instruction.

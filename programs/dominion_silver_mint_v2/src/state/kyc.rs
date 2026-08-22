@@ -14,7 +14,7 @@ pub const KYC_ACCOUNT_VERSION: u8 = 1;
 // WALLET (signed nonce, verified before attesting). A provider verifies a person, not a wallet, and this
 // program cannot check that step, so without it the gate is decorative.
 // Ships DORMANT (`config.kyc_scope_flags == 0`). Write attestations BEFORE arming, or every existing holder
-// is locked out instantly. Why dormant, and the provider-agnostic design: private/trimmed-notes/kyc.md
+// is locked out instantly. The design is provider-agnostic: the program stores attestations, not identity.
 /// A per-wallet KYC attestation. The account existing IS the approval. Never holds PII.
 #[account]
 pub struct KycAccount {
@@ -72,7 +72,7 @@ pub fn enforce_kyc(
     }
 }
 
-/// C-02 arming rule, pure so it is unit-testable outside a handler. Arming needs a configured operator AND
+/// arming rule, pure so it is unit-testable outside a handler. Arming needs a configured operator AND
 /// `attestation_count > 0`, i.e. somebody is already through. `flags == 0` (disarm) is always allowed and
 /// checked FIRST: it is the only unbrick path, so it must not depend on the roster or the operator.
 pub fn validate_kyc_arming(flags: u8, operator: Pubkey, attestation_count: u32) -> Result<()> {
@@ -123,12 +123,10 @@ pub struct RevocationOutcome {
 /// Resolve a revocation into the whole next state. One that would leave an ARMED gate with an EMPTY roster
 /// DISARMS the gate rather than being refused: refusing removed the only way to drop the LAST holder, and the
 /// workaround (disarm, revoke, re-arm) cannot re-arm, because arming needs `count > 0`.
-///
 /// That disarm needs BOTH `signer_is_admin` and `allow_disarm`. Admin-only, because the attestor also calls
 /// `revoke_kyc` and must not gain a one-transaction "drop the gate for everybody". Consent as well, because
 /// the disarm is reachable by ORDERING: the attestor walks the roster to one (every step leaves
 /// `count_after > 0`, so nothing disarms) and the admin's next revocation empties it and drops the gate.
-///
 /// NOT symmetric with `validate_kyc_arming`: arming needs `count > 0` BEFORE, this acts on `count == 0` AFTER.
 pub fn resolve_revocation(
     scope_flags: u8,
@@ -165,7 +163,7 @@ pub fn kyc_operator_may_be_cleared(scope_flags: u8) -> bool {
     scope_flags == 0
 }
 
-/// Whether the attestor may be set to this key, C-02. NOT THE ADMIN, on any scope: `revoke_kyc`'s admin-only
+/// Whether the attestor may be set to this key, NOT THE ADMIN, on any scope: `revoke_kyc`'s admin-only
 /// disarm, the hot/cold split, and "a leaked attestor cannot loosen compliance" all rest on the two being
 /// different keys and collapse silently if they are equal. NOT CLEARED WHILE ARMED, or no NEW attestation
 /// could ever be written and every not-yet-attested holder is shut out with nothing in the program saying so.
@@ -264,7 +262,7 @@ mod tests {
         assert!(validate_kyc_scope(0b100).is_err());
         assert!(validate_kyc_scope(0xFF).is_err());
     }
-    // ---- C-02: the attestation counter and the arming rule ----
+    // ---- the attestation counter and the arming rule ----
 
     #[test]
     fn arming_is_refused_with_an_empty_roster() {

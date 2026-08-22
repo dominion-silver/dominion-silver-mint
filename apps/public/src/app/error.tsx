@@ -3,7 +3,6 @@
 // FE-L19: Next.js App Router error boundary.
 // Catches render-time errors in the home page so a bug in MintRedeemCard
 // (or anything else) doesn't blow up the whole app with a blank screen.
-//
 // Server-side errors and 404s are handled separately by Next.js.
 
 import { useEffect } from "react";

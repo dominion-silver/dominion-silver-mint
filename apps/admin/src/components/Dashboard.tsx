@@ -51,7 +51,7 @@ export function Dashboard() {
   );
   // Gated on the snapshot and refreshed slowly so the two queries never saturate the RPC together. The
   // fetcher THROWS on failure rather than returning [], because an unknown roster must not render as a
-  // known-empty one. This is the only surface that shows `pending_removal_at`, and DOM-007's guarantee
+  // known-empty one. This is the only surface that shows `pending_removal_at`, and 's guarantee
   // is that a TARGETED guardian can see its own notice and react inside the timelock window.
   const { data: guardians, error: guardiansError } = useSWR<GuardianView[]>(
     data ? "dominion-guardians" : null,
@@ -176,7 +176,7 @@ function OverviewTab({ data }: { data: DashboardSnapshot }) {
           label="Redemptions"
           value={cfg.redemptionsEnabled ? "Enabled" : "DISABLED"}
           good={cfg.redemptionsEnabled}
-          tip="Master on/off switch for users selling SILV back for USDC. When OFF, redeem_silv reverts. It does NOT touch minting: this tooltip claimed 'no new mints or redemptions are accepted' (audit A-02), and an operator containing a treasury incident would have closed redemptions, trusted that sentence, and left public mint open the whole time. Minting is governed separately by public_mint_enabled and by paused. To stop everything, use Paused."
+          tip="Master on/off switch for users selling SILV back for USDC. When OFF, redeem_silv reverts. It does NOT touch minting. Closing redemptions during a treasury incident leaves public mint open, so do not rely on this switch alone. Minting is governed separately by public_mint_enabled and by paused. To stop everything, use Paused."
         />
         <StatusTile
           label="Mint pause window"
@@ -387,7 +387,7 @@ function RedemptionQueue() {
     <div className="rounded-xl border border-border bg-card p-6">
       <h3 className="mb-2 flex items-center text-sm uppercase tracking-wide text-muted">
         Redemption queue (removed)
-        <Tip text="The T+3 queue, the per-size tier and the admin off-chain settlement path were all deleted on 2026-08-05. That also removed SolidProof MEDIUM #4, where the admin could mark a request settled with no on-chain proof while the user's SILV was already burned." />
+        <Tip text="The T+3 queue, the per-size tier and the admin off-chain settlement path do not exist. There is no path for an admin to mark a redemption settled without on-chain proof." />
       </h3>
       <p className="mb-3 text-xs text-muted">
         Redemption is a single instant route: burn SILV, receive USDC, in one
@@ -592,7 +592,7 @@ function HelpTab() {
           window budget (retry once it decays) and the treasury balance. There
           is no queue, no burned-SILV IOU and no off-chain settlement step. The
           T+3 queue and the off-chain settlement instruction were deleted on
-          2026-08-05, which also removed SolidProof MEDIUM #4.
+          removed.
         </p>
       </div>
       <div>
@@ -610,7 +610,7 @@ function HelpTab() {
 }
 
 /**
- * The guardian roster, with the removal countdown. DOM-007 defers removal so the TARGETED guardian can
+ * The guardian roster, with the removal countdown. defers removal so the TARGETED guardian can
  * react inside the timelock window, including cancelling its own removal once, which is worthless if it
  * cannot see the notice. This is the only surface that reads `pending_removal_at`.
  */

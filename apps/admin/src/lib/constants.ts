@@ -18,7 +18,7 @@ export const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyT
 // Devnet was CebhMovXRM5hEhFDTyq7Y1ez8h11UzFSGjELbyQeJExv.
 export const SILV_MINT = new PublicKey("SiLVFMgD3eD2rgK628NbTBq9MnuJF5FW2CRaVyTB35L");
 
-// AUDIT FINDING P-06: `PYTH_XAG_USD_FEED_ID` (the retired Pyth Core XAG/USD feed) was exported here
+// `PYTH_XAG_USD_FEED_ID` (the retired Pyth Core XAG/USD feed) was exported here
 // with zero call sites. The program reads Pyth LAZER feed 3154 via a signed message; there is no Core
 // receiver account on `initialize` any more. A live-looking export of a retired oracle is how a future
 // change reintroduces the wrong price source, and showing a different price than the contract mints at

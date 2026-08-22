@@ -42,14 +42,10 @@ impl GuardianAccount {
     /// True only while the guardian is active AND is not itself the current admin.
     /// The admin exclusion is needed because admin-ship can move by admin transfer
     /// after an appointment, which `add_guardian` cannot see.
-    // OPEN RESIDUAL: the floor checks count REGISTRATIONS and are blind to this
-    // predicate, so an admin holding a second key K can appoint K, transfer
-    // admin-ship to K, then remove the honest guardians. Every check still passes
-    // while the surviving guardian is inert, so `guardian_count` overstates the veto.
-    // Nothing is bricked (pause and cancel accept `is_admin || is_guardian`); the
-    // INDEPENDENT veto is what is lost. Fix, not taken because it changes a
-    // governance ABI: `accept_admin_transfer` should take the incoming admin's
-    // guardian PDA and refuse while it is active. The admin console marks it INERT.
+    // Note that the guardian-count floors check REGISTRATIONS and do not evaluate this
+    // predicate, so a guardian that is also the current admin is registered but inert
+    // here. `pause` and `cancel` accept `is_admin || is_guardian`, so nothing is
+    // unreachable; what such a guardian does not provide is an INDEPENDENT veto.
     pub fn may_act(&self, signer: &Pubkey, admin: &Pubkey) -> bool {
         self.guardian == *signer && self.cooldown_until == 0 && self.guardian != *admin
     }

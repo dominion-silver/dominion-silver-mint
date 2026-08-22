@@ -1,10 +1,9 @@
 /**
  * The /api/lazer proxy holds the server-side Pyth key, so these tests assert two PROPERTIES: only feed
  * 3154 is served, and a flood is refused, both BEFORE any upstream call.
- *
  * Every assertion counts `fetch` calls, because "the request was rejected" and "our key was not spent" are
  * different claims and only the second matters: a 400 that still hit Pyth passes a status-code test and
- * fails audit finding P-01.
+ * fails audit finding .
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 
@@ -69,7 +68,7 @@ describe("the Lazer proxy only serves feed 3154", () => {
       expect(res.status, `feedId ${feedId} must be refused`).toBe(400);
       expect(await res.json()).toMatchObject({ error: "feed_not_allowed" });
     }
-    // The assertion that encodes the finding: zero upstream calls, so zero quota spent.
+    // The assertion that encodes the scenario: zero upstream calls, so zero quota spent.
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -224,14 +223,12 @@ describe("the Lazer proxy rate-limits", () => {
 });
 
 /**
- * ROUND 5 P1-05. The `fresh: true` path, which had NO test at all: every case above goes through the
+ * The `fresh: true` path, which had NO test at all: every case above goes through the
  * cached path, and the defect lived exactly in the branch none of them entered.
- *
  * The audit measured it: 40 concurrent `fresh` requests produced 30 x 200, 10 x 429 and 2 upstream
  * calls, because a waiter that joined an in-flight call skipped both cache checks (`!fresh` guarded
  * them), fell through to `allowRequest()`, and paid a token for a call it had not made.
- *
- * The first fix answered 409 to a contended caller. A review pass showed that turned an
+ * The first fix answered 409 to a contended caller. A showed that turned an
  * unauthenticated endpoint into a free product-wide denial (one curl per second claims every print),
  * so contention is now ADVISORY: everybody is served, and `contended` says whether this caller was
  * first. These tests pin BOTH halves, because reverting either one is a regression.
@@ -273,7 +270,7 @@ describe("the fresh (submit) path", () => {
       statuses.filter((s) => s === 429).length,
       `no fresh waiter may be 429'd, got ${statuses.filter((s) => s === 429).length}`,
     ).toBe(0);
-    // ONE upstream call for the whole burst. A review pass caught that the earlier bound of 3 was
+    // ONE upstream call for the whole burst. A caught that the earlier bound of 3 was
     // ratifying an amplification rather than catching it: the route retried a contended claim in-line,
     // with no sleep, against a feed that returns the same print for a full second, so each request
     // could spend three tokens on three identical answers. That tripled the cost, on our Pyth key, of
@@ -285,7 +282,7 @@ describe("the fresh (submit) path", () => {
   });
 
   it("NEVER refuses a submitter, so an anonymous loop cannot deny the mint path", async () => {
-    // THE REGRESSION GUARD for the 409 that a review pass removed. Every one of these must be served:
+    // THE REGRESSION GUARD for the 409 that a removed. Every one of these must be served:
     // this endpoint has no authentication, so a status that means "you may not have a price" is a
     // status anybody can force on everybody else with one request per second.
     const { POST } = await freshRoute();
@@ -300,7 +297,7 @@ describe("the fresh (submit) path", () => {
   });
 
   it("marks exactly ONE caller uncontended per print, and the rest contended", async () => {
-    // The advisory half. D2 lets one signed envelope price one operation, so a submitter that is not
+    // The advisory half. lets one signed envelope price one operation, so a submitter that is not
     // first should look for a newer print before asking a human to sign.
     const { POST } = await freshRoute();
     stubUpstream(nowUs());
@@ -315,7 +312,7 @@ describe("the fresh (submit) path", () => {
   });
 
   it("a NEW print is claimable again, so contention is about the print and not a dead end", async () => {
-    // Time is driven explicitly, because round 6 R6-04 put a FLOOR on how often this route may call
+    // Time is driven explicitly, because put a FLOOR on how often this route may call
     // upstream: within MIN_UPSTREAM_INTERVAL_MS a caller is served what we already have, whatever it
     // asks for. Without advancing the clock the second stub would never be fetched, and the test would
     // be asserting the cadence floor while claiming to assert the claim.
@@ -335,7 +332,7 @@ describe("the fresh (submit) path", () => {
   });
 
   it("a fresh caller inside the publish period does NOT trigger an upstream call", async () => {
-    // THE R6-04 PROPERTY. `fresh:true` is unauthenticated, and it used to mean "bypass the cache", so
+    // THE PROPERTY. `fresh:true` is unauthenticated, and it used to mean "bypass the cache", so
     // one anonymous request loop spent Dominion's Pyth quota with no wallet, no gas and nothing
     // submitted. The upstream cadence is now a property of this module, not of the caller.
     vi.useFakeTimers();
@@ -366,7 +363,7 @@ describe("the fresh (submit) path", () => {
   });
 
   it("never serves a submitter an envelope aged past the publish period", async () => {
-    // The original purpose of `fresh` SURVIVES the R6-04 change, in the form that is actually true: a
+    // The original purpose of `fresh` SURVIVES the change, in the form that is actually true: a
     // submitter is never handed a print older than one publish period, because past that a refresh is
     // due and happens. What changed is that the caller no longer FORCES the refresh; the clock does.
     vi.useFakeTimers();

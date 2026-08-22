@@ -35,7 +35,7 @@ pub fn propose_handler(ctx: Context<ProposeAdminTransfer>, new_admin: Pubkey) ->
     // compromised admin can't propose + accept in the same block. eta = now +
     // admin_timelock_seconds, and the accept window is [eta, eta +
     // PENDING_ADMIN_EXPIRY_SECONDS] so it is always a full expiry-window wide
-    // regardless of the timelock value (Codex P2-01: the old `expires_at = now +
+    // regardless of the timelock value (the old `expires_at = now +
     // expiry` collapsed the window to zero when the timelock equalled the 7-day
     // expiry).
     let eta = now
@@ -113,7 +113,7 @@ pub fn cancel_handler(ctx: Context<CancelAdminTransfer>) -> Result<()> {
     let signer = ctx.accounts.signer.key();
     let admin_key = ctx.accounts.config.admin;
     let is_admin = signer == admin_key;
-    // AUDIT review of daac4ac: `may_act` also refuses a guardian key that IS the
+    // review of daac4ac: `may_act` also refuses a guardian key that IS the
     // current admin. add_guardian cannot prevent that overlap on its own, because
     // admin-ship can move after the appointment.
     let is_guardian = match &ctx.accounts.guardian {
@@ -127,7 +127,7 @@ pub fn cancel_handler(ctx: Context<CancelAdminTransfer>) -> Result<()> {
     config.pending_admin = None;
     config.pending_admin_expires_at = 0;
     config.pending_admin_eta = 0;
-    // SolidProof LOW #3, the most important of the five: propose AND accept both
+    // the most important of the five: propose AND accept both
     // emit, but cancelling a governance handover did not, so the one transition an
     // operator most needs in their logs was the invisible one.
     emit!(AdminTransferCancelled {

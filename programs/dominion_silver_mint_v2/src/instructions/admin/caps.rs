@@ -2,22 +2,20 @@
 // (launch spec 2026-07):
 //   - set_max_silv_supply: TIGHTEN-ONLY (lower instant; raise blocked entirely).
 //   - set_redemptions_enabled: FALSE-ONLY (disable instant; enable blocked at
-//     launch, Codex P0-01).
+//     launch, ).
 //   - emergency_tighten_redeem_limits: the SINGLE instant fast-lane for the four
 //     redeem throttles, and it accepts SAFE-DIRECTION values only. LOOSENING any
 //     of the four goes through the 24h-timelocked SetRedeemLimits (propose.rs /
 //     execute.rs). This closes the head-dev "one-block drain": an admin can no
 //     longer strip the redemption rate-limits in a single instant tx.
 //   - set_min_operation_usdc: BOTH directions instant, bounded by
-//     MIN_OPERATION_CEILING_USDC (round 5 P1-04). The one setter here with no
+//     MIN_OPERATION_CEILING_USDC (). The one setter here with no
 //     direction asymmetry, because neither direction risks value; the reasoning is
 //     written out at the handler.
-//
 // The four individual instant throttle setters (set_instant_redeem_budget /
 // _window, set_large_redeem_threshold, set_redeem_queue_delay) were REMOVED in
 // favour of the single tighten-only entrypoint above (CORRECTION-2 clean shape:
 // one place for the counter-intuitive direction logic instead of four).
-//
 // Float (treasury_min_float_usdc) and premiums/oracle-guards remain 24h-timelocked
 // (propose/execute), as before.
 
@@ -35,7 +33,7 @@ use crate::instructions::admin::execute::{
 };
 use crate::state::*;
 
-/// AUDIT A-31: set_max_silv_supply needs to read the LIVE mint supply, so it gets
+/// set_max_silv_supply needs to read the LIVE mint supply, so it gets
 /// its own Accounts struct rather than adding a required account to the shared
 /// `SetParam` (which would change the ABI of set_redemptions_enabled and
 /// emergency_tighten_redeem_limits too, for no reason).
@@ -60,7 +58,7 @@ pub struct SetParam<'info> {
     pub admin: Signer<'info>,
 }
 
-/// D2 (launch spec 2026-07): the HARD SILV supply cap, atomic SILV (oz * 1e6).
+/// (launch spec 2026-07): the HARD SILV supply cap, atomic SILV (oz * 1e6).
 /// TIGHTEN-ONLY: lowering the cap is instant (a safety action), but RAISING it is
 /// rejected. At launch the cap is fixed at the physical allocation (100k oz) and
 /// there is no live PoR, so an instant raise would let a compromised admin
@@ -72,7 +70,7 @@ pub fn set_max_silv_supply_handler(ctx: Context<SetMaxSupply>, new_max: u64) -> 
     let live_supply = ctx.accounts.silv_mint.supply;
     validate_new_max_supply(new_max, old_max, live_supply)?;
     ctx.accounts.config.max_silv_supply = new_max;
-    // SolidProof LOW #3: this setter was silent. The cap is TIGHTEN-ONLY, so every
+    // this setter was silent. The cap is TIGHTEN-ONLY, so every
     // change here is irreversible and belongs in the log.
     emit!(MaxSupplyChanged {
         old_max,
@@ -84,8 +82,7 @@ pub fn set_max_silv_supply_handler(ctx: Context<SetMaxSupply>, new_max: u64) -> 
 }
 
 /// The whole decision, extracted so it is unit-testable without a Context.
-///
-/// AUDIT review of daac4ac (P1, raised by two reviewers): a comment in
+/// review of daac4ac (P1, raised by two reviewers): a comment in
 /// `scripts/e2e-fixa-devnet.ts` claimed the success branch of the invariant below was
 /// "covered by the caps.rs unit tests instead". It was not. This file had no test
 /// module at all, so `>=` written as `>` would have shipped undetected, taking with it
@@ -96,14 +93,13 @@ pub fn validate_new_max_supply(new_max: u64, current_cap: u64, live_supply: u64)
         DominionError::AboveMaximum
     );
     require!(new_max <= current_cap, DominionError::SupplyCapRaiseBlocked);
-    // AUDIT A-31: because raising the cap is blocked, lowering it BELOW the live
+    // because raising the cap is blocked, lowering it BELOW the live
     // supply is irreversible from the panel and permanently kills admin_premint,
     // the only mint path at launch. The only exit would be a program upgrade. The
     // minimal invariant the review recommended: never let the cap fall under what
     // is already minted. Headroom can still be shrunk all the way to the current
     // supply, so the emergency "stop issuing more" action is preserved; what is
     // refused is the fat-finger that bricks the instruction.
-    //
     // Read from the REAL mint rather than a tracked counter, so the check cannot
     // drift. If a deliberate permanent halt is ever wanted, it should be a separate,
     // explicitly named, separately confirmed instruction, not a side effect of this
@@ -114,19 +110,16 @@ pub fn validate_new_max_supply(new_max: u64, current_cap: u64, live_supply: u64)
 
 /// The manual redemptions switch is FALSE-ONLY on this lane: DISABLING is instant, ENABLING always
 /// reverts `RedemptionsEnableBlocked`. That asymmetry is the whole point and it has not moved.
-///
-/// ROUND 8 T8-08 CORRECTS WHAT THIS COMMENT USED TO CLAIM. It said redemptions were
+/// CORRECTS WHAT THIS COMMENT USED TO CLAIM. It said redemptions were
 /// "cryptographically off at launch" and that enabling would need a Phase 1 UPGRADE. Both were
 /// false, and the second was false even when it was written: the 24h-timelocked `SetRedeemLimits`
 /// action carries `redemptions_enabled` and `execute.rs` writes it, so opening has always been a
 /// governance action and never a code change. Since the 2026-08-09 posture change `initialize` also
 /// ships the switch OPEN, so there is nothing "off" here to begin with.
-///
-/// What this refusal actually buys, stated without the overclaim: a compromised admin cannot REOPEN
-/// redemptions in one transaction after an emergency close. It must announce the reopen, wait the
-/// full 24h and survive a guardian cancel. It does NOT stop that admin from draining an already-open
-/// protocol, and it never did: the rolling budget is the only brake there, and it bounds the RATE,
-/// not the total. See `redeem_window.rs` and the D11 custody note in config/mainnet-authorities.json.
+/// What this refusal buys, stated without overclaiming: an admin cannot REOPEN redemptions in one
+/// transaction after an emergency close. It must announce the reopen, wait the full 24h and survive a
+/// guardian cancel. It does not bound outflow on an already-open protocol; the rolling budget is the
+/// brake there, and it bounds the RATE rather than the total. See `redeem_window.rs`.
 pub fn set_redemptions_enabled_handler(ctx: Context<SetParam>, enabled: bool) -> Result<()> {
     require!(!enabled, DominionError::RedemptionsEnableBlocked);
     // NO-OP GUARD, mirroring `set_public_mint_enabled_handler`. Its absence was not cosmetic: this
@@ -144,11 +137,9 @@ pub fn set_redemptions_enabled_handler(ctx: Context<SetParam>, enabled: bool) ->
     // `set_public_mint_enabled_handler` does for its own nonce and for the same stated reason:
     // leaving one armed after a deliberate emergency close would let the open land later
     // without a fresh decision.
-    //
     // This is only effective because `execute_set_redeem_limits` now REQUIRES
     // `pending_redeem_limits_nonce == Some(nonce)`. Before that check existed, clearing this
     // field did nothing at all: the execute handler never read it.
-    //
     // Yes, this also discards any unrelated numeric loosening the proposal carried. That is the
     // right trade during an incident: losing a queued budget raise costs one re-proposal, while
     // keeping it armed costs an unwanted re-open at the worst possible moment.
@@ -167,7 +158,6 @@ pub fn set_redemptions_enabled_handler(ctx: Context<SetParam>, enabled: bool) ->
         );
     }
     ctx.accounts.config.pending_redeem_limits_nonce = None;
-    // SolidProof LOW #3.
     emit!(RedemptionsEnabledChanged {
         old_enabled,
         new_enabled: enabled,
@@ -178,13 +168,11 @@ pub fn set_redemptions_enabled_handler(ctx: Context<SetParam>, enabled: bool) ->
 
 /// Instant CLOSE of the public mint path. FALSE-ONLY, mirroring
 /// `set_redemptions_enabled` and the FIX A tighten-fast/loosen-slow asymmetry.
-///
 /// Closing is the emergency direction and must take one transaction: if the Lazer feed
 /// misbehaves, or a publisher set degrades, or a price band looks wrong, public minting
 /// has to stop NOW rather than in 24 hours. OPENING goes through
 /// `propose_set_public_mint` + `execute_set_public_mint` so it is announced, delayed and
 /// guardian-cancellable.
-///
 /// Note what this does NOT touch: the pre-mint path. `admin_premint` has never depended
 /// on `public_mint_enabled`, so closing public mint in an emergency does not block
 /// inventory operations, and pausing the protocol (which does block them) stays a
@@ -201,7 +189,6 @@ pub fn set_public_mint_enabled_handler(ctx: Context<SetParam>, enabled: bool) ->
     // true, so a pending open can only exist while the mint is CLOSED, and this handler requires
     // `old_enabled != enabled`, so it reverts PublicMintUnchanged when the mint is already closed.
     // The two states are mutually exclusive.
-    //
     // Kept for uniformity with the redeem switch, and harmless. But commit 1851324's headline
     // justification for the A7 bind ("closing the public mint did not disarm a pending open, so the
     // mint would re-open on its own schedule") described a sequence that cannot occur. The bind is
@@ -216,35 +203,30 @@ pub fn set_public_mint_enabled_handler(ctx: Context<SetParam>, enabled: bool) ->
     Ok(())
 }
 
-/// ROUND 5 P1-04: the minimum size of a priced operation, atomic USDC, on BOTH sides. INSTANT IN
+/// the minimum size of a priced operation, atomic USDC, on BOTH sides. INSTANT IN
 /// BOTH DIRECTIONS,
 /// bounded by `MIN_OPERATION_CEILING_USDC`, and that asymmetry-free shape is deliberate.
-///
-/// Why it exists: D2 made the Lazer anti-replay strict, so `last_used_feed_update_timestamp_us` is
+/// Why it exists: made the Lazer anti-replay strict, so `last_used_feed_update_timestamp_us` is
 /// one global slot in a writable config and the first operation on each print blocks the rest. With
 /// no floor a 60 micro-USDC mint captured that slot (the derivation is on the config field), which
 /// turned the anti-replay invariant into a permissionless denial primitive.
-///
 /// Why it is NOT timelocked, and the honest form of that argument. The timelock announces actions that
 /// put VALUE at risk; this field puts none at risk in either direction. Raising it prices small
 /// operations out; lowering it re-cheapens print capture. Both cost availability, neither costs
 /// principal.
-///
-/// A REVIEW PASS CORRECTED THE FIRST VERSION OF THIS NOTE, which claimed the setter "grants strictly
+/// A CORRECTED THE FIRST VERSION OF THIS NOTE, which claimed the setter "grants strictly
 /// less power than `set_public_mint_enabled(false)`, which the same admin can already call instantly".
 /// That is true of the TIGHTENING direction only. Every other instant path in this file is
 /// one-directional by construction: the supply cap tightens only, both switches close only, the redeem
 /// throttles accept safe-direction values only. This is the one instant LOOSENING of a protection in
 /// the file, and a compromised admin can set it to zero, run the dust capture it exists to price out,
 /// and restore it, all inside one slot with no window for a guardian to cancel.
-///
 /// It is still not timelocked, deliberately, and the reason is proportion rather than symmetry: the
 /// worst case is a denial of the priced path, which that key can already achieve instantly and more
 /// completely with `set_public_mint_enabled(false)` plus `pause()`. A twelfth `TimelockAction` would
 /// put more new surface in the mainnet binary than that buys. What the asymmetry does buy is
 /// OBSERVABILITY, which is why `MinOperationChanged` carries the old value, the new value and the
 /// signer: an admin that zeroes the floor is visible in one event.
-///
 /// `MIN_OPERATION_CEILING_USDC` is the rail on the lockout direction, and zero is legal: it means
 /// no floor, which is what an in-place upgrade of an existing config decodes out of `reserved`.
 pub fn set_min_operation_usdc_handler(ctx: Context<SetParam>, new_min_usdc: u64) -> Result<()> {
@@ -275,19 +257,17 @@ pub(crate) fn validate_min_operation(current: u64, requested: u64) -> Result<()>
 /// throttle in the safe (tighten) direction vs the current config, else
 /// `LooseningRequiresTimelock`; loosening any of them goes through the
 /// 24h-timelocked `propose_set_redeem_limits` / `execute_set_redeem_limits`.
-///
-/// Covers: instant_redeem_budget_usdc (D10), instant_redeem_window_seconds (D10),
-/// large_redeem_threshold_usdc (D10), redeem_queue_delay_seconds (D8). It does
+/// Covers: instant_redeem_budget_usdc (), instant_redeem_window_seconds (),
+/// large_redeem_threshold_usdc (), redeem_queue_delay_seconds (). It does
 /// NOT touch max_silv_supply (raise-blocked via set_max_silv_supply) or
 /// redemptions_enabled (enable-blocked via set_redemptions_enabled) - those keep
 /// their stricter dedicated setters.
-///
 /// Direction semantics (see `redeem_limits_all_tighten`): budget down, window UP
 /// (longer = lower drain rate), threshold down (more forced to the queue), queue
 /// delay UP. Fat-finger ceilings still apply. No pause interaction (only tightens
 /// safety limits, so safe regardless of pause state). Note (accepted): lengthening
 /// the window toward the 7d max is a denial-of-instant-redemption grief, not a
-/// drain. ROUND 8 T8-08: it is no longer "doubly moot because public redeem is
+/// drain. it is no longer "doubly moot because public redeem is
 /// closed". Redeem is OPEN from `initialize`, so this grief is reachable on a live
 /// protocol and the only thing standing against it is that the same guardian who
 /// can cancel a loosening can also pause.
@@ -312,12 +292,11 @@ pub fn emergency_tighten_redeem_limits_handler(
         ),
         DominionError::LooseningRequiresTimelock
     );
-    // RE-AUDIT P2. This is the THIRD entry point to the redeem limits, and it was the one left behind: the
+    // RE-P2. This is the THIRD entry point to the redeem limits, and it was the one left behind: the
     // timelocked path gained `redeem_limits_effective_change` and this one still only checked `any_set`
     // plus direction. `redeem_limits_all_tighten` accepts EQUALITY on purpose (tightening to the current
     // value is not a loosening), so `{ instant_redeem_budget_usdc: Some(B) }` with B already the budget
     // succeeded and emitted `RedeemLimitsTightened` while nothing moved.
-    //
     // That matters more here than on the timelocked path, not less: this is the EMERGENCY action. Its
     // event is what an incident timeline is reconstructed from afterwards, and a successful no-op in that
     // log reads as "the throttle was tightened at 03:12" when it was not.
@@ -350,7 +329,6 @@ pub fn emergency_tighten_redeem_limits_handler(
     // emergency close SUCCEEDED, emitted an event, and left `redemptions_enabled` untouched.
     // An operator responding to a bad oracle print would see a confirmed emergency action while
     // redemptions kept paying out. A silent no-op on an emergency lever is worse than a revert.
-    //
     // Same root cause as the propose.rs P0 fixed in the same pass: a new field added to the
     // VALIDATORS and not to the APPLY block. Adding a field to `RedeemLimitsArgs` means touching
     // FOUR places, and they are deliberately cross-referenced in each other's comments:
@@ -374,7 +352,7 @@ pub fn emergency_tighten_redeem_limits_handler(
             by: ctx.accounts.admin.key(),
         });
     }
-    // SolidProof LOW #3: the instant fast lane was silent. Reports the RESULTING
+    // the instant fast lane was silent. Reports the RESULTING
     // values, not the supplied Options, so a monitor sees the live throttle state.
     emit!(RedeemLimitsTightened {
         instant_redeem_budget_usdc: config.instant_redeem_budget_usdc,
@@ -538,7 +516,7 @@ mod public_mint_tests {
     }
 }
 
-/// ROUND 5 P1-04. These exercise `validate_min_operation`, the function the handler actually
+/// These exercise `validate_min_operation`, the function the handler actually
 /// calls, not a restatement of it.
 #[cfg(test)]
 mod min_operation_tests {

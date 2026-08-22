@@ -10,7 +10,6 @@ pub const FEE_EXEMPT_ACCOUNT_VERSION: u8 = 1;
 /// Waives the mint premium, the redeem premium, or both, for ONE wallet. One account per wallet,
 /// PDA-derived FROM that wallet, so the seeds bind it and nothing can be spoofed. Mint and redeem
 /// take it as an OPTION: omitting it pays the full fee, which is the safe default.
-///
 /// Grant and revoke are both INSTANT, and the exposure is NOT nil. A wallet exempt on BOTH sides
 /// mints and redeems at exact spot, so its round trip is free and it holds a free option on oracle
 /// movement paid by the treasury: normally a round trip must clear the ~2.485% fee band first.
@@ -28,7 +27,6 @@ pub struct FeeExemptAccount {
     pub version: u8,
     /// Unix timestamp after which this exemption stops applying. MANDATORY, strictly in the future,
     /// at most `MAX_FEE_EXEMPT_TERM_SECONDS` out. **0 grants NOTHING** (see `is_expired`).
-    ///
     /// The term bounds FORGETTING (an arrangement that ends, a launch-window favour nobody revisits),
     /// not a compromised admin, who picks the number. An indefinite arrangement is renewed by one
     /// instant transaction, and that renewal is the review the term exists to force.
@@ -327,7 +325,7 @@ mod tests {
     #[test]
     fn the_expiry_rail_requires_a_real_future_term() {
         const NOW: i64 = 1_700_000_000;
-        // ZERO is refused: it used to be accepted and meant "forever" (audit C-01).
+        // ZERO is refused: it used to be accepted and meant "forever" (audit ).
         assert!(validate_fee_exempt_expiry(0, NOW).is_err());
         // The past and the present instant are refused: a dead exemption would still show as active.
         assert!(validate_fee_exempt_expiry(NOW - 1, NOW).is_err());

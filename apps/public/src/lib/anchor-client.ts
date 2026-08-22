@@ -1,6 +1,5 @@
 /**
  * Anchor client wrapper (V2, Option B). The transaction builders live in lazer-tx.ts, not here.
- *
  * Mint: pay USDC, receive SILV at Pyth XAG/USD * (1 + premium_mint), bounded by a HARD supply cap.
  * Redeem: ONE instant route, `redeem_silv`, which burns the SILV and pays the USDC in the same transaction
  * or reverts. This client predicts "instant" / "limit" (window budget used up) / "otc" (treasury short) /
@@ -88,7 +87,7 @@ export interface ConfigAccount {
   mintPaused: boolean;
   redeemPaused: boolean;
   version: number;
-  /** ROUND 5 P1-04. The minimum size of a priced operation, atomic USDC: `amount_usdc` on mint, the
+  /** . The minimum size of a priced operation, atomic USDC: `amount_usdc` on mint, the
    *  gross USDC value on redeem. Zero means no floor, which
    *  is what a config initialised before this field existed decodes out of `reserved`, so read it as
    *  `?? 0` and never assume a non-zero value. It is admin-settable and instant in both directions, so
@@ -164,7 +163,7 @@ export async function fetchConfig(
   }
 }
 
-/** This and `fetchSilvSupply` THROW on an RPC failure and never return BN(0) (audit P-04): zero is a
+/** This and `fetchSilvSupply` THROW on an RPC failure and never return BN(0) (audit ): zero is a
  *  MEANINGFUL protocol value, so answering it for "the RPC did not answer" shows supply 0, treasury 0 and
  *  max-instant 0 behind a green status light and routes every redeem to "otc", and SWR records it as a
  *  success that is never retried. A missing ATA is a legitimate zero and stays one. */
@@ -299,8 +298,7 @@ export function computeMaxInstantRedeemableUsdc(
 /**
  * What a redemption of `grossUsdc` takes OUT of the treasury, mirroring `redeem_silv.rs`:
  *   `let fee_routed = if fee_routing_disabled { 0 } else { fee_usdc }; total_out = to_user + fee_routed;`
- *
- * Audit P-02: comparing the GROSS unconditionally refuses redemptions the chain would serve, and does so
+ * Audit : comparing the GROSS unconditionally refuses redemptions the chain would serve, and does so
  * exactly while `fee_routing_disabled` is on, i.e. during the incident that switch exists for.
  */
 export function redeemOutflowForGross(
@@ -334,7 +332,7 @@ export function classifyRedeem(
   // "verification required" flipping to "Redeem" once the lookup lands is self-correcting, whereas a promised
   // "instant" that reverts KycRequired costs the user a Lazer fee to discover.
   if (((cfg.kycScopeFlags ?? 0) & 2) !== 0 && kycAttested !== true) return "kyc";
-  // Both limits are on TREASURY OUTFLOW, which equals the gross only while fee routing is on (P-02).
+  // Both limits are on TREASURY OUTFLOW, which equals the gross only while fee routing is on ().
   const outflow = redeemOutflowForGross(cfg, grossUsdc, effectiveBpsRedeem);
   if (
     effectiveRedeemUsed(cfg, nowUnixSecs)
@@ -361,7 +359,7 @@ function anchorErr(t: string, name: string, codeDec: number): boolean {
   );
 }
 export function parseRedeemError(errText: string): RedeemRoute | null {
-  // ROUND 5 P1-04. `redeem_silv` gained a minimum operation size, so this became a reachable revert
+  // `redeem_silv` gained a minimum operation size, so this became a reachable revert
   // and had no mapping: the user saw a raw Custom:12118. It is a "too small", not a routing outcome,
   // so it returns null and the caller surfaces the dedicated message below.
   if (anchorErr(errText, "OperationBelowMinimum", 12118)) return null;
@@ -379,17 +377,16 @@ export function parseRedeemError(errText: string): RedeemRoute | null {
   return null;
 }
 
-/** ROUND 5 P1-04. `OperationBelowMinimum` on either side. Both mint and redeem raise it, so this is the
+/** . `OperationBelowMinimum` on either side. Both mint and redeem raise it, so this is the
  *  one place that recognises it and the caller decides the wording. */
 export function isBelowMinimumError(errText: string): boolean {
   return anchorErr(errText, "OperationBelowMinimum", 12118);
 }
 
-/** ROUND 7 R7-08. The program splits `LazerReplayed` (12121) from `LazerCarriedForward` (12082)
+/** The program splits `LazerReplayed` (12121) from `LazerCarriedForward` (12082)
  *  precisely because the two have OPPOSITE remediations, and the UI mapped neither: both landed on
  *  the generic "Transaction reverted on-chain".
- *
- *  REPLAYED means another operation consumed the same signed print. Under strict anti-replay (D2) one
+ *  REPLAYED means another operation consumed the same signed print. Under strict anti-replay () one
  *  envelope prices exactly one operation, so this is normal contention and the answer is RETRY with a
  *  fresh price. Telling the user nothing here makes a working protocol look like a broken feed.
  */

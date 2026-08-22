@@ -18,7 +18,7 @@ import {
 } from "@solana/web3.js";
 import * as actions from "../lib/admin-actions";
 import { EXEC_METHODS } from "../lib/admin-actions";
-// A-02: the bool/select form defaults live in one shared module so the render
+// the bool/select form defaults live in one shared module so the render
 // default and the read default cannot diverge again. See form-defaults.ts.
 import { boolField, selectField, displayField, UNCHOSEN } from "../lib/form-defaults";
 import {
@@ -61,20 +61,17 @@ const U16 = 65_535;
 
 /**
  * THE PROGRAM'S REAL LIMITS, mirrored from programs/dominion_silver_mint_v2/src/state/config.rs.
- *
  * These exist because the labels used to promise ranges the program does not allow, and always in the
  * PERMISSIVE direction: "Premium (bps, 0..2000)" against a ceiling of 500, "Fee (bps, 0..1000)" against
  * 500, and "Delay (3600..604800 s)" against a FLOOR of 86400. The field validators were
  * `parseUint(p.bps, U16)` and `parseUint(p.secs, U32)`, so the printed range was decoration and 65535
  * bps built cleanly.
- *
  * WHY THAT IS WORSE THAN A COSMETIC BUG. Every one of these is a `propose`, so the cost of a value the
  * program will refuse is a full Squads ceremony: create the vault transaction, collect three of five
  * approvals from three different humans, execute, and only then does it revert. The timelock one was the
  * worst of the three: it told the operator the guardian veto window could be shortened to one hour, when
  * the program's floor is 24h and shortening that window is exactly what an attacker with the admin key
  * would want.
- *
  * Label and enforcement now read the same constant, so they cannot drift apart again.
  */
 const PREMIUM_BPS_CEILING = 500; // config.rs:4 and :5, both sides, 5%
@@ -133,11 +130,11 @@ const optAtomic = (s: string | undefined, decimals: number) =>
   s && s.trim() ? parseAtomic(s, decimals) : undefined;
 
 /** Exported so `src/lib/__tests__/inventory-wallet-actions.test.ts` can traverse the descriptor this
- *  component actually renders. T8-06 asks for exactly that: asserting a string is present in
+ *  component actually renders. asks for exactly that: asserting a string is present in
  *  EXEC_METHODS proves nothing about which card an operator sees or which builder it calls. */
 export const ACTIONS: ActionDesc[] = [
   {
-    // "Mint at launch" (Thomas, 2026-07-26). Two cards on purpose, because the
+    // "Mint at launch" (, 2026-07-26). Two cards on purpose, because the
     // program is deliberately asymmetric: closing is instant, opening is timelocked.
     // One combined on/off card would let an operator try to open the mint instantly
     // and get a confusing revert.
@@ -182,7 +179,7 @@ export const ACTIONS: ActionDesc[] = [
     group: "Instant",
     mode: "squads",
     fields: [{ name: "oz", label: "Max supply (oz)", kind: "silv" }],
-    tip: "Hard ceiling on total SILV. TIGHTEN-ONLY: any value ABOVE the current cap reverts SupplyCapRaiseBlocked. This said 'Raise only with matching physical silver' (audit A-04), which described a workflow the contract does not have, and it would have been read at the exact moment the cap is reached and minting is already blocked: buy metal, type a bigger number, sign, revert. Raising the cap needs a program upgrade. Lowering is instant and PERMANENT (a one-way ratchet), and cannot go below the live supply, which would brick admin_premint.",
+    tip: "Hard ceiling on total SILV. TIGHTEN-ONLY: any value ABOVE the current cap reverts SupplyCapRaiseBlocked. Raising the cap needs a program upgrade: there is no admin path for it. Lowering is instant and PERMANENT (a one-way ratchet), and cannot go below the live supply, which would brick admin_premint.",
     current: (c) => `${Number(c.maxSilvSupply) / 1e6} oz`,
     build: (c, p) => actions.setMaxSilvSupply(c, parseAtomic(p.oz, 6)),
   },
@@ -218,7 +215,7 @@ export const ACTIONS: ActionDesc[] = [
     },
   },
   {
-    // ROUND 8 T8-03. This card moved from "Instant" to "Delayed (24h)" because the instruction behind
+    // This card moved from "Instant" to "Delayed (24h)" because the instruction behind
     // it was DELETED. `initialize` binds the pre-mint destination atomically and nothing can set it
     // instantly afterwards, so the only remaining operation is a CHANGE, and a change to where minted
     // supply lands is exactly the thing that has to be announced and be guardian-cancellable.
@@ -246,7 +243,7 @@ export const ACTIONS: ActionDesc[] = [
     mode: "squads",
     fields: [{ name: "usd", label: "Minimum per mint / redeem (USDC)", kind: "usdc" }],
     tip:
-      "ROUND 5 P1-04. The floor on a single priced operation: amount_usdc on mint, the gross USDC " +
+      "The floor on a single priced operation: amount_usdc on mint, the gross USDC " +
       "value on redeem. D2 lets one signed Lazer print price exactly ONE operation protocol-wide, so " +
       "without a floor a dust mint or a dust redeem captured every print for a fraction of a cent and " +
       "denied the priced path to everyone. Instant in BOTH directions, capped at 100 USDC on chain. " +
@@ -433,7 +430,6 @@ export const ACTIONS: ActionDesc[] = [
     },
   },
   // "Settle redemption off-chain" REMOVED 2026-08-05 with the whole queued path. It was also
-  // SolidProof MEDIUM #4, so deleting the queue deleted the finding.
 
   // --- Open redemptions. The ONLY path: set_redemptions_enabled still refuses `true` in the
   // deployed bytecode, so opening rides the 24h-timelocked SetRedeemLimits action. Given its
@@ -466,7 +462,7 @@ export const ACTIONS: ActionDesc[] = [
       {
         // Deliberately NOT optional. Left blank it used to encode 0n ("never expires") while the
         // confirm dialog rendered "(not chosen)", so an operator could read "(not chosen)", confirm,
-        // and grant a PERMANENT exemption. That is A-02's failure mode, the dialog disagreeing with
+        // and grant a PERMANENT exemption. That is 's failure mode, the dialog disagreeing with
         // what is encoded, reintroduced for a non-bool field in the very file form-defaults.ts exists
         // to protect. Typing "0" explicitly is one keystroke and it makes the dialog honest.
         name: "expires",
@@ -474,7 +470,7 @@ export const ACTIONS: ActionDesc[] = [
         kind: "optbig",
       },
     ],
-    tip: "Waives the premium for one wallet. PREFER 1 (mint only): a both-sides exemption makes a round trip free, which hands that wallet a free option on oracle movement PAID OUT OF THE TREASURY, whereas the normal 1% + 1.5% requires a ~2.485% move before a round trip profits. This tooltip used to end 'the worst case is foregone revenue, not a loss of principal' (audit A-03). That is wrong, and the contract's own comment in state/fee_exempt.rs says so: a free option settled against the treasury IS a transfer of value out of it. AN EXPIRY IS NOW MANDATORY (audit C-01): the contract rejects 0 and rejects any date more than two years out, so this form no longer accepts 'never'.",
+    tip: "Waives the premium for one wallet. PREFER 1 (mint only): a both-sides exemption makes a round trip free, which hands that wallet a free option on oracle movement PAID OUT OF THE TREASURY, whereas the normal 1% + 1.5% requires a ~2.485% move before a round trip profits. A free option settled against the treasury is a transfer of value out of it, not merely foregone revenue. AN EXPIRY IS MANDATORY: the contract rejects 0 and rejects any date more than two years out, so this form does not accept 'never'.",
     build: (c, p) => {
       const f = parseUint(p.flags, 3);
       if (f !== 1 && f !== 2 && f !== 3) {
@@ -487,10 +483,9 @@ export const ACTIONS: ActionDesc[] = [
         );
       }
       const exp = parseBigUint(p.expires);
-      // The contract enforces all of this (audit C-01), so these checks buy nothing in security. They
+      // The contract enforces all of this, so these checks buy nothing in security. They
       // buy the operator a sentence instead of a hex error code, and they catch the three mistakes
       // that actually happen, at the only moment the operator still has the form open.
-      //
       // The reason this validation was worth writing rather than deferring to the chain: this field's
       // label used to read "type 0 for never", so the permanent grant was not an edge case anyone had
       // to reach for, it was the documented shortcut. An operator who types 0 out of habit now learns
@@ -499,7 +494,7 @@ export const ACTIONS: ActionDesc[] = [
       const TWO_YEARS = 2 * 365 * 86400;
       if (exp === 0n) {
         throw new Error(
-          "0 is no longer accepted (audit C-01). A permanent exemption removes the ~2.485% " +
+          "0 is not accepted. A permanent exemption removes the ~2.485% " +
             "round-trip fee band indefinitely, which is what makes oracle movement unprofitable " +
             "to farm against the treasury. Renewing a two-year term is one instant transaction.",
         );
@@ -606,7 +601,7 @@ export const ACTIONS: ActionDesc[] = [
         kind: "int",
       },
     ],
-    tip: "WRITE THE ATTESTATIONS FIRST. Arming before any approval exists locks out every holder instantly, and no on-chain check can tell an empty roster from a deliberately empty one. Redeem-only (2) is the usual first step, so public mint stays open for DEX arbitrage. ARMING IS NOW REFUSED BY THE CONTRACT UNTIL AT LEAST ONE WALLET IS ATTESTED (audit C-02). 'An attestor is configured' never meant 'somebody can get through': a PDA or a typo'd key passed the old check while making every future attestation impossible. So the roster itself is the check, and the attest-then-arm order is enforced by the program rather than by this tooltip. One admin signature, no co-signer. DISARMING is always allowed and needs nothing: it is the only way out of a wrongly-armed gate. NOTE: arming with exactly one attestation still locks out every other holder, and no on-chain check can tell that apart from a deliberately small roster.",
+    tip: "WRITE THE ATTESTATIONS FIRST. Arming before any approval exists locks out every holder instantly, and no on-chain check can tell an empty roster from a deliberately empty one. Redeem-only (2) is the usual first step, so public mint stays open for DEX arbitrage. ARMING IS REFUSED BY THE CONTRACT UNTIL AT LEAST ONE WALLET IS ATTESTED, so the attest-then-arm order is enforced by the program rather than by this tooltip. Note that 'an attestor is configured' does not mean anyone can get through: a PDA or a mistyped key would make every future attestation impossible. One admin signature, no co-signer. DISARMING is always allowed and needs nothing: it is the only way out of a wrongly-armed gate. NOTE: arming with exactly one attestation still locks out every other holder, and no on-chain check can tell that apart from a deliberately small roster.",
     current: (c) =>
       `scope ${c.kycScopeFlags ?? 0}${c.kycEnforced ? " (ARMED)" : " (dormant)"}`,
     build: (c, p) => {
@@ -620,7 +615,7 @@ export const ACTIONS: ActionDesc[] = [
     label: "KYC: attest wallet",
     group: "Emergency & ops",
     // DIRECT, not squads: the required signer is the ATTESTOR key, not config.admin. This card
-    // only works when the connected wallet IS the attestor. Normally Mark's backend calls it.
+    // only works when the connected wallet IS the attestor. Normally backend calls it.
     mode: "direct",
     fields: [
       { name: "wallet", label: "Wallet to approve (pubkey)", kind: "pubkey" },
@@ -947,7 +942,7 @@ export function AdminActions() {
     const p = params[a.id] ?? {};
     const summary = a.fields.length
       ? a.fields
-          // A-02 follow-up: the dialog MUST read the same state the builder
+          // follow-up: the dialog MUST read the same state the builder
           // reads, or it becomes a third divergent default.
           .map((f) => `${f.label} = ${displayField(p, f.name)}`)
           .join("\n")

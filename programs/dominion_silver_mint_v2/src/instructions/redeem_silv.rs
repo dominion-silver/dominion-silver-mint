@@ -1,6 +1,5 @@
 // redeem_silv: THE redemption path. One route, instant settlement. The user burns SILV and receives
 // USDC from the treasury in the same transaction, for any amount the treasury can currently fund.
-//
 // OUTFLOW DEFINITION, and getting it backwards is a live revert. What leaves the treasury is the
 // GROSS oracle value of the burned SILV when fee routing is ON (user leg plus premium leg), and
 // GROSS MINUS FEE when routing is OFF (the premium is retained, so only the user leg moves). That
@@ -141,7 +140,7 @@ pub fn handler(
         &user_key,
     )?;
 
-    // 2. Zero guard. The global rolling-window budget below is the only size limit (D10).
+    // 2. Zero guard. The global rolling-window budget below is the only size limit ().
     require!(amount_silv > 0, DominionError::ZeroAmount);
 
     let lazer_program_ai = ctx.accounts.lazer_program.to_account_info();
@@ -180,8 +179,7 @@ pub fn handler(
     let gross_usdc = silv_to_usdc_at_oracle(amount_silv, oracle_price)?;
     require!(gross_usdc > 0, DominionError::ZeroAmount);
 
-    // 4b. ROUND 5 P1-04, the SECOND HALF, and it was missing until the review pass caught it.
-    //
+    // 4b. , the SECOND HALF, and it was missing until the caught it.
     // The floor was added to `mint_silv` alone, and the high-water mark it protects is ONE field in
     // ONE shared config that BOTH handlers write (the write on this side is a few lines ABOVE, and
     // `tools/state-harness/tests/oracle_replay.rs::both_sides_share_one_high_water_mark` proves a mint
@@ -190,15 +188,12 @@ pub fn handler(
     // `silv_to_usdc_at_oracle(1) = 58` micro-USDC gross, a 1 micro-USDC fee and 57 back to the user,
     // so capturing a print cost about 1.3 micro-USDC NET, roughly thirty times cheaper than the mint
     // capture the floor was written to price out.
-    //
     // Not exploitable at the launch posture, because `redemptions_enabled` is false. It becomes
     // exploitable on the day redeem opens, which is a 24h config change needing no upgrade and no
     // re-audit, and closing it THEN would need a program upgrade. That is exactly the shape of defect
     // worth paying for now.
-    //
     // It is denominated in USDC, like the mint side, so one field governs both: the floor is a
     // MINIMUM OPERATION SIZE, not a minimum mint. Hence `min_operation_usdc`.
-    //
     // WHAT IT COSTS, stated rather than glossed. The round trip is not symmetric: minting exactly the
     // floor pays the mint premium, so the resulting SILV is worth slightly LESS than the floor and
     // cannot be redeemed in one call. Any holder whose ENTIRE balance is worth less than
@@ -206,7 +201,6 @@ pub fn handler(
     // every position under MIN_OPERATION_CEILING_USDC in that state instantly. That is a
     // real cost of closing the capture primitive, it is not hypothetical, and it is why the ceiling
     // exists and why the setter emits an event carrying the old and new values.
-    //
     // WHY IT SITS AFTER THE ORACLE READ, unlike the mint side: the value of `amount_silv` is unknown
     // until the price is read. The transaction reverts either way, so the high-water write above is
     // rolled back and no print is consumed; what a dust caller pays for the privilege is the Lazer
@@ -272,7 +266,7 @@ pub fn handler(
     );
 
     // 7b. Solvency over the SUM of both legs; the user's leg alone would let the premium transfer
-    // overdraw. The float (D7 option a) is NOT subtracted: it gates the ADMIN, so users come first.
+    // overdraw. The float (option a) is NOT subtracted: it gates the ADMIN, so users come first.
     let treasury_balance = ctx.accounts.usdc_treasury.amount;
     require!(
         treasury_balance >= total_out,
@@ -289,7 +283,7 @@ pub fn handler(
         .checked_add(total_out)
         .ok_or(error!(DominionError::ArithmeticOverflow))?;
 
-    // 9. Dust-filter price update (D38). Pre-premium value, i.e. `gross_usdc`, so the threshold holds.
+    // 9. Dust-filter price update (). Pre-premium value, i.e. `gross_usdc`, so the threshold holds.
     maybe_update_last_price(config, oracle_price, gross_usdc, now);
 
     silv_burn_from_user(

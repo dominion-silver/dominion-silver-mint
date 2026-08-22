@@ -116,7 +116,6 @@ export function feeVaultUsdcAta(): PublicKey {
 /** Resolve the caller's OPTIONAL per-wallet accounts (fee exemption, KYC attestation) in ONE batched RPC
  *  call. Anchor optional accounts must be `null` when absent, and passing the address of an account the
  *  program cannot deserialize is worse than passing null, so this validates with `usable`, not existence.
- *
  *  THROWS on RPC failure, so the consumer sees an error rather than "no accounts" and `kycAttested` stays
  *  `undefined` (NOT KNOWN) instead of hardening into a definite `false`. The builders below fall back to
  *  null themselves, where that IS the safe direction; the decision belongs at each call site. */
@@ -133,7 +132,7 @@ export async function resolveWalletFlags(
       owner: user,
       feeExempt: feeOk ? fe : null,
       kyc: usable(infos[1], KYC_DISCRIMINATOR) ? ky : null,
-      // P-07: READ the account, do not merely locate it, or every quote uses the global premium.
+      // READ the account, do not merely locate it, or every quote uses the global premium.
       feeExemptFlags: feeOk ? decodeFeeExemptFlags(infos[0]!.data) : null,
       feeExemptExpiresAt: feeOk ? decodeFeeExemptExpiry(infos[0]!.data) : null,
     };
@@ -188,7 +187,7 @@ export interface WalletFlags {
   kyc: PublicKey | null;
   /** `Side` bitfield from the on-chain account: 1 = mint, 2 = redeem, 3 = both. */
   feeExemptFlags: number | null;
-  /** Unix seconds. Mandatory and strictly future on chain since audit C-01. */
+  /** Unix seconds. Mandatory and strictly future on chain since audit */
   feeExemptExpiresAt: number | null;
 }
 
@@ -267,7 +266,7 @@ export function decodeFeeExemptExpiry(data: Uint8Array | Buffer): number | null 
 }
 
 /** The premium a GIVEN wallet pays on a GIVEN side, mirroring `state/fee_exempt.rs::effective_premium_bps`.
- *  Audit P-07: the preview, the price, the fee label and `min_out` must all use THIS number, not the global
+ *  Audit : the preview, the price, the fee label and `min_out` must all use THIS number, not the global
  *  bps. `expiresAt` of 0 counts as EXPIRED, matching `FeeExemptAccount::is_expired`: failing open would
  *  quote 0% and then charge the premium, minting less SILV than the quote promised. */
 export function effectivePremiumBps(
@@ -313,7 +312,6 @@ export interface BuildLazerMintTxArgs {
 }
 
 /** The mint_silv account set, as a pure function of the caller and their optional per-wallet accounts.
- *
  *  EXPORTED SO IT CAN BE TESTED, and a test is the ONLY guard on this list: `.accounts()` is not strict in
  *  Anchor 0.31.1 (it delegates to `accountsPartial`), so a missing key is silently derived from the IDL seeds,
  *  and for an OPTIONAL account that derivation yields a real address for an account that does not exist,

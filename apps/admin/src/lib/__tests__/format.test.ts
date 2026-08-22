@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import BN from "bn.js";
 import { formatSilv, formatUsdc } from "../anchor-client";
 
-// AUDIT review of daac4ac: formatSilv had NO test coverage, and the rewrite that
+// review of daac4ac: formatSilv had NO test coverage, and the rewrite that
 // removed one bug (BN.toNumber() throwing above 2^53) introduced another (a rounding
 // carry that displayed 1.999999 as "1.1"). All three reviewers found it
 // independently. These are the cases that distinguish the two implementations.

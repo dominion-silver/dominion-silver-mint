@@ -7,7 +7,7 @@
 # `no-log-ix-name` build strips the msg! names it looks for. `test-harness` and `dev-hatch`
 # builds land at target/deploy/dominion_silver_mint.so, the exact path `solana program deploy`
 # reads, and dev-hatch compiles in setters that mutate config with NO timelock. Three defeated
-# earlier designs of this gate: private/trimmed-notes/gates.md
+# earlier designs of this gate.
 
 # Usage: scripts/verify-release-artifact.sh [path-to-so] [path-to-idl]
 #   --skip-rebuild   secondary checks only. Weaker, and exits 2, never 0.

@@ -35,7 +35,7 @@ export interface ConfigAccount {
   premiumBpsRedeem: number;
   // Oracle (Pyth Lazer). The Core pythFeedId[32] + pythReceiverProgram were
   // removed in the Lazer migration; these are the new fields the account
-  // actually carries (Fable audit P2-C).
+  // actually carries (audit ).
   pythLazerFeedId: number; // u32, 3154 = Metal.Index.SILVER/USD (pure spot)
   minPublishers: number; // u16, operating publisher floor
   lastUsedFeedUpdateTimestampUs: BN; // u64, non-decreasing high-water mark
@@ -56,15 +56,14 @@ export interface ConfigAccount {
   maxPriceDeltaBps: number;
   priceDeltaDecaySeconds: number;
   priceUpdateMinAmountUsdc: BN;
-  // D2: hard supply cap (atomic SILV, oz * 1e6)
+  // hard supply cap (atomic SILV, oz * 1e6)
   maxSilvSupply: BN;
-  // D7: admin-withdraw float floor (atomic USDC)
+  // admin-withdraw float floor (atomic USDC)
   treasuryMinFloatUsdc: BN;
-  // D11: manual redemptions switch
+  // manual redemptions switch
   redemptionsEnabled: boolean;
   // SLIDING-window redemption budget (2026-08-05). Two buckets: the current one plus the previous
   // one weighted by how much of it still lies inside the trailing window.
-  //
   // The worst case is still 2x the budget, but it now takes an alignment nearly a full window wide
   // instead of a one-second wait for a reset. That rate change is the whole benefit; the bound is
   // unchanged. Size the budget at half the daily outflow you are willing to see.
@@ -137,23 +136,21 @@ export interface ConfigAccount {
   /** The fee-vault escape hatch, NEGATED. false = routing ON (the launch posture); true = the
    *  premium stays in the treasury, which is the pre-2026-08-05 behaviour and the remedy if the
    *  vault ever becomes unusable (e.g. frozen by the USDC issuer).
-   *
    *  Negated on purpose: the field is carved out of `reserved`, so on an in-place upgrade it
    *  decodes from a zero byte, and the zero value has to BE the intended state. As
    *  `feeRoutingEnabled` that meant routing silently OFF on every upgraded config. */
   feeRoutingDisabled?: boolean;
   /** KYC scope bitfield: bit 0 = mint, bit 1 = redeem, 0 = off (the launch posture).
-   *
    *  Declared explicitly because the panel reads it through an `any`-typed `current?: (c: any)`
    *  callback, where a typo would silently render "scope 0 (dormant)" for an ARMED gate and still
    *  typecheck. Optional because a config written before this upgrade decodes it as 0. */
   kycScopeFlags?: number;
-  /** ROUND 5 P1-04. The minimum size of a priced operation, atomic USDC: `amount_usdc` on mint, the
+  /** . The minimum size of a priced operation, atomic USDC: `amount_usdc` on mint, the
    *  gross USDC value on redeem. Zero means NO floor, which is what a config initialised before this
    *  field existed decodes out of `reserved`, so read it as `?? 0` and never assume a non-zero value.
    *  Admin-settable and instant in both directions, so the live account is the only source of truth. */
   minOperationUsdc?: BN;
-  /** ROUND 5. Live count of KycAccounts. Was missing from this mirror despite the header claiming the
+  /** Live count of KycAccounts. Was missing from this mirror despite the header claiming the
    *  interface mirrors ConfigAccount field for field; `set_kyc_scope` refuses to arm at zero, so a
    *  console that cannot show it cannot explain why arming was refused. */
   kycAttestationCount?: number;
@@ -177,12 +174,10 @@ export interface DashboardSnapshot {
   treasuryFloatOk: boolean; // treasury >= treasury_min_float_usdc
   /**
    * Which reads FAILED, if any. Empty means every figure below is real.
-   *
-   * AUDIT FINDING A-01. `Promise.allSettled` turned a rejected treasury or supply read into `BN(0)`
+   * `Promise.allSettled` turned a rejected treasury or supply read into `BN(0)`
    * and returned a snapshot that looked complete. With the config still readable, the operator saw
    * `Treasury USDC $0`, `SILV supply 0 oz` and `0%` cap utilisation, with no indication anything had
    * gone wrong, and could then decide a withdrawal, a premint or an opening on a false photograph.
-   *
    * allSettled was the right primitive for the wrong reason: it exists so ONE failure does not lose the
    * other results, which is genuinely what we want, but the caller then has to be TOLD. Reporting the
    * failures alongside the partial data keeps the resilience and drops the lie.
@@ -216,12 +211,10 @@ type SettledAmount = PromiseSettledResult<{ value: { amount: string } }>;
 
 /**
  * Turn two settled token reads into amounts PLUS the list of the ones that failed.
- *
- * AUDIT FINDING A-01, and extracted as a pure function so the property can actually be tested. The
+ * and extracted as a pure function so the property can actually be tested. The
  * logic used to be three lines inline (`status === "fulfilled" ? new BN(...) : new BN(0)`) reachable
  * only through Anchor's `Program`, which needs a real encoded config account on a real connection. A
  * behaviour that can only be exercised end to end is a behaviour with no test, and this one had none.
- *
  * Zero is deliberately still the numeric fallback: every derived figure downstream (cap utilisation,
  * budget remaining, float check) has to compute or the whole console goes blank on one bad read. What
  * changed is that the caller is TOLD, so it can refuse to present those figures as facts.
@@ -271,7 +264,7 @@ export async function fetchDashboardSnapshot(
     connection.getTokenSupply(SILV_MINT),
   ]);
 
-  // A-01: a failed read is recorded, not silently rendered as zero. Zero stays the numeric value so
+  // a failed read is recorded, not silently rendered as zero. Zero stays the numeric value so
   // every derived figure below still computes, but `degraded` tells the UI not to trust it.
   const { treasuryUsdc, silvSupply, degraded } = readTokenAmounts(
     balanceInfo,
@@ -290,7 +283,6 @@ export async function fetchDashboardSnapshot(
   }
 
   // The contract's SLIDING window counter, ported from `state/redeem_window.rs::roll_window`.
-  //
   // This block used to mirror a FIXED reset window, and its own comment said so. The program stopped
   // being fixed on 2026-08-05 and this file was not updated, so the console showed
   // "Instant used this window: $0 (window reset)" and the full budget as remaining in exactly the
@@ -363,8 +355,7 @@ export async function fetchDashboardSnapshot(
 // ---- formatting ----
 
 /** Raw u64 BN (6 decimals) -> display USD string.
- *
- * AUDIT finding A-29: this used `raw.div(1e6).toNumber()`, an INTEGER division
+ * finding this used `raw.div(1e6).toNumber()`, an INTEGER division
  * that discarded the fractional part before formatting, so every USD figure in
  * the console silently lost its cents ($1,234.56 rendered as "1,234"). The
  * `maximumFractionDigits: 2` was therefore decorative. Now the atomic amount is
@@ -388,10 +379,10 @@ export function formatUsdc(raw: BN): string {
 
 /** Raw u64 BN (6 decimals) -> display SILV/oz count string. */
 export function formatSilv(raw: BN): string {
-  // AUDIT follow-up to A-29: `raw.toNumber()` THROWS above 2^53. It is bounded
+  // `raw.toNumber()` THROWS above 2^53. It is bounded
   // safe today because MAX_SILV_SUPPLY_CEILING (1e15 atomic) sits under 2^53, but
   // it would throw rather than misformat if that ceiling ever moved, and the whole
-  // point of the A-29 fix was to stop doing lossy arithmetic on BN before display.
+  // point of the fix was to stop doing lossy arithmetic on BN before display.
   // Split into whole and fractional parts instead, so no intermediate exceeds 2^53.
   const MICRO = new BN(1_000_000);
   const neg = raw.isNeg();
@@ -399,13 +390,12 @@ export function formatSilv(raw: BN): string {
   const whole = Number(abs.div(MICRO).toString()).toLocaleString("en-US");
   const frac = abs.mod(MICRO).toNumber(); // 0..999_999
   if (frac === 0) return `${neg ? "-" : ""}${whole}`;
-  // AUDIT review of daac4ac (P1, found independently by all three reviewers): this
+  // review of daac4ac (, found independently by all three reviewers): this
   // rounded to 4 decimals with `Math.round(frac / 100)`, which can return 10000.
   // padStart(4) leaves "10000" untouched and the trailing-zero strip collapses it to
   // "1", so 1.999999 rendered as "1.1" and 0.999999 as "0.1": roughly 0.9 oz low,
   // silently, on the supply and cap figures an operator reads before setting a
   // TIGHTEN-ONLY cap that cannot be undone.
-  //
   // Fixed by not rounding at all. All six decimals are exact (the mint has 6), and
   // trailing zeros are trimmed, so there is no carry to get wrong and no rounding
   // for the operator to reason about. Displaying more precision than before is the
@@ -430,9 +420,8 @@ export const PROGRAM_ID_STR = PROGRAM_ID.toBase58();
 
 /**
  * One guardian's on-chain state, as the console needs to display it.
- *
- * AUDIT review of daac4ac (P1, integration reviewer): `pending_removal_at` is
- * written on-chain and was read NOWHERE in either app. DOM-007's whole security
+ * review of daac4ac (, integration reviewer): `pending_removal_at` is
+ * written on-chain and was read NOWHERE in either app. 's whole security
  * property is "the targeted guardian has admin_timelock_seconds to react", and the
  * console gave that guardian no way to see that a removal had been scheduled, who is
  * targeted, or when it fires. A veto nobody can see is not a veto.
@@ -450,7 +439,6 @@ export type GuardianView = {
    * Derived: whether the PROGRAM will accept this guardian's powers, which is
    * `cooldown_until == 0 && guardian != config.admin`, i.e. exactly
    * GuardianAccount::may_act.
-   *
    * Review-of-fixes: this used to be `cooldown_until == 0` alone, so a guardian key
    * that IS the admin rendered as a healthy active guardian even though every
    * authorization site refuses it. That is the one state where guardian_count
@@ -465,7 +453,6 @@ export type GuardianView = {
 
 /**
  * Every guardian account owned by the program, newest-added first.
- *
  * Uses getProgramAccounts filtered by the GuardianAccount discriminator rather than
  * a list of known pubkeys, because nothing on-chain enumerates guardians: the config
  * holds only a COUNT, and the accounts are PDAs of keys the console does not know.
@@ -506,7 +493,6 @@ export async function fetchGuardians(
 
 /**
  * Seconds until `ts`, or null when nothing is scheduled. Negative once elapsed.
- *
  * Review-of-fixes F14: this called `ts.toNumber()`, which THROWS above 2^53 ("Number
  * can only safely store up to 53 bits"). It is called twice per row inside the
  * guardian roster's render, so a single out-of-range i64 would unmount the entire

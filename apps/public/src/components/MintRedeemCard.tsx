@@ -103,7 +103,7 @@ export function MintRedeemCard() {
     setAmount("");
   }, [mode]);
 
-  // A-26: NO default premium. A fallback bps quotes a wrong price and, worse, feeds the wrong premium into
+  // NO default premium. A fallback bps quotes a wrong price and, worse, feeds the wrong premium into
   // the min_out the transaction enforces. `null` propagates through every memo and disables the preview.
   const configuredBpsMint = cfg?.premiumBpsMint ?? null;
   const configuredBpsRedeem = cfg?.premiumBpsRedeem ?? null;
@@ -117,13 +117,11 @@ export function MintRedeemCard() {
 
   // The caller's on-chain per-wallet accounts, so `classifyRedeem` can answer the KYC question for THIS
   // wallet rather than only reporting that the gate is armed. One batched RPC call.
-  //
   // ONE SNAPSHOT, used by the quote AND handed to the builder, so the transaction is priced by the same
   // facts the user was shown. Letting the builder re-read at send time puts one transaction on two
   // snapshots that can disagree, and that disagreement surfaces as arithmetic nobody can see (a bare
   // SlippageExceeded, or a budget check that counts 100.00 where the quote classified 98.50). A
   // stale-but-CONSISTENT quote is the better trade: it reverts on a program check the user can read.
-  //
   // `error` is destructured deliberately: making the resolver throw only helps if a call site reads it.
   const { data: walletFlags, error: walletFlagsError } = useSWR(
     wallet.publicKey ? `wallet-flags-${wallet.publicKey.toBase58()}` : null,
@@ -133,7 +131,6 @@ export function MintRedeemCard() {
   // TRI-STATE, and the third state must stay reachable: `undefined` means NOT KNOWN, never "no exemption".
   // `classifyRedeem` turns it into the "kyc" route whenever the gate is armed, which is the fail-closed
   // direction, so an RPC failure blocks instead of promising an instant redeem the chain would revert.
-  //
   // `keepPreviousData` serves the PREVIOUS wallet's flags until the new fetch settles, so a foreign
   // snapshot is downgraded to `undefined`, back onto that same fail-closed path. Uses the SAME predicate
   // the builders use, imported rather than re-expressed: three copies is how one of them drifts.
@@ -141,9 +138,9 @@ export function MintRedeemCard() {
   const flags = flagsAreForThisWallet ? walletFlags : undefined;
   const kycAttested = flags ? flags.kyc != null : undefined;
 
-  // P-07: the quote uses the premiums THIS WALLET pays, not the global config values, so a whitelisted
+  // the quote uses the premiums THIS WALLET pays, not the global config values, so a whitelisted
   // wallet can see the terms it was granted before signing. `effectivePremiumBps` mirrors
-  // `state/fee_exempt.rs::effective_premium_bps`, including a zero expiry counting as expired (C-01).
+  // `state/fee_exempt.rs::effective_premium_bps`, including a zero expiry counting as expired ().
   // Falling back to the CONFIGURED bps when the exemption is unknown is the safe direction: `minSilvOut`
   // comes from this same number, so an over-optimistic quote is a hard SlippageExceeded, not a surprise.
   const premiumBpsMint =
@@ -179,7 +176,7 @@ export function MintRedeemCard() {
 
   const preview = useMemo(() => {
     if (!price || !amount) return null;
-    // A-26: no quote without the real premium (no fallback).
+    // no quote without the real premium (no fallback).
     if (premiumBpsMint === null || premiumBpsRedeem === null) return null;
     const num = parseFloat(amount);
     if (isNaN(num) || num <= 0) return null;
@@ -335,7 +332,7 @@ export function MintRedeemCard() {
 
   async function handleSubmit() {
     if (inFlight.current) return;
-    // A-26, defence in depth: never build a transaction whose enforced min_out came from a guessed premium.
+    // defence in depth: never build a transaction whose enforced min_out came from a guessed premium.
     if (premiumBpsMint === null || premiumBpsRedeem === null) {
       setErrorMsg("Protocol parameters are still loading. Please retry in a moment.");
       return;
@@ -356,14 +353,14 @@ export function MintRedeemCard() {
     setSubmitting(true);
     try {
       if (mode === "mint") {
-        // ROUND 8: public direct mint ships OPEN from `initialize`. This branch is what a user sees
+        // public direct mint ships OPEN from `initialize`. This branch is what a user sees
         // after an EMERGENCY CLOSE, not at launch: reopening rides the 24h timelock.
         if (!cfg.publicMintEnabled) {
           throw new Error(
             "Direct mint isn't open yet. You can buy SILV on the DEX.",
           );
         }
-        // ROUND 5 P1-04. The on-chain floor, read from the LIVE config rather than a constant: it is
+        // The on-chain floor, read from the LIVE config rather than a constant: it is
         // admin-settable and instant, so a copy here would go stale the first time it moves and send the
         // user into a OperationBelowMinimum revert. Checked before the envelope is claimed, so a mint
         // that cannot succeed costs neither a Lazer verify fee nor somebody else's price print.
@@ -404,12 +401,11 @@ export function MintRedeemCard() {
         setErrorMsg(null);
         afterTx(r.consumerSig, "Mint");
       } else {
-        // ROUND 5 P1-04, and the review pass caught that this guard existed on the mint side only.
+        // and the caught that this guard existed on the mint side only.
         // `redeem_silv` compares the GROSS USDC value against the same `config.min_operation_usdc`,
         // and `redeemGross` above is already exactly that number. Checked before the envelope is
         // claimed, so a redeem that cannot succeed neither pays a Lazer verify fee nor takes a price
         // print away from somebody whose transaction would have worked.
-        //
         // The floor is a WALL for a small holder, not just a floor: a balance worth less than it has
         // no redeem exit in one call, so the message says the minimum rather than only refusing.
         const minOpUsdc = cfg.minOperationUsdc?.toNumber() ?? 0;
@@ -481,7 +477,7 @@ export function MintRedeemCard() {
         }
       }
     } catch (e: unknown) {
-      // ROUND 8 T8-07. The mapping moved to lib/user-error-messages.ts so it can be tested. It was
+      // The mapping moved to lib/user-error-messages.ts so it can be tested. It was
       // inline in this catch, so the wording a user reads after a revert was asserted by nothing.
       const friendly = mapUserFacingError(e, mode, OTC_EMAIL);
       showError(friendly);
@@ -763,7 +759,7 @@ export function MintRedeemCard() {
           redeemRoute === "otc" ||
           redeemRoute === "limit" ||
           redeemRoute === "kyc" ||
-          // NOT-YET-KNOWN blocks too, and it must: `fetchTreasuryBalance` throws on an RPC failure (P-04),
+          // NOT-YET-KNOWN blocks too, and it must: `fetchTreasuryBalance` throws on an RPC failure (),
           // so `treasury` becomes undefined and `redeemRoute` becomes null. null matches none of the cases
           // above, and `handleSubmit` would then fall through every guard straight to the instant send.
           // Same tri-state doctrine as `kycAttested`: unknown is not permission.

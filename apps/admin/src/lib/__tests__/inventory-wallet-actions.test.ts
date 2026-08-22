@@ -1,13 +1,11 @@
 /**
- * ROUND 8 T8-06. The operator path for the inventory wallet, after option A deleted the instant one.
- *
- * WHY THIS FILE EXISTS AND WHAT WOULD NOT COUNT. Codex's acceptance criterion is explicit that
+ * The operator path for the inventory wallet, after option A deleted the instant one.
+ * WHY THIS FILE EXISTS AND WHAT WOULD NOT COUNT. acceptance criterion is explicit that
  * asserting a string is present in `EXEC_METHODS` is not enough: that proves a constant, not a
  * capability. So every test below builds a REAL instruction with the real Anchor builders in
  * `admin-actions.ts`, decodes it with the real IDL coder, and checks the bytes and the account list.
  * The catalog test drives the descriptor `AdminActions.tsx` actually renders, through its own
  * `build` closure, so a card that was left pointing at a deleted builder fails here.
- *
  * Everything is offline. `.instruction()` never touches the RPC; the only read the propose path
  * performs is `config.next_timelock_nonce`, and the fake connection below answers it with a
  * zero-filled account, which Borsh decodes as every pubkey default, every bool false, every Option

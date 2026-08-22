@@ -132,11 +132,9 @@ pub fn price_from_lazer(
     }
 
     // 5.4: STRICTLY increasing high-water mark. One signed envelope, one operation.
-    //
     // This was `<` until 2026-08-07, which let the same envelope price several transactions inside the
-    // freshness window. Round 4 P0-01 called that out against the stated invariant, and Thomas chose the
+    // freshness window. Round 4 called that out against the stated invariant, and chose the
     // strict guarantee over the concurrent one.
-    //
     // THE COST IS REAL AND IT IS ON THE HOT PATH: the config is a shared writable account, so at most ONE
     // mint or redeem can succeed per Lazer print. The feed publishes at fixed_rate@1000ms, so that is the
     // ceiling, roughly one operation per second protocol-wide. Two users submitting against the same
@@ -318,7 +316,7 @@ mod tests {
         // Strictly newer than last-used: the only accepted case.
         assert!(price_from_lazer(&p, &params(now), now - 1).is_ok());
         // EQUAL to last-used: rejected. One envelope, one operation. This assertion is the whole of the
-        // decision taken on round 4 P0-01, and it inverts what this test asserted before.
+        // decision taken on , and it inverts what this test asserted before.
         assert_eq!(
             price_from_lazer(&p, &params(now), now),
             Err(LazerPolicyError::NonMonotonic),

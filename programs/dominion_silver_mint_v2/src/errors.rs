@@ -106,10 +106,10 @@ pub enum DominionError {
     SerializationFailure,
     #[msg("Hourly counter previous-hour PDA mismatch")]
     PrevHourMismatch,
-    // CODEX C-01: rug-by-init defense.
+    // rug-by-init defense.
     #[msg("SILV mint already has non-zero supply at init (rug-by-init defense)")]
     SilvMintHasPreexistingSupply,
-    // CODEX C-02: bootstrap authority validation.
+    // bootstrap authority validation.
     #[msg("SILV mint authority must be the silv_mint_authority PDA")]
     SilvMintAuthorityMismatch,
     // RETIRED, never raised: the launch design REQUIRES a freeze authority to be present and to match
@@ -117,18 +117,18 @@ pub enum DominionError {
     // because discriminants are positional, so deleting it would renumber every later variant.
     #[msg("RETIRED: no longer raised. The SILV mint freeze_authority is REQUIRED to be present and to match config.freeze_authority_expected; see SilvFreezeAuthorityMismatch")]
     SilvFreezeAuthorityMustBeNone,
-    // CODEX M-02: external dependency hard-pin.
+    // external dependency hard-pin.
     #[msg("USDC mint not in known-good allowlist (Circle mainnet/devnet/testnet)")]
     UsdcMintNotAllowed,
     #[msg("Pyth receiver program does not match the official deployment")]
     WrongPythReceiver,
-    // CODEX H-03: reserve floor cannot be reduced below absolute minimum.
+    // reserve floor cannot be reduced below absolute minimum.
     #[msg("treasury_min_reserve_bps cannot be reduced below the protocol floor")]
     ReserveFloorBelowMinimum,
-    // CODEX 2nd-pass M-01: metadata update authority pinning at init.
+    // 2nd-pass metadata update authority pinning at init.
     #[msg("SILV mint metadata update_authority must be the silv_metadata_authority PDA")]
     SilvMetadataUpdateAuthorityMismatch,
-    // Option B (CONFIRMED_SPEC.md 2026-05-15). APPEND ONLY - never reorder:
+    // APPEND ONLY, never reorder: the discriminants are part of the ABI.
     // discriminants are positional and external clients read the numeric code.
     #[msg("Mint would exceed the SILV supply cap")]
     SupplyCapExceeded,
@@ -144,13 +144,13 @@ pub enum DominionError {
     RequestNotPending,
     #[msg("Redemption request owner does not match signer")]
     RedeemRequestOwnerMismatch,
-    // P1-03: an extension outside the allowlist (MetadataPointer, TokenMetadata, PermanentDelegate).
+    // an extension outside the allowlist (MetadataPointer, TokenMetadata, PermanentDelegate).
     #[msg("SILV mint has a disallowed Token-2022 extension")]
     DisallowedMintExtension,
-    // Codex deferred batch (2026-05-19). APPEND ONLY.
+    // deferred batch (2026-05-19). APPEND ONLY.
     #[msg("Redemption request is not in SettledOffchain status")]
     RequestNotSettled,
-    // P2-05: per-field metadata bounds (Option<String> + size caps).
+    // per-field metadata bounds (Option<String> + size caps).
     #[msg("Metadata update has no fields set (all None); nothing to update")]
     MetadataNoFields,
     #[msg("Metadata field is present but empty (blanking is not allowed)")]
@@ -189,7 +189,7 @@ pub enum DominionError {
     SupplyCapRaiseBlocked,
     #[msg("Public direct mint is disabled. ROUND 8: it ships OPEN and this fires only after an emergency close; reopening is 24h-timelocked")]
     PublicMintDisabled,
-    /// ROUND 8 T8-03: `set_inventory_wallet` no longer exists, so this is now raised by `initialize`
+    /// `set_inventory_wallet` no longer exists, so this is now raised by `initialize`
     /// (which refuses to bind the default) and by the readers that refuse to act on an unset field.
     #[msg(
         "Inventory wallet is not set; initialize binds it and only the 24h timelock can change it"
@@ -233,7 +233,7 @@ pub enum DominionError {
     // The targeted guardian's self-veto is capped at one use, or a rogue guardian is unremovable.
     #[msg("This guardian has already used its one self-cancel")]
     GuardianSelfCancelExhausted,
-    // "Mint at launch" phase (Thomas, 2026-07-26).
+    // "Mint at launch" phase (, 2026-07-26).
     #[msg("Public mint is already in the requested state")]
     PublicMintUnchanged,
     #[msg("Opening the public mint requires the 24h timelock; only CLOSING it is instant")]
@@ -262,24 +262,24 @@ pub enum DominionError {
     #[msg("withdraw_fees destination must not be owned by the fee-vault PDA: funds sent there could never be moved again")]
     FeeWithdrawDestinationStranded,
 
-    /// C-02: arming with an empty roster locks every holder out of the gated side, so the roster
+    /// arming with an empty roster locks every holder out of the gated side, so the roster
     /// itself is the check. Write at least one attestation (`attest_kyc`) first, then arm.
     #[msg("KYC cannot be armed with zero attestations: attest at least one wallet first")]
     KycNoAttestationsYet,
 
-    /// C-02: clearing `kyc_operator` while a side is gated means no NEW attestation can ever be
+    /// clearing `kyc_operator` while a side is gated means no NEW attestation can ever be
     /// written, shutting out every holder not already attested. Disarm first, then decommission.
     #[msg("cannot clear the KYC operator while the gate is armed: disarm the scope first")]
     KycOperatorRequiredWhileArmed,
 
-    /// C-02, the arming invariant from the other side: revoking the last attestation while a side is
+    /// the arming invariant from the other side: revoking the last attestation while a side is
     /// gated leaves an armed gate nobody can pass. Disarm first, then revoke.
     #[msg(
         "cannot revoke the last KYC attestation while the gate is armed: disarm the scope first"
     )]
     KycLastAttestationWhileArmed,
 
-    /// C-02: `Pubkey::default()` (the system program) can never present itself as a holder, so
+    /// `Pubkey::default()` (the system program) can never present itself as a holder, so
     /// attesting it would fill the roster without admitting anybody. Narrower than proving the holder
     /// is real, which is the off-chain provider pipeline.
     #[msg("that wallet cannot be attested: it can never sign as a holder")]
@@ -299,7 +299,7 @@ pub enum DominionError {
     #[msg("the KYC attestor may not be the admin key: the whole hot/cold split depends on them differing")]
     KycOperatorMayNotBeAdmin,
 
-    /// ROUND 5 P1-04. The operation is below `config.min_operation_usdc`: `amount_usdc` on the mint
+    /// The operation is below `config.min_operation_usdc`: `amount_usdc` on the mint
     /// side, the gross USDC value of `amount_silv` on the redeem side. The floor is what stops a dust
     /// operation from consuming the single global Lazer high-water slot for essentially nothing; see
     /// `ConfigAccount::min_operation_usdc`. It names the field rather than a number, because the live
@@ -307,33 +307,30 @@ pub enum DominionError {
     #[msg("operation is below config.min_operation_usdc: read the live floor before retrying")]
     OperationBelowMinimum,
 
-    /// ROUND 5 P1-04. The requested floor exceeds `MIN_OPERATION_CEILING_USDC`. The floor bounds
+    /// The requested floor exceeds `MIN_OPERATION_CEILING_USDC`. The floor bounds
     /// availability, not value, so the rail bounds how far it can be pushed toward locking users out.
     #[msg("the requested minimum operation size exceeds MIN_OPERATION_CEILING_USDC")]
     MinOperationTooHigh,
 
-    /// ROUND 5 P1-04. Writing the value already stored. Refused for the same reason the other instant
+    /// Writing the value already stored. Refused for the same reason the other instant
     /// setters here refuse a no-op: a success in an audit log reads as a change that happened.
     #[msg("the minimum operation size already holds that value")]
     MinOperationUnchanged,
 
-    /// ROUND 5, found while writing the P1-03 persistence tests. `LazerPolicyError::NonMonotonic` and
+    /// found while writing the persistence tests. `LazerPolicyError::NonMonotonic` and
     /// `LazerPolicyError::CarriedForward` both used to surface as `LazerCarriedForward`, so the two
     /// most common refusals on the priced path were indistinguishable to a caller.
-    ///
-    /// That collapse was tolerable while the anti-replay was `<`, because a replay was rare. D2 made
+    /// That collapse was tolerable while the anti-replay was `<`, because a replay was rare. made
     /// it `<=`, so ONE operation per Lazer print is now the normal steady state and losing the race is
     /// the single most likely thing a user hits. "Carried-forward oracle" tells them the feed is
     /// broken; this tells them to retry with a newer price, which is the truth and the fix.
-    ///
     /// Appended at the END of the enum, so no existing error number moves.
     #[msg("this price envelope was already used: another operation consumed it, retry with a fresh price")]
     LazerReplayed,
 
-    /// ROUND 7. `set_inventory_wallet` was instant ONLY for the first binding, when the field was
+    /// `set_inventory_wallet` was instant ONLY for the first binding, when the field was
     /// still the default; any CHANGE went through the 24h timelock.
-    ///
-    /// ROUND 8 T8-03 made this variant UNREACHABLE: the instruction that raised it is gone, and
+    /// made this variant UNREACHABLE: the instruction that raised it is gone, and
     /// `initialize` is now the first and only instant binding. It stays here because this enum is
     /// APPEND ONLY: removing it would renumber `InventoryWalletUnchanged` and everything after it,
     /// silently changing the meaning of error codes already quoted in clients, tests and audits.
@@ -344,7 +341,7 @@ pub enum DominionError {
     #[msg("the proposed inventory wallet is the one already configured")]
     InventoryWalletUnchanged,
 
-    /// ROUND 8. Unpausing with no registered guardian would switch on every flow before the
+    /// Unpausing with no registered guardian would switch on every flow before the
     /// independent brake exists. Every timelock in this program assumes someone can cancel.
     #[msg("no active guardian is registered: unpause would enable every flow with no independent brake")]
     NoActiveGuardian,
@@ -353,10 +350,9 @@ pub enum DominionError {
     #[msg("the supplied guardian is the current admin, so it is not an independent brake")]
     GuardianNotIndependent,
 
-    /// ROUND 8 FINAL-03. The config moved between the moment this unpause was built and the moment
+    /// -03. The config moved between the moment this unpause was built and the moment
     /// it executed, so the launch-readiness decision that authorised it was taken against a state
     /// that no longer exists. Re-read the chain, rebuild the unpause, approve it again.
-    ///
     /// This replaced a check on `active_proposal_count`, which read the CURRENT armed count and was
     /// therefore blind to an action that executed and disarmed itself inside that very gap.
     #[msg("the config changed after this unpause was built: the launch-readiness decision that authorised it is stale, so re-read the chain and rebuild it")]

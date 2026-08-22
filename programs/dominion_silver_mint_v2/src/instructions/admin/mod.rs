@@ -1,5 +1,5 @@
 pub mod caps;
-// CODEX P0-02: dev-only timelock-bypass hatches gated behind a non-default
+// dev-only timelock-bypass hatches gated behind a non-default
 // feature so they are absent from release/deploy builds + the IDL.
 #[cfg(feature = "dev-hatch")]
 pub mod dev;

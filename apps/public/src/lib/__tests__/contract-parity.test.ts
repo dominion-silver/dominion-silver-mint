@@ -1,12 +1,10 @@
 /**
  * Parity between this client and the on-chain program.
- *
  * Everything here exists because the batch of 2026-08-05 shipped four bugs of the same shape: the
  * program changed and the client kept using the old formula or the old account list, and NOTHING
  * caught it. The method builders go through `as any`, and `.accounts()` is NOT strict in Anchor
  * 0.31.1 (it delegates to `accountsPartial`), so neither TypeScript nor Anchor rejects a wrong
  * account list. A test is the only mechanical guard on this path.
- *
  * The two classes covered:
  *   - PRICING: the client's quote must agree with the contract's integer arithmetic. A quote that
  *     promises more than the program mints becomes a SlippageExceeded revert.
@@ -84,11 +82,9 @@ describe("mint pricing parity", () => {
     // the RAW EXACT quote against the program's output, which can never hold at dust amounts because
     // the program floors twice: at 1 atomic USDC the exact quote is 1.7e-8 SILV and the program mints
     // 0. That is not a defect, it is flooring.
-    //
     // The property that matters is the one the transaction carries: `minSilvOut`, after the client's
     // own flooring and slippage, must be <= what the program mints. Otherwise the program reverts
     // SlippageExceeded on a transaction that was fine.
-    //
     // This exercises `floor6` from the lib, i.e. the SAME function the builder uses. Reimplementing
     // the rounding here would prove nothing about the code that ships.
     for (const bps of ALL_BPS) {
@@ -299,7 +295,7 @@ describe("optional-account validation (the dust-griefing P0)", () => {
   });
 
   it("A DUSTED SYSTEM-OWNED ACCOUNT AT THE PDA IS NOT USABLE", () => {
-    // THE regression test for the P0. Creating an account at a PDA address is permissionless: a
+    // THE regression test for the . Creating an account at a PDA address is permissionless: a
     // one-lamport SystemProgram.transfer to `feeExemptPda(victim)` makes a System-owned, zero-data
     // account there. The previous existence-only check reported it as an exemption, the builder
     // passed the real PDA, and the program reverted on the owner check -- so every mint and every
@@ -333,7 +329,6 @@ describe("optional-account validation (the dust-griefing P0)", () => {
 // --- the sliding window, ported vs the Rust -----------------------------------
 
 /** Independent reimplementation of `state/redeem_window.rs::roll_window`.
- *
  *  Deliberately written from the Rust rather than from the TypeScript port, because a test that
  *  calls the code under test proves nothing. This is the guard for the drift that shipped twice:
  *  the program moved to a sliding window and the client kept a fixed one, and both reviewers found
@@ -456,11 +451,10 @@ describe("audit P-02: the client must bound OUTFLOW, not the trade size", () => 
   });
 
   it("the advertised maximum is actually SERVEABLE, in both flag states", () => {
-    // REVIEW-OF-FIXES. The version here accepted `["instant","otc"]`, and "otc" MEANS not-serveable, so
+    // The version here accepted `["instant","otc"]`, and "otc" MEANS not-serveable, so
     // the treasury bound went unasserted while the comment claimed the opposite. Worse, it inverted
     // net->gross only in the routing-ON branch, so for routing OFF it submitted a strictly SMALLER
     // redemption than the advertised maximum and proved nothing about the boundary.
-    //
     // The UI divides by (1 - bps) in BOTH states (MintRedeemCard), so the gross a user submits to receive
     // the advertised net is the same computation either way. That is what this now exercises, and it
     // demands "instant" exactly.
@@ -498,11 +492,10 @@ describe("audit P-07: the per-wallet premium mirrors the program", () => {
   // The IDL is the arbiter of the byte offsets the hand decoder uses. If a field is ever inserted into
   // FeeExemptAccount, this fails instead of the decoder silently reading the wrong bytes.
   it("the FeeExemptAccount layout the decoder derives matches the Rust struct exactly", () => {
-    // RE-AUDIT P2. This used to assert only the field NAMES and their ORDER, while the decoder hardcoded
+    // RE-. This used to assert only the field NAMES and their ORDER, while the decoder hardcoded
     // byte offsets, and the round-trip test below rebuilt its buffer from those same literals. Circular:
     // widen `added_at` from i64 to i128 and every assertion stayed green while `expires_at` moved eight
     // bytes, so the app would read `added_by`/`version` as the expiry and show an active waiver as expired.
-    //
     // Two changes. The offsets are now DERIVED from the IDL's field TYPES (lazer-tx.ts), so a widened field
     // moves them automatically and an unknown type throws at module load. And this test pins the total
     // SIZE, which is what actually catches a widening that keeps names and order intact.
@@ -585,7 +578,7 @@ describe("audit P-07: the per-wallet premium mirrors the program", () => {
     expect(decodeFeeExemptExpiry(buf)).toBe(LIVE);
 
     // A NEGATIVE i64 must decode negative, not as a huge positive. It would otherwise look like a
-    // far-future expiry, i.e. a permanent exemption, which is precisely what C-01 removed.
+    // far-future expiry, i.e. a permanent exemption, which is precisely what removed.
     const neg = new Uint8Array(114);
     neg.fill(0xff, off, off + 8); // -1
     expect(decodeFeeExemptExpiry(neg)).toBe(-1);

@@ -26,7 +26,7 @@ pub fn pause_handler(ctx: Context<Pause>) -> Result<()> {
 
     let admin_key = config.admin;
     let is_admin = signer == admin_key;
-    // AUDIT review of daac4ac: `may_act` also refuses a guardian key that IS the
+    // review of daac4ac: `may_act` also refuses a guardian key that IS the
     // current admin. add_guardian cannot prevent that overlap on its own, because
     // admin-ship can move after the appointment.
     let is_guardian = match &ctx.accounts.guardian {
@@ -50,7 +50,7 @@ pub struct Unpause<'info> {
 
     pub admin: Signer<'info>,
 
-    /// ROUND 8, the conditional P2 that comes with the open launch posture. `unpause` used to check
+    /// the conditional P2 that comes with the open launch posture. `unpause` used to check
     /// the admin signature and nothing else, while `initialize` leaves `guardian_count = 0`. With
     /// mint and redeem now OPEN in the initial state, that sequence lets a ceremony slip or a
     /// compromised admin switch every flow on before any independent party can pause or cancel. The
@@ -75,18 +75,15 @@ pub fn unpause_handler(ctx: Context<Unpause>, expected_readiness_digest: [u8; 32
         DominionError::GuardianNotIndependent
     );
 
-    // ROUND 8 FINAL-03. THE GAP BETWEEN BUILDING AN UNPAUSE AND EXECUTING IT.
-    //
+    // -03. THE GAP BETWEEN BUILDING AN UNPAUSE AND EXECUTING IT.
     // `scripts/_launch-readiness.ts` decides go/no-go from the config, the feed, the publisher floor
     // and the supply, and it runs when the ceremony BUILDS this instruction. The instruction is a
     // Squads proposal, so it executes later. In between, a matured timelocked action can execute
     // against a paused config: auto-pause is idempotent there, so nothing invalidates the approved
     // unpause and it lands on a state the decision never saw.
-    //
     // The first attempt refused while any slot was armed. That reads the CURRENT counter, and the
     // action that executes in the gap DISARMS itself, bringing the counter back to zero before the
-    // unpause lands. Codex was right: a counter is not historical.
-    //
+    // unpause lands. was right: a counter is not historical.
     // The caller now carries the digest of the state it approved. If any load-bearing field moved,
     // this refuses, and the operator re-reads and rebuilds. Nothing about the ARMED state is checked
     // any more, which also gives back the ability to resume from an incident pause with queued

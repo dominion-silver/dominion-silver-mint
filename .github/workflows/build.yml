@@ -43,7 +43,7 @@ env:
   # (edition2024-capable, compiles modern pyth-sdk). Pinning CI to 3.1.14 =
   # one consistent modern toolchain for BOTH the SBF build and the host IDL
   # build. Contract source / Anchor / pyth unchanged -> deployed bytes +
-  # IDL unaffected (no redeploy). See private/CI_IDL_DETERMINISM.md.
+  # IDL unaffected (no redeploy).
   # 3.0.0, PAS 3.1.14. : CI installait Agave 3.1.14, donc platform-tools v1.52, alors que l artefact
   # de release est construit avec 3.0.0 / platform-tools v1.51. verify-release-artifact.sh comparait donc
   # deux builds de la MAUVAISE chaine d outils entre eux et rapportait OK, sans pouvoir remarquer que

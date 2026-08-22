@@ -16,20 +16,16 @@ pub struct MintEvent {
     /// `config.premium_bps_mint`.
     pub premium_bps_used: u16,
     /// Premium routed to the fee vault (2026-08-05).
-    ///
     /// CORRECTION. An earlier version of this comment said "appended, so older decoders that
     /// stop after `timestamp` still parse the prefix". THAT WAS FALSE and it is worth spelling
     /// out, because the comment actively authorised a mistake:
-    ///
     /// This field is at index 4 of 6, BEFORE `timestamp`, not appended. Borsh is positional, so
     /// a decoder built against the pre-upgrade IDL reads these 8 bytes AS `timestamp`. A $100
     /// mint would decode as `timestamp = 1000000`, i.e. January 1970. It does not error, it
     /// silently produces a plausible wrong number, which is the worst failure shape available.
-    ///
     /// There is no in-repo decoder, so nothing is broken today. But ANY off-chain indexer,
     /// dashboard or analytics job must be rebuilt against the new IDL before it reads
     /// MintEvent or RedeemEvent again. Do not assume a prefix-compatible read.
-    ///
     /// Left in place rather than moved to the end: moving it would change the IDL again for no
     /// benefit now that the hazard is documented, and every reader has to be rebuilt either way.
     pub fee_usdc: u64,
@@ -47,7 +43,6 @@ pub struct PremintEvent {
     /// SOLIDPROOF T-006. The signer that minted. `inventory` is the DESTINATION, bound at
     /// `initialize` and changeable only through the 24h timelocked pair, so without this field the
     /// event records where supply went but not who sent it.
-    ///
     /// LAST, after `timestamp`, and that placement is the whole point. The first version of this
     /// change put `by` between `supply_post` and `timestamp` while its comment claimed an append
     /// kept the offsets stable. That was false in exactly the way `MintEvent::fee_usdc` above
@@ -62,15 +57,12 @@ pub struct RedeemEvent {
     pub user: Pubkey,
     pub amount_silv: u64,
     /// USDC the user RECEIVED, i.e. net.
-    ///
     /// The treasury's TOTAL outflow is `amount_usdc + fee_usdc` **only while fee routing is on**.
-    ///
-    /// AUDIT D-04: this said the treasury always paid `amount_usdc + fee_usdc`, "because the premium
+    /// this said the treasury always paid `amount_usdc + fee_usdc`, "because the premium
     /// leg also comes from the treasury". That is false whenever `config.fee_routing_disabled` is
     /// true: the premium is then RETAINED, so `redeem_silv.rs` debits the budget by the user's leg
     /// alone and the treasury pays exactly `amount_usdc`. An alerting rule built on the old sentence
     /// would over-count outflow by the premium during precisely the incident that turns routing off.
-    ///
     /// To reconstruct the real outflow from this event alone you cannot: you need the config flag as
     /// of that slot. `FeeRoutingChanged` is the event that tells you when it moved.
     pub amount_usdc: u64,
@@ -91,7 +83,7 @@ pub struct RedeemEvent {
 pub struct FeeExemptSet {
     pub wallet: Pubkey,
     pub flags: u8,
-    /// Always a future timestamp: C-01 made the term mandatory, so zero cannot occur. Emitted so a
+    /// Always a future timestamp: made the term mandatory, so zero cannot occur. Emitted so a
     /// monitor can alert on an unusually long term, which is the shape a compromised admin would use.
     pub expires_at: i64,
     pub by: Pubkey,
@@ -253,7 +245,7 @@ pub struct ComplianceModeChanged {
     pub new_value: bool,
 }
 
-// P2-05: each field is Option<String> - `None` means that field was left
+// each field is Option<String> - `None` means that field was left
 // unchanged by this update (only the Some(...) fields were rewritten).
 #[event]
 pub struct MetadataUpdated {
@@ -262,11 +254,10 @@ pub struct MetadataUpdated {
     pub new_uri: Option<String>,
 }
 
-// AUDIT D-04: `RedeemQueued` was declared here and emitted NOWHERE. The queued redemption lifecycle
+// `RedeemQueued` was declared here and emitted NOWHERE. The queued redemption lifecycle
 // was deleted on 2026-08-05; the event definition outlived it and stayed in the IDL, where it reads as
 // a documented part of the protocol. An integrator building an indexer would have subscribed to a
 // stream that can never produce a message, and concluded their integration was broken.
-//
 // Removing an event is safe in a way that removing a field is not: events carry no account layout and
 // no instruction encoding, so nothing on chain shifts. Verified that no client or script referenced it.
 
@@ -289,7 +280,7 @@ pub struct RedemptionSettledOffchain {
     pub timestamp: i64,
 }
 
-// P2-03: owner closed a SettledOffchain request and reclaimed the PDA rent.
+// owner closed a SettledOffchain request and reclaimed the PDA rent.
 #[event]
 pub struct RedemptionClosed {
     pub owner: Pubkey,
@@ -321,7 +312,7 @@ pub struct DevParamSet {
     pub timestamp: i64,
 }
 
-// AUDIT action 0.12b (DOM-007): deferred guardian removal.
+// action 0.12b (): deferred guardian removal.
 #[event]
 pub struct GuardianRemovalScheduled {
     pub guardian: Pubkey,
@@ -335,14 +326,13 @@ pub struct GuardianRemovalCancelled {
 }
 
 // ---------------------------------------------------------------------------
-// SolidProof TrustNet audit (2026-07-24), LOW #3: "State-changing admin setters
+// (2026-07-24), LOW #3: "State-changing admin setters
 // emit no events". Five privileged instructions mutated security-relevant state
 // silently, so an off-chain indexer could not observe them without diffing full
 // account snapshots: the supply-cap setter, the redemptions switch, the
 // emergency tighten-redeem-limits fast lane, the inventory-wallet setter, and the
 // admin-transfer cancellation. The last one is the worst of the five, because
 // propose and accept both emit while the CANCEL of a governance handover did not.
-//
 // Each event carries the OLD and the NEW value plus the signer, so a monitor can
 // alert on the transition itself rather than on a poll.
 // ---------------------------------------------------------------------------
@@ -375,8 +365,8 @@ pub struct RedeemLimitsTightened {
     pub by: Pubkey,
 }
 
-/// SolidProof MEDIUM #3 asked for this back when the destination could be changed with no delay.
-/// ROUND 8 A-05: it cannot any more. The only writer after `initialize` is
+/// asked for this back when the destination could be changed with no delay.
+/// it cannot any more. The only writer after `initialize` is
 /// `execute_set_inventory_wallet`, after 24h and cancellable by a guardian. The event stays because
 /// a timelocked redirect still has to be observable when it lands.
 #[event]
@@ -405,7 +395,7 @@ pub struct PublicMintEnabledChanged {
     pub by: Pubkey,
 }
 
-/// ROUND 5 P1-04. The mint floor is the availability control on the strict-anti-replay slot, so a
+/// The mint floor is the availability control on the strict-anti-replay slot, so a
 /// monitor needs the transition: raising it prices small users out, lowering it re-cheapens print
 /// capture. Same old/new/by shape as the other instant setters, for the same LOW #3 reason.
 #[event]

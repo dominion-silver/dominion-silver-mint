@@ -2,7 +2,7 @@
 // (/api/lazer, which holds the API key server-side). The ed25519 + dominion
 // assembly (lazer-assembly.ts) is done by the caller AFTER it builds the
 // dominion instruction (the offsets must reference that ix's serialized data).
-// Only the fetch is key-gated (the proxy returns 503 until Mark's Pyth Starter
+// Only the fetch is key-gated (the proxy returns 503 until Pyth Starter
 // key is provisioned).
 
 /** Thrown when the Lazer proxy has no API key yet (HTTP 503). */
@@ -13,8 +13,8 @@ export class LazerNotConfiguredError extends Error {
   }
 }
 
-// ROUND 5 P1-05. There was a `LazerPriceAlreadyClaimedError` here, for a 409 the proxy no longer sends.
-// The proxy briefly REFUSED a contended print; a review pass showed that turned an unauthenticated
+// There was a `LazerPriceAlreadyClaimedError` here, for a 409 the proxy no longer sends.
+// The proxy briefly REFUSED a contended print; a showed that turned an unauthenticated
 // endpoint into a free denial of the whole mint and redeem UI, so contention is now advisory and every
 // caller is served. `contended` on the response is the signal, and losing a race costs one Lazer verify
 // fee rather than costing everyone the product. See the note on `claimFresh` in api/lazer/route.ts.
@@ -47,8 +47,7 @@ export async function fetchLazerEnvelope(
    * CLAIM a print for submission. REQUIRED on the submit path: the program demands a STRICTLY increasing
    * feed timestamp, so one envelope prices exactly one operation, and an envelope shared with another
    * signer means the second transaction is refused after the verify fee is paid.
-   *
-   * ROUND 5 P1-05: this used to mean only "skip the proxy cache", which was not the same guarantee. The
+   * this used to mean only "skip the proxy cache", which was not the same guarantee. The
    * proxy now also marks the response `contended` when another submitter was handed the same print
    * first. It never refuses: see the note above. The price banner leaves this false.
    */

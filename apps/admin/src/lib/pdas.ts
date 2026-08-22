@@ -34,7 +34,6 @@ export function silvMetadataAuthorityPda(): PublicKey {
 
 /**
  * Authority of the premium fee vault. Seeds = [b"fee_vault"].
- *
  * The VAULT is this PDA's USDC associated token account, NOT this address. Derive it with
  * `getAssociatedTokenAddressSync(USDC_MINT, feeVaultPda(), true, TOKEN_PROGRAM_ID)` and note
  * that the third argument (allowOwnerOffCurve) is MANDATORY: the owner is a PDA, so omitting
@@ -50,7 +49,6 @@ export function feeVaultPda(): PublicKey {
 
 /**
  * Per-wallet fee exemption. Seeds = [b"fee_exempt", wallet].
- *
  * The seeds bind the account to the wallet, which is why mint_silv and redeem_silv can accept
  * it as an unauthenticated optional account: it cannot be presented on anyone else's behalf.
  */

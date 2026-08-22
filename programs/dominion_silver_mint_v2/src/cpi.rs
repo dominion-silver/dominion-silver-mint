@@ -1,6 +1,6 @@
 // Dual-token-program CPI helpers.
 // USDC = classic SPL Token. SILV = SPL Token-2022.
-// CODEX P3-01: USDC transfers use the *_checked variant (transfer_checked).
+// USDC transfers use the *_checked variant (transfer_checked).
 // SILV mint/burn intentionally use the UNCHECKED Token-2022 CPI (anchor_spl
 // 0.31 exposes no Token-2022 *_checked wrapper) - safe because the SILV mint
 // is `address`-pinned in every Accounts struct and its decimals are pinned to
@@ -59,10 +59,9 @@ pub fn usdc_transfer_treasury_to_user<'info>(
 }
 
 // ---------------------------------------------------------------------------
-// Premium routing (Thomas, 2026-08-05). Three wrappers, mechanically identical to the two
+// Premium routing (, 2026-08-05). Three wrappers, mechanically identical to the two
 // above, kept SEPARATE and named for their destination rather than folded into a generic
 // `usdc_transfer`.
-//
 // The reason is that this file's whole purpose is to make the money flow readable at the
 // CALL SITE. `usdc_transfer_user_to_treasury(...)` next to
 // `usdc_transfer_user_to_fee_vault(...)` inside mint_silv says exactly what the split does.
@@ -72,7 +71,6 @@ pub fn usdc_transfer_treasury_to_user<'info>(
 // ---------------------------------------------------------------------------
 
 /// Transfer the MINT premium from the user's USDC ATA to the program-owned fee vault.
-///
 /// The other leg of the same split is `usdc_transfer_user_to_treasury`, which carries the
 /// net. Together they must sum to exactly what the user authorised.
 pub fn usdc_transfer_user_to_fee_vault<'info>(
@@ -97,7 +95,6 @@ pub fn usdc_transfer_user_to_fee_vault<'info>(
 }
 
 /// Transfer the REDEEM premium from the treasury to the fee vault. Treasury PDA signs.
-///
 /// Note what this means for treasury outflow, because it is the one non-obvious
 /// consequence of routing fees out: on redemption the treasury now pays the FULL spot value
 /// of the burned SILV, split between the user and this vault. Before routing it paid only
@@ -127,7 +124,6 @@ pub fn usdc_transfer_treasury_to_fee_vault<'info>(
 }
 
 /// Sweep accrued premium out of the fee vault to an admin-chosen destination.
-///
 /// This is the ONLY path out of the vault, and the fee-vault PDA signs it. The destination
 /// is an instruction argument rather than stored config, so a wrong address costs one
 /// misdirected sweep instead of breaking mint and redeem (which is what a stored, wrong fee
@@ -175,7 +171,7 @@ pub fn silv_mint_to<'info>(
         },
         mint_authority_seeds,
     );
-    // CODEX P3-01: this calls the UNCHECKED `token_2022::mint_to` (anchor_spl
+    // this calls the UNCHECKED `token_2022::mint_to` (anchor_spl
     // 0.31 exposes no Token-2022 `mint_to_checked` wrapper). It is safe HERE
     // and only here because: (a) the SILV mint is `address = config.silv_mint`
     // pinned in every Accounts struct, and (b) SILV decimals are pinned to 6
@@ -205,7 +201,7 @@ pub fn silv_burn_from_user<'info>(
             authority: user_authority,
         },
     );
-    // CODEX P3-01: unchecked `burn` (no Token-2022 `burn_checked` wrapper in
+    // unchecked `burn` (no Token-2022 `burn_checked` wrapper in
     // anchor_spl 0.31). Safe for the same reason as mint_to above: SILV mint is
     // address-pinned and decimals are init-pinned to 6 and immutable.
     token_2022::burn(cpi_ctx, amount).map(|_| ())?;

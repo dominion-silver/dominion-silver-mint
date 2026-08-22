@@ -24,7 +24,6 @@ export function PriceBanner() {
   // were healthy. The submit path re-fetches a fresh envelope, so the consequence was a misleading
   // preview quote rather than a guaranteed revert, but the banner is the one place a user looks to judge
   // whether the price is trustworthy.
-  //
   // Hardcoded rather than read from config on purpose: this component only has the price, not the config
   // account, and adding a second chain read to a banner is worse than a constant that matches. If
   // max_staleness is ever changed by timelock, the readiness gate compares the two.

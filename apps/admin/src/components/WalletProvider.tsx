@@ -3,7 +3,7 @@
 import { ReactNode, useMemo } from "react";
 import { ConnectionProvider, WalletProvider as SolanaWalletProvider } from "@solana/wallet-adapter-react";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
-// CODEX P1-02: direct adapter packages instead of the
+// Direct adapter packages instead of the
 // `@solana/wallet-adapter-wallets` umbrella (which pulled unused
 // Torus/Trezor/WalletConnect/Reown chains + their advisories into prod).
 import { PhantomWalletAdapter } from "@solana/wallet-adapter-phantom";

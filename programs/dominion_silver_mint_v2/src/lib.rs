@@ -1,7 +1,6 @@
 // Dominion Silver mint/redeem program.
 // 1 SILV = 1 troy oz physical LBMA silver.
 // USDC in (classic SPL Token) <-> SILV out (SPL Token-2022) at the Pyth Lazer silver price + premium.
-// See PLAN.md in repo root for design rationale.
 
 use anchor_lang::prelude::*;
 
@@ -24,20 +23,17 @@ use instructions::*;
 
 // THE MAINNET PROGRAM ID, generated 2026-08-08 at the mainnet ceremony (runbook step 1). Keypair at
 // ~/.config/solana/dominion-mainnet-program.json, mode 600, NEVER in this repo.
-//
 // ONE ID FOR BOTH CLUSTERS, deliberately. `declare_id!` is a single literal, so a devnet rehearsal on
 // a different id can only ever exercise a DIFFERENT binary than the one that ships. Round 5 concluded
 // NO-GO partly because "the mainnet candidate does not exist yet"; keeping a separate rehearsal id
 // would have preserved exactly that gap. The devnet deployment under this id is the rehearsal, and its
 // bytes are the candidate's bytes.
-//
 // This id MUST be a fresh deploy: the ConfigAccount layout is incompatible with V1 and with the
 // pre-Lazer V2, and the "no stale state" hypothesis depends on the id being neither.
-//
 // Retired: V1 J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5, pre-Lazer V2
 // GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX.
 // SUPERSEDED but still deployed on devnet: HXaptAcaXBoEAsNuEv4ZwYrciHbMxSpip2VScRVDjo1Z, the 2026-08-07 rehearsal
-// contract. It carries three timelocked proposals and predates the round 5 remediation, so it is a
+// contract. It carries three timelocked proposals and predates the remediation, so it is a
 // historical record, not a target. Close it once the rehearsal under this id has run.
 declare_id!("3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ");
 
@@ -95,7 +91,7 @@ pub mod dominion_silver_mint {
     // Both instant: the worst case is foregone revenue, not lost principal. Rationale at the handlers.
 
     /// `expires_at` is MANDATORY: a unix timestamp in SECONDS, strictly in the future, capped at
-    /// MAX_FEE_EXEMPT_TERM_SECONDS. Zero is refused (C-01), so every waiver carries a term and is
+    /// MAX_FEE_EXEMPT_TERM_SECONDS. Zero is refused (), so every waiver carries a term and is
     /// renewed by one instant transaction. That renewal IS the review the term exists to force.
     pub fn set_fee_exempt(
         ctx: Context<SetFeeExempt>,
@@ -162,7 +158,7 @@ pub mod dominion_silver_mint {
         instructions::emergency::pause::pause_handler(ctx)
     }
 
-    /// ROUND 8 FINAL-03. `expected_readiness_digest` is the digest of the config fields the go-live
+    /// -03. `expected_readiness_digest` is the digest of the config fields the go-live
     /// decision read WHEN THIS INSTRUCTION WAS BUILT. See `ConfigAccount::readiness_digest`.
     pub fn unpause(ctx: Context<Unpause>, expected_readiness_digest: [u8; 32]) -> Result<()> {
         instructions::emergency::pause::unpause_handler(ctx, expected_readiness_digest)
@@ -186,7 +182,7 @@ pub mod dominion_silver_mint {
         instructions::admin::caps::set_redemptions_enabled_handler(ctx, enabled)
     }
 
-    /// ROUND 5 P1-04. The minimum size of a priced operation, atomic USDC: `amount_usdc` on the mint
+    /// The minimum size of a priced operation, atomic USDC: `amount_usdc` on the mint
     /// side, the gross USDC value of `amount_silv` on the redeem side. Instant in BOTH directions,
     /// bounded by `MIN_OPERATION_CEILING_USDC`; zero disables the floor. It is an availability
     /// control on the strict-anti-replay slot, not a value control, which is why it carries no
@@ -205,10 +201,10 @@ pub mod dominion_silver_mint {
     }
 
     // Pre-mint supply model: admin_premint mints SILV against the hard cap into the inventory wallet
-    // with no USDC and no oracle read. ROUND 8 A-05: the destination is bound at `initialize` and is
+    // with no USDC and no oracle read. the destination is bound at `initialize` and is
     // NOT late-binding. `set_inventory_wallet` no longer exists; the pair below is the only writer
     // after init, behind the 24h timelock.
-    /// ROUND 7. Propose a CHANGE of the pre-mint destination. 24h, guardian-cancellable.
+    /// Propose a CHANGE of the pre-mint destination. 24h, guardian-cancellable.
     pub fn propose_set_inventory_wallet(
         ctx: Context<ProposeInventoryWallet>,
         new_wallet: Pubkey,
@@ -223,7 +219,7 @@ pub mod dominion_silver_mint {
         instructions::admin::execute::execute_set_inventory_wallet_handler(ctx, nonce)
     }
 
-    // ROUND 8 T8-03: `set_inventory_wallet` is REMOVED from the program surface. The destination is
+    // `set_inventory_wallet` is REMOVED from the program surface. The destination is
     // an `initialize` argument, and the only post-initialize writer is the timelocked pair above.
 
     pub fn admin_premint(ctx: Context<AdminPremint>, amount: u64) -> Result<()> {
@@ -313,7 +309,7 @@ pub mod dominion_silver_mint {
     // Freeze / thaw are NOT Dominion instructions, deliberately. The SILV mint's freeze_authority is
     // the compliance multisig, so freezing or thawing an account is done with direct Token-2022
     // FreezeAccount / ThawAccount transactions signed by that multisig, exactly as seize/clawback goes
-    // directly through the PermanentDelegate (D12). Neither changes the authorities assertions.rs pins.
+    // directly through the PermanentDelegate (). Neither changes the authorities assertions.rs pins.
 
     // === Admin: timelocked propose/execute ===
 
@@ -384,7 +380,7 @@ pub mod dominion_silver_mint {
         instructions::admin::execute::execute_set_redeem_limits_handler(ctx, nonce)
     }
 
-    // D7: treasury minimum FLOAT.
+    // treasury minimum FLOAT.
     pub fn propose_set_treasury_min_float(
         ctx: Context<ProposeTreasuryFloat>,
         new_float_usdc: u64,
@@ -444,19 +440,16 @@ pub mod dominion_silver_mint {
     }
 
     // === Rent reclaim ===
-    //
-    // REVIEW PASS ON 3bf3097. `close_timelock_account` is REMOVED, and it was the last member of this
+    // `close_timelock_account` is REMOVED, and it was the last member of this
     // section. It swept a timelock account left behind by a cancel or an execute, and it required
     // `cancelled || executed_at.is_some()`. Both writers of those fields close the account in the
     // same transaction: `CancelTimelocked` carries `close = rent_recipient`, and so does every one of
     // the ten `Execute*` contexts. Anchor's close runs on exit, drains the lamports and zeroes the
     // account, so no LIVE account can ever hold the state this instruction demanded.
-    //
     // It was unreachable, and the repo's own tests said so without anyone reading it: both had to
     // fabricate the state with `clone_timelock(.., |tl| tl.cancelled = true)`, under the comment
     // "Cancel closes the account, so that state is placed directly."
-    //
-    // This is the sixth instruction in SolidProof T-006. Adding an event to something that cannot
-    // execute would satisfy the letter of the finding and tell the reader something false. The
+    // This is the sixth instruction in T-006. Adding an event to something that cannot
+    // execute would satisfy the letter of the scenario and tell the reader something false. The
     // honest answer is five instructions carrying events, and a sixth that could never run.
 }

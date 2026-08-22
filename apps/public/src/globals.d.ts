@@ -1,5 +1,5 @@
 // Global window typings for the Dominion app.
-// FE-M5 in REVIEW_REPORT.md: replaces (window as any) casts.
+// Typed window globals, so call sites do not need (window as any) casts.
 
 declare global {
   interface Window {

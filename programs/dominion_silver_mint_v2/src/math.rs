@@ -110,7 +110,7 @@ pub fn silv_to_usdc_at_oracle(amount_silv: u64, oracle_scaled: u128) -> Result<u
 }
 
 // There is deliberately NO on-chain solvency invariant: SILV is backed by physical
-// silver in custody, not by an on-chain USDC reserve. See CONFIRMED_SPEC.md Section 2.
+// silver in custody, not by an on-chain USDC reserve.
 
 #[cfg(test)]
 mod tests {

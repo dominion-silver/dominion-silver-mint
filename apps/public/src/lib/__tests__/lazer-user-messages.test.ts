@@ -1,21 +1,17 @@
 /**
- * ROUND 8 T8-07. What a user is told after a CONFIRMED-then-REVERTED financial transaction.
- *
+ * What a user is told after a CONFIRMED-then-REVERTED financial transaction.
  * The distinction that matters: a transaction refused at PREFLIGHT never lands, so it costs nothing.
  * A transaction that lands and then reverts HAS been executed by the cluster: the fee payer paid the
  * base fee and any priority fee, and only the instruction's state changes were rolled back.
- *
  * `lazer-execute.ts:155-162` builds exactly the second shape: it reads `confirmTransaction`'s
  * `value.err`, refetches the transaction for its logs, and throws
  * `Object.assign(new Error("Transaction reverted on-chain"), { logs, onChainErr })`. That is the
  * object this test feeds in, unmodified in shape, so the assertions run against the real path:
  * `errorToText` flattens it, then `mapUserFacingError` (the function `MintRedeemCard.tsx`'s catch
  * calls) picks the sentence.
- *
  * Telling that user "Nothing was charged" is false. Their principal is intact, which is the reassuring
  * part and must be said, but they did pay network fees. A protocol that misstates a fee, however
  * small, teaches its users that its financial statements are approximate.
- *
  * Both program errors are driven twice: once with the Anchor NAME in the logs (the parsed path) and
  * once with only the raw `Custom:<code>` in the structured `onChainErr` (the path where the IDL was
  * not consulted). Both must reach the same sentence, because the shape that reaches the browser

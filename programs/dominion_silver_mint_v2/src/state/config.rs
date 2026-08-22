@@ -60,20 +60,19 @@ pub const DEFAULT_ADMIN_TIMELOCK_SECONDS: u32 = 86400; // 24 hours
 // The ONLY bound on unbacked SILV, NOT an initialize arg (get it right pre-mainnet), ONE-WAY RATCHET.
 pub const DEFAULT_MAX_SILV_SUPPLY: u64 = 150_000_000_000; // 150,000 oz at 6 decimals
 
-// ROUND 8, posture decided 2026-08-09. UNUSED at launch and kept as the shape of the CLOSED state:
+// posture decided 2026-08-09. UNUSED at launch and kept as the shape of the CLOSED state:
 // `initialize` writes `public_mint_enabled = true` directly. Reopening after an emergency close is
 // still 24h-timelocked, which is the asymmetry this constant used to describe.
 pub const DEFAULT_PUBLIC_MINT_ENABLED: bool = false;
 
-// ROUND 5 P1-04, the floor on a single mint, atomic USDC (6dec). See ConfigAccount::min_operation_usdc
+// the floor on a single mint, atomic USDC (6dec). See ConfigAccount::min_operation_usdc
 // for why it exists. $10 makes capturing every Lazer print cost 10 USDC of working capital per second
 // AND 0.10 USDC of premium paid to the protocol, against 0.00006 USDC with no floor.
 pub const DEFAULT_MIN_OPERATION_USDC: u64 = 10_000_000; // $10
 
 // Rail on the setter, NOT a target. The floor is a liveness knob, so its abuse direction is locking
 // small users out, and this bounds how far a compromised admin can push that.
-//
-// REVIEW PASS ON 3bf3097, lowered from $1,000 to $100. The setter is instant in both directions, so
+// lowered from $1,000 to $100. The setter is instant in both directions, so
 // the ceiling IS the blast radius: at $1,000 one admin transaction removed the redeem exit for every
 // holder whose entire position was worth less than that, and it presented to them as a failed
 // transaction rather than as a visible closed state the way `pause` does. $100 keeps a 10x band above
@@ -150,16 +149,12 @@ pub struct ConfigAccount {
     pub max_silv_supply: u64,
 
     // Blocks ADMIN withdraw only: a user redemption may draw the treasury below it. 24h timelock.
-    //
-    // ROUND 5 P3-01: this said "and then route OTC". There is no OTC route. The queued path and its
-    // off-chain settlement were deleted on 2026-08-05 (which is also what removed SolidProof MEDIUM
-    // #4); redemption is one instant route that REVERTS when the rolling budget is exhausted. A
-    // comment describing a route that does not exist is how an integrator plans for a fallback that
-    // will never fire.
-    //
-    // Its live value is 0 by decision D5, risk accepted: nothing opposes an admin withdrawal draining
-    // the treasury, and what defends it instead is that `withdraw_usdc` is 24h-timelocked and
-    // guardian-cancellable.
+    // this said "and then route OTC". There is no OTC route. The queued path and its
+    // off-chain settlement do not exist: redemption is one instant route that REVERTS when the
+    // rolling budget is exhausted. A comment describing a route that does not exist is how an
+    // integrator plans for a fallback that will never fire.
+    // What bounds an admin withdrawal is not this floor but `withdraw_usdc` itself: it is
+    // 24h-timelocked and guardian-cancellable.
     pub treasury_min_float_usdc: u64,
 
     pub redemptions_enabled: bool, // manual switch, NO auto-expiry (deliberate)
@@ -248,16 +243,14 @@ pub struct ConfigAccount {
     /// to arm at zero. Zero at rest holds only while the gate is dormant: else backfill before upgrading.
     pub kyc_attestation_count: u32,
 
-    /// ROUND 5 P1-04. The MINIMUM SIZE OF A PRICED OPERATION, atomic USDC (6dec). It applies to
+    /// The MINIMUM SIZE OF A PRICED OPERATION, atomic USDC (6dec). It applies to
     /// `amount_usdc` on the mint side and to the gross USDC value of `amount_silv` on the redeem side,
     /// which is why it is not called `min_mint_amount`: it was, for one review cycle, and the name was
     /// half of why the redeem side went unprotected.
-    ///
-    /// It is an AVAILABILITY control, not a value control, and it exists because D2 made the
+    /// It is an AVAILABILITY control, not a value control, and it exists because made the
     /// anti-replay STRICT: `last_used_feed_update_timestamp_us` is a single global slot in this
     /// writable config, written by `mint_silv` AND `redeem_silv`, so the first operation to consume a
     /// Lazer print blocks every other one until the next print.
-    ///
     /// Measured cost of capture with no floor, at $58.34/oz:
     ///   mint,   100 bps: `fee_from_amount` ceils, so 60 micro-USDC pays a 1 micro-USDC fee, leaves 59
     ///                    net, and `mint_silv_out` floors 59/58.34 to exactly 1 atomic SILV, which
@@ -265,14 +258,12 @@ pub struct ConfigAccount {
     ///   redeem, 150 bps: 1 atomic SILV is worth 58 micro-USDC gross, pays a 1 micro-USDC fee and
     ///                    returns 57. NET cost: about 0.0000013 USDC, thirty times cheaper still.
     /// Either one bought a permissionless global denial of the priced path.
-    ///
     /// Zero DISABLES the floor, which is what an in-place upgrade of an already-initialised config
     /// decodes out of `reserved`, per THE RULE above. `initialize` writes `DEFAULT_MIN_OPERATION_USDC`.
     pub min_operation_usdc: u64,
 
-    /// ROUND 7. The active `SetInventoryWallet` proposal, or None. Carved out of `reserved` per THE
+    /// The active `SetInventoryWallet` proposal, or None. Carved out of `reserved` per THE
     /// RULE above, so an in-place upgrade decodes None, which is the correct "no proposal pending".
-    ///
     /// WHY THIS FIELD EXISTS AT ALL, rather than relying on MAX_ACTIVE_PROPOSALS: one armed proposal
     /// per action kind is what makes a guardian's job tractable. Without it an admin could queue five
     /// redirects to five wallets and the guardian would have to cancel all five within the window.
@@ -282,22 +273,18 @@ pub struct ConfigAccount {
 }
 
 impl ConfigAccount {
-    /// ROUND 8 FINAL-03. THE FIELDS THE GO-LIVE DECISION READS, HASHED.
-    ///
+    /// -03. THE FIELDS THE GO-LIVE DECISION READS, HASHED.
     /// `unpause` is built at one moment and executed at another: it is a Squads proposal, approved
     /// and executed later. Between those two moments a matured timelocked action can execute while
     /// the protocol is paused, where auto-pause is idempotent, so nothing invalidates the approved
     /// unpause and it lands on a config the readiness decision never saw.
-    ///
-    /// The first attempt refused an unpause while any slot was armed. Codex showed that does not
+    /// The first attempt refused an unpause while any slot was armed. showed that does not
     /// close it: the guard reads the CURRENT counter, and an action that executes and disarms in the
     /// gap brings the counter back to zero before the unpause lands. A counter is not historical.
-    ///
     /// So the caller carries a DIGEST of the state it approved, and this recomputes it. A digest was
     /// chosen over a revision counter for one reason: a counter has to be incremented at every
     /// mutation site, and one forgotten site makes it silently permissive. This is derived from the
     /// fields themselves, so a new field is a deliberate edit HERE rather than a silent omission.
-    ///
     /// The set is exactly what `scripts/_launch-readiness.ts` reads off the config. `paused` is
     /// deliberately EXCLUDED: the unpause is what changes it, so including it would make every
     /// unpause stale by construction.

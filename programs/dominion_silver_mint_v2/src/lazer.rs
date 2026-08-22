@@ -4,11 +4,10 @@
 // 0.34.0, the version the deployed `pyth-lazer-solana-contract` 0.8.0 locks. A
 // host-only differential test pins `=0.34.0` and diffs this parser against the
 // upstream deserializer.
-//
 // Wire format is LITTLE ENDIAN. Price-like i64 properties use 0 as the None
 // sentinel. FundingRate, FundingTimestamp, FundingRateInterval and
 // FeedUpdateTimestamp carry a u8 present flag before their value. The full
-// field-by-field layout is in private/trimmed-notes2/program-rest.md.
+// field-by-field layout is asserted by the Lazer harness under tools/.
 
 // Trust (the signer is a Lazer trusted signer) is enforced by the Lazer
 // `verify_message` CPI, never here: this module only parses an already-verified
@@ -233,7 +232,6 @@ fn consume_property(
 }
 
 /// Parse a VERIFIED Lazer payload and extract `target_feed_id`'s data.
-///
 /// `payload` must be the inner payload (`VerifiedMessage.payload` returned by
 /// the Lazer `verify_message` CPI), NOT the SolanaMessage envelope.
 /// `expected_channel` is the subscribed channel (fixed_rate@1000ms == 4).

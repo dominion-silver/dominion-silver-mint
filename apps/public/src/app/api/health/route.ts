@@ -3,14 +3,12 @@ import { APP_RPC, CLUSTER, PROGRAM_ID, SILV_MINT, USDC_MINT, LAZER_SILV_FEED_ID,
 
 /**
  * What is this deployment actually pointed at?
- *
  * WHY IT EXISTS, and it is not a generic health check. An independent review found that production
  * `app.dominion.market` was reading the chain from `api.devnet.solana.com`, the hardcoded fallback,
  * because `NEXT_PUBLIC_HELIUS_RPC` is not set in Vercel. Confirmed by loading the live page and tallying
  * its requests: three to the public devnet endpoint. Nothing anywhere said so, and nothing could: the
  * value is inlined into a lazily-loaded client chunk, so it is not greppable from outside, and the
  * symptom on a devnet preview is that everything looks fine because the accounts exist and traffic is nil.
- *
  * TWO WAYS THAT BITES, the second being the launch-breaker:
  *  1. The public endpoint rate-limits. Under launch traffic the reads 429, and because anchor-client
  *     throws rather than returning null, the Reserves panel flips to "Offline" and the mint/redeem card
@@ -19,10 +17,8 @@ import { APP_RPC, CLUSTER, PROGRAM_ID, SILV_MINT, USDC_MINT, LAZER_SILV_FEED_ID,
  *     PROGRAM_ID and SILV_MINT to mainnet, an unset Vercel variable means the app reads MAINNET accounts
  *     through a DEVNET endpoint: an empty panel, plus every explorer link stamped `?cluster=devnet`. It
  *     fails silently and looks like a deploy that simply has no data yet.
- *
  * So this route makes the resolved configuration READABLE from outside, which turns a silent
  * misconfiguration into one line of curl and one mechanical check in
- *
  * IT IS DELIBERATELY PUBLIC (added to the middleware's PUBLIC_PATHS) and leaks nothing: every value here
  * is already inlined into the client bundle that any visitor downloads. The RPC credential is the one
  * thing that must not appear, so the endpoint is reduced to its host and the query string is dropped

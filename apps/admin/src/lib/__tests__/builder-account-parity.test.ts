@@ -1,21 +1,17 @@
 /**
- * ROUND 8 L1-03, the CLASS. Every admin builder sends exactly the accounts the IDL declares.
- *
+ * the CLASS. Every admin builder sends exactly the accounts the IDL declares.
  * WHY THIS FILE EXISTS. `unpause` gained a mandatory `guardian` account on chain and the panel's
  * builder kept calling `.accountsPartial({ admin })`. Anchor cannot derive that PDA (its seed is the
  * guardian's own key, which the config does not hold), so the card threw `Unresolved accounts:
  * guardian` before producing an instruction: the documented way to resume after an emergency pause
  * was dead, and nothing in the repository noticed.
- *
  * Nothing COULD notice. `scripts/verify-client-idl-parity.ts` says in its own header that it cannot
  * check completeness, because it cannot tell which instruction a given `.accounts({...})` belongs to.
  * `account-parity.test.ts` covers eight builders someone chose by hand, and `unpause` was not one of
  * them. So the defect was not that a case was missing; it was that cases were OPT-IN.
- *
  * THE FIX IS THE LAST TEST IN THIS FILE. The table below must name every exported builder, and
  * `every builder is covered` fails when one is added without a case. Forgetting is no longer possible
  * without a red test, which is the only version of this guarantee that survives the next ABI change.
- *
  * Everything is offline: `.instruction()` never dials out, and the fake connection answers the two
  * reads a builder can perform (the config, for the timelock nonce and the admin, and the guardian
  * roster) from bytes constructed here.
@@ -78,7 +74,6 @@ const ctx = (): actions.BuildCtx => ({ connection: fakeConnection(), admin: ADMI
 
 /**
  * name -> how to build it, and which IDL instruction it must produce.
- *
  * A builder that emits SEVERAL instructions lists them in order. Arguments are plausible rather than
  * meaningful: this asserts the account list and the instruction identity, not the economics, which
  * the on-chain harness owns.
@@ -153,8 +148,7 @@ function decodeName(program: anchor.Program, ix: TransactionInstruction): string
 
 
 /**
- * ROUND 8 REVIEW P1. Serialized width of an IDL arg type.
- *
+ * Serialized width of an IDL arg type.
  * `option` is `1 + inner` for Some and 1 byte for None; every option this suite builds is passed as
  * Some, and the assertion below would flag a None as short, so a builder that starts passing null
  * must add its case here deliberately rather than silently.
@@ -211,9 +205,8 @@ describe("every admin builder passes exactly the accounts the IDL declares", () 
             .join(", ")}) and the builder sent ${ix.keys.length}`,
         ).toBe(declared.length);
 
-      // ROUND 8 REVIEW P1. ARG LENGTH TOO, on the loop that already walks every exported builder.
-      //
-      // The P1 of the previous pass was an ARGUMENT dropped when the program gained one, and this
+      // ARG LENGTH TOO, on the loop that already walks every exported builder.
+      // The of the previous pass was an ARGUMENT dropped when the program gained one, and this
       // suite only ever compared ACCOUNT counts. `instruction-args-parity.test.ts` builds its own
       // instruction, so it proves Anchor encodes an argument it was handed, not that the panel hands
       // one over. This does, for every builder, from the real exported function.

@@ -13,7 +13,7 @@ no-entrypoint = []
 no-idl = []
 no-log-ix-name = []
 cpi = ["no-entrypoint"]
-# CODEX P0-02: dev-only timelock-bypass hatches (dev_set_max_staleness /
+# dev-only timelock-bypass hatches (dev_set_max_staleness /
 # dev_set_premiums) are compiled ONLY under this feature. It is NOT in
 # `default`, so the standard `cargo-build-sbf` (release/deploy) build and the
 # generated IDL do NOT contain them. Devnet testing builds with

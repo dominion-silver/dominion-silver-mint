@@ -1,5 +1,4 @@
 // Shared readers for the admin action form fields.
-//
 // A privileged two-sided switch has NO default: the <select> renders an empty placeholder first, and
 // every reader (transaction builder AND the confirmation summary) goes through these helpers, which
 // THROW when nothing was chosen. One code path, so no default can diverge between what the operator was

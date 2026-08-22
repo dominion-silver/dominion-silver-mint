@@ -4,7 +4,7 @@
 # directives, 4c every rule in state/ is called where it must be, 5 no retired program id sits on a
 # live path. Nothing else connects those copies: no compiler, no type-checker, no test.
 # Deliberately anchor-free and network-free, so it stays the hard floor when `anchor idl build` is
-# unavailable or flaky in CI. History: private/trimmed-notes/gates.md
+# unavailable or flaky in CI.
 # Usage: scripts/verify-constants-consistency.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -239,7 +239,7 @@ print("4a. Anchor account mutability")
 # declared `mut` (or init / init_if_needed / close / realloc / zero, which imply writability). Anchor
 # only serialises `mut` accounts, so a write through a non-mut account is computed and then silently
 # discarded: not weakened, inert, and both `cargo build` and `cargo test` stay green. Six ways to fool
-# this scan, each closed below: private/trimmed-notes/gates.md
+# this scan, each closed below.
 _MUT_IMPLIED = ("mut", "init", "init_if_needed", "close", "realloc", "zero")
 # Comments are stripped from the attribute text, or `mut` in a comment inside `#[account(...)]` counts.
 _decomment = lambda t: re.sub(r"//[^\n]*", " ", re.sub(r"/\*.*?\*/", " ", t, flags=re.S))

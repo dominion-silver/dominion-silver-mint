@@ -1,14 +1,11 @@
 // mint_silv: USDC in, the premium comes OFF THE TOP, SILV is minted on the remainder at PURE SPOT.
-//
 //   fee      = ceil(amount_usdc * premium_bps_mint / 10_000)     (math.rs::fee_from_amount)
 //   silv_out = (amount_usdc - fee) / spot
-//
 // So the all-in price a minter pays per ounce is `spot / (1 - bps/1e4)`, NOT `spot * (1 + bps/1e4)`.
 // The two differ by bps^2/1e8, 1bp at the launch 1% and 25bp at the 500bp ceiling, and the public
 // client mirrors this formula: do not paraphrase it as a marked-up price.
-//
 // The premium is ALWAYS charged; only its DESTINATION is conditional on `fee_routing_disabled`.
-// Supply is bounded by one HARD cap (D2); SILV is backed off-chain, so no on-chain solvency invariant.
+// Supply is bounded by one HARD cap (); SILV is backed off-chain, so no on-chain solvency invariant.
 
 use crate::assertions::assert_silv_mint_invariants;
 use crate::cpi::{silv_mint_to, usdc_transfer_user_to_fee_vault, usdc_transfer_user_to_treasury};
@@ -134,7 +131,7 @@ pub fn handler(
         ctx.accounts.config.public_mint_enabled,
         DominionError::PublicMintDisabled
     );
-    // 2. Mint pause (D30 front-run defence). BOTH checks are needed: between the 24h elapsing and the
+    // 2. Mint pause (front-run defence). BOTH checks are needed: between the 24h elapsing and the
     // admin executing or cancelling, the time check alone would resume mints at the OLD premium.
     require!(
         now >= ctx.accounts.config.mint_paused_until,
@@ -155,27 +152,24 @@ pub fn handler(
         &user_key,
     )?;
 
-    // 3. Zero-amount guard. The HARD supply cap below is the sole mint-side VALUE limit (D2).
+    // 3. Zero-amount guard. The HARD supply cap below is the sole mint-side VALUE limit ().
     require!(amount_usdc > 0, DominionError::ZeroAmount);
 
-    // 3b. ROUND 5 P1-04, the AVAILABILITY floor. The redeem side has the matching check at
+    // 3b. , the AVAILABILITY floor. The redeem side has the matching check at
     // `redeem_silv.rs` step 4b; one field, `config.min_operation_usdc`, governs both, because the slot
     // it protects is shared.
-    //
     // It sits here rather than after the oracle read for one reason and it is NOT a safety one: the
     // whole transaction reverts either way, so the Lazer fee and the high-water write are rolled back
     // identically wherever this check lives. It is here because `amount_usdc` is already known, so a
     // dust caller is refused before the CPI rather than after it, which costs them the verify fee and
     // costs us the compute. The redeem side cannot do the same, because the size of a redeem is only
     // known once the price is read.
-    //
-    // D2 made the anti-replay strict, which turned `last_used_feed_update_timestamp_us` into one
+    // made the anti-replay strict, which turned `last_used_feed_update_timestamp_us` into one
     // global slot in a writable config: whoever consumes a print blocks every other operation until
     // the next one. Measured with no floor, at $58.34/oz and 100 bps, 60 micro-USDC was enough to
     // take that slot and still receive SILV, so the invariant that stops a REPLAY was simultaneously
     // a permissionless denial primitive. The floor is what makes capture cost working capital rather
     // than dust; the derivation is on `ConfigAccount::min_operation_usdc` and pinned by a unit test.
-    //
     // Zero disables it, which is what an in-place upgrade of an existing config decodes.
     require!(
         amount_usdc >= ctx.accounts.config.min_operation_usdc,
@@ -242,7 +236,7 @@ pub fn handler(
 
     require!(silv_out >= min_silv_out, DominionError::SlippageExceeded);
 
-    // 9. HARD supply cap (D2), in atomic SILV (oz * 1e6). `supply` is the pre-CPI circulating supply.
+    // 9. HARD supply cap (), in atomic SILV (oz * 1e6). `supply` is the pre-CPI circulating supply.
     let supply_post = ctx
         .accounts
         .silv_mint
@@ -254,7 +248,7 @@ pub fn handler(
         DominionError::SupplyCapExceeded
     );
 
-    // 10. Dust-filter price update (feeds the circuit breaker; D38). The two legs below always sum to
+    // 10. Dust-filter price update (feeds the circuit breaker; ). The two legs below always sum to
     // `amount_usdc`: only the premium's DESTINATION is conditional (step 7).
     maybe_update_last_price(config, oracle_price, amount_usdc, now);
 

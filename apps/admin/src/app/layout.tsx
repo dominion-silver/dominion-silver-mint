@@ -7,7 +7,6 @@ import { WalletContextProvider } from "@/components/WalletProvider";
 // system stack, which is why it read as a different product from the app it administers rather than
 // merely as a different section of it. Same three faces, same variable names, so a component copied
 // between the two apps behaves identically.
-//
 // THROUGH next/font, not a stylesheet link. The marketing site pulls these from
 // fonts.googleapis.com; doing that here would need `font-src` and `style-src` opened in the CSP, and
 // a design change has no business touching what the console is allowed to connect to. next/font

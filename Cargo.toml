@@ -28,7 +28,7 @@ codegen-units = 1
 
 # Pin anchor-lang / anchor-spl to the exact git tag for a single, reproducible
 # version tree (the deterministic IDL build depends on this; see
-# private/CI_IDL_DETERMINISM.md "DECISION", proven over 13 CI runs). Kamino +
+# Proven over repeated CI runs). Kamino +
 # MarginFi use the same patch.crates-io pin pattern.
 # (The vendored pyth-solana-receiver-sdk patch was removed 2026-06-10 with the
 # Pyth Lazer migration; the Core receiver SDK is no longer a dependency.)

@@ -3,7 +3,7 @@
 import { ReactNode, useMemo } from "react";
 import { ConnectionProvider, WalletProvider as SolanaWalletProvider } from "@solana/wallet-adapter-react";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
-// CODEX P1-02: import the 4 supported adapters from their DIRECT packages
+// import the 4 supported adapters from their DIRECT packages
 // instead of the `@solana/wallet-adapter-wallets` umbrella, which pulled
 // unused Torus/Trezor/WalletConnect/Reown chains (and their high/critical
 // npm advisories) into the production graph.

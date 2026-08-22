@@ -2,11 +2,10 @@
 // postPythAndExecuteConsumer: with Lazer there is no separate price-posting tx
 // (the signed price rides inside the consumer tx as the ed25519 + dominion
 // instructions), so the whole mint/redeem/claim is ONE tx and ONE wallet popup.
-//
 // Robustness mirrors the Core flow: client-side simulate before send (catch
 // reverts for free + map StaleOracle), then confirm-on-INCLUSION with a
 // value.err inspection (a landed-but-reverted tx must never be reported as
-// success - CODEX P1-01).
+// success - ).
 import { Connection, Transaction } from "@solana/web3.js";
 import type { WalletContextState } from "@solana/wallet-adapter-react";
 import bs58 from "bs58";
@@ -15,7 +14,7 @@ import { fetchLazerEnvelope } from "./lazer-client";
 
 const FLOW_TIMEOUT_MS = 90_000;
 
-// ROUND 5 P1-05. How many prints a submitter may try to claim before giving up, and how long to wait
+// How many prints a submitter may try to claim before giving up, and how long to wait
 // between tries. The feed publishes at fixed_rate@1000ms, so one second is exactly one new print.
 const CLAIM_ATTEMPTS = 3;
 const CLAIM_RETRY_MS = 1_100;
@@ -30,13 +29,11 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 }
 
 /**
- * ROUND 5 P1-05. Fetch a print for submission, preferring one no other submitter has been handed.
- *
- * D2 lets one signed envelope price exactly ONE operation, so two submitters on the same print means
+ * Fetch a print for submission, preferring one no other submitter has been handed.
+ * lets one signed envelope price exactly ONE operation, so two submitters on the same print means
  * the second is refused `LazerReplayed` after paying the Lazer verify fee. The proxy marks a print
  * `contended` when somebody already took it; waiting ~1s gets the next one, and the feed publishes at
  * fixed_rate@1000ms.
- *
  * IT ALWAYS RETURNS AN ENVELOPE. Contention is a preference, never a refusal: this runs before the
  * wallet popup, so a delay is invisible, but a refusal would mean an anonymous request loop against the
  * unauthenticated proxy could stop every user from minting. Losing the race costs a fraction of a cent
@@ -51,7 +48,7 @@ async function claimEnvelope(
     try {
       last = await fetchLazerEnvelope(feedId, true);
     } catch {
-      // KEEP THE ENVELOPE WE ALREADY HAVE. A review pass caught this: the loop discarded a usable
+      // KEEP THE ENVELOPE WE ALREADY HAVE. A caught this: the loop discarded a usable
       // contended envelope and re-fetched, and `fetchLazerEnvelope` throws on any non-2xx, so a 429
       // or a transient 502 on the OPTIONAL retry killed a mint that was one signature away from
       // working. Contention costs the user a fraction of a cent if they lose the race; propagating
@@ -94,12 +91,10 @@ async function _impl(
   }
 
   // 1. Fetch the signed envelope + its price (throws LazerNotConfiguredError on 503).
-  //
   // THIS IS THE SUBMIT PATH. `fresh` is mandatory here: the program refuses a feed timestamp it has
   // already consumed, so an envelope shared with another signer costs this user a failed transaction
-  // plus the Lazer verify fee. See round 4 P0-01.
-  //
-  // ROUND 5 P1-05: the proxy marks a print `contended` when another submitter already took it, and
+  // plus the Lazer verify fee. See .
+  // the proxy marks a print `contended` when another submitter already took it, and
   // `claimEnvelope` waits for a fresher one up to CLAIM_ATTEMPTS times. It always returns an envelope:
   // this runs BEFORE the wallet popup, so a wait is invisible, but a refusal here would hand anyone
   // with curl a way to stop every mint on the site. Bounded at 3 tries inside a 90s flow budget.
@@ -143,7 +138,7 @@ async function _impl(
 
   // 6. Confirm. confirmTransaction resolves on INCLUSION, not success: a tx that
   //    lands then reverts (stale oracle, pause, slippage, treasury race) has a
-  //    non-null value.err. Inspect it + surface the real failure (CODEX P1-01).
+  //    non-null value.err. Inspect it + surface the real failure ().
   const blockhash = signed.recentBlockhash!;
   const lastValidBlockHeight =
     signed.lastValidBlockHeight ??

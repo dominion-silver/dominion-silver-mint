@@ -7,7 +7,6 @@ const config: Config = {
       colors: {
         // dominion.market, measured out of the live DOM on 2026-08-11 with getComputedStyle
         // rather than eyeballed from a screenshot.
-        //
         // THIS REPLACES AN OLDER PALETTE THAT CLAIMED THE SAME PROVENANCE. The previous values
         // (#1a1a1a body, #4ade80 green accent) carried the comment "Exact dominion.market/why-silv
         // palette (measured from the DOM)" and were correct when written. The site has since been

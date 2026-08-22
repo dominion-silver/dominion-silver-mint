@@ -1,12 +1,10 @@
 /**
  * The admin app had NO account-list parity test.
- *
  * The public app got one after four stale call sites shipped, but the same class lives here and was
  * guarded by nothing mechanical: `withdraw_fees` gained a required `usdc_treasury` account in this
  * batch and it is present only because someone added it by hand. The parity CI gate cannot help,
  * because it only checks that a key is an account of SOME instruction, and the admin builders
  * dispatch by computed name (`[method](...)`) so its chain check does not see them either.
- *
  * These tests build the real instructions offline (no network: Anchor's `.instruction()` never
  * touches the RPC) and assert the account COUNT and the account NAMES against the committed IDL. A
  * missing account changes the count; a wrong name changes the set.
@@ -45,7 +43,6 @@ describe("admin builder account parity with the IDL", () => {
     // being off-curve is what forces `allowOwnerOffCurve = true` in the derivation, and omitting
     // that flag throws TokenOwnerOffCurveError, which has already cost this project a debugging
     // session on the treasury ATA.
-    //
     // (An earlier version of this test asserted the ATA ADDRESS was on-curve. It is not: an ATA is
     // itself a PDA of the associated-token program, so it is off-curve too. The test failed on
     // correct code, which is the third time this pass a test of mine was the thing that was wrong.)
@@ -69,13 +66,11 @@ describe("admin builder account parity with the IDL", () => {
     }
   });
 
-  // --- audit C-02, FINAL MECHANISM: one signature, and the contract holds the invariant ---
-  //
+  // --- FINAL MECHANISM: one signature, and the contract holds the invariant ---
   // The first fix added `kyc_operator: Option<Signer>` to `set_kyc_scope` and three tests asserting the
   // client passed it. Those tests were correct about the client and the mechanism was wrong: the Squads
-  // path cannot assemble two signatures, so arming was unreachable from the panel. Both audits
+  // path cannot assemble two signatures, so arming was unreachable from the panel. The reviews
   // recommended the on-chain attestation counter, so the account is gone and so are those tests.
-  //
   // What is worth pinning instead: the account list is back to two, and nothing in the client tries to
   // supply a signer the IDL no longer declares.
   it("set_kyc_scope takes exactly the accounts the IDL declares, with no co-signer", async () => {
@@ -99,12 +94,10 @@ describe("admin builder account parity with the IDL", () => {
     expect(arm[0].programId.equals(disarm[0].programId)).toBe(true);
   });
 
-  // --- audit A-01: a failed read must be REPORTED, not rendered as zero ---
-  //
+  // --- audit a failed read must be REPORTED, not rendered as zero ---
   // `fetchDashboardSnapshot` mapped a rejected treasury or supply read to BN(0) and returned a snapshot
   // that looked complete: the operator saw Treasury $0 / supply 0 oz / 0% cap used with nothing marking
   // those as unread, and could then decide a withdrawal, a premint, or an opening on them.
-  //
   // Tested through the extracted `readTokenAmounts` rather than the whole snapshot. My first attempt
   // faked a Connection and died on `getAccountInfoAndContext`: reaching the branch through Anchor needs
   // a real encoded 800-byte config account, which is why this logic had no test in the first place.
@@ -121,7 +114,7 @@ describe("admin builder account parity with the IDL", () => {
     expect(good.treasuryUsdc.toString()).toBe("1234");
     expect(good.silvSupply.toString()).toBe("5678");
 
-    // The finding's exact scenario: config readable, both token reads 429.
+    // The exact scenario: config readable, both token reads 429.
     const both = actions_ac.readTokenAmounts(bad("429 Too Many Requests"), bad("429 Too Many Requests"));
     expect(both.degraded).toHaveLength(2);
     expect(both.degraded.join(" ")).toMatch(/treasury/i);
@@ -145,13 +138,11 @@ describe("admin builder account parity with the IDL", () => {
 });
 
 /**
- * ROUND 8 A-05. The generated IDL must not carry claims the program no longer honours.
- *
- * T8-03 removed `set_inventory_wallet` from the program surface, but four doc comments kept saying
+ * The generated IDL must not carry claims the program no longer honours.
+ * removed `set_inventory_wallet` from the program surface, but four doc comments kept saying
  * the setter chooses the destination, that the first binding takes an instant path, and that the
  * wallet can be redirected instantly. Anchor exports doc comments into the IDL, so those sentences
  * shipped to every integrator that reads it, describing an instruction that does not exist.
- *
  * A negative grep is the right shape here: nothing can assert that prose is TRUE, but a specific
  * false claim that was already made once can be forbidden by name.
  */
@@ -163,12 +154,12 @@ describe("the generated IDL does not describe the deleted instant setter", () =>
     "chooses it via `set_inventory_wallet`",
   ];
 
-  it("carries none of the four claims T8-03 made false", () => {
+  it("carries none of the four claims the instruction removal made false", () => {
     const raw = JSON.stringify(idl);
     for (const phrase of FORBIDDEN) {
       expect(
         raw.includes(phrase),
-        `the IDL still says ${JSON.stringify(phrase)}. That instruction was deleted in round 8; ` +
+        `the IDL still says ${JSON.stringify(phrase)}. That instruction was deleted; ` +
           `correct the doc comment in the program and regenerate all three IDL copies.`,
       ).toBe(false);
     }

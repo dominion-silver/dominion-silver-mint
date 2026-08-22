@@ -1,10 +1,8 @@
 /**
- * ROUND 8 T8-07. The user-facing mapping for a failed mint or redeem, EXTRACTED so it can be tested.
- *
+ * The user-facing mapping for a failed mint or redeem, EXTRACTED so it can be tested.
  * It lived inline in `MintRedeemCard.tsx`'s catch block, which meant the only way to exercise it was
  * to render the component and drive a wallet. So the wording of what a user is told after losing
  * money to a revert was never asserted by anything.
- *
  * The extraction is behaviour-preserving on purpose: the strings below are moved, not rewritten, so
  * the test that follows fails on the TEXT rather than on the refactor. The card imports and calls
  * this, so the test drives the same function the product does.
@@ -23,7 +21,6 @@ export type OperationMode = "mint" | "redeem";
 
 /**
  * Turn any thrown value into the sentence the user reads.
- *
  * `flat` is the FLATTENED error: message plus program logs plus the structured `onChainErr`. A
  * transaction that was confirmed and then reverted carries its signal in the logs, never in
  * `.message`, which is why every predicate below reads the flattened form.
@@ -33,7 +30,7 @@ export function mapUserFacingError(
   mode: OperationMode,
   otcEmail: string,
 ): string {
-  // ROUND 8 T8-07. Every branch below fires on a PROGRAM error, which means the transaction was
+  // Every branch below fires on a PROGRAM error, which means the transaction was
   // executed by the cluster and then reverted. The fee payer paid the base fee and any priority fee;
   // only the state changes rolled back. The previous copy said "Nothing was charged", which is true
   // of a preflight refusal and false here. The principal really is untouched, so that reassurance

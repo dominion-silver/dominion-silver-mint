@@ -1,7 +1,6 @@
 // Pyth Lazer (Pyth Pro) Solana message + ed25519 instruction assembly: the client-side counterpart of
 // the on-chain `verify_message` (pyth-lazer-solana-contract 0.8.0 signature.rs) and of dominion's
 // verify_and_get_payload (lazer_cpi.rs), replicated to the byte so the on-chain cross-check passes.
-//
 // THE CONVENTION:
 //   - The dominion ix's `message_data` is the WHOLE envelope, never the inner payload: verify_message
 //     reads message_data[0..4] as SOLANA_FORMAT_MAGIC and slice_eq's it against the bytes the ed25519
@@ -94,7 +93,6 @@ export function lazerMessageData(envelope: Uint8Array): Uint8Array {
 /**
  * Build the ed25519 precompile instruction for a Lazer signature. Its offsets point at the envelope
  * WITHIN `dominionIxData`.
- *
  * @param dominionIxData serialized data of the dominion ix (must contain the envelope)
  * @param envelope the SolanaMessage envelope (== the dominion ix's message_data arg)
  * @param dominionInstructionIndex the dominion ix's position in the tx (e.g. 1)
@@ -150,7 +148,6 @@ export interface LazerOracleTx {
 
 /**
  * Assemble the ed25519 instruction for an already-built dominion oracle ix.
- *
  * Caller contract: build the dominion ix (mint_silv / redeem_silv / claim_redemption) with
  * `message_data = lazerMessageData(envelope)`, `ed25519_instruction_index = ed25519InstructionIndex`,
  * `signature_index = 0`, and its 5 Lazer accounts (lazer_program, lazer_storage, lazer_treasury,

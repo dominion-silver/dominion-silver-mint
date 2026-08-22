@@ -25,7 +25,6 @@ export const LAZER_PROGRAM_ID = new PublicKey("pytd2yyk641x7ak7mkaasSJVXh6YYZnC7
 export const LAZER_STORAGE = new PublicKey("3rdJbqfnagQ4yx9HXJViD4zc4xpiSqmFsKpPuSCQVyQL"); // devnet == mainnet
 // CLUSTER-SPECIFIC, MAINNET value here. The contract checks whatever we pass against the Storage's own
 // treasury field (read_treasury), so it must be the current cluster's.
-//
 // CONFIRMED 2026-08-12 BY TWO INDEPENDENT ROUTES, because getting this wrong makes every mint revert
 // with an error that says nothing about treasuries:
 //  1. Read from the Lazer Storage account 3rdJbqfna... on mainnet at offset 40 (layout is

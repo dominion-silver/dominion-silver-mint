@@ -11,7 +11,6 @@ use crate::state::{ConfigAccount, LAZER_CHANNEL_ID, LAZER_FUTURE_SKEW_US};
 pub const PRICE_SCALE: u32 = 9;
 
 /// Reads the SILV price from Pyth Lazer and applies all guards.
-///
 /// Glues the three Lazer modules: verify the signed message via the upgradeable
 /// Lazer program (isolated fee-payer PDA), parse the returned payload, apply the
 /// Sections 5.4-5.6 policy. Returns the normalized 9-decimal price + the print's
@@ -74,10 +73,10 @@ fn map_policy_err(e: LazerPolicyError) -> Error {
         | LazerPolicyError::ConfidenceNonPositive
         | LazerPolicyError::ConfidenceTooWide => error!(DominionError::OracleLowConfidence),
         LazerPolicyError::TooFewPublishers => error!(DominionError::LazerTooFewPublishers),
-        // ROUND 5, found while writing the P1-03 persistence tests: these two shared one code. They
+        // found while writing the persistence tests: these two shared one code. They
         // are different events with different fixes. CarriedForward means the FEED republished a
         // stale print, which the caller can do nothing about; NonMonotonic means another transaction
-        // consumed this print first, which is fixed by retrying with a fresh envelope. D2 made the
+        // consumed this print first, which is fixed by retrying with a fresh envelope. made the
         // second one the normal steady state, so the collapse left the most frequent refusal on the
         // priced path wearing a name that pointed operators at the oracle instead of at the race.
         LazerPolicyError::CarriedForward => error!(DominionError::LazerCarriedForward),
@@ -91,7 +90,7 @@ fn map_policy_err(e: LazerPolicyError) -> Error {
     }
 }
 
-/// Price-delta circuit breaker (D11).
+/// Price-delta circuit breaker ().
 /// If the last recorded price is newer than the decay window, reject big moves.
 /// Initial state (last_recorded_price == 0) bypasses (first tx bootstraps).
 pub fn check_price_delta(config: &ConfigAccount, new_price: u128, now: i64) -> Result<()> {
@@ -119,7 +118,7 @@ pub fn check_price_delta(config: &ConfigAccount, new_price: u128, now: i64) -> R
     Ok(())
 }
 
-/// D38 dust filter: only update last_recorded_price if amount is large enough,
+/// dust filter: only update last_recorded_price if amount is large enough,
 /// EXCEPT the very first arming (last_recorded == 0) which always records so the
 /// delta breaker cannot be permanently disarmed by an all-sub-threshold flow
 /// (Fable audit P2-B). The first accepted price is oracle-verified + in-band, so
@@ -138,7 +137,7 @@ pub fn maybe_update_last_price(
     }
 }
 
-// Option B 2026-05-15: update_reserve_check_price (D41 slow-track) removed.
+// Option B 2026-05-15: update_reserve_check_price (slow-track) removed.
 // Option B has no on-chain reserve, so there is no reserve-check price to
-// slow-track. Pricing uses the live oracle directly. See CONFIRMED_SPEC.md
+// slow-track. Pricing uses the live oracle directly.
 // Section 2.

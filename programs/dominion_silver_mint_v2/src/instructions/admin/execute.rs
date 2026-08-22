@@ -4,7 +4,7 @@
 //   - Re-validates args at execute (state may have shifted during the window).
 //   - Requires config.pending_<kind>_nonce == nonce, so clearing that slot cancels the proposal.
 //   - Clears pending_*_nonce, decrements active_proposal_count; premium_mint clears mint_paused_until.
-//   - withdraw also reverts if paused (D31), bounded by the treasury minimum FLOAT (D7).
+//   - withdraw also reverts if paused (), bounded by the treasury minimum FLOAT ().
 //   - pyth_feed, oracle_guards and compliance_mode atomically set paused = true.
 
 use anchor_lang::prelude::*;
@@ -15,7 +15,7 @@ use crate::cpi::usdc_transfer_treasury_to_user;
 use crate::errors::DominionError;
 use crate::events::*;
 use crate::state::*;
-// Withdraw reads no oracle: the float check (D7) is a price-independent USDC floor, which keeps the
+// Withdraw reads no oracle: the float check () is a price-independent USDC floor, which keeps the
 // reserve-price-manipulation surface out of the withdraw path entirely.
 
 // === Execute SetPremium (mint or redeem) ===
@@ -132,7 +132,7 @@ pub fn execute_set_premium_redeem_handler(ctx: Context<ExecutePremium>, nonce: u
     Ok(())
 }
 
-// === Execute Withdraw (float check, D7) ===
+// === Execute Withdraw (float check, ) ===
 // BPF 4 KB stack frame: Box every sizable account. Un-boxed, ConfigAccount + TimelockQueueAccount +
 // 3 token accounts overflow try_accounts by 144 B. Same pattern as mint_silv/redeem_silv.
 
@@ -200,7 +200,7 @@ pub fn execute_withdraw_usdc_handler(ctx: Context<ExecuteWithdraw>, nonce: u64) 
     );
     require!(now >= tl.executable_at, DominionError::TimelockNotElapsed);
 
-    // D31: reject if paused.
+    // reject if paused.
     require!(!config.paused, DominionError::WithdrawBlockedWhilePaused);
 
     // Decode (amount, recipient).
@@ -218,7 +218,7 @@ pub fn execute_withdraw_usdc_handler(ctx: Context<ExecuteWithdraw>, nonce: u64) 
         DominionError::WithdrawRecipientMismatch
     );
 
-    // D7: the admin withdraw is bounded by the treasury minimum FLOAT, a price-independent USDC
+    // the admin withdraw is bounded by the treasury minimum FLOAT, a price-independent USDC
     // amount, so no oracle read is needed. The float blocks ADMIN withdraw only: redemptions may draw
     // the treasury below it (then route OTC) and do NOT subtract it.
     let treasury_pre = ctx.accounts.usdc_treasury.amount;
@@ -338,7 +338,7 @@ pub fn execute_set_compliance_mode_handler(
     Ok(())
 }
 
-// === Execute SetOracleGuards (D37 Option<T> per field) ===
+// === Execute SetOracleGuards (Option<T> per field) ===
 
 #[derive(Accounts)]
 #[instruction(nonce: u64)]
@@ -433,13 +433,13 @@ pub fn execute_set_oracle_guards_handler(
         config.max_price_delta_bps = v;
     }
     if let Some(v) = g.decay_seconds {
-        // Spec-silent; defensive (D14). Min 60s so decay=0 cannot disable the
+        // Spec-silent; defensive (). Min 60s so decay=0 cannot disable the
         // breaker (elapsed > 0 would always "decay"); max 7 days so it re-arms.
         require!(v >= 60 && v <= 7 * 86400, DominionError::AboveMaximum);
         config.price_delta_decay_seconds = v;
     }
     if let Some(v) = g.dust_filter_min_usdc {
-        // Spec-silent; defensive (D14). Cap at $1M so the dust filter cannot be
+        // Spec-silent; defensive (). Cap at $1M so the dust filter cannot be
         // set so high that last_recorded_price never updates (breaker stale).
         require!(v <= 1_000_000_000_000, DominionError::AboveMaximum);
         config.price_update_min_amount_usdc = v;
@@ -510,7 +510,6 @@ pub struct RedeemLimitsArgs {
     // It rides this action rather than having its own instruction so that it inherits the 24h delay,
     // the guardian-cancel window, the single-active-nonce guard and the ceiling re-validation, at no
     // cost in ConfigAccount bytes.
-    //
     // BORSH CAVEAT before appending anything else here: this struct is serialized into
     // `TimelockQueueAccount.action_data`, so appending a field makes any proposal queued under the OLD
     // layout fail to deserialize at execute (`SerializationFailure`). Cancelling still works
@@ -520,8 +519,7 @@ pub struct RedeemLimitsArgs {
 }
 
 /// True if at least one field with a LIVE EFFECT is provided (else the call is a pure no-op).
-///
-/// C-03: the two DEAD fields do not count. A proposal touching only them is `RedeemLimitsAllNone`,
+/// the two DEAD fields do not count. A proposal touching only them is `RedeemLimitsAllNone`,
 /// the same answer as an empty one, because accepting it held `pending_redeem_limits_nonce` for 24h
 /// and announced a throttle change that changed nothing. A dead field ALONGSIDE a live one is still
 /// accepted and still written: the live field makes the proposal meaningful on its own.
@@ -532,12 +530,10 @@ pub fn redeem_limits_any_set(args: &RedeemLimitsArgs) -> bool {
 }
 
 /// The SECOND no-op gate: does any PROVIDED field actually differ from the current config?
-///
 /// `redeem_limits_any_set` answers a different question ("did the caller provide anything at all"),
 /// and the two are independent. They must agree on which fields are LIVE: when they disagreed about
 /// `redemptions_enabled`, a switch-only proposal passed one gate and died on `ProposalNoOp` in the
 /// other, so nothing in the deployed program could open redemptions.
-///
 /// IF YOU ADD A FIELD TO `RedeemLimitsArgs`, IT MUST BE ADDED HERE AND TO `redeem_limits_any_set`.
 pub fn redeem_limits_effective_change(
     args: &RedeemLimitsArgs,
@@ -559,7 +555,7 @@ pub fn redeem_limits_effective_change(
     {
         return true;
     }
-    // The DEAD fields are deliberately NOT compared: comparing them kept C-03's abuse reachable by
+    // The DEAD fields are deliberately NOT compared: comparing them kept 's abuse reachable by
     // pairing a live field at its current value with a dead field that differs. Both gates now agree
     // on the same definition of "live". The parameters stay in the signature because the execute
     // handler still WRITES a dead field when it is provided alongside a live one.
@@ -684,7 +680,6 @@ pub fn execute_set_redeem_limits_handler(
     // proposal, and this handler only wrote that field, never read it. Without the bind, an operator
     // who reaches for the instant `set_redemptions_enabled(false)` during an incident believes
     // redemptions are shut while a pending OPEN proposal is still armed and lands hours later.
-    //
     // This cannot create an inescapable state: `cancel_timelocked_action` reads no pending_*_nonce as
     // a precondition and clears the matching one, so a proposal is ALWAYS cancellable, and cancelling
     // CLOSES the account. An orphan left by an instant close therefore counts toward
@@ -790,7 +785,7 @@ pub fn validate_metadata_args(args: &MetadataArgs) -> Result<()> {
     Ok(())
 }
 
-// === Execute SetTreasuryFloat (Option B D7: replaces SetTreasuryMinReserve) ===
+// === Execute SetTreasuryFloat (Option B : replaces SetTreasuryMinReserve) ===
 
 #[derive(Accounts)]
 #[instruction(nonce: u64)]
@@ -833,7 +828,7 @@ pub fn execute_set_treasury_min_float_handler(
 
     let new_float_usdc = decode_u64(&tl.action_data)?;
     // Binding re-validation of the fat-finger ceiling (covers stale proposals and any future
-    // propose-side relaxation). No lower bound: 0 is valid per D7.
+    // propose-side relaxation). No lower bound: 0 is valid per .
     require!(
         new_float_usdc <= TREASURY_FLOAT_CEILING_USDC,
         DominionError::AboveMaximum
@@ -964,7 +959,7 @@ pub struct ExecuteInventoryWallet<'info> {
     pub rent_recipient: AccountInfo<'info>,
 }
 
-/// ROUND 7. Apply an announced change of the pre-mint destination.
+/// Apply an announced change of the pre-mint destination.
 pub fn execute_set_inventory_wallet_handler(
     ctx: Context<ExecuteInventoryWallet>,
     nonce: u64,
@@ -1417,7 +1412,7 @@ mod fix_a_tests {
         assert!(!tighten(&mixed));
     }
 
-    // --- DOM-006 (audit wave 0): the queue-delay floor. ---
+    // --- (audit wave 0): the queue-delay floor. ---
 
     fn delay(v: u32) -> RedeemLimitsArgs {
         RedeemLimitsArgs {
@@ -1639,7 +1634,7 @@ mod fix_a_tests {
 
     #[test]
     fn a_proposal_touching_only_DEAD_fields_is_refused() {
-        // C-03: `large_redeem_threshold_usdc` and `redeem_queue_delay_seconds` are read by no
+        // `large_redeem_threshold_usdc` and `redeem_queue_delay_seconds` are read by no
         // instruction since the queue was deleted, so proposing one alone must not hold the single
         // redeem-limits slot for 24h and announce a throttle change that changed nothing.
         for dead in [

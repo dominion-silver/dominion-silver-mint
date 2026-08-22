@@ -9,7 +9,6 @@ import { SILV_MINT, TOKEN_2022_PROGRAM_ID, solscanTx } from "@/lib/constants";
 /**
  * Last N signatures touching the user's SILV ATA = Dominion mint/redeem
  * activity. Single RPC call to getSignaturesForAddress(silvAta).
- *
  * Kind labelling (mint vs redeem):
  *  - First we read a localStorage cache where MintRedeemCard wrote
  *    { sig: "mint" | "redeem" } at submission time.
@@ -17,7 +16,6 @@ import { SILV_MINT, TOKEN_2022_PROGRAM_ID, solscanTx } from "@/lib/constants";
  *    lazily fetch their parsed tx ONCE, parse the program log for
  *    "Instruction: MintSilv" / "Instruction: RedeemSilv", and write
  *    the label to the cache. Subsequent loads are local.
- *
  * Cache lookups are synchronous in localStorage (cheap). RPC fetches
  * are batched lazily and capped at 10 per page load to stay below
  * devnet public RPC limits.

@@ -11,7 +11,6 @@ const config: Config = {
     extend: {
       colors: {
         // THE SAME PALETTE apps/public CARRIES, and this file previously did not.
-        //
         // It held `bg: #0a0a0a`, `accent: #22c55e` (green-500) under the comment "dominion.market
         // palette". That was true when written and became false when the site was rebranded: darker
         // ground, a display serif, and a periwinkle accent instead of green. apps/public was updated

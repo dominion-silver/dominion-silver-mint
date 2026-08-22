@@ -1,30 +1,26 @@
 /**
- * Audit finding P-08: the cluster must DERIVE from the RPC, and everything cluster-dependent must
+ * Audit finding : the cluster must DERIVE from the RPC, and everything cluster-dependent must
  * follow it.
- *
  * Four explorer links carried a literal `?cluster=devnet` and the low-SOL notice always pointed at the
  * devnet faucet. On mainnet that means the toast after a successful mint opens a transaction that does
  * not exist on the cluster it links to, which reads to the user as "my mint failed", and a user out of
  * SOL is sent to a faucet that cannot fund them.
- *
  * WHY A UNIT TEST AND NOT A BUNDLE GREP. My first check was `grep cluster=devnet` over a mainnet-env
  * build, expecting zero hits. It found two, and that proved nothing either way: both arms of
  * `CLUSTER === "devnet" ? "?cluster=devnet" : ""` are string literals in the source, so both survive
  * into the bundle whether or not the runtime ever reaches them. Presence of a literal is not evidence
  * about a value. This asserts the values.
- *
  * The env is set BEFORE the dynamic import in each case, because `CLUSTER` is computed once at module
  * evaluation from `process.env.NEXT_PUBLIC_*`.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 
 /**
- * REVIEW-OF-FIXES: this helper used to set BOTH `NEXT_PUBLIC_HELIUS_RPC` and
+ * this helper used to set BOTH `NEXT_PUBLIC_HELIUS_RPC` and
  * `NEXT_PUBLIC_TRITON_RPC` to the same value in every case, which made the production configuration
  * unreachable from this suite. The runbook lists only HELIUS, TRITON has no consumer in the app, and
  * TRITON's fallback to devnet was what poisoned `CLUSTER`. A test that can only express the
  * both-set shape cannot fail on the only shape that ships.
- *
  * `triton` is therefore separate, and defaults to UNSET, which is production.
  */
 async function load(rpc?: string, triton?: string) {
@@ -64,7 +60,7 @@ describe("cluster derivation drives every cluster-dependent output", () => {
 
   it("an unrecognised private RPC host is treated as mainnet, not devnet", async () => {
     // A real mainnet operator uses a private endpoint whose hostname says nothing. Defaulting an
-    // unknown host to devnet would reintroduce the finding for exactly the deployments that matter.
+    // unknown host to devnet would reintroduce the scenario for exactly the deployments that matter.
     for (const rpc of [
       "https://dominion.rpcpool.com",
       "https://my-node.internal/rpc",
@@ -108,7 +104,7 @@ describe("the production configuration: HELIUS set, TRITON unset", () => {
   });
 
   it("a mainnet URL merely CONTAINING 'devnet' is still mainnet", async () => {
-    // Same class as the scripts-side P0: match on the host, not on the URL.
+    // Same class as the scripts-side : match on the host, not on the URL.
     for (const rpc of [
       "https://api.mainnet-beta.solana.com/?tag=devnet-mirror",
       "https://mainnet.helius-rpc.com/?api-key=7fdevnet91-aaaa",

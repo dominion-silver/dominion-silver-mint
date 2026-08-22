@@ -5,7 +5,7 @@ import idl from "../idl/dominion_silver_mint.json";
 import { oracleGuardsArgsObject } from "../admin-actions";
 import { boolField, displayField, selectField } from "../form-defaults";
 
-// Fable audit P1-A regression guard. proposeSetOracleGuards is the launch
+// regression guard. proposeSetOracleGuards is the launch
 // GO-gate instruction; it was silently dropping 6 of 7 fields because the arg
 // object used snake_case keys while Anchor camelCases the IDL at runtime.
 // This builds the instruction OFFLINE (no network) with the real coder, decodes
@@ -62,7 +62,7 @@ const ALL_FIELDS = [
   "minPublishers",
 ];
 
-describe("proposeSetOracleGuards encoding (Fable P1-A camelCase guard)", () => {
+describe("proposeSetOracleGuards encoding (camelCase guard)", () => {
   it("encodes every provided field as Some (no silent drop)", async () => {
     const obj = oracleGuardsArgsObject({
       stalenessSeconds: 20,
@@ -113,7 +113,7 @@ describe("proposeSetOracleGuards encoding (Fable P1-A camelCase guard)", () => {
   });
 });
 
-// AUDIT finding A-02 regression guard (P1, operator integrity), updated after
+// finding regression guard (, operator integrity), updated after
 // the follow-up review. The original bug was a boolean <select> that DISPLAYED
 // "on / true" while the builder encoded `false`, because the render default and
 // the read default were two different things. The first fix shared one default;
@@ -141,7 +141,7 @@ describe("privileged form fields require an explicit choice (A-02)", () => {
 
   it("the confirmation dialog shows exactly what the builder will read", () => {
     // The dialog and the builder must never disagree: this is the invariant the
-    // whole finding was about.
+    // whole point was.
     expect(displayField({}, "on")).toBe("(not chosen)");
     expect(displayField({ on: "true" }, "on")).toBe("true");
     expect(displayField({ on: "false" }, "on")).toBe("false");

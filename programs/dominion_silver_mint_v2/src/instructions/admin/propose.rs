@@ -1,10 +1,10 @@
 // Timelock propose instructions.
-// Common rules per PLAN.md §5.3:
-//   - Reverts if same-kind pending_*_nonce already Some (D35 single-active).
-//   - Reverts if proposed value matches current config (D36 no-op).
-//   - Reverts if active_proposal_count >= 10 (D29 cap).
+// Common rules for every proposal:
+//   - Reverts if same-kind pending_*_nonce already Some (single-active).
+//   - Reverts if proposed value matches current config (no-op).
+//   - Reverts if active_proposal_count >= 10 (cap).
 //   - Allocates nonce from config.next_timelock_nonce, increments tracking.
-//   - propose_set_premium_mint additionally sets mint_paused_until = executable_at (D30).
+//   - propose_set_premium_mint additionally sets mint_paused_until = executable_at ().
 //   - propose_withdraw_usdc may be called even while paused (queueing OK; execute reverts on paused).
 
 use anchor_lang::prelude::*;
@@ -89,7 +89,6 @@ pub fn propose_set_premium_mint_handler(ctx: Context<ProposePremium>, new_bps: u
         .ok_or(error!(DominionError::ArithmeticOverflow))?;
     config.pending_premium_mint_nonce = Some(nonce);
 
-    // D30.
     config.mint_paused_until = executable_at;
 
     emit!(AdminActionProposed {
@@ -266,12 +265,10 @@ pub struct ProposePublicMint<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Propose OPENING the public mint path ("mint at launch", Thomas 2026-07-26).
-///
+/// Propose OPENING the public mint path ("mint at launch", 2026-07-26).
 /// Only `true` is proposable here. Closing is instant via
 /// `set_public_mint_enabled(false)`, because closing is the emergency direction: if the
 /// oracle misbehaves, mint must stop in one transaction, not in 24 hours.
-///
 /// Why opening is timelocked at all, given that a public mint takes USDC IN rather than
 /// paying it out: it is not a drain vector, but it is a posture change with two real
 /// consequences. It wakes the ORACLE path, which is completely dormant while mint and
@@ -354,9 +351,8 @@ pub struct ProposeInventoryWallet<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Propose CHANGING the pre-mint destination. Round 7, SolidProof condition 4.
-///
-/// The payload is the 32-byte destination pubkey. ROUND 8 A-05: there is no instant path and no
+/// Propose CHANGING the pre-mint destination. Round 7, condition 4.
+/// The payload is the 32-byte destination pubkey. there is no instant path and no
 /// "first binding" here. `initialize` requires a non-zero destination, so the field is never unset
 /// and this pair is the ONLY writer after init. No path returns it to `Pubkey::default()`.
 pub fn propose_set_inventory_wallet_handler(
@@ -743,7 +739,6 @@ pub fn propose_set_redeem_limits_handler(
     // `redeem_limits_any_set`, passed the ceilings, and died here on ProposalNoOp, while
     // `set_redemptions_enabled(true)` is refused in bytecode and `emergency_tighten_redeem_limits`
     // refuses Some(true). No path left to the one action the batch exists to enable.
-    //
     // Two independent no-op gates guard this action and a new field has to be added to BOTH.
     // They now live side by side in execute.rs so that is hard to miss.
     require!(
@@ -811,7 +806,7 @@ pub fn propose_set_redeem_limits_handler(
     Ok(())
 }
 
-// === ProposeTreasuryFloat (Option B D7: replaces Option A ProposeMinReserve) ===
+// === ProposeTreasuryFloat (Option B : replaces Option A ProposeMinReserve) ===
 // Sets treasury_min_float_usdc, the minimum USDC the admin must leave in the
 // treasury on withdraw (option a: blocks ADMIN withdraw only; redemptions can
 // still draw below it, then route OTC). 24h-timelocked. There is NO lower
@@ -842,7 +837,7 @@ pub fn propose_set_treasury_min_float_handler(
     let config = &mut ctx.accounts.config;
     let now = Clock::get()?.unix_timestamp;
 
-    // Fat-finger ceiling only (no lower bound: 0 is valid per D7).
+    // Fat-finger ceiling only (no lower bound: 0 is valid per ).
     require!(
         new_float_usdc <= TREASURY_FLOAT_CEILING_USDC,
         DominionError::AboveMaximum
@@ -1083,7 +1078,7 @@ pub fn propose_update_metadata_handler(
     let config = &mut ctx.accounts.config;
     let now = Clock::get()?.unix_timestamp;
 
-    // P2-05: at least one field set; each PROVIDED field must be non-empty and
+    // at least one field set; each PROVIDED field must be non-empty and
     // within its cap. Blanking (Some("")) is rejected outright; "leave this
     // field unchanged" is expressed as None (execute skips its CPI). The exact
     // same validation runs again at execute (binding, defense in depth).

@@ -1,12 +1,10 @@
 // Squads v4 multisig integration for the Dominion admin console.
-//
 // The on-chain `config.admin` of dominion_silver_mint is the Ops Squads
 // VAULT PDA (not a single key). Every admin action is therefore a Squads
 // flow: wrap the dominion instruction into a vault transaction, create a
 // proposal, members approve to threshold, then execute. The Upgrade Squads
 // is a separate multisig (its vault is the Solana program upgrade authority,
 // set via the Solana CLI, not from this app).
-//
 // Designed for the browser wallet adapter: we BUILD instructions and let the
 // connected wallet sign/send. We do NOT use the SDK `rpc.*` helpers (those
 // expect a Keypair signer). Verified against @sqds/multisig 2.1.4.
@@ -23,11 +21,11 @@ import * as multisig from "@sqds/multisig";
 
 export type SquadsRole = "ops" | "upgrade";
 
-// Configured at deploy time (Mark provides the real multisig addresses).
+// Configured at deploy time (provides the real multisig addresses).
 // Until then these are placeholders so the app builds; every flow that
 // needs a real multisig checks `isConfigured()` first.
-// Fable audit P3-h: parse defensively. A typo in the env value (the exact
-// moment Mark's real vaults get wired) must fall back to the placeholder so
+// parse defensively. A typo in the env value (the exact
+// moment real vaults get wired) must fall back to the placeholder so
 // `isConfigured()` shows the clean "not configured" banner, NEVER throw at
 // module load and white-screen the whole admin app.
 function configuredPk(envValue: string | undefined): PublicKey {
@@ -236,7 +234,6 @@ export async function buildExecuteTx(params: {
 export interface ProposalView {
   /**
    * Is this index below the multisig's `staleTransactionIndex`, i.e. voided by a later config change?
-   *
    * Squads bumps `staleTransactionIndex` whenever membership or the threshold changes, and every
    * proposal at or below it can no longer be approved or executed (`StaleProposal`, 0x1777). Without
    * this flag a voided proposal renders with live Approve and Execute buttons: clicking either wastes a

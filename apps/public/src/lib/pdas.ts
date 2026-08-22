@@ -43,7 +43,6 @@ export function silvMetadataAuthorityPda(): PublicKey {
 
 /**
  * Authority of the premium fee vault. Seeds = [b"fee_vault"].
- *
  * The VAULT is this PDA's USDC associated token account, not this address. Derive it with
  * allowOwnerOffCurve = true: the owner is a PDA, and omitting that flag throws
  * TokenOwnerOffCurveError.

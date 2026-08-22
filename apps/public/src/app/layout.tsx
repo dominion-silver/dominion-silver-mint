@@ -6,7 +6,6 @@ import { Toaster } from "@/components/Toaster";
 
 // dominion.market's three faces, read out of its font stylesheet: Jost for UI and numbers,
 // Cormorant Garamond for display, JetBrains Mono for addresses.
-//
 // LOADED THROUGH next/font ON PURPOSE. The site itself pulls these from fonts.googleapis.com;
 // doing that here would need `font-src`/`style-src` opened in the CSP in next.config.ts, and the
 // brief for this change was design only, nothing touching connections. next/font downloads and
