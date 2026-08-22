@@ -13,7 +13,7 @@
 #   --skip-rebuild   secondary checks only. Weaker, and exits 2, never 0.
 #   --local-only     ask ONLY "is this a clean default-feature build of this tree", and exit 0 on
 #                    success. Skips the release-pin comparison entirely instead of reporting on it.
-# EXIT CODES, and the reason they exist (round 5 ). This script used to print
+# EXIT CODES, and the reason they exist (). This script used to print
 # `EXPECTED MISMATCH` and then finish with `ARTIFACT OK` and exit 0. A caller reading the exit code,
 # or a human reading the last line, was told the artifact was attested when the script had just said
 # it could not be. The previous session saw that 0 in its own test output and took it for the
@@ -81,7 +81,7 @@ ROOT="$(cd -P "$(dirname "$_self")/.." && pwd)"
 
 # ================================================================ WHOSE TREE IS THIS?
 # THE THIRD ALIASING SHAPE. ROOT comes from where this file sits, and ROOT selects the manifest that
-# is read, the sources that are rebuilt and the target/ that is attested. Round 7 closed two of the
+# is read, the sources that are rebuilt and the target/ that is attested. An earlier revision closed two of the
 # three ways a file can sit somewhere it does not belong: a SYMLINK is resolved by `realpath` above,
 # and a HARD LINK is refused by the `st_nlink` guard above. A COPY, or a MOVE, defeats both. It has
 # exactly one link and it resolves to itself, so the guards see nothing, and the verifier proceeds to
@@ -438,7 +438,7 @@ else
     echo "   This run answers 'is this a clean default build of this tree' and nothing else."
     echo "   The release pin is the reproducible-build job's job."
   else
-  # THE MANIFEST PATH IS NOT CONFIGURABLE. Round 6 an earlier version of this script honoured
+  # THE MANIFEST PATH IS NOT CONFIGURABLE. An earlier revision an earlier version of this script honoured
   # `DOMINION_RELEASE_MANIFEST` so the self-test could drive the state machine, and printed two loud
   # warnings when it was set. The warnings did not matter. What matters is the MACHINE contract, which
   # this script's own header declares to be the exit code and the final line: with an injected manifest
@@ -472,7 +472,7 @@ else
     # the same lie in a new place.
     echo "   NOT ATTESTED: release_artifact.status is 'no-candidate'."
     echo "     local : $h_have"
-    echo "   No release candidate has been pinned yet. Round 6 R6-11: this used to say the source"
+    echo "   No release candidate has been pinned yet."
     echo "   still carried the devnet id and that step 2 would change declare_id!, which stopped"
     echo "   being true the moment the mainnet id was created, so the script printed a false reason"
     echo "   for a correct refusal."
@@ -492,7 +492,7 @@ else
     fail=1
   elif [[ "$h_have" == "$PINNED" ]]; then
     echo "   ok: the local artifact IS the pinned release artifact ($PINNED)"
-    # Size is compared too, not merely printed (round 5 ): two files can only share a sha256 by
+    # Size is compared too, not merely printed (): two files can only share a sha256 by
     # accident nobody has ever produced, but a manifest whose bytes field disagrees with its own hash
     # is a manifest that was hand-edited, and that IS reachable.
     have_bytes="$(wc -c < "$SO" | tr -d ' ')"
@@ -579,7 +579,7 @@ echo "4. Release record"
 echo "   sha256: $(shasum -a 256 "$SO" | awk '{print $1}')"
 echo "   bytes:  $(wc -c < "$SO" | tr -d ' ')"
 echo
-# THE ORDER OF THESE THREE BLOCKS IS THE CONTRACT (round 5 ). Every path out of this script ends
+# THE ORDER OF THESE THREE BLOCKS IS THE CONTRACT (). Every path out of this script ends
 # in exactly one of them, each prints a DIFFERENT last line, and each exits a DIFFERENT code. The
 # defect this replaces was a fall-through: a branch printed EXPECTED MISMATCH and then reached the
 # OK line anyway, so the last line and the exit code both said something the script had just denied.

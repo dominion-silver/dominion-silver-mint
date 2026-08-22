@@ -1,4 +1,4 @@
-"""ROUND 6 R6-07. Read `release_artifact` and VALIDATE the `pinned` state as a closed schema.
+"""Read `release_artifact` and VALIDATE the `pinned` state as a closed schema.
 
 Prints one line: `<status> <sha256|-> <bytes|-> <problems|->`, with problems comma-separated.
 Callers: scripts/verify-release-artifact.sh and the reproducible-build job. One implementation, so the

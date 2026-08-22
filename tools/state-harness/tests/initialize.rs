@@ -726,8 +726,7 @@ fn the_carved_fields_read_as_their_intended_at_zero_values() {
     );
 }
 
-// ================================================================ 
-
+// ================================================================
 #[test]
 fn dom001_a_signer_who_is_not_the_upgrade_authority_is_refused() {
     let mut b = Boot::new();

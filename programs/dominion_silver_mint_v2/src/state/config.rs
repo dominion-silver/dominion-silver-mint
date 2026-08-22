@@ -203,7 +203,7 @@ pub struct ConfigAccount {
     pub pending_redeem_limits_nonce: Option<u64>,
 
     pub inventory_wallet: Pubkey, // pre-mint destination, bound by initialize, changed only via the 24h timelock
-    pub public_mint_enabled: bool, // ROUND 8: OPEN at launch; closing is instant, reopening is 24h
+    pub public_mint_enabled: bool, // OPEN at launch; closing is instant, reopening is 24h
 
     pub kyc_operator: Pubkey,
     pub kyc_enforced: bool,
@@ -340,8 +340,8 @@ impl ConfigAccount {
         + 8                   // instant_used_prev_usdc (carved out of reserved)
         + 1                   // fee_routing_disabled (carved out of reserved)
         + 4                   // kyc_attestation_count (carved out of reserved)
-        + 8                   // min_operation_usdc (carved out of reserved, round 5 P1-04)
-        + (1 + 8)             // pending_inventory_wallet_nonce (carved out of reserved, round 7)
+        + 8                   // min_operation_usdc (carved out of reserved, )
+        + (1 + 8)             // pending_inventory_wallet_nonce (carved out of reserved, )
         + 23; // reserved
 
     // A POST-write invariant, complementary to the pre-write checks at each mutation site.

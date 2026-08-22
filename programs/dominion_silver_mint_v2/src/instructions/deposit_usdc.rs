@@ -41,7 +41,7 @@ pub struct DepositUsdc<'info> {
 }
 
 pub fn handler(ctx: Context<DepositUsdc>, amount: u64) -> Result<()> {
-    // (codex deferred, batch 2026-05-19): deposit_usdc is INTENTIONALLY
+    // deposit_usdc is INTENTIONALLY
     // allowed while paused. A deposit only ADDS USDC to the treasury; it
     // cannot drain funds, cannot mint SILV, and touches no price/oracle path.
     // A paused protocol is precisely when an operator needs to refill the

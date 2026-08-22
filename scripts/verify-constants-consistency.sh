@@ -177,7 +177,7 @@ if "SILV_MINT" in a and "SILV_MINT" in p_:
 # the string a human copies into listing forms.
 # THIS GATE IS THE ONE THE LAUNCH PATH RUNS, which is why the checks live here and not only in
 # scripts/test-t1-initialize-args.ts: the runbook calls this script, and it does not call that test.
-# Corrected after a review-of-fixes pass: the first version skipped in TOTAL SILENCE when the field was
+# Corrected after a review pass: the first version skipped in TOTAL SILENCE when the field was
 # missing, so renaming the key to `pregenerated_mnt` left this gate at CONSTANTS OK with no line about
 # the pin at all. Failing open is exactly the defect the check was added to remove.
 _manifest_path = pathlib.Path("config/mainnet-authorities.json")
@@ -382,7 +382,7 @@ def _prog(rel):
 
 # THE MANIFEST. rule -> every file that must call it, relative to programs/dominion_silver_mint_v2/src/.
 _RULES = {
-    # ---- KYC (and round 3) ----
+    # ---- KYC (and ) ----
     "validate_kyc_scope": ["instructions/admin/kyc_admin.rs"],
     "validate_kyc_arming": ["instructions/admin/kyc_admin.rs"],
     "validate_kyc_subject": ["instructions/admin/kyc_admin.rs"],

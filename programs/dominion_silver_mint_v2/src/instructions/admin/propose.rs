@@ -351,7 +351,7 @@ pub struct ProposeInventoryWallet<'info> {
     pub system_program: Program<'info, System>,
 }
 
-/// Propose CHANGING the pre-mint destination. Round 7, condition 4.
+/// Propose CHANGING the pre-mint destination. condition 4 of the proposal rules.
 /// The payload is the 32-byte destination pubkey. there is no instant path and no
 /// "first binding" here. `initialize` requires a non-zero destination, so the field is never unset
 /// and this pair is the ONLY writer after init. No path returns it to `Pubkey::default()`.
@@ -579,7 +579,7 @@ pub fn propose_set_oracle_guards_handler(
             DominionError::PriceOutOfBounds
         );
     }
-    // Cross-field (Fable audit P3-e): resolve the effective band (the arg if
+    // Cross-field (audit P3-e): resolve the effective band (the arg if
     // Some, else the current config) and reject min >= max at PROPOSE too, so a
     // doomed proposal cannot occupy the single oracle-guards slot for the full
     // timelock. Execute re-checks against the applied values (defense in depth).
@@ -653,7 +653,7 @@ pub fn propose_set_oracle_guards_handler(
     let mut data = Vec::with_capacity(TimelockQueueAccount::MAX_ACTION_DATA_BYTES);
     args.serialize(&mut data)
         .map_err(|_| error!(DominionError::SerializationFailure))?;
-    // Defense in depth (Fable audit P3-d): an action_data write beyond the
+    // Defense in depth (audit P3-d): an action_data write beyond the
     // account budget would corrupt the timelock account. The worst-case borsh
     // of OracleGuardsArgs (~46 B) is far under the cap, but guard it explicitly
     // for parity with propose_update_metadata.

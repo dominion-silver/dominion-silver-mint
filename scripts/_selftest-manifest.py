@@ -1,11 +1,11 @@
-"""ROUND 6 R6-03. Write a chosen `release_artifact` block into the SANDBOX copy's manifest.
+"""Write a chosen `release_artifact` block into the SANDBOX copy's manifest.
 
 This exists as a FILE rather than a heredoc inside scripts/test-verify-release-artifact.sh for one
 reason: it is only ever pointed at a temporary copy of the repository, and that constraint should be
 readable at a glance instead of buried in shell quoting.
 
 The history matters. The self-test used to drive `DOMINION_RELEASE_MANIFEST`, an override that
-`verify-release-artifact.sh` honoured in production. Round 6 R6-03: an environment variable that can
+`verify-release-artifact.sh` honoured in production. an environment variable that can
 make an attestation tool exit 0 with `ARTIFACT OK` is a false-attestation channel, whatever warnings it
 prints, because the machine contract is the exit code and the final line. The override is gone. The
 test copies the repository and edits its copy, which exercises the same state machine and leaves no

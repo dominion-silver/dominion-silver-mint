@@ -126,7 +126,7 @@ pub fn set_redemptions_enabled_handler(ctx: Context<SetParam>, enabled: bool) ->
     // handler DISARMS any pending open (below), so calling it while redemptions were already closed
     // succeeded and silently destroyed a queued proposal. A defensive "let me confirm redemptions are
     // off" click during pre-launch cost 24 hours. That was the reachable half of the cancel-wipes-a-
-    // live-proposal sequence the review-of-fixes found.
+    // live-proposal sequence the review found.
     require!(
         ctx.accounts.config.redemptions_enabled,
         DominionError::ProposalNoOp
@@ -184,7 +184,7 @@ pub fn set_public_mint_enabled_handler(ctx: Context<SetParam>, enabled: bool) ->
     ctx.accounts.config.public_mint_enabled = enabled;
     // Also clear any in-flight OPEN proposal: leaving one pending after a deliberate
     // emergency close would let the open land later without a fresh decision.
-    // NOTE ON REACHABILITY, from the review-of-fixes. This clear can never fire on a LIVE nonce:
+    // NOTE ON REACHABILITY, from the review. This clear can never fire on a LIVE nonce:
     // `propose_set_public_mint` requires `new_value != public_mint_enabled` with `new_value` forced
     // true, so a pending open can only exist while the mint is CLOSED, and this handler requires
     // `old_enabled != enabled`, so it reverts PublicMintUnchanged when the mint is already closed.
@@ -242,7 +242,7 @@ pub fn set_min_operation_usdc_handler(ctx: Context<SetParam>, new_min_usdc: u64)
 }
 
 /// Split out of the handler so the unit tests below exercise the real predicate rather than a
-/// paraphrase of it. Round 4's lesson: a test that restates the rule passes when the rule is deleted.
+/// paraphrase of it. a test that restates the rule passes when the rule is deleted.
 pub(crate) fn validate_min_operation(current: u64, requested: u64) -> Result<()> {
     require!(
         requested <= MIN_OPERATION_CEILING_USDC,
@@ -371,7 +371,7 @@ mod tests {
     // Mirrors DEFAULT_MAX_SILV_SUPPLY. Kept as a local so the boundary cases below read
     // clearly, and pinned to the real constant by the_shipped_launch_cap_is_the_one_being_tested
     // so it can never silently drift again (it caught the 100k -> 150k change).
-    const CAP: u64 = 150_000_000_000; // 150k oz at 6dp, the launch cap (Thomas 2026-07-29)
+    const CAP: u64 = 150_000_000_000; // 150k oz at 6dp, the launch cap
     const SUPPLY: u64 = 3_000_000_000; // 3000 oz minted
 
     fn code(e: anchor_lang::error::Error) -> u32 {
@@ -436,7 +436,7 @@ mod tests {
 
     #[test]
     fn the_shipped_launch_cap_is_the_one_being_tested() {
-        // Review-of-fixes: this test used the test-local CAP constant, so it could not
+        // this test used the test-local CAP constant, so it could not
         // detect the SHIPPED launch cap drifting away from what these cases assume,
         // and its second assertion duplicated tighten_to_exactly_the_live_supply.
         // Now pinned to the real default.

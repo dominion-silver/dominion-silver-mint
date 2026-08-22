@@ -421,7 +421,7 @@ ok(
 
 console.log(`\n=== ${pass} passed, ${fail} failed ===`);
 if (fail > 0) {
-  console.log("Cluster resolution is NOT safe. See audit finding S-01 before deploying anything.");
+  console.log("Cluster resolution is NOT safe. Do not deploy anything until this passes.");
   process.exit(1);
 }
 console.log("CLUSTER RESOLUTION OK: the environment decides, and an unknown mainnet constant throws.");

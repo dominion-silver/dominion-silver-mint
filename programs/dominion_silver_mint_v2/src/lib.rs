@@ -24,7 +24,7 @@ use instructions::*;
 // THE MAINNET PROGRAM ID, generated 2026-08-08 at the mainnet ceremony (runbook step 1). Keypair at
 // ~/.config/solana/dominion-mainnet-program.json, mode 600, NEVER in this repo.
 // ONE ID FOR BOTH CLUSTERS, deliberately. `declare_id!` is a single literal, so a devnet rehearsal on
-// a different id can only ever exercise a DIFFERENT binary than the one that ships. Round 5 concluded
+// a different id can only ever exercise a DIFFERENT binary than the one that ships. An earlier revision concluded
 // NO-GO partly because "the mainnet candidate does not exist yet"; keeping a separate rehearsal id
 // would have preserved exactly that gap. The devnet deployment under this id is the rehearsal, and its
 // bytes are the candidate's bytes.

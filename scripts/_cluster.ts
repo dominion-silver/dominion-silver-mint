@@ -171,7 +171,7 @@ export function mainnetAddressFrom(cfg: Record<string, unknown>, field: string):
     throw new Error(
       `cluster_constants.${field} is missing from config/mainnet-authorities.json.\n` +
         `This script refuses to guess a mainnet address, and it will NOT fall back to the devnet\n` +
-        `one: that fallback is audit finding S-01, the P0 of the 2026-08-06 external audit.\n` +
+        `one: a silent devnet fallback is how a mainnet run ends up on the wrong chain.\n` +
         `Add the VERIFIED address to config/mainnet-authorities.json under "cluster_constants",\n` +
         `together with how it was verified, then re-run.`,
     );

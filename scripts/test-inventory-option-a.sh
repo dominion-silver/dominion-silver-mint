@@ -48,7 +48,7 @@ harness() {
   BUILD_ARGS=(--no-build)
 }
 
-note "== T8-03 option A =="
+note "== the pre-mint destination is bound, not settable =="
 
 # 1 + 2. `initialize` binds the requested wallet and refuses the default. Both read ConfigAccount back
 # out of the VM after a real transaction, which is the only thing that can tell an applied write from

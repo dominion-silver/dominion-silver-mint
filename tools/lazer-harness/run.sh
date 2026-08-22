@@ -21,7 +21,7 @@ scan_for() {
     echo "ERROR: expected artifact does not exist: $f" >&2
     exit 1
   fi
-  # Review-of-fixes F3: removing the pipeline was not enough. `strings > tmp` had its
+  # removing the pipeline was not enough. `strings > tmp` had its
   # exit status DISCARDED, and because scan_for is invoked as an `if` condition bash
   # suspends errexit for the entire function body. So a file that exists but cannot be
   # READ (chmod 000, or a failing mktemp) produced an empty temp, grep found nothing,

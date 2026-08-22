@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
-# ROUND 8 T8-01. The installer must authenticate the TOOLCHAIN ARCHIVE, and must extract nothing when
+# The installer must authenticate the TOOLCHAIN ARCHIVE, and must extract nothing when
 # the bytes are wrong.
-#
 # WHY THE NEGATIVE CASE LOOKS LIKE THIS. Proving "it refuses" is not enough: the question is whether
 # anything from the rejected archive ever reached the filesystem or ran. So the mutated archive
 # carries a SENTINEL executable that writes a file when executed, and the case asserts three things:
 # the exit is non-zero, the sentinel was never extracted into the destination, and its marker file
 # does not exist.
-#
 # The fixture enters through a FAKE `curl` placed first on PATH, never through an override in the
 # production script. An installer that honours an environment variable to change where it fetches
 # from has a hole shaped exactly like the one this test exists to close.
-#
 #   bash .github/test-install-solana.sh
 set -uo pipefail
 cd "$(dirname "$0")/.."

@@ -102,7 +102,7 @@ function decode(data: Buffer) {
   return (program.coder.instruction as any).decode(data);
 }
 
-describe("T8-06: the inventory wallet has a delayed operator path and no instant one", () => {
+describe("the inventory wallet has a delayed operator path and no instant one", () => {
   it("proposeSetInventoryWallet encodes the requested wallet and exact IDL accounts", async () => {
     const target = PublicKey.unique();
     const built = await builder("proposeSetInventoryWallet")(ctx(), target);

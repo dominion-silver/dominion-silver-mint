@@ -110,7 +110,7 @@ async function main() {
   if (keys.upgrade_authority && keys.ops_admin) {
     if (keys.upgrade_authority.equals(keys.ops_admin)) {
       bad(
-        "upgrade_authority == ops_admin: one key compromise is a total takeover (SolidProof MEDIUM #1)",
+        "upgrade_authority == ops_admin: one key compromise would be a total takeover",
       );
     } else {
       ok("upgrade_authority != ops_admin");

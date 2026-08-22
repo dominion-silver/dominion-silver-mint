@@ -39,7 +39,7 @@ env:
   # *assumed* "3.1.13 = rustc 1.89" but CI runs proved its platform-tools
   # rustc behaves ~1.84 (edition2024-unparseable + pyth-solana-receiver-sdk
   # E0782 when locked). The LOCAL toolchain that actually built the live V2
-  # .so + IDL is Solana 3.1.14 -> platform-tools v1.52 -> rustc 1.89.0
+  # so + IDL is Solana 3.1.14 -> platform-tools v1.52 -> rustc 1.89.0
   # (edition2024-capable, compiles modern pyth-sdk). Pinning CI to 3.1.14 =
   # one consistent modern toolchain for BOTH the SBF build and the host IDL
   # build. Contract source / Anchor / pyth unchanged -> deployed bytes +
@@ -293,7 +293,7 @@ jobs:
       # the same shape. `--no-build` because the release artifact was built above and the whole point
       # is to test THOSE bytes; it also re-reads the three IDL copies and the client parity gate, so it
       # must sit after the regenerate and parity steps.
-      # , local half. Shape is not provenance: a pin naming a commit that does not
+      # local half. Shape is not provenance: a pin naming a commit that does not
       # exist, a non-numeric run id or an invented tool version must be refused before anything
       # downstream trusts the tuple.
       - name: The release pin refuses invented provenance (BLOCKING)
@@ -305,7 +305,7 @@ jobs:
       - name: The pre-mint destination cannot be redirected (BLOCKING)
         run: bash scripts/test-inventory-option-a.sh --no-build
 
-      # , the ceremony half. Offline: it drives ceremony-step8's pure builder and decodes
+      # the ceremony half. Offline: it drives ceremony-step8's pure builder and decodes
       # the instruction bytes. The panel half runs inside the admin app's vitest step below.
       - name: Every script is classified for cluster resolution (BLOCKING)
         run: npx --no-install tsx scripts/verify-cluster-resolution.ts
@@ -335,7 +335,7 @@ jobs:
       - name: Production npm advisories may not get worse (BLOCKING)
         run: bash scripts/verify-npm-audit-policy.sh
 
-  # , and it is its OWN JOB on purpose ().
+  # and it is its OWN JOB on purpose ().
   # `scripts/test-verify-release-artifact.sh` runs the verifier END TO END across ten cases (eleven invocations: case 10 runs it twice), and
   # each FULL run
   # rebuilds the program into a fresh isolated CARGO_TARGET_DIR that nothing reuses. That is the price
@@ -582,7 +582,7 @@ jobs:
         #      CI tweak. Re-confirmed exhaustively per "do the
         #      spike" mandate.
         # Deploy gate is INDEPENDENT of this step and intact: the live
-        # .so + IDL are sha256-verified (RELEASE_ARTIFACT_V2_DEVNET.md),
+        # so + IDL are sha256-verified (RELEASE_ARTIFACT_V2_DEVNET.md),
         # the IDL is committed in-repo, and the `reproducible-build` job
         # (solana-verify/Docker, deterministic) is separate. Run
         # 26095758504 (this exact config: vendored pyth + non-blocking)
@@ -679,7 +679,7 @@ jobs:
           cargo install solana-verify --locked --version "$VER"
           solana-verify --version
 
-      # , RESOLVED as a process change rather than a fix. Two independent investigations, crossed,
+      # RESOLVED as a process change rather than a fix. Two independent investigations, crossed,
       # measured that the SBF build is not deterministic across host platforms at the SAME toolchain
       # version. Our .so embeds /Users/runner/work/platform-tools/platform-tools/out/rust/library/alloc/...
       # at three places: the paths of the GitHub macOS runner that compiled the platform-tools tarball,
@@ -755,7 +755,6 @@ jobs:
           printf '\n' >> "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json"
           python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json"
           # And it must be the IDL the apps ship, or the manifest attests an IDL nobody uses.
-          #
           # NORMALISED ON BOTH SIDES, exactly as in the gate job. The committed copies have their `docs`
           # arrays stripped, because Anchor lifts Rust doc comments into the IDL and the apps bundle it,
           # so that prose would be served to every visitor. This was the SECOND comparison site and it

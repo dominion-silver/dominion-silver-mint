@@ -439,7 +439,7 @@ export type GuardianView = {
    * Derived: whether the PROGRAM will accept this guardian's powers, which is
    * `cooldown_until == 0 && guardian != config.admin`, i.e. exactly
    * GuardianAccount::may_act.
-   * Review-of-fixes: this used to be `cooldown_until == 0` alone, so a guardian key
+   * this used to be `cooldown_until == 0` alone, so a guardian key
    * that IS the admin rendered as a healthy active guardian even though every
    * authorization site refuses it. That is the one state where guardian_count
    * overstates the real veto, so it is the one the roster most needs to show.
@@ -493,7 +493,7 @@ export async function fetchGuardians(
 
 /**
  * Seconds until `ts`, or null when nothing is scheduled. Negative once elapsed.
- * Review-of-fixes F14: this called `ts.toNumber()`, which THROWS above 2^53 ("Number
+ * this called `ts.toNumber()`, which THROWS above 2^53 ("Number
  * can only safely store up to 53 bits"). It is called twice per row inside the
  * guardian roster's render, so a single out-of-range i64 would unmount the entire
  * Dashboard rather than degrade one cell. The guardian tests assert i64::MAX is
@@ -513,7 +513,7 @@ export function secondsUntil(ts: BN, nowSeconds?: number): number | null {
 
 /** "in 23h 59m" / "elapsed 2h ago", for a countdown an operator can act on. */
 export function formatCountdown(seconds: number): string {
-  // Review-of-fixes F14: returned "in Infinityd NaNh" for non-finite input.
+  // returned "in Infinityd NaNh" for non-finite input.
   if (!Number.isFinite(seconds)) return "unknown";
   const abs = Math.abs(seconds);
   const d = Math.floor(abs / 86400);

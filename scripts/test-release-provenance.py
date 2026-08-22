@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ROUND 8 T8-04, local half. The release pin must not accept INVENTED values.
+""" local half. The release pin must not accept INVENTED values.
 
 `validate_pinned` checked shapes: 40 hex characters for the source commit, non-empty for the CI run
 id and the solana-verify version. Shape is not provenance. `0000...0` is 40 hex characters and names

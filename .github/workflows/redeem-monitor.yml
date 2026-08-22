@@ -1,17 +1,13 @@
 name: RedeemEvent monitor
 
 # Watches the redemption outflow: is it abnormal, and can the treasury still serve it.
-#
 # It runs on a schedule here rather than on a workstation so the alarm survives a closed lid.
-#
 # WHAT IT COSTS IN PRIVACY, since this repository is PUBLIC: the run log shows redemption amounts and
 # the redeemer's address. All of it is already on chain and readable by anyone, so this publishes
 # nothing that was private. What must NOT reach the log is the RPC credential, and it does not: the
 # script prints the endpoint through `redactRpc`, which strips the query string and the path.
-#
 # A RED RUN MEANS THIS CHECK IS BROKEN, not that the protocol is. Alerts go to Telegram, and only when
 # something changes. The job's own status is reserved for "the check could not be completed".
-#
 # GRANULARITY, honestly. The scheduler's minimum is 5 minutes and runs are queued, so the real spacing
 # is 10 to 20 minutes. What bounds a drain is the protocol's own rolling budget, not the speed of this
 # alarm, and pausing carries multisig latency regardless. This exists to put a human in the loop.

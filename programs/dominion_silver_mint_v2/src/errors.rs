@@ -256,7 +256,7 @@ pub enum DominionError {
     InsufficientFeeVault,
     #[msg("Attestation account does not belong to the signing wallet")]
     AttestationWalletMismatch,
-    // Review-of-fixes 2026-08-05. APPEND ONLY.
+    // -08-05. APPEND ONLY.
     #[msg("Fee-exemption expiry is invalid: it is MANDATORY and must be a unix timestamp in SECONDS, strictly in the future, at most MAX_FEE_EXEMPT_TERM_SECONDS away. Zero is NOT an indefinite term. A 13-digit millisecond value is rejected here.")]
     FeeExemptExpiryInvalid,
     #[msg("withdraw_fees destination must not be owned by the fee-vault PDA: funds sent there could never be moved again")]

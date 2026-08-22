@@ -1,4 +1,4 @@
-"""ROUND 8 FINAL-06. The ONE place that turns `solana-verify --version` into the pinned field.
+"""INAL-06. The ONE place that turns `solana-verify --version` into the pinned field.
 
 Called by BOTH `.github/workflows/build.yml` (the producer, when it writes release-manifest.json) and
 `scripts/test-release-provenance.py` (the proof). That sharing is the whole point.

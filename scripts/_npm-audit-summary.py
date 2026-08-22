@@ -1,4 +1,4 @@
-"""ROUND 6 R6-09. Summarise one `npm audit --omit=dev --json` report for the ratchet.
+"""Summarise one `npm audit --omit=dev --json` report for the ratchet.
 
 Reads the report on stdin, `ALLOWED` (newline-separated package names) and `WS` (the workspace key)
 from the environment. Prints one line:

@@ -405,7 +405,7 @@ describe("sliding window parity with the program", () => {
   });
 });
 
-describe("audit P-02: the client must bound OUTFLOW, not the trade size", () => {
+describe("the client must bound OUTFLOW, not the trade size", () => {
   // The finding's own worked example, kept as the first case so a regression reproduces the report.
   const base = {
     paused: false,
@@ -488,7 +488,7 @@ describe("audit P-02: the client must bound OUTFLOW, not the trade size", () => 
   });
 });
 
-describe("audit P-07: the per-wallet premium mirrors the program", () => {
+describe("the per-wallet premium mirrors the program", () => {
   // The IDL is the arbiter of the byte offsets the hand decoder uses. If a field is ever inserted into
   // FeeExemptAccount, this fails instead of the decoder silently reading the wrong bytes.
   it("the FeeExemptAccount layout the decoder derives matches the Rust struct exactly", () => {

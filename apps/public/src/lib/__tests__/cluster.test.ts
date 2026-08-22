@@ -1,5 +1,5 @@
 /**
- * Audit finding : the cluster must DERIVE from the RPC, and everything cluster-dependent must
+ * The cluster must DERIVE from the RPC, and everything cluster-dependent must
  * follow it.
  * Four explorer links carried a literal `?cluster=devnet` and the low-SOL notice always pointed at the
  * devnet faucet. On mainnet that means the toast after a successful mint opens a transaction that does

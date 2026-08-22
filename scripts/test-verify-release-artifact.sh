@@ -184,7 +184,7 @@ sandbox_manifest pinned "$LOCAL_SHA" "$LOCAL_BYTES"
 run_case "a pin this host does reproduce: exit 0 and ARTIFACT OK" 0 \
   "ARTIFACT OK" -- bash "$SANDBOX/$VERIFY"
 
-# 6. Hash right, size wrong. A manifest that disagrees with itself was hand-edited (round 5 
+# 6. Hash right, size wrong. A manifest that disagrees with itself was hand-edited (
 # the committed one carried a macOS hash next to a macOS size while the artifact was neither).
 sandbox_manifest pinned "$LOCAL_SHA" $((LOCAL_BYTES + 1))
 run_case "a manifest whose size contradicts its hash is rejected" 1 \

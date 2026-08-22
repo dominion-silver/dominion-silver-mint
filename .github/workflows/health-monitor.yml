@@ -3,17 +3,14 @@ name: Health monitor
 # THE OPERATIONAL ALARM. Separate workflow from redeem-monitor.yml on purpose: that one answers "is the
 # redemption outflow abnormal", this one answers "is someone attacking us and can we still pay". Sharing
 # a workflow would mean one failing step hides the other's result.
-#
 # GITHUB'S SCHEDULER IS NOT RELIABLE AND THIS FILE SHOULD NOT PRETEND OTHERWISE. Measured on 2026-08-13:
 # after redeem-monitor.yml reached the default branch at 10:29Z, its first scheduled run fired at 12:26Z,
 # nearly two hours late. Scheduled events are queued and dropped under load, and `schedule` registers
 # from the DEFAULT BRANCH only. So a missed window is normal, and silence proves nothing.
-#
 # That is what HEARTBEAT_URL is for: the script pings it on every completed run, and an external
 # dead-man's-switch (healthchecks.io or equivalent) alerts when the pings stop. Without that secret,
 # nothing anywhere notices this monitor dying, which is the failure mode that matters most because it
 # looks exactly like "no problems found".
-#
 # A RED RUN HERE MEANS THE MONITOR IS BROKEN, NOT THAT THE PROTOCOL IS. That distinction was learned the
 # expensive way: this workflow used to exit non-zero on every alert, so GitHub mailed a failure notice
 # every ten minutes for as long as any condition stayed true. On 2026-08-21 that was 100 of the last 100

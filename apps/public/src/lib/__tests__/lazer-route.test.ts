@@ -3,7 +3,7 @@
  * 3154 is served, and a flood is refused, both BEFORE any upstream call.
  * Every assertion counts `fetch` calls, because "the request was rejected" and "our key was not spent" are
  * different claims and only the second matters: a 400 that still hit Pyth passes a status-code test and
- * fails audit finding .
+ * fails .
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 

@@ -1,25 +1,20 @@
 #!/usr/bin/env bash
-# ROUND 8 T8-01. Install the Anza/Solana toolchain from an archive this script AUTHENTICATES ITSELF.
-#
-# WHAT WAS WRONG, in this file's own previous words. Round 6 replaced `sh -c "$(curl ...)"` with a
-# checksummed bootstrap. Round 7 found that closed the door and left the window open: the bootstrap
-# then downloaded `agave-install-init-$TARGET` unverified and ran it. Round 7 pinned that binary. And
+# Install the Anza/Solana toolchain from an archive this script AUTHENTICATES ITSELF.
+# WHAT WAS WRONG, in this file's own previous words. An earlier revision replaced `sh -c "$(curl ...)"` with a
+# checksummed bootstrap. An earlier revision found that closed the door and left the window open: the bootstrap
+# then downloaded `agave-install-init-$TARGET` unverified and ran it. An earlier revision pinned that binary. And
 # the header said, honestly, that it still did NOT verify the toolchain TARBALL the installer then
 # downloads. That was the remaining unauthenticated stage: whoever controls that object gets code
 # execution inside the job that produces the release binary.
-#
 # THE FIX IS TO REMOVE THE STAGE, AGAIN. We fetch `solana-release-$TARGET.tar.bz2` ourselves, compare
 # its SHA-256 to a pin measured here, and only then extract. `agave-install-init` is no longer
 # downloaded or run at all: it existed to fetch this archive, and we fetch it.
-#
 # THE PINS BELOW WERE MEASURED, not copied. An earlier draft of this work was handed three digests by
 # a reviewer; pinning a digest nobody in this repository has measured is theatre, so they were
 # re-measured by streaming each archive through shasum on 2026-08-09. The two that matter agreed.
-#
 # x86_64-apple-darwin is DELIBERATELY ABSENT. No Intel Mac exists in this project, so a pin for it
 # would be an unmeasured constant, and the missing-entry branch below fails loudly with the command
 # to measure it. An absent pin is safer than a guessed one.
-#
 # WHEN THE VERSION CHANGES: re-measure every target you support, in one commit, with the reason.
 #   curl -sSfL "https://github.com/anza-xyz/agave/releases/download/v<V>/solana-release-<TARGET>.tar.bz2" | shasum -a 256
 set -euo pipefail

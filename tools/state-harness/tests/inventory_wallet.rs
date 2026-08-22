@@ -366,7 +366,7 @@ fn a_change_cannot_be_executed_through_the_wrong_action_slot() {
     let _ = E_NONCE_MISMATCH;
 }
 
-// ================================================================ OPTION A ()
+// ================================================================ OPTION A
 // RED PHASE FIRST. These scenarios are written against `1314be4`, WITHOUT the production fix, and
 // they must fail on their RESULT rather than on a missing symbol. common proof rule is
 // explicit: "une erreur de compilation causee seulement par un import de symbole qui n existe pas

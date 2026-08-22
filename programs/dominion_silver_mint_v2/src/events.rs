@@ -40,7 +40,7 @@ pub struct PremintEvent {
     pub amount: u64,
     pub supply_post: u64,
     pub timestamp: i64,
-    /// SOLIDPROOF T-006. The signer that minted. `inventory` is the DESTINATION, bound at
+    /// The signer that minted. `inventory` is the DESTINATION, bound at
     /// `initialize` and changeable only through the 24h timelocked pair, so without this field the
     /// event records where supply went but not who sent it.
     /// LAST, after `timestamp`, and that placement is the whole point. The first version of this

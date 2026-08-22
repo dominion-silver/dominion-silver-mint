@@ -133,7 +133,7 @@ pub fn price_from_lazer(
 
     // 5.4: STRICTLY increasing high-water mark. One signed envelope, one operation.
     // This was `<` until 2026-08-07, which let the same envelope price several transactions inside the
-    // freshness window. Round 4 called that out against the stated invariant, and chose the
+    // freshness window. An earlier revision called that out against the stated invariant, and chose the
     // strict guarantee over the concurrent one.
     // THE COST IS REAL AND IT IS ON THE HOT PATH: the config is a shared writable account, so at most ONE
     // mint or redeem can succeed per Lazer print. The feed publishes at fixed_rate@1000ms, so that is the
