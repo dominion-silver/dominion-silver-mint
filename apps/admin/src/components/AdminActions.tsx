@@ -97,9 +97,16 @@ type FieldKind =
   | "select"
   | "optint"
   | "optbig";
+/** A one-click value for a field the operator would otherwise compute by hand. */
+export interface FieldPreset {
+  label: string;
+  /** Seconds from now. Resolved at click time, never baked into the module. */
+  secondsFromNow: number;
+}
 export interface Field {
   name: string;
   label: string;
+  presets?: FieldPreset[];
   kind: FieldKind;
   options?: readonly string[];
 }
@@ -468,6 +475,19 @@ export const ACTIONS: ActionDesc[] = [
         name: "expires",
         label: "Expires (unix SECONDS; REQUIRED, must be future, max 2 years out)",
         kind: "optbig",
+        // TWO YEARS IS THE CEILING, and it is the CONTRACT's:
+        // MAX_FEE_EXEMPT_TERM_SECONDS = 2 * 365 * 86400, enforced by
+        // validate_fee_exempt_expiry, which reverts FeeExemptExpiryInvalid past it. So there is no
+        // 5-year or 10-year button to offer: it would be a button that guarantees a failed
+        // transaction. The longest one stops a day short of the cap, because the chain compares
+        // against ITS clock: a local clock running slightly fast would otherwise compute a value the
+        // program rejects, and one day of slack costs nothing.
+        presets: [
+          { label: "1 month", secondsFromNow: 30 * 86400 },
+          { label: "6 months", secondsFromNow: 182 * 86400 },
+          { label: "1 year", secondsFromNow: 365 * 86400 },
+          { label: "2 years (max)", secondsFromNow: 2 * 365 * 86400 - 86400 },
+        ],
       },
     ],
     tip: "Waives the premium for one wallet. PREFER 1 (mint only): a both-sides exemption makes a round trip free, which hands that wallet a free option on oracle movement PAID OUT OF THE TREASURY, whereas the normal 1% + 1.5% requires a ~2.485% move before a round trip profits. A free option settled against the treasury is a transfer of value out of it, not merely foregone revenue. AN EXPIRY IS MANDATORY: the contract rejects 0 and rejects any date more than two years out, so this form does not accept 'never'.",
@@ -1194,6 +1214,46 @@ export function AdminActions() {
                             setField(a.id, f.name, e.target.value)
                           }
                         />
+                      )}
+                      {f.presets && (
+                        <div className="mt-1 flex flex-wrap gap-1">
+                          {f.presets.map((p) => {
+                            // Resolved on click, from the clock at that moment. A timestamp computed
+                            // when the page loaded would drift for as long as the tab stayed open.
+                            const value = String(
+                              Math.floor(Date.now() / 1000) + p.secondsFromNow,
+                            );
+                            const chosen = params[a.id]?.[f.name] === value;
+                            return (
+                              <button
+                                key={p.label}
+                                type="button"
+                                onClick={() => setField(a.id, f.name, value)}
+                                className={`rounded border px-2 py-0.5 text-[10px] transition ${
+                                  chosen
+                                    ? "border-accent text-accent"
+                                    : "border-border text-muted hover:border-accent hover:text-accent"
+                                }`}
+                              >
+                                {p.label}
+                              </button>
+                            );
+                          })}
+                          {params[a.id]?.[f.name] && (
+                            <span className="self-center text-[10px] text-muted">
+                              ={" "}
+                              {(() => {
+                                const n = Number(params[a.id]?.[f.name]);
+                                return Number.isFinite(n) && n > 0
+                                  ? new Date(n * 1000)
+                                      .toISOString()
+                                      .slice(0, 16)
+                                      .replace("T", " ") + "Z"
+                                  : "not a timestamp";
+                              })()}
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
                   ))}
