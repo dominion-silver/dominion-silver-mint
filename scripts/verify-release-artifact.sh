@@ -473,9 +473,6 @@ else
     echo "   NOT ATTESTED: release_artifact.status is 'no-candidate'."
     echo "     local : $h_have"
     echo "   No release candidate has been pinned yet."
-    echo "   still carried the devnet id and that step 2 would change declare_id!, which stopped"
-    echo "   being true the moment the mainnet id was created, so the script printed a false reason"
-    echo "   for a correct refusal."
     echo "   Pin the candidate from the reproducible-build job (runbook step 2c), never from a local"
     echo "   build: SBF builds are not deterministic across host platforms (S-07)."
     not_attested=1
