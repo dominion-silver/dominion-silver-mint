@@ -1,45 +1,37 @@
 /**
  * The RedeemEvent / budget-consumption alarm. READ ONLY: it opens no keypair and sends no transaction.
- *
  * WHY IT EXISTS. D11 accepted a hot single-signer inventory wallet holding the pre-mint while
  * redemptions are open, and named two things as the compensating controls: an automatic alert on
  * RedeemEvent and on the rate the budget is consumed, tested end to end, and a reachable guardian able
  * to pause inside a measured SLA. As of 2026-08-11 neither existed anywhere in this repo. Nothing
  * watched the only lane USDC can leave through.
- *
  * WHAT IT WATCHES, and it deliberately uses TWO independent sources because each answers a question the
  * other cannot:
- *
  *  1. THE CONFIG ACCOUNT, one read, no history required: the rolling-window buckets. This answers "how
  *     much of the budget is gone right now" without depending on having seen every event. A log-only
  *     monitor that missed a batch would under-report exactly when it matters.
  *  2. THE RedeemEvent LOGS: who redeemed, how much, and at what premium. This answers "is this the
  *     inventory wallet draining, or ordinary users", which the budget number cannot distinguish and
- *     which is the entire D11 threat.
- *
+ * which is the entire D11 threat.
  * THE TRAP, and the program's own source warns about it (events.rs on `amount_usdc`): you CANNOT
  * reconstruct the treasury's outflow from RedeemEvent alone. `amount_usdc` is what the user RECEIVED.
  * While fee routing is ON the treasury also paid the premium; while it is OFF the premium is retained
  * and the treasury paid only `amount_usdc`. A rule assuming `amount_usdc + fee_usdc` over-counts by the
  * premium during precisely the incident that turns routing off. So this reads `fee_routing_disabled`
  * from the config and says which basis it used, rather than deriving outflow from events alone.
- *
  *   DOMINION_RPC=... npx tsx scripts/redeem-monitor.ts
  *   DOMINION_RPC=... npx tsx scripts/redeem-monitor.ts --json      # for a scheduler
  *   REDEEM_MONITOR_WEBHOOK=https://... npx tsx scripts/redeem-monitor.ts
- *
  * THE EXIT CODE REPORTS ON THE CHECK, NOT ON THE CHAIN, and the original design here is what taught us
  * why. "A scheduler that treats non-zero as a failure gets paging for free" was true and it backfired:
  * exiting 1 on every alert made 100 of the last 100 scheduled runs red, and each red run mails everyone
  * watching the repository. With a condition that stays true, that is an email every ten minutes for days.
  * Alerts go to Telegram now, on a TRANSITION only (see scripts/_alert-state.ts). Exit 1 is reserved for
  * the monitor itself failing: it could not read the chain, or it could not deliver.
- *
  * REDEMPTIONS ARE JUDGED ONLY INSIDE A TIME WINDOW, for the same reason. The per-redemption rule compares
  * an outflow against the ROLLING budget, so applying it to a redemption from last week is meaningless
  * twice over: that outflow no longer sits in the window it is being measured against. Measured on
  * 2026-08-21, this alerted on a redemption from 14 August on every single run, seven days running.
- *
  * WHAT THIS CANNOT DO, stated here because a monitor that implies otherwise is dangerous: it does not
  * pause anything. `pause` accepts admin OR guardian, and on mainnet both are Squads vaults, so the
  * reaction carries multisig latency. Detection in 60 seconds buys nothing against a bound of ~40,000
@@ -66,14 +58,12 @@ const RPC_SAFE = redactRpc(RPC);
 
 /**
  * The alert body, shaped so the three channels anyone actually uses accept it as-is.
- *
  * THE COMMENT THIS REPLACES WAS WRONG, and confidently so: it said "whichever channel is chosen
  * (Telegram, Slack, a pager), it is a POST of this JSON". It is not. Slack reads `text` and answers 400
  * `invalid_payload` to anything else. Discord reads `content` and answers 400 with an embeds error.
  * Telegram's bot API wants `chat_id` and `text`. Posting the raw report to any of them produces a
  * channel that looks configured, exits 1 as if it alerted, and delivers nothing to a human. That is the
  * worst failure mode a monitor has: silence that looks like coverage.
- *
  * So the payload carries a human-readable one-liner under all three keys AND the full structured report
  * alongside. Slack picks up `text`, Discord picks up `content`, Telegram needs `chat_id` in the URL and
  * picks up `text`, and a generic receiver or a Vercel route gets everything. One shape, no per-provider
@@ -104,7 +94,6 @@ const BUDGET_ALERT_PCT = Number(process.env.REDEEM_ALERT_BUDGET_PCT ?? 25);
 const SINGLE_ALERT_PCT = Number(process.env.REDEEM_ALERT_SINGLE_PCT ?? 10);
 /**
  * How many recent signatures to scan for events.
- *
  * 25 rather than 100, measured: the first version fetched one transaction per signature and the public
  * devnet RPC answered 429 partway through. It exited 2 rather than 0, which is the design working, but
  * a monitor that rate-limits itself into "could not tell" on a normal run is a monitor nobody trusts.
@@ -126,13 +115,11 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Fetch transactions in a way that survives a rate-limited endpoint.
- *
  * MEASURED, TWICE. The first version called getTransaction once per signature and the public devnet RPC
  * answered 429 partway through. Batching with getTransactions was better and STILL 429'd, because that
  * endpoint throttles per METHOD and a preceding run had already spent the budget. Both times the
  * monitor exited 2 rather than 0, which is the design working, but a monitor that cannot finish a
  * normal run is a monitor that gets muted.
- *
  * So: try the batch, and on failure fall back to one-at-a-time with a delay, with bounded retries. A
  * production deployment should point DOMINION_RPC at a paid endpoint; this makes a weak one survivable
  * rather than pretending the problem away.

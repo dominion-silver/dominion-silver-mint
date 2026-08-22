@@ -1,30 +1,24 @@
 /**
  * Audit EVERY interaction with the program since it went live, and reconcile it against on-chain state.
- *
  * WHY A RECONCILIATION RATHER THAN A LIST. Listing transactions shows what happened; it cannot show that
  * nothing ELSE happened. Reconciliation can: if every ounce minted minus every ounce burned equals the
  * mint's current supply, and every premium charged equals the fee vault's balance, then there is no
  * unexplained issuance and no unexplained fee. A discrepancy is the finding, and its absence is the
  * evidence. That is the only form of "everything is normal" worth reporting.
- *
  * WHAT IT RECONCILES
  *   supply      sum(mint_silv out) + sum(admin_premint) - sum(redeem_silv burned) == silv_mint.supply
  *   fees        sum(mint premium) + sum(redeem premium) == fee vault balance
  *   treasury    sum(usdc in) - sum(usdc out) + deposits == treasury balance
  *   premiums    every mint charged exactly premium_bps_mint, every redeem premium_bps_redeem
- *
  * WHAT IT ALSO REPORTS, because a failed transaction is data and not noise
  *   every reverted transaction, with its Anchor error DECODED from the IDL rather than left as
  *   "Custom: 12000". A user hitting a limit is the protocol working; a user hitting an internal error is
  *   not, and the two are indistinguishable until the code is named.
- *
  * AND WHAT IT FLAGS AS ANOMALOUS
  *   an instruction outside the expected set, a premium that does not match config, a signer that is
  *   neither a user nor the ops vault on an admin instruction, and any SILV that appeared or vanished
  *   without a matching mint or burn.
- *
  * Read-only. It sends nothing and needs no keypair.
- *
  * Run: DOMINION_RPC=<mainnet> npx tsx scripts/audit-since-launch.ts [--limit 1000]
  */
 import { Connection, PublicKey, Keypair } from "@solana/web3.js";

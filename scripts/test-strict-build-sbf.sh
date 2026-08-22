@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# ROUND 8 F-03. The guard must fire on a build that EXITS 0 and prints the fatal line.
-#
+# The guard must fire on a build that EXITS 0 and prints the fatal line.
 # That combination is the entire point and it cannot be reached by waiting for a real overflow, so the
 # line is INJECTED into the captured log through a hook the production path ignores. Without this the
 # guard is a grep nobody has ever seen match.

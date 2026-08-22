@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
-# ROUND 8 T8-03, the acceptance runner. Option A: the pre-mint destination is an argument of
+# the acceptance runner. Option A: the pre-mint destination is an argument of
 # `initialize`, bound atomically and validated non-default, and `set_inventory_wallet` is DELETED.
-#
 # Five scenarios, in the order the criterion lists them. Each one either passes or this script exits
 # non-zero, and a run in which ZERO scenarios executed is a FAILURE, not a pass: that false-green is
 # the exact class this whole harness exists to close, and it has been reintroduced twice in this repo
 # by a filter that matched nothing.
-#
 # The on-chain scenarios go through the REAL `.so` via LiteSVM. `tools/state-harness/run.sh` builds
 # it, so this runner never tests yesterday's binary, which is the other repeat failure here.
-#
 #   bash scripts/test-inventory-option-a.sh              # build the .so, then run everything
 #   bash scripts/test-inventory-option-a.sh --no-build   # reuse the artifact already at target/deploy
 set -euo pipefail
@@ -61,7 +58,7 @@ harness "initialize binds a non-default inventory wallet atomically" \
 harness "initialize rejects Pubkey::default inventory" \
   initialize_refuses_a_zero_inventory_wallet
 
-# 3. The deleted discriminator, sent at the real dispatcher. Codex was explicit that an `rg` is not
+# 3. The deleted discriminator, sent at the real dispatcher. was explicit that an `rg` is not
 # the proof here: the test builds the historical eight bytes, sends them, and re-reads the config.
 harness "the removed instant-setter discriminator is not dispatched and changes no state" \
   option_a_the_removed_instant_setter_discriminator_is_not_dispatched

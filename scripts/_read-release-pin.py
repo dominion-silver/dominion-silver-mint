@@ -26,15 +26,13 @@ import sys
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 B58 = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$")
-# ROUND 8 A-04. A BARE semver, and an EXACT allowlist, not a shape.
-#
+# A BARE semver, and an EXACT allowlist, not a shape.
 # Two defects were folded into the old rule. First it accepted any shape-matching string, including
 # `999999.999999.999999`, so "approved" named nothing. Second, and worse operationally, CI wrote this
 # field from `solana-verify --version`, which prints "solana-verify 0.5.1", while the install step
 # feeds the field verbatim to `cargo install --version`, which needs a bare semver. The runbook told
 # the operator to copy one into the other, so the FIRST ci run after any pin failed to install its
 # own pinned tool. The producer now emits the bare token and this is the consumer-side gate.
-#
 # The allowlist is exact. Adding a version is a deliberate commit, which is the point: the tool that
 # decides which bytes are reproducible is not a thing to leave floating.
 APPROVED_VERIFY_VERSIONS = frozenset({"0.5.1"})
@@ -62,8 +60,7 @@ def validate_pinned(rel: dict, root: str) -> list[str]:
     n = rel.get("bytes")
     if not isinstance(n, int) or n <= 0:
         bad.append("bytes is not a positive integer")
-    # ROUND 8 T8-04. SHAPE IS NOT PROVENANCE, and these three fields only had shapes.
-    #
+    # SHAPE IS NOT PROVENANCE, and these three fields only had shapes.
     # `ci_run_id` and `solana_verify_version` were checked non-empty, so "invented-run" and
     # "invented-tool" passed. `source_commit` was checked as 40 hex characters, so a string of forty
     # zeros passed while naming no commit. A pin can therefore have described a build that never

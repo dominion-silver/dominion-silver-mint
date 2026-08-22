@@ -1,32 +1,25 @@
 /**
  * Turn a LEVEL alarm into an EDGE alarm, because the level version made the channel useless.
- *
  * WHAT WENT WRONG, measured rather than supposed. On 2026-08-21 the last 100 runs of both monitors were
  * failures, 100 out of 100, and the Telegram channel plus a GitHub "run failed" email carried the same
  * three lines every ten minutes for days:
- *
  *     premium_bps_mint CHANGED: now 5, pinned 100      <- our own deliberate fee change
  *     treasury 6.90 USDC is below the 10.00 minimum    <- true, and true continuously since 14 Aug
  *     1 of 1 program transactions REVERTED (100%)      <- a percentage over a sample of one
- *
  * Every one of those was CORRECT. That is the point: correctness is not the bar. A condition that stays
  * true re-sends forever, so the operator learns the channel says nothing new and stops reading it, and
  * then the one message that matters arrives into a muted channel. The treasury line above is exactly
  * that message, and it was buried under its own repetitions.
- *
  * SO THE UNIT OF ALERTING IS A TRANSITION, not a state:
  *   - a condition that was absent and is now present    -> notify
  *   - a condition that was present and is now gone      -> notify once, as RESOLVED, then forget it
  *   - a condition that was present and still is         -> SILENT, until `renotifyHours` has passed
- *
  * The re-notify exists so a real ongoing problem cannot be forgotten entirely. Twelve hours is chosen so
  * an incident that starts overnight is raised again in the morning, and no more often.
- *
  * THE KEY IS THE MESSAGE WITH ITS NUMBERS REMOVED, and this is the load-bearing detail. "treasury 6.90
  * USDC is below" and "treasury 6.85 USDC is below" are the SAME condition; keying on the raw string
  * would make every run a fresh alert and rebuild the exact flood this file exists to stop. Numbers are
  * replaced by `#` for identity, while the message that gets SENT keeps its real figures.
- *
  * STATE LIVES IN A FILE, restored by actions/cache. A cache miss degrades to "everything looks new", so
  * the worst case after an eviction is one duplicate message, never silence. Chosen over a database or a
  * committed file because branch protection forbids pushing to main and a monitor must not need a write
@@ -45,7 +38,6 @@ type State = Record<string, Entry>;
 
 /**
  * The identity of a condition, independent of the figures inside it.
- *
  * Digits, decimals and thousands separators all collapse to `#`, so a drifting balance or a moving
  * percentage keeps one identity. Addresses survive, which is intended: a DIFFERENT address in an
  * authority-drift alert is a genuinely different event and must page.
@@ -94,7 +86,6 @@ export type Transitions = {
 
 /**
  * Diff the current alert set against the previous run and persist the result.
- *
  * `hadStateFile` is returned so the caller can say "first run, everything looks new" instead of
  * presenting a cache miss as a burst of incidents.
  */

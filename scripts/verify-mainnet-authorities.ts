@@ -1,7 +1,6 @@
 /**
  * Verify every address in config/mainnet-authorities.json against the live cluster,
  * BEFORE the mainnet deploy ceremony.
- *
  * Why this exists: the mainnet authority assignment contains decisions that are
  * irreversible at mint creation (freeze authority, permanent delegate) or expensive to
  * undo (upgrade authority, admin). A single mistyped base58 character produces a valid
@@ -9,7 +8,6 @@
  * program looks healthy, and the compliance lever simply does not work when it is
  * finally needed. This script makes the ceremony reproducible from a reviewed file
  * instead of from a terminal command line.
- *
  * Run:
  *   npx tsx scripts/verify-mainnet-authorities.ts              # mainnet
  *   DOMINION_RPC=https://api.devnet.solana.com npx tsx ...     # rehearse on devnet

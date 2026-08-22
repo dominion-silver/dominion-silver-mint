@@ -1,7 +1,6 @@
 /**
  * Mandatory safety guard for every script that can send a transaction. Two rules, enforced here rather
  * than remembered:
- *
  *   RULE 1  Never touch a cluster the script was not pointed at. Anything but devnet and localnet needs
  *           DOMINION_ALLOW_MAINNET=i-understand, and the chain's genesis hash must agree with the host.
  *   RULE 2  Never take an action whose undo is slow or impossible unless the operator named that exact
@@ -22,12 +21,12 @@ export type ActionCost =
 
 /** Every state-changing action a script might take, and what it costs to UNDO. That is the ONLY axis: an
  *  action can be catastrophic and still be "reversible" here. An action missing from the list is refused,
- *  the right default for something nobody has thought about, so keep the list honest. */
+ * the right default for something nobody has thought about, so keep the list honest. */
 export const ACTION_COST: Record<string, ActionCost> = {
   pause: "reversible",
   unpause: "reversible",
   add_guardian: "reversible",
-  // ROUND 8 T8-03: `set_inventory_wallet` is DELETED from the program, so it is deleted here too. An
+  // `set_inventory_wallet` is DELETED from the program, so it is deleted here too. An
   // action missing from this table is REFUSED, which is the behaviour we want for a name that no
   // longer dispatches. The destination is now bound by `initialize` (irreversible, below) and the
   // only later writer is the 24h-timelocked pair.
@@ -50,7 +49,7 @@ export const ACTION_COST: Record<string, ActionCost> = {
   deposit_usdc: "timelocked-undo",
   propose_set_inventory_wallet: "reversible", // a proposal can be cancelled instantly
   execute_set_inventory_wallet: "timelocked-undo", // moving it back costs another full window
-  // REVIEW PASS 2026-08-10. This said `reversible`, "adds supply; the cap bounds it". The cap bounds
+  // 2026-08-10. This said `reversible`, "adds supply; the cap bounds it". The cap bounds
   // the TOTAL; it is not an undo. There is NO admin burn anywhere in this program: the only burn is
   // `silv_burn_from_user` (cpi.rs), it requires the HOLDER's signature, and it only runs inside
   // `redeem_silv`, which pays out treasury USDC. So an over-mint cannot be undone, and the nearest

@@ -1,42 +1,32 @@
 /**
  * The operational alarm: is someone attacking us, and can we still honour redemptions.
- *
  * WHAT THIS DELIBERATELY DOES NOT DO, because the first version got it wrong. It does NOT alert on
  * treasury coverage of SILV held by third parties. That metric assumed holders would come and redeem at
  * the protocol, but the pre-minted SILV went into liquidity pools where partners post the USDC side, so
  * the float is not a redemption claim. An alert that maps to no real risk is worse than no alert: it is
  * exactly what teaches people to ignore the channel. Removed, not kept "just in case".
- *
  * WHAT IT WATCHES INSTEAD.
- *
  *  1. AM I BEING ATTACKED. The signal is not a ratio, it is the INVARIANCE of what must never change.
  *     Control of this protocol lives in a handful of fields and every takeover has to move one: the
  *     admin, a pending admin transfer, the guardian count, the SILV mint's own mint/freeze/delegate
  *     authorities, the inventory and treasury destinations, the program's upgrade authority, and the slot
  *     of the last deploy. They are PINNED below as literals. Drift is the alarm, and changing one
  *     deliberately means editing a constant in a commit, which is a better audit trail than a database.
- *
- *     The deploy slot earns its own sentence: an upgrade replaces the program's logic wholesale and
+ * The deploy slot earns its own sentence: an upgrade replaces the program's logic wholesale and
  *     cannot avoid changing that slot. It is the cheapest exact detector of the worst event.
- *
  *  2. UNEXPECTED INSTRUCTIONS. Normal traffic is mint, redeem, and our own deposits and pre-mints.
  *     Anything else running, a pause, an authority change, a withdrawal, is either us and we know, or
  *     someone else and we need to know now. Allow-listing the normal and alerting on the rest catches a
  *     class of attack no balance check can see.
- *
  *  3. CAN WE STILL PAY REDEMPTIONS. Not coverage of the float: whether the treasury can serve the
  *     redemptions actually arriving. An absolute floor under which redeems start reverting, plus the
  *     rolling 24h budget approaching or hitting its cap, since that cap stops redeems outright.
- *
  *  4. VOLUME, both directions. A lot of mints or a lot of redeems in a short window is worth knowing
  *     even when nothing is broken.
- *
  *  5. THE ORACLE. Kept because it is not noise: it fires only when priced operations are actually
  *     reverting for everyone, which is invisible from every balance in the system.
- *
  * Supply against the cap is a TREND, not an incident, so it lives in the weekly digest (--weekly) rather
  * than in a ten-minute alarm.
- *
  * THE EXIT CODE ANSWERS "DID THE CHECK RUN", NOT "IS THERE A PROBLEM", and the first version had this
  * backwards with a measurable cost. It exited 1 on every alert, a non-zero exit fails the workflow, and a
  * failed workflow mails everyone watching the repository. So a single true-and-unchanging condition sent
@@ -44,15 +34,12 @@
  * The alert channel is Telegram. CI status is reserved for the monitor itself being broken.
  *   0  the check ran, whatever it found
  *   1  the check could not be completed, or an alert could not be delivered. Investigate the monitor.
- *
  * TELEGRAM ONLY ON A TRANSITION, in English, via `_alert-state.ts`. A condition that is still true is
  * silent until `MONITOR_RENOTIFY_HOURS` has passed. A channel that says "all good" every ten minutes gets
  * muted, and a channel that repeats the same true alarm every ten minutes gets muted faster, because it
  * teaches the reader that nothing in it is new.
- *
  * IT DOES NOT PAUSE ANYTHING. `pause` needs admin or a guardian, both Squads vaults, so every reaction
  * carries 3-of-5 latency. The rolling budget is the brake; this is only the sensor.
- *
  * Run: DOMINION_RPC=<mainnet> npx tsx scripts/health-monitor.ts [--weekly]
  */
 import { Connection, PublicKey, Keypair } from "@solana/web3.js";
@@ -109,12 +96,10 @@ const PINNED = {
    * The upgrade Squads vault, 3-of-5, since 2026-08-21. It was the deployer's single hot key until
    * then: whoever held it could replace the entire program with no multisig and no timelock, while
    * every authority downstream of it was already a 3-of-5.
-   *
    * Moved to the vault with scripts/transfer-upgrade-authority.ts, and this literal is updated in the
    * SAME change rather than afterwards. That ordering is enforced by the script, which refuses to send
    * while this pin is stale: leaving it behind is what made the mint-premium change page every ten
    * minutes for hours earlier the same day.
-   *
    * NOTE it is the same vault as the freeze authority and the permanent delegate, so one 3-of-5 quorum
    * can both replace the program and move anyone's SILV. Squads manages program upgrades from vault
    * index 0, which is why the emergency path stays inside its UI.
@@ -146,7 +131,6 @@ const PINNED = {
 /**
  * Instructions that are NORMAL traffic ON OUR PROGRAM. Anything else is either us and we know, or
  * someone else and this is how we find out. Deliberately short: adding a name here is a decision.
- *
  * ONLY OUR PROGRAM'S OWN INSTRUCTIONS ARE JUDGED, and the first version got this wrong too. A
  * transaction's logs contain the Anchor line for every CPI as well, so allow-listing against raw log
  * names alerted on `VerifyMessage` (Pyth Lazer), `MintTo` and `Burn` and `InitializeAccount3`

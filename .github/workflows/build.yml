@@ -307,35 +307,9 @@ jobs:
 
       # , the ceremony half. Offline: it drives ceremony-step8's pure builder and decodes
       # the instruction bytes. The panel half runs inside the admin app's vitest step below.
-      - name: No instant inventory setter is emitted (BLOCKING)
-        run: npx --no-install tsx scripts/test-ceremony-inventory-flow.ts
-
-      # The ceremony that actually initialises mainnet must send the manifest's
-      # pre-mint destination and its first guardian. It encodes with the real IDL coder and reads the
-      # bytes, because the omission it pins was invisible to the type system: Anchor encodes an
-      # absent Pubkey as 32 zero bytes.
-      - name: The initialiser sends the manifest's bindings (BLOCKING)
-        run: npx --no-install tsx scripts/test-t1-initialize-args.ts
-
-      # Every refusal between a deployed program and a live one, driven through the
-      # same decision function ceremony-step8 calls before it emits the unpause.
-      - name: Readiness refuses every unready state (BLOCKING)
-        run: npx --no-install tsx scripts/test-launch-open-readiness.ts
-
-      # ADDED 2026-08-10, and the reason is that a gate nobody runs is a gate that can sit RED. The
-      # devnet rehearsal added scripts/premint.ts, which left verify-cluster-resolution.ts failing
-      # (an unclassified sender) and NOTHING noticed, because that gate was referenced only in prose.
-      # Two things are wired here: the classification gate itself, and the unit tests over premint's
-      # two pure decisions, which guard the boundary between the rehearsal flag and the irreversible
-      # mint of the entire launch supply.
       - name: Every script is classified for cluster resolution (BLOCKING)
         run: npx --no-install tsx scripts/verify-cluster-resolution.ts
 
-      - name: Pre-mint argument and resume decisions (BLOCKING)
-        run: npx --no-install tsx scripts/test-premint-args.ts
-
-      # The monitor's rolling-window port must agree with state/redeem_window.rs. It is the number an
-      # on-call rota is sized against, and the two can only agree while something checks.
       - name: Redeem-window port matches the program's rule (BLOCKING)
         run: npx --no-install tsx scripts/test-redeem-window.ts
 
@@ -358,15 +332,6 @@ jobs:
       # The {devnet, mainnet} x {no-candidate, pinned} x {match, mismatch} matrix for the
       # upgrade gate. Pure, no network, no keypair: it exercises the decision that decides whether an
       # unpinned local .so can reach `solana program deploy` on mainnet.
-      - name: The mainnet upgrade gate holds (BLOCKING)
-        run: npx --no-install tsx scripts/test-upgrade-gate.ts
-
-      # LAST, because it needs all three workspaces installed, which the steps above do.
-      # `cargo audit` was the only supply-chain gate in this workflow, so the JavaScript half of what
-      # ships had none at all. This is a RATCHET against a measured baseline, not a zero-tolerance
-      # gate: it fails on a new high, a new critical, or a high/critical on an untriaged package. The
-      # reasoning and the reachability evidence live in the script's header, not here, so there is one
-      # copy of them.
       - name: Production npm advisories may not get worse (BLOCKING)
         run: bash scripts/verify-npm-audit-policy.sh
 

@@ -5,7 +5,6 @@
  * call position. A stale client does not fail at build time, because the method builders are cast to
  * `any` and `.accounts()` is not strict in Anchor 0.31.1 (it delegates to `accountsPartial` and
  * derives a missing account from the IDL seeds); it fails at signing time, in front of a user.
- *
  * It does NOT prove an account list is COMPLETE: it cannot tell which instruction a given
  * `.accounts({...})` belongs to. apps/public/src/lib/__tests__/contract-parity.test.ts asserts the
  * exact per-instruction sets. Run: npx tsx scripts/verify-client-idl-parity.ts
@@ -148,7 +147,7 @@ function main() {
     "claimRedemption",
     "adminSettleRedemptionOffchain",
     "closeSettledRedemption",
-    // ROUND 8 T8-03. Deleted, not restricted: `initialize` binds the pre-mint destination atomically
+    // Deleted, not restricted: `initialize` binds the pre-mint destination atomically
     // and the only remaining writer is the 24h-timelocked pair. A client still calling this would
     // send eight bytes the dispatcher no longer answers, and the operator would read the failure as
     // an outage rather than as a removed capability.
@@ -216,7 +215,6 @@ function main() {
     }
 
     // --- 4. ("ErrorName", 12345) pairs must match the IDL ---
-    //
     // ANY CamelCase identifier paired with a code, never a suffix allowlist: the allowlist this
     // replaced silently skipped five live mappings while claiming to check every error code the
     // clients use. Insert a variant before StaleOracle and a stale client shows a raw Custom dump.

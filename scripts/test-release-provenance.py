@@ -113,15 +113,13 @@ def main() -> None:
         "solana_verify_version",
     )
 
-    # ROUND 8 A-04. THE CASE THAT WAS DELETED, and why.
-    #
+    # THE CASE THAT WAS DELETED, and why.
     # It was called "mismatched run/source/artifact tuples rejected" and it passed `"de" * 20`, which
     # is not a commit in this tree. So it re-ran the "nonexistent source commit" case above under a
     # name that promised something else entirely: that an EXISTING but INCOHERENT tuple is caught.
-    # Codex measured the real behaviour against `validate_pinned` with `1314be4` (a real commit), an
+    # measured the real behaviour against `validate_pinned` with `1314be4` (a real commit), an
     # invented numeric run id and an invented semver, and got `invented_numeric_tuple_problems=[]`.
     # Accepted, silently, while the green line claimed the opposite.
-    #
     # The honest replacement is NOT another local case. Nothing local can catch it: coherence between
     # a commit, a CI run and a set of bytes is a fact about GitHub, and this validator says so in its
     # own docstring. So the case is replaced by an assertion that the validator does not PRETEND to
@@ -147,8 +145,7 @@ def main() -> None:
             "provenance is a live check, not a shape check"
         )
 
-    # ROUND 8 FINAL-06. THE PRODUCER IS EXECUTED, not restated.
-    #
+    # -06. THE PRODUCER IS EXECUTED, not restated.
     # The previous version wrote its own three strings and called them "the REAL produced string".
     # A workflow regressing to `.stdout.strip()` would start writing "solana-verify 0.5.1" again while
     # this test stayed green on its own literal. Both sides now call

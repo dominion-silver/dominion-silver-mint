@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
 # Gate: refuse to deploy an artifact not built from this tree with the default features.
-#
 # ASSERTS: the .so is byte-identical to a clean default-feature rebuild; the forbidden
 # instruction names are absent as strings; the IDL exists, advertises none of them, and its
 # address equals declare_id!. It asserts NOTHING about what is deployed on-chain.
@@ -14,14 +13,12 @@
 #   --skip-rebuild   secondary checks only. Weaker, and exits 2, never 0.
 #   --local-only     ask ONLY "is this a clean default-feature build of this tree", and exit 0 on
 #                    success. Skips the release-pin comparison entirely instead of reporting on it.
-#
-# EXIT CODES, and the reason they exist (round 5 P0-02). This script used to print
+# EXIT CODES, and the reason they exist (round 5 ). This script used to print
 # `EXPECTED MISMATCH` and then finish with `ARTIFACT OK` and exit 0. A caller reading the exit code,
 # or a human reading the last line, was told the artifact was attested when the script had just said
 # it could not be. The previous session saw that 0 in its own test output and took it for the
 # intended behaviour, which is the same class of defect as a harness runner printing OK over zero
 # tests executed.
-#
 #   0  ATTESTED. Clean rebuild AND the artifact reproduces the pinned release binary.
 #      Under --local-only: clean rebuild, and no claim about the release pin is made or implied.
 #   1  REJECTED. A check failed: the rebuild differs, a forbidden instruction is present, the IDL is
@@ -41,11 +38,10 @@ set -euo pipefail
 # root it scanned nothing and passed. Exactly the defect this same file fixes for the manifest read a
 # hundred lines below, left in place one block earlier. `verify-mainnet-readiness.ts` invoked it with
 # an inherited cwd.
-# ROOT is the tree of the REAL script, not of the path used to invoke it. R6-03 removed the env var
+# ROOT is the tree of the REAL script, not of the path used to invoke it. removed the env var
 # that redirected the manifest; a symlink is the same redirection through the filesystem, and ROOT is
 # what selects MANIFEST_JSON below.
-#
-# REVIEW OF FIXES ON 993e628, P1. The first attempt was `cd -P "$(dirname "$BASH_SOURCE")/.."`, which
+# P1. The first attempt was `cd -P "$(dirname "$BASH_SOURCE")/.."`, which
 # closes only ONE of the two symlink shapes. Measured:
 #   ln -s <repo>/scripts       <fake>/scripts        -> cd -P resolves it. Closed.
 #   ln -s <repo>/scripts/x.sh  <fake>/scripts/x.sh   -> dirname is already <fake>/scripts, a real
@@ -53,13 +49,11 @@ set -euo pipefail
 # The second shape is the natural one, and it still read a prepared tree's manifest, lib.rs and
 # target/. Resolving BASH_SOURCE ITSELF is what closes both. `readlink -f` is not portable to older
 # macOS, and this script already depends on python3.
-#
-# ROUND 7 R7-01 [sic, R7-02]. Symlinks were two of THREE shapes. A HARD LINK carries no target to
+# [sic, ]. Symlinks were two of THREE shapes. A HARD LINK carries no target to
 # resolve: the alias and the original share one inode, `realpath` returns the alias's own path, and
 # ROOT becomes the directory holding the alias. The auditor reproduced it: a hard link dropped into a
 # prepared tree made this script attest that tree's `.so` against that tree's manifest and print
 # ARTIFACT OK, while looking byte-identical to the audited script because it IS the same inode.
-#
 # `st_nlink` is what distinguishes them, and it is the only thing that does. A file reachable under
 # more than one name cannot tell you which tree it belongs to, so it must not try to guess.
 _self="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")"
@@ -85,29 +79,24 @@ if [ "$_nlink" != "1" ]; then
 fi
 ROOT="$(cd -P "$(dirname "$_self")/.." && pwd)"
 
-# ================================================================ ROUND 8 T8-02: WHOSE TREE IS THIS?
-#
+# ================================================================ WHOSE TREE IS THIS?
 # THE THIRD ALIASING SHAPE. ROOT comes from where this file sits, and ROOT selects the manifest that
 # is read, the sources that are rebuilt and the target/ that is attested. Round 7 closed two of the
 # three ways a file can sit somewhere it does not belong: a SYMLINK is resolved by `realpath` above,
 # and a HARD LINK is refused by the `st_nlink` guard above. A COPY, or a MOVE, defeats both. It has
 # exactly one link and it resolves to itself, so the guards see nothing, and the verifier proceeds to
 # attest a foreign repository while being byte-identical to the audited script.
-#
 # That is not a hypothetical: reviewing the FILE cannot distinguish the two, because it is the same
 # file. What distinguishes them is whether the checkout it sits in is the authenticated one.
-#
 # WHAT THIS ESTABLISHES, and deliberately no more:
 #   1. ROOT is the top level of a Git working tree, and it is the SAME tree this file lives in.
 #   2. This exact file is TRACKED in that tree, and its blob matches HEAD. A copy dropped into a
 #      foreign repository is untracked there, which is the cheap and decisive discriminator.
 #   3. The tree knows the commit the release pin attests, so the pin can be compared against real
 #      history rather than against a string.
-#
 # WHAT IT DELIBERATELY DOES NOT DO: require `HEAD == release_artifact.source_commit`. The commit that
 # RECORDS a pin necessarily comes after the run that produced the candidate, so that equality would
 # make committing a pin impossible. The identity that matters is the checkout's, not the tip's.
-#
 # It runs HERE, before the docs scan, before the rebuild at `cargo build-sbf` and before
 # `MANIFEST_JSON` is even assigned, so a foreign tree is refused before anything reads or rebuilds it.
 # `scripts/test-verifier-root-identity.sh` asserts that ordering from a `bash -x` trace rather than
@@ -137,16 +126,14 @@ if [ "$_toplevel" != "$ROOT" ]; then
   exit 1
 fi
 # THE IDENTITY GATE. Fourth design, and the first one that states its own limit.
-#
 # WHAT THREE PREVIOUS ATTEMPTS GOT WRONG, in order:
 #   1. "is this file TRACKED here" fell to `git init && git add -A && git commit`.
 #   2. "does this tree contain the attested source commit" only fires once a candidate is pinned, and
-#      the status is `no-candidate`, so it never fired.
+# the status is `no-candidate`, so it never fired.
 #   3. "does this tree CONTAIN the anchor commit" fell to a foreign clone placed on an ORPHAN commit:
-#      the anchor object is public, `git cat-file -e` finds it, and containment says nothing about
-#      where HEAD is. Codex reproduced it: foreign_head=4f69c71, is-ancestor exit 1, cat-file exit 0,
+# the anchor object is public, `git cat-file -e` finds it, and containment says nothing about
+#      where HEAD is. reproduced it: foreign_head=4f69c71, is-ancestor exit 1, cat-file exit 0,
 #      gate passed.
-#
 # THE LIMIT, stated once so nobody has to rediscover it a fourth time. This script LIVES IN the tree
 # it authenticates. Whoever can prepare that tree can also delete these lines. No gate written here
 # can defend against that, and any claim that it does is false. What this gate defends against is an
@@ -155,13 +142,12 @@ fi
 # control is procedural and lives OUTSIDE this file: obtain the verifier from a separately fetched
 # clone at a signed tag, and compare its blob hash out of band. `docs/MAINNET_LAUNCH_RUNBOOK.md`
 # carries that procedure.
-#
 # Within that limit, four facts are established, each refusing BEFORE the docs scan, before
 # `MANIFEST_JSON` is assigned and before the rebuild.
 
 # (a) ANCESTRY, not containment. The anchor must be reachable FROM HEAD. A clone that merely owns the
 #     object fails this; only a checkout whose history actually passes through it succeeds. This is
-#     the single line that kills Codex's orphan reproduction.
+# the single line that kills orphan reproduction.
 ANCHOR_COMMIT="1314be417bfbdcea861bb75047964e722a8eada9"
 if ! (cd -P "$ROOT" && git merge-base --is-ancestor "$ANCHOR_COMMIT" HEAD 2>/dev/null); then
   echo ""
@@ -176,9 +162,9 @@ fi
 # THE CLOSED LIST, declared HERE because (b) below compares it across a merge and (c) compares it
 # against HEAD. Declaring it after its first use made the merge path silently compare NOTHING.
 BUILD_INPUTS="programs Cargo.toml Cargo.lock rust-toolchain.toml Anchor.toml scripts/verify-release-artifact.sh scripts/_read-release-pin.py scripts/_strict-build-sbf.sh"
-#     ROUND 8 FINAL-02. `scripts/_strict-build-sbf.sh` was missing, and it is the script that
+#     -02. `scripts/_strict-build-sbf.sh` was missing, and it is the script that
 #     actually RUNS the rebuild (line ~326). A hand-written list is a list someone forgets to update,
-#     so `scripts/test-verifier-root-identity.sh` now DERIVES the set of repo scripts this file
+# so `scripts/test-verifier-root-identity.sh` now DERIVES the set of repo scripts this file
 #     invokes and fails if any of them is absent from the line above. The list stays literal here
 #     because it must be readable at a glance in an audited file; the derivation is the guard.
 
@@ -188,7 +174,7 @@ BUILD_INPUTS="programs Cargo.toml Cargo.lock rust-toolchain.toml Anchor.toml scr
 #     operator's local configuration is a check the operator can be missing without noticing, and CI
 #     runners have no such configuration at all.
 #     Caveat, per THE LIMIT above: the pinned key sits in this file, so a tree-preparer can swap it.
-#     It raises the bar from "clone a public repo" to "edit the audited verifier", which is a
+# It raises the bar from "clone a public repo" to "edit the audited verifier", which is a
 #     detectable act. It does not make the gate unconditional.
 RELEASE_SIGNER_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKz73pnCUcRB2YNuMQFWQZb46U7PF05XEltkVkTg93mB"
 RELEASE_SIGNER_ID="toblanc34@gmail.com"
@@ -199,17 +185,14 @@ _verify_commit() {
       verify-commit "$1" >/dev/null 2>&1)
 }
 
-# ROUND 8 FINAL-01. A MERGE IS NOT SIGNED BY US, AND DEMANDING THAT IT IS MADE CI IMPOSSIBLE.
-#
+# -01. A MERGE IS NOT SIGNED BY US, AND DEMANDING THAT IT IS MADE CI IMPOSSIBLE.
 # The first version required HEAD itself to carry the pinned signature. The file even said "a merge
 # commit created by the forge is signed by the FORGE, not by this key", and then refused it. Since
 # branch protection delivers through pull requests, `actions/checkout` puts HEAD on GitHub's
 # synthetic merge on `pull_request` and on the real merge on `push` to main. The required checks
 # therefore could not all go green on the only delivery shape the protection allows. Measured:
-#
 #     57de5e43 (owner commit, SSH-signed) : exit 0
 #     1314be41 (real GitHub merge)        : exit 1   Commit: GitHub <noreply@github.com>, RSA
-#
 # WHAT IS ACTUALLY BEING AUTHENTICATED IS THE BYTES, NOT THE TIP. So a merge is accepted when one of
 # its parents carries the pinned signature AND the BUILD INPUTS are byte-identical between that
 # parent and HEAD. Everything outside the closed list may differ, which is what a merge legitimately
@@ -220,7 +203,7 @@ _verify_commit() {
 # branch tip we signed. That is the shape this accepts. Two shapes it does NOT accept, on purpose:
 #   - a SQUASH merge, which has one unsigned parent whose build inputs differ, so nobody signed the
 #     squashed bytes. If this repository ever switches to squash merging, this gate must change with
-#     it, deliberately.
+# it, deliberately.
 #   - a merge that pulled main forward THROUGH a build input. Then the merged bytes are genuinely
 #     not the reviewed bytes, and re-signing the merge, or attesting from the branch tip, is the
 #     correct answer rather than widening this.
@@ -230,7 +213,7 @@ if _verify_commit HEAD; then
   _identity_ok=yes
   _identity_via="HEAD is signed by the pinned release key"
 else
-  # ROUND 8 REVIEW P1. IT MUST ACTUALLY BE A MERGE. Without this, `rev-list --parents` yields the
+  # REVIEW P1. IT MUST ACTUALLY BE A MERGE. Without this, `rev-list --parents` yields the
   # parent of ANY commit, so an unsigned attacker-authored commit sitting on top of a signed one, and
   # touching nothing in the closed list, was accepted while the script printed "HEAD is a merge whose
   # build inputs are identical to signed parent" - a false statement about its own input. The
@@ -262,7 +245,7 @@ echo "  identity   : $_identity_via"
 #     every fact above is about a commit and none of them is about the files the rebuild will read.
 #     A dirty worktree is the realistic accident this catches, and it is also the cheapest way to
 #     attest something that was never committed.
-#     The manifest is deliberately NOT in this list, and that is a distinction worth keeping. This
+# The manifest is deliberately NOT in this list, and that is a distinction worth keeping. This
 #     list is what gets REBUILT: sources, lockfile, toolchain, plus the checker itself. The manifest
 #     is the CLAIM being checked. Binding it to HEAD conflates the two and would forbid the one
 #     legitimate reason to hold an uncommitted pin: reading a candidate before recording it. It loses
@@ -284,8 +267,8 @@ fi
 # (d) WHEN A CANDIDATE IS PINNED, THE REBUILT INPUTS ARE THE ATTESTED COMMIT'S INPUTS. This is the
 #     fact the whole script exists to support, and no previous version had it. HEAD cannot EQUAL
 #     `source_commit`: the commit that RECORDS a pin necessarily comes after the run that produced
-#     the candidate. So the requirement is narrower and exact: `source_commit` is an ancestor of HEAD,
-#     and the BUILD INPUTS are byte-identical between the two. Everything outside that closed list
+# the candidate. So the requirement is narrower and exact: `source_commit` is an ancestor of HEAD,
+# and the BUILD INPUTS are byte-identical between the two. Everything outside that closed list
 #     (docs, the pin record itself, apps, tests) may legitimately differ, which is precisely what
 #     lets a pin be committed at all.
 _pin_commit="$(cd -P "$ROOT" && python3 -c "
@@ -341,22 +324,19 @@ for a in "$@"; do
     *)              ARGS+=("$a") ;;
   esac
 done
-# ROUND 8 REVIEW P1, OPEN AND DELIBERATELY NOT PATCHED AT THE END OF A SESSION.
-#
+# REVIEW P1, OPEN AND DELIBERATELY NOT PATCHED AT THE END OF A SESSION.
 # The finding is real: an UNCOMMITTED config/mainnet-authorities.json can drive an exit-0
 # attestation, because every downstream check recomputes from this same local tree. Set sha256 to the
 # local build's hash, recompute the sizes and the IDL hash from the same files, name any ancestor as
 # source_commit and any digits as ci_run_id, and validate_pinned passes, (d) passes, and a correct
 # NOT ATTESTED becomes ARTIFACT OK. That is the removed DOMINION_RELEASE_MANIFEST override coming
 # back through the filesystem, and my "a manifest that lies is caught downstream" argument was wrong.
-#
 # Two attempts at the fix both broke the self-test, and the reason is a genuine design knot rather
 # than a bad patch: requiring the pin to be committed means the pin self-test must commit its
 # candidate variants, and a sandbox cannot produce a commit signed by the pinned release key, so the
 # identity gate then refuses every fixture for an unrelated reason. Resolving it needs a decision
 # about how the positive attestation case is exercised at all, and inventing one in the last minutes
 # of a session is how the previous six passes went wrong.
-#
 # Recorded here rather than silently dropped. It is a P1 and it is OPEN.
 
 SO="${ARGS[0]:-$ROOT/target/deploy/dominion_silver_mint.so}"
@@ -379,17 +359,14 @@ fi
 
 fail=0
 # INITIALISED HERE, and this line is why CI could not go green.
-#
 # `not_attested` was only ever ASSIGNED inside two of the three branches of check 1b: the
 # no-candidate branch and the cross-platform branch. The third, `--local-only`, sets neither. This
 # script runs under `set -u`, so on that path the test at the bottom
 # (`if [[ "$not_attested" -ne 0 ]]`) hit an unbound variable and the shell killed the script with
 # "line 617: not_attested: unbound variable".
-#
 # The consequence was worse than a crash: the two paths that DO set it are both failure paths, so
 # every SUCCESS path died. `ARTIFACT OK` and `LOCAL BUILD OK` were unreachable lines. A release gate
 # that can only report failure or not-attested, and never pass, is not a gate.
-#
 # The comment above check 1b claims "every branch below now sets `fail` or `not_attested`". That claim
 # is what made the initialisation look unnecessary, and it was false for the `--local-only` branch.
 # Observed on CI run 31390147116: `gate` failed here, and `verifier-self-test` failed its two
@@ -409,7 +386,7 @@ else
   # The reference build gets its OWN CARGO_TARGET_DIR. --sbf-out-dir only moves the final .so, so
   # compilation would otherwise reuse the shared target/ that CI restores from a Cargo.lock-keyed
   # cache: a tampered rlib would be linked into both sides and the hashes would agree.
-  # ROUND 8 F-03. Through the shared strict builder, which treats a stack-overflow line as fatal even
+  # Through the shared strict builder, which treats a stack-overflow line as fatal even
   # when cargo exits 0. This rebuild is the REFERENCE the artifact is compared against: an overflow
   # here reproduces on both sides, so the hashes would agree and the comparison would bless corrupted
   # bytes. The previous version captured build.log and only read it when the exit code was non-zero,
@@ -441,23 +418,19 @@ else
   fi
 
   # ---- 1b. And that is NOT the same claim as matching the release pin ----
-  #
-  # S-07, measured 2026-08-07. Check 1a compares two builds made on the SAME machine, so it proves the
+  # measured 2026-08-07. Check 1a compares two builds made on the SAME machine, so it proves the
   # artifact is a clean default build here. It says NOTHING about whether it matches what ships, because
   # SBF builds are not deterministic across host platforms: our .so embeds
   # /Users/runner/work/platform-tools/... paths baked into the macOS-built platform-tools std, and the
   # linux-x86_64 tarball carries /home/runner/... of a different length, shifting every rodata offset
   # after it. macOS and Linux disagree at v1.51 AND at v1.52.
-  #
   # The Solana docs state it directly: "Solana program builds are not deterministic across different
   # systems", and "make sure that you actually deploy the verified build and don't accidentally overwrite
   # it with anchor build or cargo build-sbf". The RELEASE artifact is therefore a Linux container build
   # produced by `solana-verify build`, and release_artifact.sha256 pins THAT.
-  #
   # So this check reports the comparison honestly instead of letting 1a's green imply something it cannot
   # mean. It FAILS only on linux/x86_64, where the two should agree.
-  #
-  # ROUND 5 P0-02: every branch below now sets `fail` or `not_attested`, and neither of them can end
+  # every branch below now sets `fail` or `not_attested`, and neither of them can end
   # at the `ARTIFACT OK` line. The branch that used to print EXPECTED MISMATCH and fall through to a
   # green conclusion is the third one.
   if [[ "$LOCAL_ONLY" -eq 1 ]]; then
@@ -465,30 +438,27 @@ else
     echo "   This run answers 'is this a clean default build of this tree' and nothing else."
     echo "   The release pin is the reproducible-build job's job."
   else
-  # THE MANIFEST PATH IS NOT CONFIGURABLE. Round 6 R6-03: an earlier version of this script honoured
+  # THE MANIFEST PATH IS NOT CONFIGURABLE. Round 6 an earlier version of this script honoured
   # `DOMINION_RELEASE_MANIFEST` so the self-test could drive the state machine, and printed two loud
   # warnings when it was set. The warnings did not matter. What matters is the MACHINE contract, which
   # this script's own header declares to be the exit code and the final line: with an injected manifest
   # carrying the local .so's hash and size, it still exited 0 with `ARTIFACT OK`. An environment
   # variable inherited from a shell, a CI step or a wrapper was therefore a channel for a false release
   # attestation, and the self-test blessed it in its positive case.
-  #
   # An attestation tool must have exactly ONE source of truth and no way to point it elsewhere. The
   # self-test now copies the repository into a temporary directory and edits ITS copy, which tests the
   # same state machine without leaving a door in production.
-  #
   # $ROOT-anchored, not cwd-relative: the old form opened 'config/mainnet-authorities.json' against
   # whatever directory the caller happened to be in, so running this from anywhere but the repo root
   # silently took the unreadable branch.
   MANIFEST_JSON="$ROOT/config/mainnet-authorities.json"
-  # ROUND 6 R6-07. THE `pinned` STATE HAS A CLOSED SCHEMA, and it is validated here rather than being
+  # THE `pinned` STATE HAS A CLOSED SCHEMA, and it is validated here rather than being
   # a set of fields the CI happens to write. Before this, the CI generated eight fields and every gate
   # compared three: `status`, `sha256`, `bytes`. `normalized_sha256` was consumed by nothing in the
   # repository, and the runbook accepted a null `idl_sha256` with an assertion that is vacuously true
   # when the pin is null. A pin entered by hand at runbook step 2c could therefore be incomplete or
   # internally inconsistent and still satisfy every check, while the manifest claimed "Every gate
   # compares against them".
-  #
   # `schema` below is empty when the pin is coherent, or the list of what is wrong.
   read -r PIN_STATUS PINNED PIN_BYTES PIN_SCHEMA <<<"$(python3 "$ROOT/scripts/_read-release-pin.py" "$MANIFEST_JSON" "$ROOT" 2>/dev/null || echo "UNREADABLE - - -")"
   HOST_OS="$(uname -s)"; HOST_ARCH="$(uname -m)"
@@ -522,7 +492,7 @@ else
     fail=1
   elif [[ "$h_have" == "$PINNED" ]]; then
     echo "   ok: the local artifact IS the pinned release artifact ($PINNED)"
-    # Size is compared too, not merely printed (round 5 P2-01): two files can only share a sha256 by
+    # Size is compared too, not merely printed (round 5 ): two files can only share a sha256 by
     # accident nobody has ever produced, but a manifest whose bytes field disagrees with its own hash
     # is a manifest that was hand-edited, and that IS reachable.
     have_bytes="$(wc -c < "$SO" | tr -d ' ')"
@@ -609,7 +579,7 @@ echo "4. Release record"
 echo "   sha256: $(shasum -a 256 "$SO" | awk '{print $1}')"
 echo "   bytes:  $(wc -c < "$SO" | tr -d ' ')"
 echo
-# THE ORDER OF THESE THREE BLOCKS IS THE CONTRACT (round 5 P0-02). Every path out of this script ends
+# THE ORDER OF THESE THREE BLOCKS IS THE CONTRACT (round 5 ). Every path out of this script ends
 # in exactly one of them, each prints a DIFFERENT last line, and each exits a DIFFERENT code. The
 # defect this replaces was a fall-through: a branch printed EXPECTED MISMATCH and then reached the
 # OK line anyway, so the last line and the exit code both said something the script had just denied.
@@ -639,7 +609,7 @@ if [[ "$not_attested" -ne 0 ]]; then
   echo "artifact that ships."
   echo "  reason: $not_attested_why"
   echo "  the deployable bytes come from the reproducible-build CI job."
-  # REVIEW PASS ON 3bf3097: the DO-NOT-DEPLOY sentence used to be the last line here, so this was
+  # the DO-NOT-DEPLOY sentence used to be the last line here, so this was
   # the one path where `tail -1` did not start with ARTIFACT. The header promises uniformity.
   echo "ARTIFACT NOT ATTESTED. DO NOT DEPLOY THIS FILE."
   exit 3

@@ -73,14 +73,12 @@ const GENESIS: Record<Cluster, string | null> = {
   localnet: null, // a fresh validator has a random genesis hash; nothing to pin.
 };
 
-/** ROUND 7 R7-04. EVERY public cluster, including the ones we do not support.
- *
- *  The localnet negative check used to be built from `GENESIS`, which is keyed on the `Cluster` type,
- *  and `Cluster` has no testnet member because these scripts refuse testnet by hostname. So a tunnel
+/** EVERY public cluster, including the ones we do not support.
+ * The localnet negative check used to be built from `GENESIS`, which is keyed on the `Cluster` type,
+ * and `Cluster` has no testnet member because these scripts refuse testnet by hostname. So a tunnel
  *  from 127.0.0.1 to `api.testnet.solana.com` reached the chain, matched nothing in `GENESIS`, and was
  *  accepted as an unknown local validator. Reproduced by the auditor through a local HTTP proxy.
- *
- *  The list a denylist needs is "public chains", not "chains we have a Cluster variant for". Tying it
+ * The list a denylist needs is "public chains", not "chains we have a Cluster variant for". Tying it
  *  to the type was the defect. Anything reachable and publicly known belongs here. */
 const PUBLIC_GENESIS: Record<string, string> = {
   devnet: "EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG",
@@ -100,14 +98,13 @@ export async function assertClusterMatchesChain(ctx: ClusterContext): Promise<vo
   const expected = GENESIS[ctx.cluster];
   const actual = await new Connection(ctx.rpc, "confirmed").getGenesisHash();
 
-  // REVIEW PASS ON 3bf3097. localnet used to `return` here BEFORE any RPC call, because a fresh
+  // localnet used to `return` here BEFORE any RPC call, because a fresh
   // validator has a random genesis hash and there is nothing to pin. But localnet is also exempt from
   // the consent gate (`_guard.ts::guardConsentOnly`) and from the release-pin gate
   // (`upgrade-program.ts::decideUpgradeGate`, which keys on the literal "mainnet-beta"), and any
   // 127.0.0.1, localhost or *.localhost URL classifies as localnet. An SSH tunnel or a local RPC proxy
   // pointed at mainnet therefore reached `solana program deploy` with an unpinned local .so, no
   // consent prompt and no genesis check: three gates off at once through one carve-out.
-  //
   // We cannot say what a local genesis hash SHOULD be. We can say what it must NOT be, and that is
   // enough, because the attack needs the tunnel to terminate on a real cluster, and a real cluster has
   // a known hash.
@@ -139,11 +136,10 @@ export async function assertClusterMatchesChain(ctx: ClusterContext): Promise<vo
 }
 
 /** Read a ceremony value out of `config/mainnet-authorities.json`, the source of truth. Ceremony values are
- *  READ, never retyped into a script, so there is exactly one place to be wrong (audit D-01). */
+ *  READ, never retyped into a script, so there is exactly one place to be wrong (). */
 export function mainnetConfig(): Record<string, unknown> {
-  // ROUND 7 R7-03. THERE IS NO OVERRIDE. Not an env var, not a pair of env vars.
-  //
-  // R6-03 deleted `DOMINION_RELEASE_MANIFEST` for redirecting which file a gate trusts. This sibling
+  // THERE IS NO OVERRIDE. Not an env var, not a pair of env vars.
+  // deleted `DOMINION_RELEASE_MANIFEST` for redirecting which file a gate trusts. This sibling
   // survived one file over, and the previous fix gated it behind a SECOND variable,
   // `DOMINION_CLUSTER_SELFTEST=1`. That was wrong in principle and the audit said so plainly: both
   // variables come from the same environment, so the second one is a textual marker, not a separation
@@ -151,7 +147,6 @@ export function mainnetConfig(): Record<string, unknown> {
   // a copied command carries both, `t1-hostile-bootstrap.ts` then reads authorities, launch posture,
   // the Lazer treasury and the USDC mint from the redirected file, the consent and genesis checks all
   // pass, and the single irreversible `initialize` writes the wrong values.
-  //
   // The test seam moved into the type system instead: `readMainnetConfigFrom` below takes a path, and
   // `mainnetAddressFrom` takes an already-parsed object. The self-test calls those with what it built.
   // Production calls this, which reads one path and cannot be pointed anywhere else.

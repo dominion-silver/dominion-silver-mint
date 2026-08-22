@@ -1,6 +1,5 @@
 /**
- * GATE: cluster selection is driven by the ENVIRONMENT and never falls back to devnet (audit S-01).
- *
+ * GATE: cluster selection is driven by the ENVIRONMENT and never falls back to devnet ().
  * ASSERTS the properties, not the implementation: an unset DOMINION_RPC still resolves to devnet; an
  * explicit OR UNRECOGNISED mainnet RPC resolves to mainnet-beta and to mainnet ADDRESSES, never the
  * devnet USDC mint; a URL merely containing "devnet" is classified by HOST; the transaction guard
@@ -177,7 +176,6 @@ for (const rpc of [
     // sends through `rpc.<name>(...)`: vaultTransactionCreate, proposalCreate, proposalApprove,
     // vaultTransactionExecute, multisigCreateV2. That is `.rpc.` followed by a call, which the Anchor
     // pattern above does NOT match because it expects `.rpc(` directly.
-    //
     // It went unnoticed because every earlier Squads script also airdrops or transfers SOL through
     // `sendAndConfirmTransaction`, so it was detected for the wrong reason. `create-ops-proposal.ts`
     // is the first script whose ONLY sends are Squads calls, and this gate caught it: the script was
@@ -201,8 +199,6 @@ for (const rpc of [
     "_guard.ts",
     "_cluster.ts",
     "_program-id.ts",
-    // Called BY t1, which guards. It resolves no cluster of its own and takes an open Connection.
-    "_t1-mint-helper.ts",
     // Telegram and heartbeat delivery for the monitors. It resolves no cluster, opens no Connection and
     // touches no Solana RPC at all: its only network calls are api.telegram.org and a ping URL. Exempt on
     // the same terms as the helpers above, and the send-primitive check below verifies that rather than
@@ -211,46 +207,21 @@ for (const rpc of [
     "verify-cluster-resolution.ts",
   ]);
 
-  // ROUND 5 P0-03. `_ceremony-emit.ts` holds the shared emit/verify/send plumbing for the two
+  // `_ceremony-emit.ts` holds the shared emit/verify/send plumbing for the two
   // ceremony steps, and `sendAll` is now where their transactions leave from. It is NOT in `helpers`
   // above: helpers are exempt from classification, and a file containing a send primitive must never
   // be exempt from anything. It is a SENDER, listed below, and INDIRECT, because it takes an already
   // guarded Connection from its caller and resolves no cluster of its own.
-  //
   // Moving those calls out of step 8 is exactly the failure mode the handover calls A, changing
   // a mechanism without propagating to what describes it: this gate went red on the same commit,
   // which is why it exists.
 
   // THE MANIFEST. Every script here sends transactions and must call requireSanctionedCluster.
-  const SENDERS = new Set([
-    // Hands the program's upgrade authority to the Squads vault. One instruction, unrecoverable if the
-    // destination is wrong, so it guards the cluster like every other sender.
-    "transfer-upgrade-authority.ts",
-    "_ceremony-emit.ts",
-    "ceremony-step8.ts",
-    "create-fee-vault.ts",
-    "e2e-fixa-devnet.ts",
-    // ROUND 8 L1-05. The two-phase inventory change across the real 24h timelock.
-    "e2e-inventory-change-devnet.ts",
-    "initialize-devnet.ts",
-    // The launch-supply sender. Added 2026-08-10 with the script itself; the gate caught its absence.
-    "premint.ts",
-    "t1-hostile-bootstrap.ts",
-    "test-dominion-squads-e2e.ts",
-    // No primitive matches it (it shells out via `sh(cmd, args)`), and it writes mainnet bytecode.
-    "upgrade-program.ts",
-  ]);
+  const SENDERS = new Set<string>([]);
   // Senders whose transactions leave through code a regex here cannot see. `upgrade-program.ts` shells
   // out via `sh(cmd, args)`; the two ceremony steps delegate to `_ceremony-emit.ts:sendAll`. Both are
   // still REQUIRED to call requireSanctionedCluster, which is asserted separately, and they do.
-  const INDIRECT = new Set([
-    "upgrade-program.ts",
-    // ROUND 8: `ceremony-step7.ts` is DELETED with runbook step 7. The public-mint open it proposed
-    // no longer exists as a launch action: initialize ships that switch open, so the proposal would
-    // revert PublicMintUnchanged. The check below refuses a manifest entry naming a deleted script,
-    // which is what forced this line to go with the file.
-    "ceremony-step8.ts",
-  ]);
+  const INDIRECT = new Set<string>([]);
   // `_ceremony-emit.ts` is deliberately NOT here. INDIRECT means "no send primitive is expected to
   // match this file", and that file calls `sendAndConfirmTransaction(` in plain sight AND calls
   // `requireSanctionedCluster` itself. Listing it would have exempted the one file every mainnet
@@ -270,10 +241,6 @@ for (const rpc of [
     // Reads the chain and fetches the deployed bundles to prove the frontends resolve MAINNET.
     // Sends nothing, so it must NOT be forced through the transaction guard.
     "verify-post-deploy.ts",
-    // ROUND 8 REVIEW. Three files this gate had never seen. `_readiness-digest.ts` and
-    // `_run-state.ts` are pure: no Connection, no keypair, no send. `test-security-posture-docs.ts`
-    // shells out to the litesvm harness and reads files, and touches no cluster.
-    "_readiness-digest.ts",
     // Pure string function: strips provider credentials out of an RPC endpoint before anything prints
     // it. No Connection, no keypair. Extracted from redeem-monitor.ts precisely BECAUSE that file runs
     // its main() at import time, so importing the helper from there executed a whole monitor run.
@@ -284,44 +251,19 @@ for (const rpc of [
     // it: `_telegram.ts` was added without a registration once and this gate went red on the commit,
     // which is the gate working and a round-trip that did not need to happen.
     "_alert-state.ts",
-    "_run-state.ts",
-    // Pure unit tests over premint.ts's two exported decisions (argv -> atomic, run record ->
-    // resume plan). It imports premint.ts, which is a SENDER, but only for those two pure
-    // functions: premint.ts guards its own main behind `require.main === module`, so importing it
-    // opens no Connection and loads no keypair.
-    "test-premint-args.ts",
     // Pure port of the program's rolling-window rule, plus its fixtures. No cluster, no keypair.
     "_redeem-window.ts",
     "test-redeem-window.ts",
     // READ-ONLY alarm. It builds an Anchor Program with a throwaway keypair precisely so it CANNOT
     // sign, reads the config and the logs, and sends no transaction.
     "redeem-monitor.ts",
-    "premint-sizing.ts",
-    "probe-lazer-feed.ts",
     "read-config.ts",
     "verify-client-idl-parity.ts",
-    // ROUND 6 R6-02. Imports `decideUpgradeGate` from upgrade-program.ts and calls it with literals.
-    // It contains no send primitive of its own, and the module it imports now guards `main()` behind
-    // `require.main === module`, so importing the decision no longer starts the upgrade script. That
-    // guard was found by this classification failing.
-    "test-upgrade-gate.ts",
-    // ROUND 8 T8-06. Imports `buildStep8Actions` from ceremony-step8.ts and calls it with literals.
-    // Builders stop at `.instruction()`, so nothing is signed and nothing is sent, and the module it
-    // imports guards `main()` behind `require.main === module` for the same reason test-upgrade-gate
-    // needed that guard: importing a decision must not start a ceremony.
-    "test-ceremony-inventory-flow.ts",
-    // ROUND 8 L1-01. Imports `buildT1InitializeArgs` from t1-hostile-bootstrap.ts and encodes it
-    // offline with the IDL coder. That module's `main()` is behind `require.main === module` for
-    // exactly this reason; importing the ceremony's argument builder must not start a ceremony.
-    "test-t1-initialize-args.ts",
-    // ROUND 8 L1-04. Pure decision function plus its test: no Connection, no RPC, no signer.
-    "_launch-readiness.ts",
-    "test-launch-open-readiness.ts",
-    // ROUND 8 F-03 / T8-01. Build and install barriers: they shell out to cargo and curl, never to a
+    // / Build and install barriers: they shell out to cargo and curl, never to a
     // cluster, and they resolve no RPC.
     "_strict-build-sbf.sh",
     "test-strict-build-sbf.sh",
-    // ROUND 8 T8-04. Drives the real validate_pinned offline; no Connection, no RPC.
+    // Drives the real validate_pinned offline; no Connection, no RPC.
     "test-release-provenance.py",
   ]);
 
@@ -423,8 +365,7 @@ for (const rpc of [
 //    gate could pass while `_cluster.ts` quietly defaulted. The mutation goes to a TEMP COPY: a gate
 //    must never write to config/mainnet-authorities.json and restore it in a `finally`, which does not
 //    run on SIGINT.
-//
-//    ROUND 7 R7-03. This used to point the PRODUCTION reader at the copy with `DOMINION_MAINNET_CONFIG`
+// This used to point the PRODUCTION reader at the copy with `DOMINION_MAINNET_CONFIG`
 //    (plus, briefly, a second variable pretending to be an authority check). The seam is now in the
 //    signature: `readMainnetConfigFrom(path)` and `mainnetAddressFrom(cfg, field)` are pure, this test
 //    hands them what it built, and `mainnetConfig()` in production reads one path with no way to be

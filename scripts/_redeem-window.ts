@@ -1,18 +1,15 @@
 /**
  * A faithful port of `state/redeem_window.rs::roll_window`, so the monitor measures the budget the way
  * the PROGRAM measures it.
- *
  * WHY A PORT AND NOT A GUESS. The obvious monitor reads `config.instant_used_usdc` and compares it to
  * the budget. That number is WRONG on its own: the throttle is a two-bucket sliding counter, so the
  * usage that actually counts is the current bucket plus a time-weighted slice of the previous one, and
  * both buckets roll forward on read. A monitor using the raw field under-reports right after a boundary
  * and over-reports late in a window. Alerting on the wrong number is worse than not alerting, because
  * it trains whoever is on call to ignore it.
- *
  * The consequence that makes this worth porting exactly: the sliding counter admits close to 2x the
  * budget across one boundary. That is the REAL bound on a drain, ~40,000 USDC in 24h at the launch
  * default, not the ~20,000 the budget field suggests.
- *
  * scripts/test-redeem-window.ts pins this against the Rust behaviour, including the 2x property.
  */
 

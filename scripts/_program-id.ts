@@ -1,23 +1,19 @@
 /**
  * The one place a script learns which program to talk to.
- *
  * AUDIT review of daac4ac (P2): 18 scripts each hardcoded a program id, and most held
  * an id retired one or two generations earlier (`GDN5ktEm88...`, `J9cwPQ7Pp2...`).
  * A script pointed at a dead program does not fail in an obvious way: it fails with
  * AccountNotInitialized or "program does not exist", which reads as a broken protocol
  * rather than a stale constant. The same class already produced a false "the oracle
  * CPI is broken" signal from the Lazer harness.
- *
  * Resolution order:
  *   1. DOMINION_PROGRAM_ID, for deliberately targeting a throwaway id
  *   2. the generated IDL's `address`, which scripts/verify-constants-consistency.sh
  *      pins to `declare_id!` in CI
  *   3. the IDL copies COMMITTED under apps/*, added 2026-08-13
- *
  * There is deliberately NO hardcoded fallback: a missing IDL is an error, not a
  * silent default to whatever was current when the file was written. Step 3 is not
  * that: it reads a real IDL out of the repository.
- *
  * WHY STEP 3 EXISTS. `target/` is gitignored, so a plain checkout has no generated
  * IDL, and every script that imports this module dies on a message telling the reader
  * to run `anchor idl build`. That is correct advice for a developer and useless for a
@@ -25,7 +21,6 @@
  * reason, and it is the compensating control for the redemption risk, so it would have
  * failed silently every ten minutes. Standing up a Rust and Solana toolchain to build
  * an IDL for a ten-minute cron is absurd.
- *
  * WHY IT IS SAFE. The committed copies are not a second source of truth.
  * `verify-constants-consistency.sh` asserts, on every gate run, that all present IDL
  * copies are BYTE-IDENTICAL and that their `address` equals `declare_id!`. So reading

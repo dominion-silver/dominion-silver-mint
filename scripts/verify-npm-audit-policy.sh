@@ -1,38 +1,30 @@
 #!/usr/bin/env bash
-# ROUND 5 P2-06. A production-dependency audit policy that can actually fail.
-#
+# A production-dependency audit policy that can actually fail.
 # THE FINDING. `npm audit --omit=dev` was red in all three workspaces (root, apps/public, apps/admin),
 # nothing in CI ran it, and the only supply-chain gate was `cargo audit`. So the JavaScript half of
 # what ships had no gate at all, and the advisory list could grow without anyone noticing.
-#
 # WHY THIS IS A RATCHET AND NOT A ZERO-TOLERANCE GATE. Forty-odd advisories cannot honestly be cleared
 # in one batch, and the audit's own remediation says to triage advisory by advisory rather than to
 # bulk-upgrade. A gate that demands zero would be turned off within a week, which is worse than no
 # gate. This one pins the CURRENT state and fails on anything WORSE: a new high, a new critical, a new
 # vulnerable package. The backlog is visible and bounded; drift is not possible.
-#
 # THE REACHABILITY EVIDENCE, measured 2026-08-08 and not assumed. Almost every high and the single
 # critical arrive through ONE path:
-#
 #   @dominion/public-app -> @solana/wallet-adapter-react -> @solana-mobile/wallet-adapter-mobile
 #                        -> react-native -> metro, image-size, shell-quote, ...
-#
 # That is the React Native BUILD toolchain, pulled in transitively by a wallet adapter the app never
 # imports. Measured against the real production build of apps/public: `shell-quote`, `metro`,
 # `image-size`, `react-native` and `bigint-buffer` appear in ZERO files under `.next/static` and
 # `.next/server`. They are in the dependency graph and not in the artifact.
-#
 # That is a reachability argument, not an all-clear: it says these advisories cannot be triggered by a
 # browser or by our server, because the code is not there. Re-measure it when the wallet adapter is
 # upgraded, because the conclusion is about THIS graph.
-#
 # Usage: bash scripts/verify-npm-audit-policy.sh
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
 # BASELINE, re-measured 2026-08-21. Lower these whenever an advisory is genuinely resolved; raising one
 # means accepting a new vulnerability and belongs in a commit that says why.
-#
 # The 2026-08-21 re-measure is a RECLASSIFICATION, not an acceptance: upstream moved advisories from
 # high to moderate, so high fell and moderate rose while the advisory ID set shrank by two
 # (1124288 and 1138813 are gone) and gained nothing. See the note in the ratchet loop below.
@@ -46,16 +38,13 @@ BASELINE=(
 # Packages allowed to carry a HIGH or CRITICAL today. A high/critical on any package NOT listed here
 # fails even when the totals are unchanged: a swap (one resolved, one new) is exactly the drift a
 # count-only gate misses. This list caught `@sqds/multisig` the first time it ran.
-#
 # TWO CATEGORIES, and the distinction is the triage. Calling everything "unreachable" would be the
 # same overclaim as calling a lexical grep a semantic proof.
-#
 # (A) NOT IN THE SHIPPED ARTIFACT, measured. The React Native build toolchain, transitive through
 #     @solana/wallet-adapter-react -> @solana-mobile/wallet-adapter-mobile. Grepping the real
 #     production build of apps/public for shell-quote, metro, image-size, react-native and
 #     bigint-buffer returns ZERO files under .next/static and .next/server. The code is not there, so
-#     the advisories cannot fire. Re-measure when the wallet adapter is upgraded.
-#
+# the advisories cannot fire. Re-measure when the wallet adapter is upgraded.
 # (B) REACHABLE, and no fix exists that does not break the product. `npm audit fix` offers
 #     @sqds/multisig 1.3.1 for the 2.1.4 we use: a MAJOR DOWNGRADE to the pre-v4 API the entire admin
 #     Squads path is built on. Taking it would remove the only working mainnet ceremony path to remove
@@ -100,18 +89,15 @@ for entry in "${BASELINE[@]}"; do
   # branch, the gate printed "improved (N -> 0). Lower the baseline in this commit." and exited 0
   # having measured nothing, while actively inviting the operator to zero out the baseline. A gate
   # whose failure mode is "everything is fine" is worse than no gate.
-  #
-  # REVIEW PASS ON 3bf3097. The guard above proved `metadata.vulnerabilities` was a dict and stopped
+  # The guard above proved `metadata.vulnerabilities` was a dict and stopped
   # there, which left two shapes that still read as "everything is fine":
-  #
   #   1. A report with every count at 0 and an EMPTY `vulnerabilities` map. Measured: the gate printed
   #      "critical improved (1 -> 0). Lower the baseline in this commit." and exited 0, i.e. it
   #      instructed the operator to destroy the only memory the gate has. An offline mirror, a proxy
   #      returning no advisory data or any soft failure produces exactly this.
   #   2. A report with NO top-level `vulnerabilities` key at all (the npm 6 shape, which uses
-  #      `advisories`). The counts still compared and passed while the entire R6-09 advisory-id
+  #      `advisories`). The counts still compared and passed while the entire advisory-id
   #      ratchet silently did nothing.
-  #
   # Both are now shape failures. A gate must be able to tell "I measured zero" from "I measured
   # nothing", and only the second one is an emergency.
   b_total=$((b_crit + b_high + b_mod + b_low))
@@ -149,7 +135,6 @@ sys.exit(0)
   # graph improved. This loop failed anyway, because it ratchets each severity independently, and it
   # printed "note: high improved" on the line above its own "FAIL: moderate went from 18 to 20".
   # It held both halves of the evidence and drew the wrong conclusion.
-  #
   # The baseline's own note has the principle right: "An advisory ID is an identity." So the ID set is
   # the authority on whether anything new arrived, and a bucket that grows with no new ID can only be a
   # reclassification of something already accepted. Reported, not failed.
@@ -172,7 +157,7 @@ sys.exit(0)
     echo "         Triage each one, then either fix it or add it with its reachability evidence."
     fail=1
   fi
-  # ROUND 6 R6-09. THE CHECK THAT ACTUALLY CATCHES A NEW VULNERABILITY. Counts and package names both
+  # THE CHECK THAT ACTUALLY CATCHES A NEW VULNERABILITY. Counts and package names both
   # stay put when a brand new advisory lands on a package that is already vulnerable and already
   # allowlisted, which is the common case for `next`, `ws`, `sharp` and `postcss`. An advisory ID is an
   # identity, so a new one is new whatever the totals do.

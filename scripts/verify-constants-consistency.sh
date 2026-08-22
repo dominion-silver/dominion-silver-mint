@@ -5,7 +5,6 @@
 # live path. Nothing else connects those copies: no compiler, no type-checker, no test.
 # Deliberately anchor-free and network-free, so it stays the hard floor when `anchor idl build` is
 # unavailable or flaky in CI. History: private/trimmed-notes/gates.md
-#
 # Usage: scripts/verify-constants-consistency.sh
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -76,7 +75,7 @@ for cluster in ("localnet", "devnet"):
         check(False, f"[programs.{cluster}] has no active dominion_silver_mint entry")
         continue
     check(got == DECLARED, f"[programs.{cluster}] == declare_id!")
-# mainnet must stay absent until the mainnet ceremony (audit DOM-014).
+# mainnet must stay absent until the mainnet ceremony ().
 active_mainnet = section_entry("mainnet")
 if active_mainnet:
     check(active_mainnet == DECLARED, "[programs.mainnet] (present) == declare_id!")
@@ -176,7 +175,6 @@ if "SILV_MINT" in a and "SILV_MINT" in p_:
 # exists, and t1-hostile-bootstrap refuses on mainnet unless the supplied keypair derives to exactly
 # it. So a truncated or typo'd value does not fail here, it fails in the one-shot window. It is also
 # the string a human copies into listing forms.
-#
 # THIS GATE IS THE ONE THE LAUNCH PATH RUNS, which is why the checks live here and not only in
 # scripts/test-t1-initialize-args.ts: the runbook calls this script, and it does not call that test.
 # Corrected after a review-of-fixes pass: the first version skipped in TOTAL SILENCE when the field was
@@ -331,12 +329,11 @@ if _suppressors:
 check(not _suppressors, "no @ts-nocheck / @ts-ignore / @ts-expect-error anywhere in scripts/")
 
 print("4c. Every state rule has a LEXICAL call in the file that must call it, outside test code")
-# ROUND 5 P2-05, and this is a WORDING fix that matters. The heading said "every state rule is
+# and this is a WORDING fix that matters. The heading said "every state rule is
 # called", and the summary line said the rules "are called where they must be". That is more than
 # this check can know. It searches the source text for `rule(` after stripping comments, strings and
 # test modules: a call inside a dead branch, a call whose result is discarded, or a helper that no
 # longer affects the handler all satisfy it.
-#
 # It is a WIRING ALARM and it is a good one: it catches a deleted call site, which is a real thing
 # that happened. It is not semantic proof. The semantic proof is the handler-level tests in
 # tools/state-harness, which drive the real bytes and observe the resulting state, plus the targeted
@@ -385,7 +382,7 @@ def _prog(rel):
 
 # THE MANIFEST. rule -> every file that must call it, relative to programs/dominion_silver_mint_v2/src/.
 _RULES = {
-    # ---- KYC (C-02 and round 3) ----
+    # ---- KYC (and round 3) ----
     "validate_kyc_scope": ["instructions/admin/kyc_admin.rs"],
     "validate_kyc_arming": ["instructions/admin/kyc_admin.rs"],
     "validate_kyc_subject": ["instructions/admin/kyc_admin.rs"],
@@ -396,7 +393,7 @@ _RULES = {
     "enforce_kyc": ["instructions/mint_silv.rs", "instructions/redeem_silv.rs"],
     # Called by validate_kyc_operator_assignment, not a handler. Declared for the completeness sweep.
     "kyc_operator_may_be_cleared": ["state/kyc.rs"],
-    # ---- fee exemptions (C-01 and the whitelist) ----
+    # ---- fee exemptions (and the whitelist) ----
     "validate_fee_exempt_expiry": ["instructions/admin/fee_whitelist.rs"],
     "validate_fee_exempt_flags": ["instructions/admin/fee_whitelist.rs"],
     "effective_premium_bps": ["instructions/mint_silv.rs", "instructions/redeem_silv.rs"],
@@ -411,11 +408,10 @@ _RULES = {
     "active_not_pending": ["state/guardian.rs"],
     "roll_window": ["instructions/redeem_silv.rs"],
     # ---- go-live readiness ----
-    # ROUND 8 FINAL-03. The fingerprint of the config fields the go-live decision read when the
+    # -03. The fingerprint of the config fields the go-live decision read when the
     # unpause was BUILT. Registered 2026-08-10: the rule shipped in the readiness-digest batch
     # without a manifest entry, so the completeness sweep failed the deploy gate. It caught it,
     # which is its job.
-    #
     # WHAT THIS ENTRY ACTUALLY BUYS, stated honestly after a review pass measured it by mutation.
     # It is a WIRING alarm for one file, nothing more. Mutants that still PASS: deleting the
     # `require!` while keeping the call, making the comparison vacuous, short-circuiting it with
@@ -480,7 +476,7 @@ for _u in sorted(set(_uncovered)):
     print(f"   FAIL: {_u} is declared in state/ and absent from the 4c manifest, so nothing checks it runs")
 check(
     not _absent and not _missing and not _uncovered,
-    # ROUND 5 P2-05: "lexical call present", not "called". The difference is the whole finding.
+    # "lexical call present", not "called". The difference is the whole finding.
     f"all {len(_RULES)} state rules have a lexical call at each required site "
     f"({sum(len(v) for v in _RULES.values())} sites). Wiring alarm, NOT semantic proof: "
     f"the handler-level proof is tools/state-harness",

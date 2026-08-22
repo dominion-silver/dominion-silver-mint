@@ -1,23 +1,18 @@
 /**
  * Assert that the DEPLOYED frontends read MAINNET, by comparing them against the chain.
- *
  * WHY IT EXISTS. On 2026-08-13 both frontends displayed devnet figures on production, and nothing
  * anywhere said so. The public app showed "Max instant now: $0.2" and the admin console showed
  * `TREASURY USDC $20.00`, `SILV SUPPLY 8,000.3463 oz`, `MAX 100,000 oz`, `MINT PREMIUM 1.50%`. Every
  * one of those is a real number, correctly rendered, read from the devnet deployment: the program id
  * is the SAME on both clusters, so a wrong RPC produces a page that looks healthy and lies.
- *
  * Two independent causes, both configuration and neither visible in a diff:
  *   public project  NEXT_PUBLIC_HELIUS_RPC absent            -> APP_RPC falls back to DEVNET_RPC
  *   admin project   NEXT_PUBLIC_HELIUS_RPC = devnet.helius…  -> devnet, explicitly
  * `NEXT_PUBLIC_*` is inlined at BUILD time, so fixing the variable changes nothing until a rebuild.
- *
  * So the check that matters is not "does the page render" but "does the deployed bundle resolve to the
  * same cluster and the same accounts the chain has". This reads BOTH and compares. It sends nothing.
- *
  * It is deliberately mechanical: the expectations live in code, not in an operator's judgement, so a
  * deploy that is still wrong cannot be waved through by someone reading a screenshot at 14:55.
- *
  * Run: DOMINION_RPC=<mainnet> npx tsx scripts/verify-post-deploy.ts
  */
 import { Connection, PublicKey, Keypair } from "@solana/web3.js";
@@ -136,9 +131,7 @@ async function main(): Promise<void> {
     // NOT a check on `?cluster=devnet`, and the first version of this file had one. It failed on a
     // CORRECT mainnet deploy, because the string survives minification as the UNUSED branch of a
     // runtime ternary:
-    //
     //     f = "devnet" === x ? "?cluster=devnet" : ""
-    //
     // `x` is the resolved cluster and it is "mainnet-beta", so the suffix evaluates to "". Grepping a
     // bundle for a string proves the string is present, never that the branch containing it is taken.
     // The resolved cluster is a RUNTIME value and /api/health above is what reads it, so that is where

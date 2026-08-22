@@ -1,12 +1,10 @@
 /**
  * Pins scripts/_redeem-window.ts against the behaviour of state/redeem_window.rs.
- *
  * The port exists so the monitor measures the budget the way the PROGRAM measures it. That is only
  * true while the two agree, and nothing but this file makes them agree. The cases below are the ones
  * the Rust's own test module covers, plus the property that actually matters operationally: the
  * sliding counter admits close to 2x the budget across one boundary, which is the real bound on a
  * drain and the number an on-call rota has to be sized against.
- *
  *   npx tsx scripts/test-redeem-window.ts
  */
 import { adversarialBound, rollWindow } from "./_redeem-window";
