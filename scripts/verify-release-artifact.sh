@@ -148,7 +148,7 @@ fi
 # (a) ANCESTRY, not containment. The anchor must be reachable FROM HEAD. A clone that merely owns the
 #     object fails this; only a checkout whose history actually passes through it succeeds. This is
 # the single line that kills orphan reproduction.
-ANCHOR_COMMIT="1314be417bfbdcea861bb75047964e722a8eada9"
+ANCHOR_COMMIT="82386962fac6b7a4a9b679b630f1ce4eedec1759"
 if ! (cd -P "$ROOT" && git merge-base --is-ancestor "$ANCHOR_COMMIT" HEAD 2>/dev/null); then
   echo ""
   echo "REFUSING TO RUN: $ANCHOR_COMMIT is not an ancestor of HEAD in the tree at $ROOT."
