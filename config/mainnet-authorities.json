@@ -92,7 +92,15 @@
     "foreign_upgradeable_program": "pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt"
   },
   "release_artifact": {
-    "status": "pinned",
+    "status": "no-candidate",
+    "toolchain": "solana-cli/SBF 3.0.0, platform-tools v1.51, SBF rustc 1.84.1, anchor-cli 0.31.1",
+    "_status_note": [
+      "status is no-candidate because the comment-only cleanup touched files in the verifier's",
+      "BUILD_INPUTS list, so this tree no longer matches the commit the fields below name. The compiled",
+      "program is unchanged (no non-comment line differs in any program file), so a reproducible-build run",
+      "on this tree is expected to reproduce the same bytes; that run is what will restore status=pinned.",
+      "The fields below describe the LAST pin and are not read while status is no-candidate."
+    ],
     "sha256": "241e1ed558186e2056486003608c3464173e88126991dd80241686d2c60321da",
     "normalized_sha256": "073b2e3846d5df790a2f91da15a6edaf09ea0eda575a133b80bffd6ccfdd256a",
     "bytes": 1237704,
@@ -101,7 +109,6 @@
     "ci_repository": "dominion-silver/dominion-silver-mint",
     "program_id": "3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ",
     "idl_sha256": "f24cbabc180931359b64019e4c112fcd535dedf25c8aa038c6bc0decf46178d5",
-    "solana_verify_version": "0.5.1",
-    "toolchain": "solana-cli/SBF 3.0.0, platform-tools v1.51, SBF rustc 1.84.1, anchor-cli 0.31.1"
+    "solana_verify_version": "0.5.1"
   }
 }
