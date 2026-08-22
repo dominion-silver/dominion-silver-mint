@@ -1,21 +1,17 @@
-// ROUND 7, then ROUND 8 T8-03. The pre-mint DESTINATION, and the redirect both auditors refused to
+// The pre-mint DESTINATION, and why the redirect is not available:
 // let ship.
-//
-// THE ATTACK, in the words of the Codex report: the admin can `set_inventory_wallet(attacker)` and
+// THE ATTACK, in the words of the report: the admin can `set_inventory_wallet(attacker)` and
 // then `admin_premint(remaining cap headroom)` in the same block. The hard cap bounds how much can be
 // taken; it provides no window in which anyone could see it coming and no way to stop it.
-//
-// ROUND 7's fix kept the FIRST binding instant, on the argument that with the field unset
-// `admin_premint` refuses outright and there is nothing to redirect. Codex refuted that in round 8:
+// 's fix kept the FIRST binding instant, on the argument that with the field unset
+// `admin_premint` refuses outright and there is nothing to redirect. refuted that in :
 // compromise the Ops key DURING the ceremony, before the legitimate binding, and the attacker binds
 // their own wallet with no delay and no veto. "Nothing to steal" confused supply already minted with
 // issuance power still available.
-//
 // OPTION A, what this file now pins. `inventory_wallet` is an argument of `initialize`, bound
 // atomically with everything else and validated non-default. `set_inventory_wallet` is DELETED, not
 // restricted: the instruction, its Accounts struct and its lib.rs entry are gone. The only writer
 // left is `execute_set_inventory_wallet`, behind the 24h timelock and guardian-cancellable.
-//
 // WHAT THIS FILE DOES NOT CLOSE, and D11 is the answer to it: tokens already held by the LEGITIMATE
 // destination. With redemptions open at launch, whoever holds that key redeems them into treasury
 // USDC with no admin instruction and no timelock. That is custody, not program logic.
@@ -69,8 +65,7 @@ fn execute_inventory_as(f: &mut Fixture, signer: &Keypair, nonce: u64, rent: Pub
 /// redirect while paused ON PURPOSE: it would otherwise take effect the instant somebody unpauses,
 /// which is exactly when nobody is watching this field. Tests that reach an execute therefore need a
 /// live protocol, and the ones that do not deliberately keep the paused fixture.
-///
-/// ROUND 8: going live is no longer one admin signature. `unpause` demands an active guardian
+/// going live is no longer one admin signature. `unpause` demands an active guardian
 /// distinct from the admin, and the common helper installs one.
 fn live() -> Fixture {
     let mut f = Fixture::new_bare();
@@ -83,7 +78,6 @@ fn inventory(f: &Fixture) -> Pubkey {
 }
 
 // ---------------------------------------------------------------- the timelocked change
-//
 // There is no "first binding" section any more. `initialize` performs the first and only instant
 // binding, and initialize.rs owns the proof of both halves: the readback of the requested key, and
 // the refusal of the default pubkey. Everything below starts from a wallet the fixture already
@@ -106,7 +100,7 @@ fn a_change_takes_a_proposal_the_full_delay_and_an_execute() {
         Some(nonce),
         "the config did not record the pending proposal"
     );
-    // Proposing does NOT move the wallet. This is the observation window the auditors asked for.
+    // Proposing does NOT move the wallet. This is the observation window.
     assert_eq!(inventory(&f), first, "proposing moved the wallet immediately");
 
     // One second short of the delay is still refused. The boundary is the property, not the ballpark.
@@ -270,11 +264,10 @@ fn premint_ix(f: &Fixture, destination_ata: Pubkey, amount: u64) -> Instruction 
 
 #[test]
 fn the_redirect_then_premint_pair_cannot_happen_in_one_block() {
-    // THE Codex scenario, assembled for real rather than argued about: one transaction carrying the
+    // THE scenario, assembled for real rather than argued about: one transaction carrying the
     // historical redirect discriminator followed by `admin_premint` of the cap headroom into the
     // attacker's ATA. Under option A the first instruction has no handler, so the transaction fails
     // atomically and the second one never runs.
-    //
     // The premint half is a REAL instruction with real accounts, and the test proves it separately:
     // the same premint into the LEGITIMATE destination succeeds. Without that control the test would
     // pass just as happily if `admin_premint` were broken for every destination.
@@ -373,15 +366,13 @@ fn a_change_cannot_be_executed_through_the_wrong_action_slot() {
     let _ = E_NONCE_MISMATCH;
 }
 
-// ================================================================ OPTION A (T8-03)
-//
+// ================================================================ OPTION A ()
 // RED PHASE FIRST. These scenarios are written against `1314be4`, WITHOUT the production fix, and
-// they must fail on their RESULT rather than on a missing symbol. Codex's common proof rule is
+// they must fail on their RESULT rather than on a missing symbol. common proof rule is
 // explicit: "une erreur de compilation causee seulement par un import de symbole qui n existe pas
 // n est pas suffisante". So neither test names a field or an instruction that does not exist yet.
-//
 // Both build raw instruction data and send it to the REAL `.so` through LiteSVM, then read
-// `ConfigAccount` back. That is the only way to prove what the dispatcher does, and Codex says so:
+// `ConfigAccount` back. That is the only way to prove what the dispatcher does, and says so:
 // "un simple `rg` n est pas la preuve rouge principale".
 
 /// Anchor's 8-byte discriminator for a global instruction, `sha256("global:<name>")[..8]`. Written

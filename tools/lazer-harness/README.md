@@ -1,6 +1,6 @@
 # Lazer oracle behavioral harness
 
-Closes the "no runtime CPI test" gap (Fable/Codex). This is the only test that
+This is the only test that
 exercises the dominion Lazer oracle read path END TO END against a real (mock)
 callee program: `dominion probe_oracle_price` -> `verify_and_get_payload`
 (fund the fee-payer PDA, `invoke_signed` the Lazer `verify_message`, read +

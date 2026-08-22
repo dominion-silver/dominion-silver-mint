@@ -2,11 +2,9 @@
 # Hermetic runner for the Lazer behavioral harness. Builds BOTH SBF artifacts with
 # the correct features into target/harness, asserts the probe IS present there, runs
 # the litesvm suite, then asserts target/deploy is still probe-free.
-#
 # It does NOT rebuild target/deploy: since the harness stopped writing there, there
 # is nothing to restore. (An earlier version of this header still claimed it did.)
-#
-# AUDIT review of daac4ac (P1, found independently by two reviewers): both probe
+# both probe
 # assertions used `strings f | grep -q TOKEN` under `set -euo pipefail`. grep -q exits
 # on first match, strings then dies of SIGPIPE, and pipefail reports 141 for the whole
 # pipeline. Read as a boolean that is "no match", which made the step-4 assertion fail
@@ -52,7 +50,7 @@ scan_for() {
 cd "$(dirname "$0")/../.."
 
 echo "[1/4] build dominion (--features test-harness) + mock-lazer -> SBF"
-# AUDIT root-cause fix: build the harness artifact into its OWN directory so
+# build the harness artifact into its OWN directory so
 # target/deploy (the path `solana program deploy` reads) is never touched.
 cargo build-sbf --manifest-path programs/dominion_silver_mint_v2/Cargo.toml --sbf-out-dir target/harness --features test-harness
 cargo build-sbf --manifest-path tools/mock-lazer/Cargo.toml --sbf-out-dir target/harness
@@ -63,7 +61,7 @@ if ! scan_for target/harness/dominion_silver_mint.so ProbeOraclePrice; then
 fi
 
 echo "[2/4] run litesvm harness (rustc 1.89; litesvm needs >= 1.86)"
-# ROUND 4 P2-04. Le runner state avait ce defaut et il a ete corrige; celui-ci le gardait. Un `cargo test`
+# Le runner state avait ce defaut et il a ete corrige; celui-ci le gardait. Un `cargo test`
 # dont le filtre ne matche rien sort 0, et ce script imprimait alors son message OK sur une execution de
 # ZERO test. Le compte est lu et asserte, avec le total attendu epingle: un test perdu est aussi grave
 # qu un test rouge, et il est plus silencieux.

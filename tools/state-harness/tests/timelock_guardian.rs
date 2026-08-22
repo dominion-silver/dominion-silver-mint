@@ -217,14 +217,14 @@ fn pause_as(f: &mut Fixture, signer: &Keypair, guardian_slot: Option<Pubkey>) ->
     f.send(&[ix], &[signer])
 }
 
-/// ROUND 8: `unpause` takes a mandatory guardian slot. This file already fills all three guardian
+/// `unpause` takes a mandatory guardian slot. This file already fills all three guardian
 /// slots before it unpauses, so it presents one of ITS OWN guardians rather than asking the common
 /// helper to appoint a fourth, which `max_guardian_count = 3` would refuse.
 fn unpause_as(f: &mut Fixture, signer: &Keypair, guardian_slot: Pubkey) -> TxOutcome {
     f.unpause_with(signer, guardian_slot)
 }
 
-/// ROUND 8 L1-02: the appointee CO-SIGNS. `add_guardian` was admin-only, which let a compromised Ops
+/// the appointee CO-SIGNS. `add_guardian` was admin-only, which let a compromised Ops
 /// mint its own guardians and satisfy the independence check `unpause` performs with keys it held.
 /// `signer_override` presents a DIFFERENT key in the guardian_signer slot, for the negative case.
 fn add_guardian_signed_by(
@@ -342,8 +342,7 @@ fn funded(f: &mut Fixture) -> Keypair {
 
 /// Three appointed guardians, the maximum this config allows.
 /// Three ACTIVE guardians, which is `max_guardian_count`.
-///
-/// ROUND 8 L1-02: `initialize` already appointed one, so only two are added here and the fixture's
+/// `initialize` already appointed one, so only two are added here and the fixture's
 /// own key is returned as the first. Adding three would breach the budget, and pretending otherwise
 /// would test a state a real deployment can never be in.
 fn with_three_guardians(f: &mut Fixture) -> (Keypair, Keypair, Keypair) {

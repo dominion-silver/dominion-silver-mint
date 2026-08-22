@@ -205,9 +205,9 @@ fn pause(f: &mut Fixture) -> TxOutcome {
     f.send(&[ix], &[&admin])
 }
 
-/// ROUND 8: routed through the common helper, which installs the independent guardian that
+/// routed through the common helper, which installs the independent guardian that
 /// `unpause` now demands.
-/// ROUND 8 A-03. Cancel a queued action as the admin, so a test can reach the state the new
+/// Cancel a queued action as the admin, so a test can reach the state the new
 /// `unpause` requires: no armed slot. The instruction is `cancel_timelocked_action(nonce)`.
 fn cancel_as_admin(f: &mut Fixture, nonce: u64) -> TxOutcome {
     let admin = f.admin.insecure_clone();
@@ -253,13 +253,11 @@ fn live() -> Fixture {
 }
 
 /// `live()`, then both switches CLOSED through their instant setters.
-///
-/// ROUND 8 flipped the launch posture: `initialize` now ships `redemptions_enabled` and
+/// flipped the launch posture: `initialize` now ships `redemptions_enabled` and
 /// `public_mint_enabled` open, so a proposal to open them is a ProposalNoOp and the timelocked OPEN
 /// path becomes untestable from the launch state. The property under test never changed. Only the
 /// starting point did, so these tests close first and then prove the open still costs 24 hours, is
 /// still admin-only, still refuses to land while paused, and is still cancellable.
-///
 /// Closing is itself the permitted direction of both setters, and this helper asserts both landed:
 /// if a close silently no-opped, every test built on it would be starting from an OPEN state and
 /// proving nothing.
@@ -837,7 +835,7 @@ fn execute_set_public_mint_refuses_to_land_while_paused() {
     assert!(f.config().public_mint_enabled, "the execute applied nothing");
 }
 
-// ====================================================== round 5 P1-04: the mint availability floor
+// ====================================================== the minimum-operation floor: the mint availability floor
 
 /// `set_min_operation_usdc`, the instant setter. Same `SetParam` shape as the two switches above.
 fn set_min_operation(f: &mut Fixture, new_min: u64) -> TxOutcome {
@@ -855,7 +853,7 @@ fn set_min_operation(f: &mut Fixture, new_min: u64) -> TxOutcome {
 
 #[test]
 fn the_dust_mint_that_captured_a_lazer_print_is_now_refused() {
-    // THE FINDING (round 5 P1-04), driven against the real bytes. 60 micro-USDC was the smallest
+    // THE PROPERTY, driven against the real bytes. 60 micro-USDC was the smallest
     // amount that minted a non-zero SILV at $58.34/oz, so it was the whole cost of taking the single
     // global high-water slot D2 created. The floor must stop it.
     let mut f = live();
@@ -875,7 +873,6 @@ fn the_mint_floor_is_checked_before_the_oracle_read_so_a_refused_call_pays_no_ve
     // ORDERING. The fixture's Lazer program account is deliberately NOT executable, so any call that
     // reaches step 4 dies with LazerProgramNotExecutable. A dust call must die BEFORE that with
     // OperationBelowMinimum, and a call at the floor must reach it.
-    //
     // What this proves is a COMPUTE and FEE property, not a safety one: a reverted transaction rolls
     // back the Lazer fee and the high-water write wherever the check sits. It is still worth pinning,
     // because moving the check below the CPI would make every refused dust call pay a verify fee, and

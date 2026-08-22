@@ -17,7 +17,7 @@ mod harness {
     use std::io::Write;
     use std::str::FromStr;
 
-    // AUDIT: the dominion program id used to be a hardcoded string here, and it
+    // the dominion program id used to be a hardcoded string here, and it
     // silently drifted on every fresh deploy (2ujQg -> AX7se -> gc5TW). Each drift
     // turned all 6 tests into Anchor Custom(4100) DeclaredProgramIdMismatch, which
     // reads as "the oracle path is broken" rather than "the harness is stale".
@@ -58,7 +58,7 @@ mod harness {
     const E_FEE_TOO_HIGH: &str = "12074";
     const E_TOO_FEW_PUBLISHERS: &str = "12081";
     const E_CARRIED_FORWARD: &str = "12082";
-    // ROUND 5. Split out of E_CARRIED_FORWARD: a replayed envelope and a feed that republished a
+    // Split out of E_CARRIED_FORWARD: a replayed envelope and a feed that republished a
     // stale print are different events with different fixes, and D2 made the first one the common
     // case. See the note on map_policy_err in src/oracle.rs.
     const E_LAZER_REPLAYED: &str = "12121";
@@ -74,7 +74,7 @@ mod harness {
     }
 
     fn so_bytes(name: &str) -> Vec<u8> {
-        // AUDIT root-cause fix (2026-07-25): this used to read target/deploy, the
+        // this used to read target/deploy, the
         // same path `solana program deploy` reads, and the harness needs a
         // `--features test-harness` build, so running it left a probe-contaminated
         // binary sitting at the deploy path. It now reads target/harness, which
@@ -107,7 +107,7 @@ mod harness {
         b.extend_from_slice(&[0u8; 32]); // upgrade_authority_info
         // Compliance
         b.extend_from_slice(&[0u8; 32]); // permanent_delegate_expected
-        // AUDIT: freeze_authority_expected was MISSING here, which shifted every
+        // freeze_authority_expected was MISSING here, which shifted every
         // subsequent field by 32 bytes and made the whole account mis-decode.
         b.extend_from_slice(&[0u8; 32]); // freeze_authority_expected
         b.push(0); // compliance_mode
@@ -154,7 +154,7 @@ mod harness {
         for _ in 0..9 {
             b.push(0); // 9 Option<u64> nonces = None
         }
-        // AUDIT: every launch-spec 2026-07 field below was MISSING, leaving the
+        // every launch-spec 2026-07 field below was MISSING, leaving the
         // buffer 149 bytes short of the layout the program deserializes. Keep this
         // block in the same order as ConfigAccount in state/config.rs.
         b.write_i64::<LittleEndian>(0).unwrap(); // pending_admin_eta
@@ -171,7 +171,7 @@ mod harness {
         b.push(0); // pending_por_feed_nonce: Option<u64> = None
         b.push(0); // mint_paused
         b.push(0); // redeem_paused
-        // ROUND 5, review pass. THIS TAIL WAS WRONG, and had been since `pending_removal_count` was
+        // THIS TAIL WAS WRONG, and had been since `pending_removal_count` was
         // added. It wrote `version` where the program reads `pending_removal_count`, then 64 bytes of
         // "reserved" in place of the real 55-byte tail, so every field after `redeem_paused` was
         // shifted by one byte and eight bytes too long. It never surfaced because Anchor ignores
@@ -186,7 +186,7 @@ mod harness {
         b.write_u64::<LittleEndian>(0).unwrap(); // instant_used_prev_usdc
         b.push(0); // fee_routing_disabled
         b.write_u32::<LittleEndian>(0).unwrap(); // kyc_attestation_count
-        b.write_u64::<LittleEndian>(0).unwrap(); // min_operation_usdc (round 5 P1-04)
+        b.write_u64::<LittleEndian>(0).unwrap(); // min_operation_usdc
         b.extend_from_slice(&[0u8; 32]); // reserved
 
         // Drift guard, with the arithmetic corrected. ConfigAccount::SIZE is 800, but that is the
@@ -194,7 +194,6 @@ mod harness {
         // while a `None` serializes to a single byte. There are FOURTEEN Option<u64> fields, not the
         // thirteen the old comment counted, so the serialized length with every Option = None is
         // 800 - 14*8 - 32 = 656.
-        //
         // WHAT THIS ASSERT DOES AND DOES NOT DO, stated because the old comment overclaimed: it
         // measures THIS FUNCTION'S OUTPUT against a number a human derived. It never consults the
         // program, so it does not "fail loudly if the program layout changes" the way the old comment
@@ -372,18 +371,16 @@ mod harness {
 
     #[test]
     fn an_envelope_at_or_below_the_stored_mark_is_refused_by_the_policy() {
-        // RENAMED in round 5, because the old name was `the_same_envelope_cannot_be_consumed_twice`
+        // RENAMED in because the old name was `the_same_envelope_cannot_be_consumed_twice`
         // and that is NOT what this test does. It pre-writes the high-water mark into a crafted
         // config and calls the probe ONCE. `probe_oracle_price` is read-only by construction, so this
         // exercises the COMPARISON in lazer_price.rs and never the WRITE. The two writes live in
         // mint_silv.rs and redeem_silv.rs, and deleting either left this test green while the
-        // matching path was replayable: round 5 P1-03.
-        //
+        // matching path was replayable: the minimum-operation floor.
         // The persistence half now lives in tools/state-harness/tests/oracle_replay.rs, which drives
         // real mints and redeems through the mock Lazer and reads the field back off the chain. Both
         // writes were mutation-verified against it. This test keeps its narrower, honest job.
-        //
-        // ROUND 4 P0-01 is what made the comparison strict: `fut <` became `fut <=`, so one signed
+        // is what made the comparison strict: `fut <` became `fut <=`, so one signed
         // envelope prices exactly ONE operation.
         let ts = NOW_US;
 

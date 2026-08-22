@@ -165,14 +165,14 @@ fn cancel_transfer_as(f: &mut Fixture, signer: &Keypair, guardian_slot: Option<P
     f.send(&[ix], &[signer])
 }
 
-/// ROUND 8: routed through the common helper, which installs the independent guardian `unpause` now
+/// routed through the common helper, which installs the independent guardian `unpause` now
 /// demands. Callers in this file MUST install it while the ORIGINAL admin still holds the office:
 /// `add_guardian` is `has_one = admin`, so an appointment attempted after a handover is refused.
 fn unpause_as(f: &mut Fixture, signer: &Keypair) -> TxOutcome {
     f.unpause_as(signer)
 }
 
-/// ROUND 8 L1-02: the appointee co-signs, so this takes the Keypair rather than the Pubkey.
+/// the appointee co-signs, so this takes the Keypair rather than the Pubkey.
 fn add_guardian(f: &mut Fixture, g: &Keypair) -> TxOutcome {
     let admin = f.admin.insecure_clone();
     let ix = Instruction {
@@ -353,7 +353,7 @@ fn the_transfer_lifecycle_refuses_an_early_accept_then_moves_the_admin_on_chain(
     let mut f = Fixture::new();
     let incoming = funded(&mut f);
     let old_admin = f.admin.insecure_clone();
-    // ROUND 8: the unpause guardian is appointed HERE, before the handover, because `add_guardian` is
+    // the unpause guardian is appointed HERE, before the handover, because `add_guardian` is
     // admin-only and the old admin is about to lose that office. The unpause assertions at the end of
     // this test are about who may CALL unpause, not about who may appoint.
     f.ensure_unpause_guardian();
@@ -523,9 +523,9 @@ fn cancel_admin_transfer_is_admin_or_guardian_only() {
 
 // ------------------------------------------------- the sweeper that could not sweep
 
-// REVIEW PASS ON 3bf3097. Two tests lived here, for `close_timelock_account`. Both had to FABRICATE
+// Two tests lived here, for `close_timelock_account`. Both had to FABRICATE
 // their subject with `clone_timelock(.., |tl| tl.cancelled = true)`, under the comment "Cancel closes
-// the account, so that state is placed directly". That comment was the finding, written down and not
+// the account, so that state is placed directly". That comment was written down and not
 // read: the instruction required `cancelled || executed_at.is_some()`, and every writer of either
 // field closes the account in the same transaction, so no live account could ever satisfy it. The
 // instruction is deleted. What replaces the two tests is the invariant that makes it unnecessary,
@@ -602,7 +602,7 @@ fn finalize_removal_refuses_a_desynced_pending_counter() {
         "finalize against a pending_removal_count that is already zero",
     );
     let c = f.config();
-    // 3, not 2: `initialize` appointed the fixture's own guardian before these two (ROUND 8 L1-02).
+    // 3, not 2: `initialize` appointed the fixture's own guardian before these two ().
     assert_eq!(c.guardian_count, 3, "the aborted finalize shrank the set anyway");
     assert_eq!(c.pending_removal_count, 0);
 

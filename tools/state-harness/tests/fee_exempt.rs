@@ -208,7 +208,7 @@ fn withdraw(f: &mut Fixture, signer: &Keypair, amount: u64, s: &Sweep) -> TxOutc
     f.send(&[ix], &[signer])
 }
 
-/// ROUND 8: routed through the common helper, which installs the independent guardian that
+/// routed through the common helper, which installs the independent guardian that
 /// `unpause` now demands.
 fn unpause(f: &mut Fixture) {
     expect_ok(f.unpause(), "unpause");
@@ -366,7 +366,7 @@ fn a_zero_or_out_of_range_expiry_is_refused_at_write_time() {
     let admin = f.admin.insecure_clone();
     let wallet = f.holder.pubkey();
 
-    // Audit C-01 made the term mandatory. Zero is the case that matters: the READER counts it as
+    // The term is mandatory. Zero is the case that matters: the READER counts it as
     // already expired, so a stored zero is a rent-paying row that exempts nobody. The last case is
     // the realistic fat finger, a 13-digit millisecond timestamp pasted where seconds go.
     let bad = [

@@ -105,14 +105,14 @@ impl Guards {
 
 // ---------------------------------------------------------------- generic helpers
 
-/// ROUND 8: `unpause` demands an active guardian distinct from the admin, so the seven copies of
+/// `unpause` demands an active guardian distinct from the admin, so the seven copies of
 /// this helper now all route through the one in common, which installs that guardian on demand.
 fn unpause(f: &mut Fixture) {
     expect_ok(f.unpause(), "unpause");
     assert!(!f.config().paused, "unpause did not clear config.paused");
 }
 
-/// ROUND 8 A-03. Admin-signed cancel, so a test can reach the "nothing armed" state `unpause` now
+/// Admin-signed cancel, so a test can reach the "nothing armed" state `unpause` now
 /// requires. The guardian slot is optional and Anchor 0.31 expects the PROGRAM ID in its position.
 fn cancel_withdraw_as_admin(f: &mut Fixture, nonce: u64) -> TxOutcome {
     let admin = f.admin.insecure_clone();

@@ -1,16 +1,13 @@
-// ROUND 8. THE OPEN LAUNCH POSTURE, qualified end to end.
-//
+// THE OPEN LAUNCH POSTURE, qualified end to end.
 // The owner inverted the launch posture on 2026-08-09: `initialize` now writes
 // `public_mint_enabled = true` and `redemptions_enabled = true`, so no base setting costs a 24h wait
 // during the ceremony. Nothing about that is safe on its own. What holds the launch is THE PAUSE,
 // and the pause is only a real gate if leaving it requires something the admin cannot produce alone.
-//
-// This file is the qualification Codex asked for, and it exists because the previous lot changed the
+// This file is the qualification asked for, and it exists because the previous lot changed the
 // posture and shipped no test of the posture. Every scenario below drives the REAL `.so` through
 // LiteSVM and reads the account back; the budget cases go through the whole `redeem_silv` path with
-// fresh Lazer prints rather than calling `roll_window` as a pure function, because the finding is
+// fresh Lazer prints rather than calling `roll_window` as a pure function, because the property is
 // about what a holder can actually take out, not about the arithmetic in isolation.
-//
 // Run: bash tools/state-harness/run.sh launch_open_
 
 mod common;
@@ -30,7 +27,7 @@ const E_TIMELOCK_NOT_ELAPSED: u32 = 12028;
 /// `RedeemLimitExceeded`. MEASURED against the real program, not guessed: the first version of
 /// this file used DailyCapExceeded (12016), which is a different limit on a different path.
 const E_INSTANT_BUDGET_EXCEEDED: u32 = 12103;
-/// ROUND 8 L1-02, appended at the very end of the enum.
+/// appended at the very end of the enum.
 const E_NO_ACTIVE_GUARDIAN: u32 = 12124;
 const E_GUARDIAN_NOT_INDEPENDENT: u32 = 12125;
 
@@ -214,9 +211,9 @@ fn launch_open_initialize_binds_inventory_and_starts_paused_with_both_switches_o
         "the pre-mint destination is unset"
     );
     assert!(c.paused, "a fresh deploy must be PAUSED");
-    assert!(c.public_mint_enabled, "round 8: mint ships OPEN");
-    assert!(c.redemptions_enabled, "round 8: redeem ships OPEN");
-    // ROUND 8 L1-02: the brake exists from block zero, and it is not the admin.
+    assert!(c.public_mint_enabled, "mint ships OPEN");
+    assert!(c.redemptions_enabled, "redeem ships OPEN");
+    // the brake exists from block zero, and it is not the admin.
     assert_eq!(c.guardian_count, 1, "initialize must appoint the first guardian");
     assert_ne!(
         f.guardian.pubkey(),
@@ -300,8 +297,7 @@ fn launch_open_unpause_demands_an_active_guardian_distinct_from_the_admin() {
     let admin = f.admin.insecure_clone();
 
     // --- rejects guardian_count = 0.
-    //
-    // ROUND 8 L1-02 made this state UNREACHABLE in operation: `initialize` appoints the first
+    // made this state UNREACHABLE in operation: `initialize` appoints the first
     // guardian, so the count is 1 from block zero. It is reached here by writing the config directly,
     // the same way this suite reaches a desynced counter, and the test says so rather than implying
     // the sequence exists. The guard stays worth testing because the count CAN return to zero if a
@@ -323,7 +319,6 @@ fn launch_open_unpause_demands_an_active_guardian_distinct_from_the_admin() {
     assert!(f.config().paused, "a refused unpause resumed the protocol");
 
     // --- rejects a guardian that IS the current admin.
-    //
     // Reached the way a real deployment would reach it: the admin office MOVES onto a key that
     // already holds a guardian seat. `add_guardian` refuses to appoint the admin, so this is the only
     // route, and it is exactly why the check reads the LIVE admin instead of trusting appointment
@@ -465,17 +460,14 @@ fn launch_open_direct_setters_cannot_reopen_and_the_timelocked_reopen_is_cancell
     assert!(f.config().redemptions_enabled, "the matured reopen applied nothing");
 }
 
-// ================================================================ the P1 custody finding
+// ================================================================ the inventory custody behaviour
 
 #[test]
 fn launch_open_the_inventory_signer_can_redeem_preminted_silv_with_no_admin_instruction() {
-    // THE CONDITIONAL P1, demonstrated rather than argued. Option A closed the redirection of the
-    // BINDING; it does nothing about the tokens already held by the legitimate destination. With
-    // redemptions open from initialize, whoever holds that single-signer key converts pre-minted SILV
-    // into treasury USDC with no admin instruction, no proposal and no timelock.
-    //
-    // This test exists to keep that true statement true in the repository: if a future change makes
-    // it fail, the custody finding has moved and the risk note must move with it.
+    // Binding the pre-mint destination constrains WHERE tokens go, not what the holder may do with
+    // them afterwards. With redemptions open, the holder of the inventory wallet can redeem its own
+    // balance through the ordinary user path, which needs no admin instruction and no timelock. This
+    // test pins that behaviour so a change to it is visible.
     let mut f = live_priced(2_000_000_000);
     let inventory = f.inventory.insecure_clone();
     f.prepare_mint_accounts(&inventory);
@@ -507,8 +499,8 @@ fn launch_open_the_inventory_signer_can_redeem_preminted_silv_with_no_admin_inst
     );
     assert!(
         f.token_balance(&f.usdc_mint.clone(), &inventory.pubkey(), CLASSIC_TOKEN_PROGRAM) > usdc_before,
-        "the inventory holder could not convert pre-minted SILV into treasury USDC, so the P1 \
-         custody finding has changed shape and its risk note is now stale"
+        "the inventory holder could no longer redeem its own pre-mint through the user path, so this \
+         behaviour has changed"
     );
 }
 
@@ -516,7 +508,7 @@ fn launch_open_the_inventory_signer_can_redeem_preminted_silv_with_no_admin_inst
 
 #[test]
 fn launch_open_the_integrated_redeem_path_refuses_the_first_unit_over_the_budget() {
-    // Through the REAL redeem_silv with fresh prints, not `roll_window` in isolation: the finding is
+    // Through the REAL redeem_silv with fresh prints, not `roll_window` in isolation: the property is
     // about what a holder can take out, and only the integrated path can answer that.
     let mut f = live_priced(5_000_000_000);
     let holder = f.holder.insecure_clone();
@@ -547,7 +539,7 @@ fn launch_open_the_integrated_redeem_path_refuses_the_first_unit_over_the_budget
 
 #[test]
 fn launch_open_adversarial_alignment_approaches_two_budgets_in_one_trailing_window() {
-    // THE REAL BOUND, and the reason the risk note says ~40k USDC and not 20k. The window is a
+    // THE REAL BOUND, and the reason the bound is close to twice the budget. The window is a
     // BUCKET, not a sliding sum: spending the whole budget at the end of one bucket and the whole
     // budget at the start of the next puts nearly 2x through a trailing slice one window long.
     let mut f = live_priced(20_000_000_000);
@@ -577,7 +569,7 @@ fn launch_open_adversarial_alignment_approaches_two_budgets_in_one_trailing_wind
     // Drain near the END of that bucket...
     f.warp(w - 10);
     expect_ok(redeem_fresh(&mut f, &holder, at_budget), "drain at the end of the bucket");
-    // ...and again `window - 1` later, which rolls exactly one bucket and leaves the previous one
+    // and again `window - 1` later, which rolls exactly one bucket and leaves the previous one
     // weighted at ~10/window, i.e. nothing.
     f.warp(w - 1);
     expect_ok(
@@ -587,10 +579,10 @@ fn launch_open_adversarial_alignment_approaches_two_budgets_in_one_trailing_wind
     let out = f.token_balance(&f.usdc_mint.clone(), &holder.pubkey(), CLASSIC_TOKEN_PROGRAM) - usdc_before;
 
     // Strictly more than one budget inside a trailing window of one window's length. The exact figure
-    // depends on the premium, so the assertion is the RATIO, which is what the risk note quotes when
+    // depends on the premium, so the assertion is the RATIO, which is the stable quantity when
     // it says the real bound is close to 2x and not 1x.
-    // F-09. `out > budget` was too weak to carry this test's own name: 1.01x satisfies it while the
-    // risk note claims something close to 2x. Two drains at 90% put ~1.8 budgets through the window
+    // `out > budget` was too weak to carry this test's own name: 1.01x satisfies it while the
+    // the bound is close to 2x. Two drains at 90% put ~1.8 budgets through the window
     // before premium, so the floor is 1.5x. Strictly stronger, and it fails if the counter is ever
     // tightened toward the naive 1x the note explicitly says it does NOT provide.
     let floor = TEST_BUDGET_USDC / 2 * 3;
@@ -622,7 +614,7 @@ fn launch_open_the_budget_replenishes_so_it_is_a_rate_limit_not_a_loss_cap() {
     // TWO windows of silence, not one: after a single boundary the previous bucket is still carried
     // at nearly its full weight, which is the sliding counter doing its job. After two, nothing
     // carries. The budget bounds the RATE and not the total, so "the budget caps the loss" is false
-    // and the risk note says so.
+    // and that is the documented bound.
     f.warp(2 * DEFAULT_INSTANT_REDEEM_WINDOW_SECONDS as i64 + 1);
     expect_ok(
         redeem_fresh(&mut f, &holder, at_budget),
@@ -632,7 +624,7 @@ fn launch_open_the_budget_replenishes_so_it_is_a_rate_limit_not_a_loss_cap() {
 
 #[test]
 fn launch_open_a_guardian_pause_blocks_the_next_redemption_immediately() {
-    // The only automatic-looking stop is a human one, and it is instant. Asserted so the risk note's
+    // The only automatic-looking stop is a human one, and it is instant. Asserted so the
     // "detection and reaction SLA" has something concrete underneath it.
     let mut f = live_priced(5_000_000_000);
     let holder = f.holder.insecure_clone();
@@ -648,17 +640,14 @@ fn launch_open_a_guardian_pause_blocks_the_next_redemption_immediately() {
     );
 }
 
-// ================================================================ ROUND 8 FINAL-03
-//
-// THE EXACT SCENARIO, built the way the finding describes it and not the way that is convenient.
-//
-// The first attempt at this refused an unpause while any timelocked slot was armed. Codex showed
+// ================================================================ -03
+// THE EXACT SCENARIO, built the demanding way rather than the convenient one.
+// The first attempt at this refused an unpause while any timelocked slot was armed. showed
 // that misses the class entirely: the action that executes in the gap DISARMS itself, so the counter
 // is back to zero by the time the unpause lands. The three tests written for that guard all used
 // actions whose execute was REFUSED during the pause, so they stayed armed and the guard saw them.
-// They proved the guard, not the finding.
-//
-// This one proves the finding. The unpause instruction is built ONCE, at T0, carrying the digest of
+// That proves the guard, not the property.
+// This proves the property. The unpause instruction is built ONCE, at T0, carrying the digest of
 // the state the readiness decision approved. Then a matured oracle feed change executes while the
 // protocol is paused, moving a field the decision reads and disarming itself. The PRE-BUILT
 // instruction is then submitted, unchanged, and must be refused.
@@ -749,16 +738,12 @@ fn a_prebuilt_unpause_is_refused_after_a_matured_action_changed_the_approved_sta
 
 #[test]
 fn the_readiness_digest_moves_on_every_config_field_the_decision_reads() {
-    // ROUND 8, written BEFORE the next audit rather than after it.
-    //
     // FINAL-03 is closed by a digest, and a digest is only worth what it covers. This walks the
     // decision in `scripts/_launch-readiness.ts` input by input and asserts, on the real chain, that
     // each CONFIG input moves the digest. A field silently dropped from `readiness_digest()` makes
     // the whole mechanism permissive again, and nothing else would notice.
-    //
     // THE THREE INPUTS THE DECISION READS THAT ARE NOT CONFIG, and why a config digest not covering
     // them is sound rather than an omission:
-    //
     //   circulating supply  frozen for the whole window. Both emission paths (`admin_premint` at
     //                       premint.rs:60 and `mint_silv`) require `!config.paused`, and the window
     //                       being closed is exactly the window in which the protocol is paused.
@@ -767,7 +752,6 @@ fn the_readiness_digest_moves_on_every_config_field_the_decision_reads() {
     //                       (fee_whitelist.rs:87). It also cannot stop existing between two blocks.
     //   active guardians    re-validated ON-CHAIN by `unpause` itself, which demands a guardian
     //                       account with `cooldown_until == 0` that is not the admin.
-    //
     // If a future change makes supply mutable while paused, or adds a vault-closing instruction, this
     // comment is where the argument breaks and the digest must grow.
     let mut f = Fixture::new();
@@ -819,30 +803,25 @@ fn the_readiness_digest_moves_on_every_config_field_the_decision_reads() {
     );
 }
 
-/// ROUND 8 REVIEW P1. THE FROZEN VECTOR that pins every implementation of the digest to one another.
-///
+/// REVIEW P1. THE FROZEN VECTOR that pins every implementation of the digest to one another.
 /// There are four: this program, the harness mirror in `common/mod.rs`, `scripts/_readiness-digest.ts`
 /// and its copy in the admin app. Only the harness mirror was proven, and only transitively: it
 /// submits its digests to the real program, so a drift there fails 180 tests loudly.
-///
 /// The TypeScript pair was proven by NOTHING. Its only assertion was that the output is 32 bytes
 /// long, which is true of any hash of anything. Adding a field to `readiness_digest()` regenerates
 /// a byte-identical IDL (`[u8; 32]` does not change), keeps the args-parity test at 40 bytes, and
 /// leaves both TypeScript copies silently wrong. The failure would have surfaced for the first time
 /// as a reverted mainnet go-live transaction.
-///
 /// This is the same constant asserted in `apps/admin/src/lib/__tests__/instruction-args-parity.test.ts`.
 /// Changing the digest breaks BOTH, in two languages, which is the point: a field added on one side
 /// cannot pass unnoticed on the other.
 #[test]
 fn the_readiness_digest_mirror_matches_the_declared_layout() {
-    // ROUND 8 REVIEW P0. THE FIRST VERSION OF THIS TEST ASSERTED NOTHING.
-    //
+    // REVIEW P0. THE FIRST VERSION OF THIS TEST ASSERTED NOTHING.
     // It built the preimage from literals and hashed it, then compared to a literal. `sha256(x) == x`
     // can only fail if someone edits the test. The reviewer proved it by mutation: adding a byte to
     // the mirror in common/mod.rs left this test GREEN while six real tests went red. The docblock
     // claimed it pinned the encoders; it observed neither.
-    //
     // This one calls `Fixture::readiness_digest()`, the mirror, over the LIVE config, and compares it
     // to a preimage rebuilt here from the same live values. A field added on one side and not the
     // other makes the two diverge. The mirror is in turn pinned to the PROGRAM by every `unpause` in

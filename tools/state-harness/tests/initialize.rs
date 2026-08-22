@@ -1,8 +1,7 @@
 // On-chain tests for `initialize`. It is `init` on the single [CONFIG_SEED] PDA, so on a real cluster
 // every one of these assertions is testable exactly once per program id and never again. The 158 unit
 // tests call pure functions only: none of them can see which key landed in config.admin, whether the
-// DOM-001 upgrade-authority chain still binds, or that a carved field was actually written.
-//
+// upgrade-authority chain still binds, or that a carved field was actually written.
 // This file boots its own LiteSVM rather than using `Fixture`, because it must reach the state BEFORE
 // initialize and vary the args, the ProgramData authority and the two mints.
 
@@ -30,7 +29,7 @@ const E_SILV_MINT_HAS_PREEXISTING_SUPPLY: u32 = 12052;
 const E_SILV_MINT_AUTHORITY_MISMATCH: u32 = 12053;
 const E_USDC_MINT_NOT_ALLOWED: u32 = 12055;
 const E_SILV_METADATA_UPDATE_AUTHORITY_MISMATCH: u32 = 12058;
-/// ROUND 8 T8-03. Verified against target/idl/dominion_silver_mint.json, not counted by hand.
+/// Verified against target/idl/dominion_silver_mint.json, not counted by hand.
 const E_INVENTORY_WALLET_NOT_SET: u32 = 12086;
 const E_DISALLOWED_MINT_EXTENSION: u32 = 12066;
 const E_SILV_FREEZE_AUTHORITY_MISMATCH: u32 = 12089;
@@ -179,10 +178,10 @@ struct Args {
     pyth_lazer_feed_id: u32,
     admin_timelock_seconds: u32,
     max_guardian_count: u8,
-    /// ROUND 8 T8-03. APPENDED LAST on purpose: the 142-byte prefix above did not move, so a client
+    /// APPENDED LAST on purpose: the 142-byte prefix above did not move, so a client
     /// that still encodes the old layout fails to deserialize instead of silently shifting a field.
     inventory_wallet: Pubkey,
-    /// ROUND 8 L1-02. The first guardian, appointed by this same transaction, so the independent
+    /// The first guardian, appointed by this same transaction, so the independent
     /// brake exists before anything can be unpaused. Appended last for the same reason.
     guardian: Pubkey,
 }
@@ -302,7 +301,7 @@ impl Boot {
     }
 
     /// `svm.add_program` installs the program under loader v2, where `programdata_address()` is None
-    /// and the DOM-001 chain can never pass, so a negative test would pass for the wrong reason.
+    /// and the chain can never pass, so a negative test would pass for the wrong reason.
     /// Rewrite it into the upgradeable shape; programdata must exist first or `set_account` fails.
     fn install_loader_v3(&mut self, upgrade_authority: Option<Pubkey>) {
         let pid = program_id();
@@ -588,7 +587,7 @@ fn initialize_writes_every_config_field_and_the_values_read_back_on_chain() {
     assert_eq!(c.instant_used_usdc, 0, "instant_used_usdc");
     assert_eq!(c.next_redeem_request_nonce, 0, "next_redeem_request_nonce");
 
-    // Governance slots: everything empty, nothing pre-armed, EXCEPT the guardian set. ROUND 8 L1-02
+    // Governance slots: everything empty, nothing pre-armed, EXCEPT the guardian set. 
     // appoints the first guardian here, so "empty" would now mean "no independent brake at go-live".
     assert_eq!(c.guardian_count, 1, "guardian_count: the first guardian is appointed by initialize");
     assert_eq!(c.pending_removal_count, 0, "pending_removal_count");
@@ -618,7 +617,7 @@ fn initialize_writes_every_config_field_and_the_values_read_back_on_chain() {
     }
 
     // Phase-2 hooks and granular pauses.
-    // ROUND 8 T8-03: `inventory_wallet` is no longer a hook left at zero for a later instant setter.
+    // `inventory_wallet` is no longer a hook left at zero for a later instant setter.
     // It is bound HERE, from the argument, and no instruction can set it afterwards. Reading back
     // the requested key is what proves the binding is atomic with the one initialize transaction.
     assert_eq!(
@@ -632,7 +631,7 @@ fn initialize_writes_every_config_field_and_the_values_read_back_on_chain() {
     assert!(!c.mint_paused, "mint_paused");
     assert!(!c.redeem_paused, "redeem_paused");
     assert_eq!(c.version, CONFIG_SCHEMA_VERSION, "config.version");
-    // ROUND 5 P1-04. NOT zero, and that is the point: a fresh mainnet config must ship with the
+    // NOT zero, and that is the point: a fresh mainnet config must ship with the
     // availability floor already armed. Zero is the value an in-place upgrade of an OLD config
     // decodes, and it means no floor, so an initialize that left it zero would ship the defect the
     // field exists to close.
@@ -641,7 +640,7 @@ fn initialize_writes_every_config_field_and_the_values_read_back_on_chain() {
         "config.min_operation_usdc must be the shipped default, not zero"
     );
     assert_eq!(c.reserved, [0u8; 23], "config.reserved");
-    // ROUND 7: initialize must leave the new slot empty. A non-None here would mean a proposal
+    // initialize must leave the new slot empty. A non-None here would mean a proposal
     // existed before the program did, which is the shape a mis-decoded layout produces.
     assert_eq!(
         c.pending_inventory_wallet_nonce, None,
@@ -651,12 +650,11 @@ fn initialize_writes_every_config_field_and_the_values_read_back_on_chain() {
 
 #[test]
 fn a_fresh_deploy_is_paused_with_mint_and_redemptions_already_open() {
-    // ROUND 8 launch posture, decided 2026-08-09. The two switches ship OPEN so that no base setting
+    // launch posture, decided 2026-08-09. The two switches ship OPEN so that no base setting
     // costs a 24h wait during the ceremony. THE PAUSE is what holds the launch, and it is the one
     // assertion here whose inversion would put the protocol live at block zero against oracle bounds
     // nobody validated. The pair of open switches is not the same thing as a live protocol, and this
     // test asserts exactly that distinction: open, and paused.
-    //
     // The compensating control is on the OTHER side, in `unpause`: it now demands an active guardian
     // distinct from the admin, so the transition to live cannot happen before the independent brake
     // is installed. `guardian_count = 0` here is what makes that requirement bite.
@@ -667,13 +665,13 @@ fn a_fresh_deploy_is_paused_with_mint_and_redemptions_already_open() {
     assert!(c.paused, "a fresh deploy must be PAUSED");
     assert!(
         c.redemptions_enabled,
-        "round 8 posture: public direct redeem ships OPEN"
+        "public direct redeem ships OPEN"
     );
     assert!(
         c.public_mint_enabled,
-        "round 8 posture: the public mint ships OPEN"
+        "the public mint ships OPEN"
     );
-    // ROUND 8 L1-02. ONE guardian, appointed by this same transaction. It used to be zero, and
+    // ONE guardian, appointed by this same transaction. It used to be zero, and
     // `add_guardian` was admin-only, so the "independent brake" `unpause` demands could be minted by
     // the very key it exists to restrain. Anchoring it here puts it in the authenticated ceremony
     // artifact instead.
@@ -685,7 +683,7 @@ fn a_fresh_deploy_is_paused_with_mint_and_redemptions_already_open() {
 
 #[test]
 fn initialize_refuses_a_zero_inventory_wallet() {
-    // ROUND 8 T8-03. The destination of the pre-mint is now an argument with no later setter, so the
+    // The destination of the pre-mint is now an argument with no later setter, so the
     // ONE transaction that writes it has to refuse the empty value. Without this check a ceremony
     // that forgot the field would bind the pre-mint to the default pubkey permanently, and the only
     // repair would be a 24h timelocked change.
@@ -728,7 +726,7 @@ fn the_carved_fields_read_as_their_intended_at_zero_values() {
     );
 }
 
-// ================================================================ DOM-001
+// ================================================================ 
 
 #[test]
 fn dom001_a_signer_who_is_not_the_upgrade_authority_is_refused() {
@@ -942,7 +940,7 @@ fn a_zero_pyth_feed_id_is_refused() {
 #[test]
 fn a_usdc_mint_outside_circles_three_is_refused() {
     let mut b = Boot::new();
-    // M-02: without the allowlist the deployer passes a fake 6-decimal "USDC" they control and mints
+    // without the allowlist the deployer passes a fake 6-decimal "USDC" they control and mints
     // SILV against worthless reserves.
     b.usdc_mint = Pubkey::new_unique();
     expect_error(b.run(), E_USDC_MINT_NOT_ALLOWED, "a fake USDC mint");
@@ -966,7 +964,7 @@ fn a_silv_mint_with_the_token2022_default_nine_decimals_is_refused() {
 #[test]
 fn a_silv_mint_with_preexisting_supply_is_refused() {
     let mut b = Boot::new();
-    // C-01: SILV pre-minted between the two off-chain mint-creation phases is indistinguishable from
+    // SILV pre-minted between the two off-chain mint-creation phases is indistinguishable from
     // legitimate supply once initialize has accepted it.
     b.silv.supply = 1;
     expect_error(
@@ -979,7 +977,7 @@ fn a_silv_mint_with_preexisting_supply_is_refused() {
 #[test]
 fn a_silv_mint_authority_outside_the_program_pda_is_refused() {
     let mut b = Boot::new();
-    // C-02: an off-chain mint authority lets the deployer mint unbacked SILV outside every cap and
+    // an off-chain mint authority lets the deployer mint unbacked SILV outside every cap and
     // pause in this program.
     b.silv.mint_authority = Some(Pubkey::new_unique());
     expect_error(
@@ -1027,7 +1025,7 @@ fn a_zero_freeze_authority_arg_is_refused() {
 #[test]
 fn a_permanent_delegate_that_disagrees_with_the_arg_is_refused() {
     let mut b = Boot::new();
-    // P1-03: the one privileged clawback capability on SILV must not belong to an arbitrary key while
+    // the one privileged clawback capability on SILV must not belong to an arbitrary key while
     // config claims the Ops vault holds it.
     b.silv.permanent_delegate = Pubkey::new_unique();
     expect_error(
@@ -1052,7 +1050,7 @@ fn a_zero_permanent_delegate_arg_is_refused() {
 #[test]
 fn a_fourth_mint_extension_is_refused() {
     let mut b = Boot::new();
-    // P1-03: TransferHook, TransferFee, DefaultAccountState(Frozen) or NonTransferable would alter
+    // TransferHook, TransferFee, DefaultAccountState(Frozen) or NonTransferable would alter
     // token behaviour underneath every mint and redeem, so the allowlist is exactly three.
     b.silv.extra_extension = true;
     expect_error(
@@ -1089,7 +1087,7 @@ fn a_metadata_pointer_aimed_at_a_separate_account_is_refused() {
 #[test]
 fn a_token_metadata_update_authority_outside_the_program_pda_is_refused() {
     let mut b = Boot::new();
-    // M-01: an off-chain update authority lets the deployer rename the token outside the 24h
+    // an off-chain update authority lets the deployer rename the token outside the 24h
     // timelocked metadata action.
     b.silv.md_update_authority = Some(Pubkey::new_unique());
     expect_error(

@@ -1,21 +1,18 @@
-// ROUND 5 P1-03. The Lazer anti-replay high-water mark, tested where it is actually WRITTEN.
-//
-// THE FINDING. `tools/lazer-harness/src/lib.rs` carries a test called
+// The Lazer anti-replay high-water mark, tested where it is actually WRITTEN.
+// `tools/lazer-harness/src/lib.rs` carries a test called
 // `the_same_envelope_cannot_be_consumed_twice`. It never consumes an envelope: it hand-writes
 // `last_used_feed_ts_us` into a crafted config, calls `probe_oracle_price` once, and asserts the
 // equality is refused. But `probe_oracle_price` is read-only by construction (its module header says
 // so, and the handler only sets return data), so that test exercises the COMPARISON and never the
 // WRITE. The only two writes in the program are `mint_silv.rs:191` and `redeem_silv.rs:175`. Deleting
 // either one leaves that reassuringly-named test green while the corresponding path is replayable.
-//
-// So each side is tested here in the shape the finding asks for: a first priced operation ACCEPTED,
+// So each side is tested here explicitly: a first priced operation ACCEPTED,
 // the persisted field READ BACK off the chain, and a second operation with the SAME envelope
 // REFUSED. Then a mutation check on each write: if the assignment is removed, the "refused" half of
 // the matching test must go green-to-red, and `both_sides_share_one_high_water_mark` is what catches
 // a write that is silently pointed at the wrong side.
-//
 // D2 is what makes this strict: `fut <= last_used` is refused, so one signed envelope prices exactly
-// ONE operation. The availability consequence of that choice is round 5 P1-04, handled separately by
+// ONE operation. The availability consequence of that choice is the minimum-operation floor, handled separately by
 // `config.min_operation_usdc`.
 
 mod common;
@@ -24,7 +21,6 @@ use common::*;
 use solana_sdk::signature::Signer;
 
 /// `DominionError::LazerReplayed`. Verified against target/idl, not counted by hand.
-///
 /// It is a NEW code, added in this batch. Writing these tests is what exposed the fact that a replay
 /// and a carried-forward feed print both surfaced as `LazerCarriedForward` (12082): one code for two
 /// events with two different fixes. With D2 making one-operation-per-print the steady state, the
@@ -126,7 +122,7 @@ fn a_redeem_persists_the_feed_timestamp_and_the_same_envelope_is_then_refused() 
     assert!(silv > 0, "the seed mint issued no SILV");
     f.fund_token_account(&f.usdc_mint.clone(), &treasury_pda(), TREASURY_USDC);
 
-    // ROUND 8: redemptions are open from `initialize`, so the 24h warp the old opener performed is
+    // redemptions are open from `initialize`, so the 24h warp the old opener performed is
     // gone. The seed mint above CONSUMED the print at `ts0`, and `now_us` has microsecond resolution
     // over a second-resolution clock, so without advancing time `ts == ts0` and the redeem below
     // would fail on LazerReplayed rather than on the property under test. One second is the smallest
@@ -167,7 +163,7 @@ fn a_redeem_persists_the_feed_timestamp_and_the_same_envelope_is_then_refused() 
 fn both_sides_share_one_high_water_mark() {
     // The cross-side property, and the reason the two writes cannot be tested only in isolation: the
     // mark is ONE field in ONE shared config, so a mint consumes the print for redeem too. This is
-    // also what makes the D2 availability finding (P1-04) global rather than per-instruction, and it
+    // also what makes the availability property global rather than per-instruction, and it
     // is what would break if either write were ever pointed at a per-side field.
     let mut f = priced();
     let holder = f.holder.insecure_clone();
@@ -196,7 +192,7 @@ fn both_sides_share_one_high_water_mark() {
 
 #[test]
 fn a_replay_and_a_carried_forward_print_report_different_errors() {
-    // ROUND 5, the diagnosability half. Both of these are refusals on the priced path and they used
+    // the diagnosability half. Both of these are refusals on the priced path and they used
     // to be the SAME code, which meant a user who lost the race for a print was told the oracle had
     // carried a stale value. The two assertions below are the whole content of that fix: they fail if
     // `map_policy_err` ever collapses the pair again.
@@ -252,7 +248,7 @@ fn an_envelope_older_than_the_mark_is_refused_not_merely_an_equal_one() {
 
 #[test]
 fn the_redeem_side_has_the_same_floor_and_a_dust_redeem_cannot_capture_a_print() {
-    // ROUND 5 P1-04, SECOND HALF. The floor shipped on the mint side only, and the review pass that
+    // SECOND HALF. The floor shipped on the mint side only, and the review pass that
     // followed pointed out that the slot it protects is shared: `both_sides_share_one_high_water_mark`
     // above proves a print consumed by either handler is gone for the other. So a mint-only floor was
     // not a floor, and redeem was the cheaper door: at $58.34/oz, 1 atomic SILV is 58 micro-USDC gross

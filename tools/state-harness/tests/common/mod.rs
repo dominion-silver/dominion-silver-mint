@@ -86,7 +86,7 @@ pub const E_KYC_LAST_ATTESTATION_WHILE_ARMED: u32 = 12114;
 pub const E_KYC_SUBJECT_INVALID: u32 = 12115;
 pub const E_KYC_REVOKE_WOULD_DISARM: u32 = 12116;
 pub const E_KYC_OPERATOR_MAY_NOT_BE_ADMIN: u32 = 12117;
-// ROUND 5 P1-04. Verified against target/idl/dominion_silver_mint.json, not counted by hand.
+// Verified against target/idl/dominion_silver_mint.json, not counted by hand.
 pub const E_OPERATION_BELOW_MINIMUM: u32 = 12118;
 pub const E_MIN_OPERATION_TOO_HIGH: u32 = 12119;
 pub const E_MIN_OPERATION_UNCHANGED: u32 = 12120;
@@ -97,7 +97,7 @@ pub const SIDE_ALL_BITS: u8 = 3;
 
 pub const NOW_SECS: i64 = 1_700_000_000;
 pub const ADMIN_TIMELOCK_SECONDS: u32 = 86_400;
-/// ROUND 5 P1-04. Mirrors `DEFAULT_MIN_OPERATION_USDC` in state/config.rs; `initialize` writes it,
+/// Mirrors `DEFAULT_MIN_OPERATION_USDC` in state/config.rs; `initialize` writes it,
 /// so the fixture and the tests must agree with the program or every mint here reverts.
 pub const DEFAULT_MIN_OPERATION_USDC: u64 = 10_000_000; // $10
 // MIRROR of state::config::MIN_OPERATION_CEILING_USDC. Nothing enforces that these agree, so the
@@ -253,11 +253,11 @@ pub struct Config {
     pub instant_used_prev_usdc: u64,
     pub fee_routing_disabled: bool,
     pub kyc_attestation_count: u32,
-    /// ROUND 5 P1-04, carved out of `reserved` per THE RULE in state/config.rs. This mirror is what
+    /// carved out of `reserved` per THE RULE in state/config.rs. This mirror is what
     /// caught the layout change when the field was added: the harness read 10_000_000 LE bleeding
     /// into `reserved` and the initialize test failed rather than silently mis-decoding.
     pub min_operation_usdc: u64,
-    /// ROUND 7, carved out of `reserved` per THE RULE. Same story as the field above: if the program
+    /// carved out of `reserved` per THE RULE. Same story as the field above: if the program
     /// and this mirror disagree, the initialize test fails on a decoded value rather than passing on a
     /// silently mis-parsed one.
     pub pending_inventory_wallet_nonce: Option<u64>,
@@ -456,7 +456,7 @@ pub struct Fixture {
     pub holder: Keypair,
     pub holder2: Keypair,
     pub stranger: Keypair,
-    /// ROUND 8. `unpause` now demands an ACTIVE guardian distinct from the admin, so a running
+    /// `unpause` now demands an ACTIVE guardian distinct from the admin, so a running
     /// protocol is no longer one admin signature away. This is the key `ensure_unpause_guardian`
     /// installs on demand, kept OUT of `initialize` on purpose: a fresh deploy must still read
     /// `guardian_count = 0`, and the guardian-budget tests need all three slots free.
@@ -465,10 +465,10 @@ pub struct Fixture {
     pub permanent_delegate: Pubkey,
     pub usdc_mint: Pubkey,
     pub silv_mint: Pubkey,
-    /// ROUND 8 T8-03. Bound at `initialize` and never settable afterwards, so the fixture has to
+    /// Bound at `initialize` and never settable afterwards, so the fixture has to
     /// carry it: tests that assert on the pre-mint destination read this rather than a default.
     pub inventory_wallet: Pubkey,
-    /// ROUND 8 L1-02 / the P1 custody finding. The KEY behind `inventory_wallet`, because the
+    /// / the inventory custody behaviour. The KEY behind `inventory_wallet`, because the
     /// conditional P1 is precisely that its holder can sign `redeem_silv` itself, with no admin
     /// instruction and no timelock. A test that could not sign as this key could not demonstrate it.
     pub inventory: Keypair,
@@ -512,7 +512,7 @@ impl Fixture {
         }
 
         // `svm.add_program` installs the program under loader v2, for which `programdata_address()`
-        // returns None and the DOM-001 chain in `initialize` can never pass. Rewrite it into the
+        // returns None and the chain in `initialize` can never pass. Rewrite it into the
         // upgradeable shape. Order matters: litesvm re-loads the ELF out of the programdata account
         // (offset 45) for any executable account owned by the upgradeable loader, so programdata
         // must exist first or `set_account` itself returns MissingAccount.
@@ -616,10 +616,10 @@ impl Fixture {
         args.extend_from_slice(&3154u32.to_le_bytes()); // pyth_lazer_feed_id
         args.extend_from_slice(&ADMIN_TIMELOCK_SECONDS.to_le_bytes());
         args.push(3); // max_guardian_count
-        // ROUND 8 T8-03: the pre-mint destination is now bound ATOMICALLY here. There is no
+        // the pre-mint destination is now bound ATOMICALLY here. There is no
         // instruction that can set it afterwards, only the 24h-timelocked change.
         args.extend_from_slice(self.inventory_wallet.as_ref());
-        // ROUND 8 L1-02: the FIRST guardian, appointed in this same transaction. The fixture
+        // the FIRST guardian, appointed in this same transaction. The fixture
         // therefore starts with guardian_count = 1 and an active brake, which is the state a real
         // deployment is in the instant `initialize` returns.
         args.extend_from_slice(self.guardian.pubkey().as_ref());
@@ -664,7 +664,7 @@ impl Fixture {
             "config.admin_timelock_seconds"
         );
         assert_eq!(c.max_guardian_count, 3, "config.max_guardian_count");
-        // ROUND 8, launch posture decided 2026-08-09. Mint and redeem are OPEN in the initial
+        // launch posture decided 2026-08-09. Mint and redeem are OPEN in the initial
         // configuration so that no base setting costs a 24h wait during the ceremony. What still
         // guards the launch is the PAUSE: nothing flows until somebody unpauses, and `unpause` now
         // demands an active guardian distinct from the admin. The two flags being open is not the
@@ -672,16 +672,16 @@ impl Fixture {
         assert!(c.paused, "a fresh deploy must be PAUSED");
         assert!(
             c.redemptions_enabled,
-            "redemptions must be OPEN at initialize (round 8 posture)"
+            "redemptions must be OPEN at initialize"
         );
         assert!(
             c.public_mint_enabled,
-            "public mint must be OPEN at initialize (round 8 posture)"
+            "public mint must be OPEN at initialize"
         );
         assert_ne!(
             Pubkey::new_from_array(c.inventory_wallet),
             Pubkey::default(),
-            "T8-03: initialize must bind the inventory wallet atomically"
+            "initialize must bind the inventory wallet atomically"
         );
         assert_eq!(c.kyc_scope_flags, 0, "the KYC gate must be DORMANT at launch");
         assert!(!c.kyc_enforced, "kyc_enforced must be false at launch");
@@ -809,8 +809,7 @@ impl Fixture {
     // ------------------------------------------------------------ guardian and unpause
 
     /// `add_guardian`, signed by `signer` in BOTH the admin and the payer slot.
-    ///
-    /// ROUND 8 F-02: the appointee's co-signature was REMOVED. It bought participation rather than
+    /// the appointee's co-signature was REMOVED. It bought participation rather than
     /// independence and made the instruction unexecutable through the Squads ceremony.
     pub fn add_guardian_as(&mut self, signer: &Keypair, guardian: &Keypair) -> TxOutcome {
         let ix = Instruction {
@@ -844,7 +843,6 @@ impl Fixture {
     /// Install `self.guardian` if it is not already registered, and return its key. Idempotent, so a
     /// test may call it directly (to control WHEN the appointment happens, which matters before an
     /// admin transfer) or let `unpause_as` call it.
-    ///
     /// `signer` is the CURRENT admin: `add_guardian` is `has_one = admin`, and `self.admin` goes
     /// stale the moment a test moves admin-ship.
     pub fn ensure_unpause_guardian_as(&mut self, signer: &Keypair) -> Pubkey {
@@ -867,14 +865,14 @@ impl Fixture {
     /// exactly about which account lands in that slot: a guardian that is the admin, a guardian in
     /// cooldown, another guardian's PDA.
     pub fn unpause_with(&mut self, signer: &Keypair, guardian_slot: Pubkey) -> TxOutcome {
-        // ROUND 8 FINAL-03. Read the digest NOW, which is what an honest caller does: build the
+        // -03. Read the digest NOW, which is what an honest caller does: build the
         // instruction against the state it just read. `unpause_with_digest` is the primitive the
         // staleness tests need, because proving the gap requires a digest read EARLIER than the send.
         let d = self.readiness_digest();
         self.unpause_with_digest(signer, guardian_slot, d)
     }
 
-    /// ROUND 8 FINAL-03. The digest of the config fields the go-live decision reads, computed the
+    /// -03. The digest of the config fields the go-live decision reads, computed the
     /// same way `ConfigAccount::readiness_digest` does on-chain. Mirrored rather than imported so a
     /// test can capture it at T0 and submit it at T2.
     pub fn readiness_digest(&self) -> [u8; 32] {
@@ -924,7 +922,7 @@ impl Fixture {
 
     // ------------------------------------------------------------ the mint call site
 
-    /// Bring the protocol to the state where a public mint can land. ROUND 8: `initialize` already
+    /// Bring the protocol to the state where a public mint can land. `initialize` already
     /// leaves `public_mint_enabled = true`, so the only remaining step is the unpause, and the
     /// unpause is now what carries the guardian requirement. The 24h path that OPENS a closed public
     /// mint still exists and is still the only opener; it is exercised in caps.rs, from a state this
@@ -933,7 +931,7 @@ impl Fixture {
         expect_ok(self.unpause(), "open_public_mint: unpause");
         assert!(
             self.config().public_mint_enabled,
-            "round 8 posture: initialize must leave the public mint OPEN"
+            "initialize must leave the public mint OPEN"
         );
         assert!(!self.config().paused, "open_public_mint left the protocol paused");
     }
@@ -953,8 +951,7 @@ impl Fixture {
     /// read then fails with LazerProgramNotExecutable, which is the marker that the KYC gate at step
     /// 2b LET THE CALL THROUGH. `supply_kyc = false` presents the program id in the optional slot,
     /// Anchor's encoding for None.
-    ///
-    /// The amount is `DEFAULT_MIN_OPERATION_USDC` and NOT the 1 USDC it used to be: round 5 P1-04
+    /// The amount is `DEFAULT_MIN_OPERATION_USDC` and NOT the 1 USDC it used to be: the minimum-operation floor
     /// added an availability floor at step 3b, which sits BEFORE the oracle read, so a 1 USDC call
     /// now stops at OperationBelowMinimum and never reaches the marker these tests read. Use
     /// `try_mint_amount` to exercise the floor itself.
@@ -962,7 +959,7 @@ impl Fixture {
         self.try_mint_amount(user, supply_kyc, DEFAULT_MIN_OPERATION_USDC)
     }
 
-    /// `try_mint` with an explicit `amount_usdc`, so a test can drive the round 5 P1-04 floor from
+    /// `try_mint` with an explicit `amount_usdc`, so a test can drive the the minimum-operation floor floor from
     /// both sides without every other caller having to carry the amount.
     pub fn try_mint_amount(
         &mut self,
@@ -1015,15 +1012,13 @@ impl Fixture {
 }
 
 // ===================================================================================================
-// ROUND 5 P1-03: a Lazer that actually EXECUTES, so the anti-replay high-water mark can be observed
+// a Lazer that actually EXECUTES, so the anti-replay high-water mark can be observed
 // being written and then enforced.
-//
-// The finding: `tools/lazer-harness` names a test `the_same_envelope_cannot_be_consumed_twice`, but
+// `tools/lazer-harness` names a test `the_same_envelope_cannot_be_consumed_twice`, but
 // it PRE-WRITES `last_used_feed_ts_us` into a hand-built config and calls `probe_oracle_price` once.
 // The probe is read-only by construction (its own module header says so), so that test never exercises
 // a write. The only two writes in the program are `mint_silv.rs` and `redeem_silv.rs`, and deleting
 // either one left the reassuringly-named test green.
-//
 // Everything below exists to close that: a mock Lazer program installed as EXECUTABLE, a real signed
 // envelope, funded token accounts, and mint/redeem calls that succeed. The base fixture deliberately
 // keeps the Lazer account NON-executable (several tests read LazerProgramNotExecutable as the marker
@@ -1039,7 +1034,7 @@ const SILV_FEED_ID: u32 = 3154; // Metal.Index.SILVER/USD
 const LAZER_FEE_LAMPORTS: u64 = 1;
 
 /// A price inside every default oracle guard: $58.34 at exponent -5, 3 publishers, 1bp of confidence.
-/// Chosen to be the same figure the round 5 finding was measured at, so the two read as one story.
+/// Chosen to match the figure the two tests share, so they read as one story.
 pub const SILV_PRICE_MANTISSA: i64 = 5_834_000;
 pub const SILV_PRICE_EXPONENT: i16 = -5;
 
@@ -1297,8 +1292,7 @@ impl Fixture {
     /// carrying `redemptions_enabled = Some(true)`. Both instant setters refuse `true` by
     /// construction, so a test that needs to go from CLOSED to OPEN has to go the long way, and going
     /// the long way is also what proves the path exists.
-    ///
-    /// ROUND 8: `initialize` now leaves redemptions OPEN, so this is a REOPENER and it asserts that.
+    /// `initialize` now leaves redemptions OPEN, so this is a REOPENER and it asserts that.
     /// Calling it on the launch state would be a 24h warp that proves nothing; `require_redemptions_open`
     /// is what a test that merely needs an open redeem path should call.
     pub fn reopen_redemptions(&mut self) {
@@ -1342,13 +1336,13 @@ impl Fixture {
         );
     }
 
-    /// ROUND 8 posture: assert the redeem path is open rather than manufacture it. This is the
+    /// posture: assert the redeem path is open rather than manufacture it. This is the
     /// replacement for the old `open_redemptions()` at call sites that only wanted a live redeem
     /// path; it deliberately does NOT warp, and several oracle tests stamp envelopes right after it.
     pub fn require_redemptions_open(&self) {
         assert!(
             self.config().redemptions_enabled,
-            "round 8 posture: initialize must leave redemptions OPEN"
+            "initialize must leave redemptions OPEN"
         );
     }
 }

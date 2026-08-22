@@ -8,7 +8,7 @@ mod dominion_lazer;
 // ---------------------------------------------------------------------------
 // 1. DIFFERENTIAL: build a payload with the canonical SDK exactly as the Lazer
 //    publisher would, then assert the dominion hand-rolled parser extracts the
-//    same values byte-for-byte. Closes P2-01 (parser was human-verified only).
+//    same values byte-for-byte. Closes (parser was human-verified only).
 // ---------------------------------------------------------------------------
 #[cfg(test)]
 mod differential {

@@ -1,5 +1,5 @@
 # Host-only verification crate (NOT a member of the main workspace, NOT built
-# for SBF). Closes the Fable/Codex P2-01 machine-verification gap:
+# for SBF). Closes the Fable/machine-verification gap:
 #   1. The dominion hand-rolled Lazer parser (programs/.../src/lazer.rs) is
 #      DIFFERENTIALLY tested against the canonical pyth-lazer-protocol 0.34.0
 #      wire format (the same crate the on-chain Lazer program locks).

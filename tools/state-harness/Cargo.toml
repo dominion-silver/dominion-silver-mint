@@ -17,7 +17,7 @@ litesvm = "0.7"
 solana-sdk = "2.3"
 sha2 = "0.10"
 borsh = { version = "1", features = ["derive"] }
-# ROUND 5 P1-03. The Lazer anti-replay high-water mark is written by mint_silv and redeem_silv and by
+# The Lazer anti-replay high-water mark is written by mint_silv and redeem_silv and by
 # NOTHING else (probe_oracle_price is read-only), so proving it persists needs a real call through a
 # Lazer program that executes. These two build the signed-envelope payload; tools/mock-lazer is the
 # program, and run.sh builds it into target/harness. Pinned to the same version as
