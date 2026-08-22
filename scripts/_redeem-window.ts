@@ -1,10 +1,10 @@
 /**
- * A faithful port of `state/redeem_window.rs::roll_window`, so the monitor measures the budget the way
+ * A faithful port of `state/redeem_window.rs::roll_window`, so a reader measures the budget the way
  * the PROGRAM measures it.
- * WHY A PORT AND NOT A GUESS. The obvious monitor reads `config.instant_used_usdc` and compares it to
+ * WHY A PORT AND NOT A GUESS. The obvious approach reads `config.instant_used_usdc` and compares it to
  * the budget. That number is WRONG on its own: the throttle is a two-bucket sliding counter, so the
  * usage that actually counts is the current bucket plus a time-weighted slice of the previous one, and
- * both buckets roll forward on read. A monitor using the raw field under-reports right after a boundary
+ * both buckets roll forward on read. A reader using the raw field under-reports right after a boundary
  * and over-reports late in a window. Alerting on the wrong number is worse than not alerting, because
  * it trains whoever is on call to ignore it.
  * The consequence that makes this worth porting exactly: the sliding counter admits close to 2x the
@@ -35,7 +35,7 @@ export function rollWindow(
   const w = windowSeconds;
   if (w <= 0n) {
     // Degenerate config. The Rust fails OPEN here (fresh window, no usage) rather than reverting a
-    // redemption, and the setters keep the window well above zero. Mirrored, not "improved": a monitor
+    // redemption, and the setters keep the window well above zero. Mirrored, not "improved": a reader
     // that disagreed with the program about a degenerate case would report a breach that cannot happen.
     return { effectiveUsed: 0n, newWindowStart: now, rolledCurrent: 0n, rolledPrev: 0n };
   }

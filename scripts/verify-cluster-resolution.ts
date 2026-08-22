@@ -199,11 +199,6 @@ for (const rpc of [
     "_guard.ts",
     "_cluster.ts",
     "_program-id.ts",
-    // Telegram and heartbeat delivery for the monitors. It resolves no cluster, opens no Connection and
-    // touches no Solana RPC at all: its only network calls are api.telegram.org and a ping URL. Exempt on
-    // the same terms as the helpers above, and the send-primitive check below verifies that rather than
-    // trusting this comment.
-    "_telegram.ts",
     "verify-cluster-resolution.ts",
   ]);
 
@@ -235,28 +230,16 @@ for (const rpc of [
     // Walks every program transaction since launch and reconciles it against on-chain state.
     // Read-only: it sends nothing and needs no keypair.
     "audit-since-launch.ts",
-    // Read-only monitors. They query the chain and the live site and send no transaction, so they
-    // must NOT be forced through the transaction guard.
-    "health-monitor.ts",
     // Reads the chain and fetches the deployed bundles to prove the frontends resolve MAINNET.
     // Sends nothing, so it must NOT be forced through the transaction guard.
     "verify-post-deploy.ts",
     // Pure string function: strips provider credentials out of an RPC endpoint before anything prints
-    // it. No Connection, no keypair. Extracted from redeem-monitor.ts precisely BECAUSE that file runs
-    // its main at import time, so importing the helper from there executed a whole monitor run.
+    // it. No Connection, no keypair. Extracted into its own module precisely BECAUSE its caller ran
+    // its main at import time, so importing the helper from there executed a whole run.
     "_redact.ts",
-    // The monitors' alert memory: reads and writes one small JSON file under .monitor-state so an alarm
-    // can fire on a TRANSITION instead of on a level. No Connection, no keypair, no network at all, so
-    // it must not be forced through the transaction guard. Registered in the SAME change that created
-    // it: `_telegram.ts` was added without a registration once and this gate went red on the commit,
-    // which is the gate working and a round-trip that did not need to happen.
-    "_alert-state.ts",
     // Pure port of the program's rolling-window rule, plus its fixtures. No cluster, no keypair.
     "_redeem-window.ts",
     "test-redeem-window.ts",
-    // READ-ONLY alarm. It builds an Anchor Program with a throwaway keypair precisely so it CANNOT
-    // sign, reads the config and the logs, and sends no transaction.
-    "redeem-monitor.ts",
     "read-config.ts",
     "verify-client-idl-parity.ts",
     // / Build and install barriers: they shell out to cargo and curl, never to a
