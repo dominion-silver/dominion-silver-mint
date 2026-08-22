@@ -1,21 +1,18 @@
 name: Anchor Build + Test
 
-# ROUND 6 R6-08. EVERY EXTERNAL REFERENCE IN THIS FILE IS IMMUTABLE.
-#
+# EVERY EXTERNAL REFERENCE IN THIS FILE IS IMMUTABLE.
 # Actions are pinned by full commit SHA with the human-readable tag in a trailing comment, anchor-cli
 # by commit rather than by tag, and the Anza installer is downloaded, checksummed and only then run
 # (.github/install-solana.sh). `actions/checkout@v4` and `dtolnay/rust-toolchain@stable` are MOVABLE
 # refs: whoever controls them controls what runs in the job that produces the release binary, and this
 # workflow's whole purpose is to say those bytes came from this source.
-#
 # The token is scoped to `contents: read` by the `permissions:` block below. That bounds the blast
 # radius inside the repository but does nothing about the ARTIFACT: a compromised toolchain still gets
 # to compile it.
-#
 # When you bump one, bump the SHA and the comment together, and record the identity in the release
 # manifest so a future reader can tell which toolchain produced a given binary.
 
-# REVIEW PASS ON 3bf3097. This block did not exist, and the header above ASSERTED the read-only scope
+# This block did not exist, and the header above ASSERTED the read-only scope
 # as if it did. The real scope was the org/repo default, a setting outside this file and outside any
 # commit, so the claim could become false without a diff. An assertion about a security property
 # belongs in the file that enforces it.
@@ -25,7 +22,7 @@ permissions:
 on:
   push:
     branches: [main]
-    # ROUND 5, review pass: the publish step's `if:` allowed a tag ref, and this block did not trigger
+    # the publish step's `if:` allowed a tag ref, and this block did not trigger
     # on tags at all, so the tag release path documented in the runbook and in docs/REPO_PROTECTION.md
     # could never fire. Tags are protected as immutable by a ruleset; a release cut from one has to be
     # able to build.
@@ -47,14 +44,14 @@ env:
   # one consistent modern toolchain for BOTH the SBF build and the host IDL
   # build. Contract source / Anchor / pyth unchanged -> deployed bytes +
   # IDL unaffected (no redeploy). See private/CI_IDL_DETERMINISM.md.
-  # 3.0.0, PAS 3.1.14. Round 4: CI installait Agave 3.1.14, donc platform-tools v1.52, alors que l artefact
+  # 3.0.0, PAS 3.1.14. : CI installait Agave 3.1.14, donc platform-tools v1.52, alors que l artefact
   # de release est construit avec 3.0.0 / platform-tools v1.51. verify-release-artifact.sh comparait donc
   # deux builds de la MAUVAISE chaine d outils entre eux et rapportait OK, sans pouvoir remarquer que
   # l empreinte epinglee venait d une autre. v1.51 vers v1.52 change la taille du binaire de 1 193 616 a
   # 1 154 024 octets a source identique, donc l ecart n est pas cosmetique.
   SOLANA_VERSION: 3.0.0
   ANCHOR_VERSION: 0.31.1
-  # ROUND 6 R6-08. The COMMIT behind v0.31.1. A git tag can be moved; a commit cannot. `--locked` pins
+  # The COMMIT behind v0.31.1. A git tag can be moved; a commit cannot. `--locked` pins
   # the dependencies of whatever anchor-cli cargo fetches, never which anchor-cli that is.
   ANCHOR_COMMIT: 47284f8f0b9844c6b83234aa90f556bad00e12ed
   RUST_VERSION: 1.89.0
@@ -63,9 +60,8 @@ env:
 jobs:
   # ===================================================================
   # BLOCKING GATE (audit action 0.5, added 2026-07-25).
-  #
   # Every step below is intentionally WITHOUT continue-on-error. The audit's
-  # finding H-02 / DOM-015 was that this workflow could not fail: a non-compiling
+  # / was that this workflow could not fail: a non-compiling
   # program and failing unit tests both produced a green check, because every
   # substantive step was continue-on-error and there was no test step at all.
   # The legacy job that follows is left as-is (it exists for artifact upload and
@@ -74,8 +70,7 @@ jobs:
   gate:
     runs-on: ubuntu-latest
     steps:
-      # ROUND 8 FINAL-01 bis. FULL HISTORY, and this is load-bearing rather than tidy.
-      #
+      # -01 bis. FULL HISTORY, and this is load-bearing rather than tidy.
       # `actions/checkout` defaults to `fetch-depth: 1`. Measured on a shallow clone of this
       # repository: 1 commit present, the anchor absent, and `merge-base --is-ancestor` exiting 128
       # rather than 1. The verifier's identity gate needs the anchor to be REACHABLE from HEAD, and
@@ -99,7 +94,7 @@ jobs:
       # be linked into BOTH and the hashes would agree. The script now isolates its
       # reference build with its own CARGO_TARGET_DIR; `target` is also no longer
       # cached here, so the gate's own artifact is built from source every run.
-      # Only ~/.cargo/bin/ANCHOR is cached, not the whole bin dir: review-of-fixes F11
+      # Only ~/.cargo/bin/ANCHOR is cached, not the whole bin dir: 
       # noted that ~/.cargo/bin holds the rustup shims (cargo, rustc, rustfmt), the
       # cache is restored AFTER dtolnay/rust-toolchain, and a tarball from an older
       # runner image can overwrite the shims that action just set up ("rustup could
@@ -111,14 +106,14 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/bin/anchor
-          # REVIEW PASS ON 3bf3097: ANCHOR_COMMIT belongs in the KEY. The cached `anchor` binary was
+          # ANCHOR_COMMIT belongs in the KEY. The cached `anchor` binary was
           # keyed on Cargo.lock alone, and the install step below is skipped on `command -v anchor`.
           # So bumping the --rev pin without touching Cargo.lock restored and ran the OLD anchor,
           # and the pin whose entire purpose is 'a tag can move, a commit cannot' was not in force
           # on any cache hit. The IDL this job diffs against the committed copies came from it.
           key: gate-cargo-${{ env.ANCHOR_COMMIT }}-${{ hashFiles('**/Cargo.lock') }}
 
-      # ROUND 8 T8-01. The self-test runs BEFORE the real install, so a regression in the
+      # The self-test runs BEFORE the real install, so a regression in the
       # authentication is caught before any toolchain is placed on this runner.
       - name: The Solana installer authenticates its archive (BLOCKING)
         run: bash .github/test-install-solana.sh
@@ -136,12 +131,12 @@ jobs:
         run: cargo test -p dominion_silver_mint --lib --locked
 
       - name: Build the release artifact, default features (BLOCKING)
-        # REVIEW PASS ON 3bf3097: `--locked` was missing HERE and present in the verifier's own
+        # `--locked` was missing HERE and present in the verifier's own
         # reference build and in verifier-self-test. An unlocked build-sbf may rewrite Cargo.lock;
         # the reference build then reads the rewritten lock and the two agree with each other while
         # disagreeing with the committed tree. `cargo check --locked` above makes that unreachable
         # today, which is luck, not design.
-        # ROUND 8 F-03: through the strict builder, which makes a BPF stack overflow fatal even
+        # through the strict builder, which makes a BPF stack overflow fatal even
         # though cargo exits 0 and emits a .so.
         run: bash scripts/_strict-build-sbf.sh --manifest-path programs/dominion_silver_mint_v2/Cargo.toml -- --locked
 
@@ -161,20 +156,18 @@ jobs:
             cargo install --git https://github.com/coral-xyz/anchor --rev "${ANCHOR_COMMIT}" anchor-cli --locked --force
           fi
           anchor --version
-          # REVIEW-OF-FIXES P0: this used `anchor idl build -- --locked > target/idl/....json`.
+          # DO NOT redirect stdout into the artifact. An earlier form did, with
           # Redirecting STDOUT into the artifact means anything else cargo writes to stdout lands in the
           # file. On a cargo-registry cache MISS that is the "  Downloaded <crate>" progress lines, so the
           # file begins with two spaces and the JSON is corrupt. The step still exits 0 and goes GREEN,
           # and the next step dies with a raw `json.decoder.JSONDecodeError: Expecting value: line 1
           # column 3 (char 2)`.
-          #
           # Consequence, verified against the real runs (30557224814, 30525729898, and every one of the
           # last twelve on main): the `gate` job has NEVER PASSED, so none of the steps after this one has
           # ever executed on CI. Not the IDL-copies diff, not the release-artifact check, not the
           # client/IDL parity gate, not either app's typecheck, tests or build. The header comment in
           # scripts/verify-client-idl-parity.ts claims "the CI job order closes that gap"; it was true as
           # YAML and false in fact.
-          #
           # `-o` writes the IDL directly and leaves stdout to cargo, which removes the class rather than
           # this instance. It omits the trailing newline the redirect produced, so it is added back to keep
           # the committed copies byte-identical (the JSON itself is unchanged: verified equal).
@@ -196,14 +189,12 @@ jobs:
       - name: Install root and both apps' dependencies
         # The root install is what makes `npx --no-install tsc` and `npx --no-install tsx` resolve the
         # pinned compiler instead of downloading one.
-        #
         # apps/public is installed HERE, before the typecheck, and that is not incidental:
         # scripts/e2e-lazer-mint.ts imports lazer-assembly and lazer-tx from apps/public/src/lib rather
         # than keeping a second copy of the envelope assembly that could drift from the one the frontend
         # ships. lazer-tx pulls @solana/wallet-adapter-react, an app dependency, so typechecking scripts/
         # genuinely requires the app's node_modules. Without this the gate failed with TS2307 on a module
         # that exists, and section 4b of verify-constants-consistency.sh hit the same error one step later.
-        #
         # apps/admin is here for EXACTLY the same reason, and its absence broke this job the first time
         # CI ever ran on the round-8 branch. `scripts/test-admin-panel-simulate.ts:43` imports
         # `../apps/admin/src/lib/admin-actions` so that the simulator exercises the REAL builders the
@@ -211,7 +202,6 @@ jobs:
         # `apps/admin/src/lib/squads.ts`, which imports `@sqds/multisig`. Without the install, tsc aborts
         # on TS2307 before it reaches scripts/ at all, and section 4b then reports the failure it was
         # written to report: "tsc exited 2 with no scripts/ diagnostics, so it checked NOTHING".
-        #
         # That is the failure mode this gate exists for, caught by the gate rather than by a merge.
         run: |
           npm ci
@@ -226,7 +216,6 @@ jobs:
         # committed, the console is describing a program that is not the one being
         # deployed. verify-constants-consistency.sh proves the COMMITTED copies
         # agree with each other; this proves they agree with a FRESH build.
-        #
         # BOTH SIDES ARE NORMALISED THROUGH THE SAME SCRIPT, which strips `docs`.
         # Anchor lifts Rust doc comments into the IDL, the apps bundle the IDL, and
         # Next inlines it, so internal engineering prose was being served to every
@@ -243,12 +232,11 @@ jobs:
               || { echo "::error::the committed $app IDL differs from a fresh regeneration"; exit 1; }
           done
 
-      - name: Verify the release artifact (BLOCKING - audit A-33)
+      - name: Verify the release artifact (BLOCKING)
         # Refuses any binary that does not match a clean default-feature rebuild,
         # which is what catches a dev-hatch or test-harness build reaching the
         # deploy path. Also fails on a missing IDL.
-        #
-        # ROUND 5 P0-02: `--local-only`, and the flag is the whole point. This gate builds NATIVELY on
+        # `--local-only`, and the flag is the whole point. This gate builds NATIVELY on
         # the runner, and the release artifact is the linux/amd64 CONTAINER build produced by
         # reproducible-build. Asking a native build to match the release pin made this step fail on a
         # comparison it was never the right job to make, which is why every step after it (including the
@@ -256,22 +244,20 @@ jobs:
         # it is the job that produces the bytes.
         run: scripts/verify-release-artifact.sh --local-only
 
-      - name: On-chain state harness, 154 tests (BLOCKING - audit round 4, P1-04)
+      - name: On-chain state harness (BLOCKING)
         # These litesvm tests run against target/deploy/dominion_silver_mint.so, the release artifact
         # built two steps above, and they are the only thing that proves the HANDLERS still call the rules
         # in src/state/. An adversarial pass measured 192 handler-level mutations that leave all 158 unit
         # tests green; this suite catches the ones that matter.
-        #
-        # ROUND 4 P1-04: nothing under .github/ referenced this runner. The suite existed, passed locally,
+        # nothing under .github/ referenced this runner. The suite existed, passed locally,
         # and gated no merge. The 19 P0 mutations closed in f9c7112 were unprotected in CI from the moment
         # they were written.
-        #
         # It must run AFTER the release artifact is built and BEFORE the Lazer harness, which rebuilds into
         # target/harness with --features test-harness. The runner asserts the artifact it loads is
         # probe-free, so an ordering mistake fails loudly rather than testing the wrong bytes.
         run: bash tools/state-harness/run.sh --no-build
 
-      - name: Lazer behavioural harness (BLOCKING - audit H-01)
+      - name: Lazer behavioural harness (BLOCKING)
         # Builds into target/harness, so it cannot contaminate the deploy artifact.
         run: bash tools/lazer-harness/run.sh
 
@@ -281,11 +267,10 @@ jobs:
         run: scripts/verify-release-artifact.sh --local-only
 
       - name: Typecheck the root transaction scripts (BLOCKING)
-        # ROUND 3 P2: CI typechecked each APP and never the root scripts, while the structural gate checked
+        # P2: CI typechecked each APP and never the root scripts, while the structural gate checked
         # for the PRESENCE of guard text rather than loadability. So three transaction scripts shipped unable
         # to start (TS2448 twice, TS2304 twice) and a five-argument call to a six-argument function sat in
         # T1's hostile-mint case, which meant the ceremony could not compile.
-        #
         # This step used to sit ABOVE Node setup, with a comment calling it "Anchor-free and network-free".
         # Both halves were wrong: with no node_modules on the runner, bare `npx tsc` DOWNLOADS whatever
         # TypeScript is newest (6.0.3 on the run that exposed this) and finds no @types/node, so it failed
@@ -294,48 +279,47 @@ jobs:
         # absent local compiler now fails loudly instead of silently fetching a different one.
         run: npx --no-install tsc -p tsconfig.scripts.json
 
-      # D6 was marked closed when this script was WRITTEN. The review-of-fixes pointed out it ran
+      # was marked closed when this script was WRITTEN. The pointed out it ran
       # NOWHERE: the punch-list item is literally titled "No CI gate catches client-vs-IDL drift", so a
       # script a human has to remember to type did not close it.
-      #
       # Placed after Node setup (it needs npx/tsx) and it reads `target/idl`, which the "Regenerate
       # the IDL" step above creates. Order matters in both directions.
       - name: Verify the clients call only instructions/accounts/errors the IDL declares (BLOCKING)
         # Root deps are installed above; re-running npm ci here just paid for the same install twice.
         run: npx --no-install tsx scripts/verify-client-idl-parity.ts
 
-      # ROUND 8 T8-03. The acceptance runner for option A, wired into CI in the SAME commit that adds
-      # it: round 4's P1-04 was a harness that existed, passed locally and gated no merge, and this is
+      # The acceptance runner for option A, wired into CI in the SAME commit that adds
+      # it: 's was a harness that existed, passed locally and gated no merge, and this is
       # the same shape. `--no-build` because the release artifact was built above and the whole point
       # is to test THOSE bytes; it also re-reads the three IDL copies and the client parity gate, so it
       # must sit after the regenerate and parity steps.
-      # ROUND 8 T8-04, local half. Shape is not provenance: a pin naming a commit that does not
+      # , local half. Shape is not provenance: a pin naming a commit that does not
       # exist, a non-numeric run id or an invented tool version must be refused before anything
       # downstream trusts the tuple.
-      - name: T8-04 the release pin refuses invented provenance (BLOCKING)
+      - name: The release pin refuses invented provenance (BLOCKING)
         run: python3 scripts/test-release-provenance.py
 
-      - name: F-03 a BPF stack overflow fails the build even when cargo exits 0 (BLOCKING)
+      - name: A BPF stack overflow fails the build even when cargo exits 0 (BLOCKING)
         run: bash scripts/test-strict-build-sbf.sh
 
-      - name: T8-03 option A - the pre-mint destination cannot be redirected (BLOCKING)
+      - name: The pre-mint destination cannot be redirected (BLOCKING)
         run: bash scripts/test-inventory-option-a.sh --no-build
 
-      # ROUND 8 T8-06, the ceremony half. Offline: it drives ceremony-step8's pure builder and decodes
+      # , the ceremony half. Offline: it drives ceremony-step8's pure builder and decodes
       # the instruction bytes. The panel half runs inside the admin app's vitest step below.
-      - name: T8-06 ceremony emits no instant inventory setter (BLOCKING)
+      - name: No instant inventory setter is emitted (BLOCKING)
         run: npx --no-install tsx scripts/test-ceremony-inventory-flow.ts
 
-      # ROUND 8 L1-01. The ceremony that actually initialises mainnet must send the manifest's
+      # The ceremony that actually initialises mainnet must send the manifest's
       # pre-mint destination and its first guardian. It encodes with the real IDL coder and reads the
       # bytes, because the omission it pins was invisible to the type system: Anchor encodes an
       # absent Pubkey as 32 zero bytes.
-      - name: L1-01 the mainnet initialiser sends the manifest's bindings (BLOCKING)
+      - name: The initialiser sends the manifest's bindings (BLOCKING)
         run: npx --no-install tsx scripts/test-t1-initialize-args.ts
 
-      # ROUND 8 L1-04. Every refusal between a deployed program and a live one, driven through the
+      # Every refusal between a deployed program and a live one, driven through the
       # same decision function ceremony-step8 calls before it emits the unpause.
-      - name: L1-04 launch-open readiness refuses every unready state (BLOCKING)
+      - name: Readiness refuses every unready state (BLOCKING)
         run: npx --no-install tsx scripts/test-launch-open-readiness.ts
 
       # ADDED 2026-08-10, and the reason is that a gate nobody runs is a gate that can sit RED. The
@@ -371,13 +355,13 @@ jobs:
           npx vitest run
           npm run build
 
-      # ROUND 6 R6-02. The {devnet, mainnet} x {no-candidate, pinned} x {match, mismatch} matrix for the
+      # The {devnet, mainnet} x {no-candidate, pinned} x {match, mismatch} matrix for the
       # upgrade gate. Pure, no network, no keypair: it exercises the decision that decides whether an
       # unpinned local .so can reach `solana program deploy` on mainnet.
       - name: The mainnet upgrade gate holds (BLOCKING)
         run: npx --no-install tsx scripts/test-upgrade-gate.ts
 
-      # ROUND 5 P2-06. LAST, because it needs all three workspaces installed, which the steps above do.
+      # LAST, because it needs all three workspaces installed, which the steps above do.
       # `cargo audit` was the only supply-chain gate in this workflow, so the JavaScript half of what
       # ships had none at all. This is a RATCHET against a measured baseline, not a zero-tolerance
       # gate: it fails on a new high, a new critical, or a high/critical on an untriaged package. The
@@ -386,23 +370,20 @@ jobs:
       - name: Production npm advisories may not get worse (BLOCKING)
         run: bash scripts/verify-npm-audit-policy.sh
 
-  # ROUND 5 P0-02, and it is its OWN JOB on purpose (review pass).
-  #
+  # , and it is its OWN JOB on purpose ().
   # `scripts/test-verify-release-artifact.sh` runs the verifier END TO END across ten cases (eleven invocations: case 10 runs it twice), and
   # each FULL run
   # rebuilds the program into a fresh isolated CARGO_TARGET_DIR that nothing reuses. That is the price
   # of testing the conclusion instead of the branch, and it is the right price: the defect it exists
   # to catch was a script that printed EXPECTED MISMATCH and then exited 0 with ARTIFACT OK, which no
   # unit test of an internal branch would ever have found.
-  #
   # Inside `gate` it added roughly 15 to 25 minutes to the critical path of the job the whole batch is
   # trying to make people trust, and a gate that slow is a gate somebody turns off. In its own job it
   # runs in PARALLEL with gate, stays blocking, and costs no wall-clock on the path to a merge.
   verifier-self-test:
     runs-on: ubuntu-latest
     steps:
-      # ROUND 8 FINAL-01 bis. FULL HISTORY, and this is load-bearing rather than tidy.
-      #
+      # -01 bis. FULL HISTORY, and this is load-bearing rather than tidy.
       # `actions/checkout` defaults to `fetch-depth: 1`. Measured on a shallow clone of this
       # repository: 1 commit present, the anchor absent, and `merge-base --is-ancestor` exiting 128
       # rather than 1. The verifier's identity gate needs the anchor to be REACHABLE from HEAD, and
@@ -417,17 +398,14 @@ jobs:
       # on the release path: it tests the VERIFIER, not the artifact. scripts/test-verify-release-artifact.sh
       # runs eleven cases and most of them do a full clean `cargo build-sbf`, so the cost is inherent to
       # the test rather than to a slow runner.
-      #
       # WHY THE JOB STILL RUNS INSTEAD OF BEING SKIPPED. GitHub's `paths:` filter only exists at the
       # workflow level, and making the JOB conditional turns a required check into a skipped one, whose
       # treatment depends on branch-protection settings that live outside this file. So the job always
       # runs and always reports; only the expensive STEPS are conditional. A green line here therefore
       # still means what it meant, and the log below says which of the two things it means.
-      #
       # FAIL-SAFE DIRECTION IS "RUN". A tag, a manual dispatch, an unknown base, a force-push, a first
       # push to a new branch: all of those run the full self-test. It only skips when git can prove the
       # diff touched none of the verifier's own inputs.
-      #
       # Plain git rather than a paths-filter action: this workflow's header requires every external
       # reference to be pinned and auditable, and a diff of file names does not need a dependency.
       - name: Decide whether the verifier's own inputs changed
@@ -504,9 +482,8 @@ jobs:
         uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable, 2026-08-08
         with:
           toolchain: 1.89.0
-      # ROUND 8 T8-01. The self-test runs BEFORE the real install, so a regression in the
+      # The self-test runs BEFORE the real install, so a regression in the
       # authentication is caught before any toolchain is placed on this runner.
-      #
       # NOT behind the scope gate: it is seconds long, it guards a supply-chain property rather than the
       # verifier, and .github/install-solana.sh is used by three jobs. Cheap enough to always run.
       - name: The Solana installer authenticates its archive (BLOCKING)
@@ -517,7 +494,7 @@ jobs:
         run: bash .github/install-solana.sh
       - name: Build the artifact the self-test reads
         if: steps.scope.outputs.relevant == 'true'
-        # ROUND 8 F-03: through the strict builder, which makes a BPF stack overflow fatal even
+        # through the strict builder, which makes a BPF stack overflow fatal even
         # though cargo exits 0 and emits a .so.
         run: bash scripts/_strict-build-sbf.sh --manifest-path programs/dominion_silver_mint_v2/Cargo.toml -- --locked
       - name: Regenerate the IDL (the verifier treats a missing one as a failure)
@@ -545,8 +522,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      # ROUND 8 FINAL-01 bis. FULL HISTORY, and this is load-bearing rather than tidy.
-      #
+      # -01 bis. FULL HISTORY, and this is load-bearing rather than tidy.
       # `actions/checkout` defaults to `fetch-depth: 1`. Measured on a shallow clone of this
       # repository: 1 commit present, the anchor absent, and `merge-base --is-ancestor` exiting 128
       # rather than 1. The verifier's identity gate needs the anchor to be REACHABLE from HEAD, and
@@ -572,13 +548,13 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          # REVIEW PASS ON 3bf3097: same defect as the gate's cache, wider blast radius, because this
+          # same defect as the gate's cache, wider blast radius, because this
           # job caches all of ~/.cargo/bin and produces the artifacts.
           key: ${{ runner.os }}-cargo-${{ env.ANCHOR_COMMIT }}-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Install Solana CLI (Agave v${{ env.SOLANA_VERSION }})
-        # REVIEW PASS ON 3bf3097, P0. This was the FOURTH install site and the only one that still
-        # ran `sh -c "$(curl ...)"`. R6-08 moved three jobs onto the checksummed installer and the
+        # P0. This was the FOURTH install site and the only one that still
+        # ran `sh -c "$(curl ...)"`. moved three jobs onto the checksummed installer and the
         # commit message claimed the pattern was gone repo-wide; it was not. This job is a `needs:`
         # dependency of `reproducible-build`, holds GITHUB_TOKEN and uploads artifacts, so it was
         # the worst of the four to leave behind. The retry loop that justified the local copy now
@@ -611,12 +587,11 @@ jobs:
         continue-on-error: true
 
       - name: anchor build (NON-BLOCKING - Option D, definitive root cause)
-        # FINAL STATE. Sanctioned Option D (NEXT_STEPS P2-07). DEFINITIVE
+        # FINAL STATE. Sanctioned Option D (NEXT_STEPS ). DEFINITIVE
         # root cause, exhaustively proven over ~18 verified CI runs +
         # local repro + agave-source + crates.io-MSRV analysis. TWO
         # independent problems were found; one is FIXED, one is a
         # fundamental anchor/Solana toolchain incompatibility:
-        #
         #  (1) FIXED: pyth-solana-receiver-sdk 0.6.1's own bare-trait
         #      `AnchorSerialize::try_to_vec` = E0782 hard error on modern
         #      rustc (pyth never fixed it through HEAD; solana-program
@@ -624,7 +599,6 @@ jobs:
         #      single toolchain). Resolved by vendoring + minimally
         #      patching pyth (commit 39a62e7, triple-reviewed SHIP,
         #      serialization byte-equivalent, supply-chain-diff clean).
-        #
         #  (2) NOT a CI-fixable issue: anchor 0.31.1's `anchor build`
         #      (SBF AND IDL) re-resolves the dep graph UNLOCKED, ignoring
         #      the committed Cargo.lock. That re-resolve (a) pulls
@@ -639,10 +613,9 @@ jobs:
         #      a coral-xyz/anchor + anza platform-tools toolchain
         #      incompatibility; the real fix is a DELIBERATE coordinated
         #      anchor-CLI + Solana version upgrade (mainnet-hardening,
-        #      tracked in NEXT_STEPS P2-07 + CI_IDL_DETERMINISM.md), NOT a
-        #      CI tweak. Re-confirmed exhaustively per Thomas's "do the
+        #      tracked in NEXT_STEPS + CI_IDL_DETERMINISM.md), NOT a
+        #      CI tweak. Re-confirmed exhaustively per "do the
         #      spike" mandate.
-        #
         # Deploy gate is INDEPENDENT of this step and intact: the live
         # .so + IDL are sha256-verified (RELEASE_ARTIFACT_V2_DEVNET.md),
         # the IDL is committed in-repo, and the `reproducible-build` job
@@ -656,34 +629,30 @@ jobs:
         run: yarn install
         continue-on-error: true
 
-      # REVIEW PASS ON 3bf3097. The `idl` upload is REMOVED, for the same reason and by the same
+      # The `idl` upload is REMOVED, for the same reason and by the same
       # argument as the `program-binary` upload below.
-      #
       # It came from the `anchor build` step above, which carries `continue-on-error: true`, out of a
       # `target/` restored from a cache keyed only on Cargo.lock. So it could be a failed build's
       # leftovers or a stale cached file, it was gated by nothing, it published on every event
       # including a fork's pull_request, and it sat in the same run listing as the verifiable `.so`
-      # that runbook step 2b tells the operator to download. R5 P1-01 made exactly this argument
+      # that runbook step 2b tells the operator to download. R5 made exactly this argument
       # about the binary and stopped one file short. The IDL is what both apps decode accounts with.
-      #
       # There is no gap left behind: the IDL is committed in-repo, and `reproducible-build` builds it
       # from the pinned toolchain, diffs it against both committed copies and hashes it into the
       # manifest. The committed copy IS the built one or CI is red.
 
-      # ROUND 5 P1-01. The `program-binary` upload was REMOVED, not renamed.
-      #
+      # The `program-binary` upload was REMOVED, not renamed.
       # It was the output of the `anchor build` step above, which carries `continue-on-error: true`
       # because anchor is known broken in this repo. So this job published a `.so` that might be from a
       # failed build, might be stale from the restored cache, and was never tested by anything. It sat
       # next to `dominion_silver_mint-verifiable-so` in the same run with a name that reads MORE
       # official, and the audit found both still downloadable for 90 days from a run whose two security
       # jobs were red.
-      #
       # There is now exactly ONE downloadable binary in this workflow: the container build published by
       # reproducible-build, after it has been tested and hashed. An artifact nobody can confuse with the
       # release is worth more than a second one that has to be explained.
 
-      # REVIEW PASS ON 3bf3097. The `cargo-lock` upload is REMOVED. Its name said "for commit if not
+      # The `cargo-lock` upload is REMOVED. Its name said "for commit if not
       # present"; Cargo.lock has been committed for a long time, and `verify-release-artifact.sh`
       # rebuilds against the committed one. An ungated artifact that duplicates a tracked file only
       # creates a second candidate for "which lock produced this binary", which is the question the
@@ -693,28 +662,25 @@ jobs:
         run: anchor test --skip-local-validator
         continue-on-error: true # tests are placeholders; will fail until 55-test matrix implemented
 
-  # AUDIT FINDING S-05. Every step of this job carried `continue-on-error: true` and the final step
+  # Every step of this job carried `continue-on-error: true` and the final step
   # was `if [ -f ... ]`, which does nothing when the file is absent. So the job went GREEN whether or
   # not a verifiable build had ever happened, and a green "reproducible-build" check is exactly the
   # kind of thing a release checklist treats as proof. It attested nothing.
-  #
   # It is blocking now. The `gate` job is NOT a substitute and the audit was right to say so: gate
   # compares two builds produced by the SAME local toolchain, which catches a tampered artifact but
   # cannot demonstrate that an independent party reproduces the same bytes. Only solana-verify does
   # that, which is the whole reason this job exists.
-  #
   # If it breaks, fix the Docker image or the toolchain pin. Do NOT restore continue-on-error: that
   # converts a failing proof back into a passing badge, which is worse than having no job at all.
   reproducible-build:
     runs-on: ubuntu-latest
-    # ROUND 5 P1-01. `needs: build` was the defect: this job produced and PUBLISHED the deployable
+    # `needs: build` was the defect: this job produced and PUBLISHED the deployable
     # binary while the gate was still running, or had already failed. Run 31218108656 published two
     # artifacts from a run whose conclusion was `failure`. It now waits for the gate, so nothing
     # downloadable can come out of a run whose tests did not pass.
     needs: [build, gate, verifier-self-test]
     steps:
-      # ROUND 8 FINAL-01 bis. FULL HISTORY, and this is load-bearing rather than tidy.
-      #
+      # -01 bis. FULL HISTORY, and this is load-bearing rather than tidy.
       # `actions/checkout` defaults to `fetch-depth: 1`. Measured on a shallow clone of this
       # repository: 1 commit present, the anchor absent, and `merge-base --is-ancestor` exiting 128
       # rather than 1. The verifier's identity gate needs the anchor to be REACHABLE from HEAD, and
@@ -734,12 +700,11 @@ jobs:
         run: bash .github/install-solana.sh
 
       - name: Install solana-verify
-        # ROUND 5 P2-02. `--version` is pinned, and `--locked` was never a substitute for it: --locked
+        # `--version` is pinned, and `--locked` was never a substitute for it: --locked
         # pins the DEPENDENCIES of whichever release cargo resolves, not the choice of release. The run
         # the audit observed installed 0.5.1 because that happened to be newest that day; the next one
         # could resolve anything, and the tool that decides which bytes are reproducible is not a thing
         # to leave floating. Upstream recommends a tagged release for production.
-        #
         # The version lives in config/mainnet-authorities.json so the manifest and the installer cannot
         # disagree, and it is read here rather than duplicated.
         run: |
@@ -749,24 +714,21 @@ jobs:
           cargo install solana-verify --locked --version "$VER"
           solana-verify --version
 
-      # S-07, RESOLVED as a process change rather than a fix. Two independent investigations, crossed,
+      # , RESOLVED as a process change rather than a fix. Two independent investigations, crossed,
       # measured that the SBF build is not deterministic across host platforms at the SAME toolchain
       # version. Our .so embeds /Users/runner/work/platform-tools/platform-tools/out/rust/library/alloc/...
       # at three places: the paths of the GitHub macOS runner that compiled the platform-tools tarball,
       # baked into its prebuilt std. The linux-x86_64 tarball carries /home/runner/..., a different string
       # of different length, which shifts every rodata offset after it. macOS and Linux disagree at v1.51
       # AND at v1.52, while each host is deterministic with itself.
-      #
       # The first hypothesis, forcing --tools-version v1.51, was WRONG: the container already links
       # 1.84.1-sbpf-solana-v1.51, identical to local.
-      #
       # The Solana docs say it outright: "If you verify your program which is not build in a docker
       # container it will most likely fail because Solana program builds are not deterministic across
       # different systems", and "make sure that you actually deploy the verified build and don't
       # accidentally overwrite it with anchor build or cargo build-sbf". Drift does exactly this in CI
       # (solana-verify build --library-name drift --base-image ...), and the Solana Foundation reusable
       # workflow builds on a Linux runner then proposes the deploy to Squads.
-      #
       # So THIS JOB PRODUCES THE DEPLOYABLE BYTES. It is no longer a build compared against itself.
       # --base-image is unnecessary now: [workspace.metadata.cli] solana = "3.0.0" in the root Cargo.toml
       # is read first by solana-verify (main.rs:954), which removes the silent fallback to the lockfile's
@@ -775,8 +737,8 @@ jobs:
         run: |
           set -euo pipefail
           rm -f target/deploy/dominion_silver_mint.so
-          # ROUND 8, F-03 remainder. THESE are the bytes that ship, and this was the last build path
-          # that did not apply the BPF stack-overflow rule. `solana-verify build` runs cargo inside a
+          # THESE are the bytes that ship, and they must obey the BPF stack-overflow rule.
+          # `solana-verify build` runs cargo inside a `solana-verify build` runs cargo inside a
           # container, so it cannot go through scripts/_strict-build-sbf.sh, but the rule is the same
           # and the message is the same: the toolchain prints it and exits 0. Capturing the output and
           # refusing on that line is what makes the published artifact obey the barrier the harness
@@ -794,7 +756,7 @@ jobs:
           echo "container build sha256:"
           sha256sum target/deploy/dominion_silver_mint.so
 
-      # ROUND 5 P2-02. The container runs as root, so everything it writes under target/ comes back
+      # The container runs as root, so everything it writes under target/ comes back
       # root-owned. The old diagnostics step began with `rm -f target/deploy/...` and died there with
       # Permission denied; because it was continue-on-error, the hashes and std paths it promised were
       # "on record in every run" were produced in none of them. Fixing the ownership FIRST is also what
@@ -805,7 +767,7 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" target
           test -r target/deploy/dominion_silver_mint.so
 
-      # ROUND 5, review pass. TWO defects with one root cause, both found independently by two
+      # TWO defects with one root cause, both found independently by two
       # reviewers: this job ran `verify-release-artifact.sh`, whose check 3 treats a MISSING IDL as a
       # failure and is NOT gated by --local-only, and it wrote `idl_sha256` into the manifest only
       # `if os.path.exists(...)`. Nothing here built an IDL: `solana-verify build` shells out to
@@ -813,7 +775,6 @@ jobs:
       # of this file records that exact fact). So the job could never go green, the artifact the
       # runbook tells an operator to download would never exist, and the pin's IDL hash would always
       # have been null with the runbook's step-3b assertion vacuously passing on it.
-      #
       # Building the IDL HERE fixes both. It is also the right place: the manifest that identifies the
       # release should carry the hash of the IDL built from the same source at the same commit.
       - name: Build the IDL for the manifest (BLOCKING)
@@ -829,18 +790,26 @@ jobs:
           printf '\n' >> "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json"
           python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$GITHUB_WORKSPACE/target/idl/dominion_silver_mint.json"
           # And it must be the IDL the apps ship, or the manifest attests an IDL nobody uses.
-          diff -u apps/public/src/lib/idl/dominion_silver_mint.json target/idl/dominion_silver_mint.json
-          diff -u apps/admin/src/lib/idl/dominion_silver_mint.json target/idl/dominion_silver_mint.json
+          #
+          # NORMALISED ON BOTH SIDES, exactly as in the gate job. The committed copies have their `docs`
+          # arrays stripped, because Anchor lifts Rust doc comments into the IDL and the apps bundle it,
+          # so that prose would be served to every visitor. This was the SECOND comparison site and it
+          # was missed when the first was fixed: the gate went green and this job failed 13 minutes later
+          # on a diff containing nothing but `docs`.
+          python3 scripts/_strip-idl-docs.py target/idl/dominion_silver_mint.json /tmp/idl-fresh-rb.json
+          for app in public admin; do
+            python3 scripts/_strip-idl-docs.py "apps/$app/src/lib/idl/dominion_silver_mint.json" "/tmp/idl-rb-$app.json"
+            diff -u "/tmp/idl-rb-$app.json" /tmp/idl-fresh-rb.json \
+              || { echo "::error::the committed $app IDL differs from a fresh regeneration"; exit 1; }
+          done
 
-      # ROUND 5 P1-02. THE BINARY THIS JOB PUBLISHES IS NOW THE BINARY IT TESTS.
-      #
+      # THE BINARY THIS JOB PUBLISHES IS NOW THE BINARY IT TESTS.
       # The gate ran the on-chain suite against its own NATIVE build; this job built a different file in a
       # different job and ran nothing against it. There was no artifact transfer between them and no
       # blocking comparison of the two. On the audited run the gate died before the harness and the
       # container binary was published anyway. The auditor closed the hole by hand, downloading the .so
       # and running the suite on it (141/141 at the time), and said plainly that an external proof is not a property
       # of the pipeline. It is one now.
-      #
       # `--no-build` is what makes this test the container bytes rather than a fresh native build.
       - name: Run the 154 on-chain tests against the CONTAINER binary (BLOCKING)
         run: bash tools/state-harness/run.sh --no-build
@@ -859,15 +828,14 @@ jobs:
         id: tested
         run: echo "sha=$(sha256sum target/deploy/dominion_silver_mint.so | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
-      # ROUND 5, review pass. This step used to `rm -f target/deploy/dominion_silver_mint.so`, build a
+      # This step used to `rm -f target/deploy/dominion_silver_mint.so`, build a
       # NATIVE binary into that exact path, and restore the container copy on its LAST line. It is
       # `continue-on-error`, and GitHub's default shell is `bash -e`, so any failure between the rm and
       # the cp (the second full SBF build filling the runner's disk is the realistic one) left a native
       # binary at the path the manifest and the publish step read. The job would then hash it, name it
       # `dominion_silver_mint-verifiable-so`, and attest bytes nothing had tested.
-      #
       # It now builds into its OWN directory and never touches target/deploy. That was always the fix:
-      # `--sbf-out-dir` exists, and `tools/lazer-harness/run.sh` learned the same lesson in round 3.
+      # `--sbf-out-dir` exists, and `tools/lazer-harness/run.sh` learned the same lesson in 
       - name: Diagnostics, the cross-host divergence on record
         continue-on-error: true
         run: |
@@ -881,13 +849,12 @@ jobs:
           echo "=== the std paths baked into each ==="
           strings target/deploy/dominion_silver_mint.so | grep -oE "/(Users|home)/runner/work[^ ]{0,50}" | sort -u | head -3 || true
 
-      # ROUND 5 P2-01. A machine-readable manifest of everything that identifies this artifact, built
+      # A machine-readable manifest of everything that identifies this artifact, built
       # from MEASUREMENTS rather than from the committed file. The old manifest carried a hash and a
       # size and nothing else, the CI compared only the hash, and the local script printed the size
       # without confronting it with anything: a manifest whose size disagreed with its own hash passed
       # every check. It also lacked the source commit, the tool version, the run id, the program id and
       # the IDL hash, all of which are needed to say WHICH build a given file is.
-      #
       # `normalized_sha256` is the OTHER hash convention and the one most likely to be mixed up:
       # solana-verify strips trailing zeros before hashing (get_binary_hash), and that is what
       # `verify-from-repo` compares against the chain. On the same file the two numbers differ.
@@ -898,7 +865,7 @@ jobs:
           SO=target/deploy/dominion_silver_mint.so
           python3 - "$SO" > release-manifest.json <<'PY'
           import hashlib, json, os, re, subprocess, sys
-          # ROUND 8 self-hunt. ABSOLUTE, not relative. `sys.path.insert(0, "scripts")` resolved
+          # ABSOLUTE path, not relative. A bare `sys.path.insert(0, "scripts")` resolves
           # against the step's CWD, so adding a `working-directory:` to this step later would break
           # the import. It would fail loudly rather than silently, but a release job that dies on an
           # ImportError is still a release job that does not run.
@@ -920,12 +887,12 @@ jobs:
               "source_commit": os.environ["GITHUB_SHA"],
               "ci_run_id": os.environ["GITHUB_RUN_ID"],
               "ci_repository": os.environ["GITHUB_REPOSITORY"],
-              # ROUND 8 A-04. BARE semver, not the raw `--version` line. `solana-verify --version`
+              # BARE semver, not the raw `--version` line. `solana-verify --version`
               # prints "solana-verify 0.5.1", the runbook tells the operator to copy this field into
               # config/mainnet-authorities.json, and the install step feeds that value straight to
               # `cargo install --version`, which needs a bare semver constraint. Emitting the prefixed
               # string meant the FIRST ci run after a pin could not install its own pinned tool.
-              # ROUND 8 FINAL-06. The SHARED producer, so the proof and the production path cannot
+              # A SHARED producer, so the proof and the production path cannot
               # drift. A local helper here was invisible to the test, which hard-coded its strings.
               "solana_verify_version": _svv.measured(),
               "idl_sha256": hashlib.sha256(open(idl, "rb").read()).hexdigest()
@@ -940,14 +907,14 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # THE PIN COMPARISON, and it is the ONLY authority on the pin (round 5 P0-02). The gate no longer
+      # THE PIN COMPARISON, and it is the ONLY authority on the pin (). The gate no longer
       # makes this claim, because a native build cannot.
       - name: Compare the verifiable build against the pinned release artifact (BLOCKING)
         run: |
           set -euo pipefail
           GOT=$(python3 -c "import json;print(json.load(open('release-manifest.json'))['sha256'])")
           GOT_BYTES=$(python3 -c "import json;print(json.load(open('release-manifest.json'))['bytes'])")
-          # ROUND 6 R6-07. One implementation of "is this pin valid", shared with the local verifier,
+          # ONE implementation of "is this pin valid", shared with the local verifier,
           # so CI and the operator's machine cannot disagree about what a pin has to contain.
           read -r STATUS EXPECTED EXP_BYTES SCHEMA <<<"$(python3 scripts/_read-release-pin.py config/mainnet-authorities.json .)"
           echo "status       : $STATUS"
@@ -955,10 +922,9 @@ jobs:
           echo "pinned       : $EXPECTED ($EXP_BYTES bytes)"
           case "$STATUS" in
             no-candidate)
-              # The honest state until the mainnet program id exists. Codex: the source still carries
+              # The honest state until the mainnet program id exists. the source still carries
               # the devnet id, and runbook step 2 changes declare_id!, which changes the binary, the
               # hash and the IDL. Pinning today would pin bytes that will never be deployed.
-              #
               # This is NOT a vacuous green. The job has already proved the container reproduces a
               # build AND that this exact file passes the full on-chain suite. What it does not claim is
               # that the file is the mainnet release, and it says so rather than implying otherwise.
@@ -988,10 +954,9 @@ jobs:
               ;;
           esac
 
-      # PUBLISH LAST (round 5 P1-01). Everything above has now run against this exact file: the tests,
+      # PUBLISH LAST (). Everything above has now run against this exact file: the tests,
       # the probe scan, the hashes and the pin. Publishing before them is what let a red run leave two
       # downloadable binaries behind for 90 days.
-      #
       # And only from a PUSH to main or a tag. The workflow also runs on pull_request, where anyone
       # with a fork can propose a branch; a deployable artifact must not be producible from an arbitrary
       # PR. PRs still run every check above, they just do not leave a binary behind.
