@@ -55,3 +55,8 @@ ceremony-out/
 __pycache__/
 *.pyc
 
+# Agent instructions for this repository. Internal by construction: it describes what must
+# NOT be published here, which is itself not publishable. Loaded from the working directory,
+# so it has to sit at the root, so it has to be ignored here.
+/CLAUDE.md
+/CLAUDE.local.md

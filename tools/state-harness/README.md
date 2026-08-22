@@ -1,8 +1,8 @@
 # On-chain state harness
 
 The 158 Rust unit tests all call PURE FUNCTIONS in `src/state/`. None of them can
-see a handler that computed the right value and never persisted it. External
-reviewers measured 192 handler-level mutations (a dropped Anchor `mut`, a deleted
+see a handler that computed the right value and never persisted it. Mutation
+testing measured 192 handler-level mutations (a dropped Anchor `mut`, a deleted
 `has_one`, a deleted `validate_*` call, an inverted derived field) that each left
 all 158 tests AND every repo gate green. This suite loads the real `.so` into
 litesvm, sends real transactions, and reads the accounts back to assert FIELD

@@ -1412,7 +1412,7 @@ mod fix_a_tests {
         assert!(!tighten(&mixed));
     }
 
-    // --- (audit wave 0): the queue-delay floor. ---
+    // --- The queue-delay floor. ---
 
     fn delay(v: u32) -> RedeemLimitsArgs {
         RedeemLimitsArgs {

@@ -6,18 +6,17 @@ solana_version = "3.0.0"
 resolution = true
 skip-lint = false
 
-# AUDIT DOM-014: localnet and mainnet pointed at the RETIRED GDN5k... id, which is
-# not this binary's declare_id. An operator could initialize, verify or sign against
-# the wrong program. localnet now matches declare_id.
+# Every cluster below declares the SAME id as this binary's declare_id!. A cluster entry that
+# names anything else lets an operator initialize, verify or sign against the wrong program.
 [programs.localnet]
 dominion_silver_mint = "3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ"
 
 [programs.devnet]
 dominion_silver_mint = "3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ"
 
-# AUDIT DOM-014 is now SATISFIED rather than deferred: the mainnet id was generated on 2026-08-08 and
-# is the same id on every cluster, so no tooling can point at a program nobody controls. The comment
-# that used to sit here said declaring a stale id is worse than declaring none, which was right; what
+# The mainnet id is the same id on every cluster, so no tooling can point at a program nobody
+# controls. Declaring a stale id is worse than declaring none, which is why this entry is not
+# left empty; what
 # closes it is a real id, not an absent entry.
 [programs.mainnet]
 dominion_silver_mint = "3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ"

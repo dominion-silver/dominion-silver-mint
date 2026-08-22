@@ -77,7 +77,7 @@ const GENESIS: Record<Cluster, string | null> = {
  * The localnet negative check used to be built from `GENESIS`, which is keyed on the `Cluster` type,
  * and `Cluster` has no testnet member because these scripts refuse testnet by hostname. So a tunnel
  *  from 127.0.0.1 to `api.testnet.solana.com` reached the chain, matched nothing in `GENESIS`, and was
- *  accepted as an unknown local validator. Reproduced by the auditor through a local HTTP proxy.
+ *  accepted as an unknown local validator. Reproduced through a local HTTP proxy.
  * The list a denylist needs is "public chains", not "chains we have a Cluster variant for". Tying it
  *  to the type was the defect. Anything reachable and publicly known belongs here. */
 const PUBLIC_GENESIS: Record<string, string> = {
@@ -141,7 +141,7 @@ export function mainnetConfig(): Record<string, unknown> {
   // THERE IS NO OVERRIDE. Not an env var, not a pair of env vars.
   // deleted `DOMINION_RELEASE_MANIFEST` for redirecting which file a gate trusts. This sibling
   // survived one file over, and the previous fix gated it behind a SECOND variable,
-  // `DOMINION_CLUSTER_SELFTEST=1`. That was wrong in principle and the audit said so plainly: both
+  // `DOMINION_CLUSTER_SELFTEST=1`. That was wrong in principle: both
   // variables come from the same environment, so the second one is a textual marker, not a separation
   // of authority and not proof the caller is the test harness. A leftover `.env`, a ceremony shell or
   // a copied command carries both, `t1-hostile-bootstrap.ts` then reads authorities, launch posture,

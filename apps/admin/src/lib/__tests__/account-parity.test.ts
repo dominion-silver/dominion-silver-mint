@@ -94,7 +94,7 @@ describe("admin builder account parity with the IDL", () => {
     expect(arm[0].programId.equals(disarm[0].programId)).toBe(true);
   });
 
-  // --- audit a failed read must be REPORTED, not rendered as zero ---
+  // --- a failed read must be REPORTED, not rendered as zero ---
   // `fetchDashboardSnapshot` mapped a rejected treasury or supply read to BN(0) and returned a snapshot
   // that looked complete: the operator saw Treasury $0 / supply 0 oz / 0% cap used with nothing marking
   // those as unread, and could then decide a withdrawal, a premint, or an opening on them.

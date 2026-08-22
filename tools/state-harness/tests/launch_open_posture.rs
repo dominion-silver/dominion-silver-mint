@@ -817,9 +817,9 @@ fn the_readiness_digest_moves_on_every_config_field_the_decision_reads() {
 /// cannot pass unnoticed on the other.
 #[test]
 fn the_readiness_digest_mirror_matches_the_declared_layout() {
-    // REVIEW P0. THE FIRST VERSION OF THIS TEST ASSERTED NOTHING.
+    // THE FIRST VERSION OF THIS TEST ASSERTED NOTHING.
     // It built the preimage from literals and hashed it, then compared to a literal. `sha256(x) == x`
-    // can only fail if someone edits the test. The reviewer proved it by mutation: adding a byte to
+    // can only fail if someone edits the test. Mutation proved it: adding a byte to
     // the mirror in common/mod.rs left this test GREEN while six real tests went red. The docblock
     // claimed it pinned the encoders; it observed neither.
     // This one calls `Fixture::readiness_digest`, the mirror, over the LIVE config, and compares it

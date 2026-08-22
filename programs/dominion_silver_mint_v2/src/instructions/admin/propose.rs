@@ -579,7 +579,7 @@ pub fn propose_set_oracle_guards_handler(
             DominionError::PriceOutOfBounds
         );
     }
-    // Cross-field (audit P3-e): resolve the effective band (the arg if
+    // Cross-field: resolve the effective band (the arg if
     // Some, else the current config) and reject min >= max at PROPOSE too, so a
     // doomed proposal cannot occupy the single oracle-guards slot for the full
     // timelock. Execute re-checks against the applied values (defense in depth).
@@ -653,7 +653,7 @@ pub fn propose_set_oracle_guards_handler(
     let mut data = Vec::with_capacity(TimelockQueueAccount::MAX_ACTION_DATA_BYTES);
     args.serialize(&mut data)
         .map_err(|_| error!(DominionError::SerializationFailure))?;
-    // Defense in depth (audit P3-d): an action_data write beyond the
+    // Defense in depth: an action_data write beyond the
     // account budget would corrupt the timelock account. The worst-case borsh
     // of OracleGuardsArgs (~46 B) is far under the cap, but guard it explicitly
     // for parity with propose_update_metadata.

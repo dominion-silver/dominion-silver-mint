@@ -85,7 +85,7 @@ describe("Lazer failure messages after an on-chain revert", () => {
           `message must not claim nothing was charged after an on-chain revert\nreceived ${JSON.stringify(message)}`,
         ).not.toContain("Nothing was charged");
 
-        // The remediations stay OPPOSITE: replay is contention, carry-forward is a stalled feed.
+        // The two answers stay OPPOSITE: replay is contention, carry-forward is a stalled feed.
         expect(message).toContain(c.verb);
       });
     }

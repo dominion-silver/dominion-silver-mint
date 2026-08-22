@@ -225,7 +225,7 @@ describe("the Lazer proxy rate-limits", () => {
 /**
  * The `fresh: true` path, which had NO test at all: every case above goes through the
  * cached path, and the defect lived exactly in the branch none of them entered.
- * The audit measured it: 40 concurrent `fresh` requests produced 30 x 200, 10 x 429 and 2 upstream
+ * Measured: 40 concurrent `fresh` requests produced 30 x 200, 10 x 429 and 2 upstream
  * calls, because a waiter that joined an in-flight call skipped both cache checks (`!fresh` guarded
  * them), fell through to `allowRequest`, and paid a token for a call it had not made.
  * The first fix answered 409 to a contended caller. A showed that turned an
@@ -258,7 +258,7 @@ describe("the fresh (submit) path", () => {
   }
 
   it("NO fresh waiter is charged a token for a call it did not make", async () => {
-    // THE ORIGINAL FINDING, as an assertion. A joiner causes no upstream cost, so it must never be
+    // THE ORIGINAL DEFECT, as an assertion. A joiner causes no upstream cost, so it must never be
     // rate-limited.
     const { POST } = await freshRoute();
     stubUpstream(nowUs());

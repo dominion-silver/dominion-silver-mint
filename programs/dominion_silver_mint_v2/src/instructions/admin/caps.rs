@@ -82,11 +82,11 @@ pub fn set_max_silv_supply_handler(ctx: Context<SetMaxSupply>, new_max: u64) -> 
 }
 
 /// The whole decision, extracted so it is unit-testable without a Context.
-/// review of (P1, raised by two reviewers): a comment in
-/// `scripts/e2e-fixa-devnet.ts` claimed the success branch of the invariant below was
-/// "covered by the caps.rs unit tests instead". It was not. This file had no test
-/// module at all, so `>=` written as `>` would have shipped undetected, taking with it
-/// the documented ability to shrink headroom all the way to the live supply.
+/// The test module at the bottom of this file covers BOTH branches of the invariant
+/// below, success and failure, and it covers them here rather than through an
+/// end-to-end script, because a pure function is where the boundary actually lives.
+/// `>=` written as `>` would silently remove the documented ability to shrink
+/// headroom all the way to the live supply, so the boundary is asserted, not assumed.
 pub fn validate_new_max_supply(new_max: u64, current_cap: u64, live_supply: u64) -> Result<()> {
     require!(
         new_max <= MAX_SILV_SUPPLY_CEILING,
@@ -103,7 +103,7 @@ pub fn validate_new_max_supply(new_max: u64, current_cap: u64, live_supply: u64)
     // Read from the REAL mint rather than a tracked counter, so the check cannot
     // drift. If a deliberate permanent halt is ever wanted, it should be a separate,
     // explicitly named, separately confirmed instruction, not a side effect of this
-    // setter (open product decision, see the master audit doc section 13.4).
+    // setter.
     require!(new_max >= live_supply, DominionError::SupplyCapBelowSupply);
     Ok(())
 }
@@ -578,7 +578,7 @@ mod min_operation_tests {
 
     #[test]
     fn the_default_floor_prices_out_the_measured_capture_amount() {
-        // THE FINDING, as an executable assertion rather than a comment. At $58.34/oz and 100 bps,
+        // The derivation as an executable assertion rather than a comment. At $58.34/oz and 100 bps,
         // 60 micro-USDC is the smallest amount that mints a non-zero SILV: `fee_from_amount` ceils
         // 60*100/10000 to 1, leaving 59 net, and `mint_silv_out` floors 59/58.34 to exactly 1.
         // That is the whole cost of capturing a Lazer print, so the derivation is pinned here: if

@@ -55,7 +55,7 @@ pub fn read_silver_price_lazer(
 }
 
 fn map_parse_err(e: LazerError) -> Error {
-    // audit P3-c: surface the three CONFIG-actionable parse failures with
+    // Surface the three CONFIG-actionable parse failures with
     // distinct codes (the operator can fix the configured channel / feed id, or
     // the message is oversized); everything else is a generic corrupt payload.
     match e {
@@ -120,8 +120,8 @@ pub fn check_price_delta(config: &ConfigAccount, new_price: u128, now: i64) -> R
 
 /// dust filter: only update last_recorded_price if amount is large enough,
 /// EXCEPT the very first arming (last_recorded == 0) which always records so the
-/// delta breaker cannot be permanently disarmed by an all-sub-threshold flow
-/// (audit P2-B). The first accepted price is oracle-verified + in-band, so
+/// delta breaker cannot be permanently disarmed by an all-sub-threshold flow.
+/// The first accepted price is oracle-verified + in-band, so
 /// arming on it is safe; the dust filter still governs every SUBSEQUENT update
 /// (preventing a tiny trade from moving the reference to a manipulated print).
 pub fn maybe_update_last_price(

@@ -25,8 +25,8 @@ pub enum TimelockAction {
     // closed, so the announced window is when a bad oracle guard should surface.
     SetPublicMint = 11,
     // Changing the pre-mint DESTINATION is a redirect: the admin picks where supply lands,
-    // and `admin_premint` can then mint the remaining cap headroom into it in the same block. Both
-    // auditors call the instant setter untenable while a premint capability exists. Discriminants are
+    // and `admin_premint` can then mint the remaining cap headroom into it in the same block. An
+    // instant setter is untenable while a premint capability exists. Discriminants are
     // APPEND ONLY.
     SetInventoryWallet = 12,
 }

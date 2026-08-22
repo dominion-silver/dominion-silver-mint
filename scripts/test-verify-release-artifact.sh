@@ -134,8 +134,8 @@ run_case "a missing .so is rejected" 1 \
   "ARTIFACT REJECTED" -- bash "$VERIFY" "$TMP/does-not-exist.so"
 
 # 2b. A HARD LINK of the verifier into another tree makes it attest THAT tree, while
-#     being byte-identical to the audited script because it is the same inode. `realpath` cannot see
-# it: there is no target to resolve. The auditor reproduced ARTIFACT OK for foreign bytes this
+#     being byte-identical to the verifier because it is the same inode. `realpath` cannot see
+# it: there is no target to resolve. ARTIFACT OK was reproduced for foreign bytes this
 #     way. st_nlink is the only signal, so this case exists to keep the guard honest.
 HL="$TMP/hardlink-tree"
 mkdir -p "$HL/scripts" "$HL/target/deploy" "$HL/target/idl" "$HL/config"

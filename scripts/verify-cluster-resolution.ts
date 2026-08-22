@@ -38,7 +38,7 @@ function withRpc<T>(rpc: string | undefined, fn: () => T): T {
   }
 }
 
-console.log("Cluster resolution gate (audit S-01)\n");
+console.log("Cluster resolution gate\n");
 
 // 1. default stays devnet
 withRpc(undefined, () => {

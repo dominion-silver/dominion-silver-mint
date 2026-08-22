@@ -59,9 +59,9 @@ env:
 
 jobs:
   # ===================================================================
-  # BLOCKING GATE (audit action 0.5, added 2026-07-25).
-  # Every step below is intentionally WITHOUT continue-on-error. The audit's
-  # / was that this workflow could not fail: a non-compiling
+  # BLOCKING GATE.
+  # Every step below is intentionally WITHOUT continue-on-error. This workflow
+  # once could not fail at all: a non-compiling
   # program and failing unit tests both produced a green check, because every
   # substantive step was continue-on-error and there was no test step at all.
   # The legacy job that follows is left as-is (it exists for artifact upload and
@@ -87,7 +87,7 @@ jobs:
           toolchain: 1.89.0
           components: rustfmt
 
-      # AUDIT review of (P1, security reviewer): `target` was cached under a key
+      # `target` was once cached under a key
       # that hashes only Cargo.lock, never the source. verify-release-artifact.sh
       # compares the artifact against a "clean" rebuild, and both used to compile
       # through this same shared target dir, so a stale or tampered intermediate would
@@ -140,7 +140,7 @@ jobs:
         # though cargo exits 0 and emits a .so.
         run: bash scripts/_strict-build-sbf.sh --manifest-path programs/dominion_silver_mint_v2/Cargo.toml -- --locked
 
-      # AUDIT review of (P0, integration reviewer, proved by execution): this
+      # Proved by execution: this
       # job could NEVER have passed on a fresh runner. `cargo build-sbf` does not
       # create target/idl (it makes deploy/, release/, sbpf-solana-solana/ only) and
       # target/ is gitignored, so the shell failed the redirect before anchor ran. The
@@ -611,7 +611,7 @@ jobs:
       # because anchor is known broken in this repo. So this job published a `.so` that might be from a
       # failed build, might be stale from the restored cache, and was never tested by anything. It sat
       # next to `dominion_silver_mint-verifiable-so` in the same run with a name that reads MORE
-      # official, and the audit found both still downloadable for 90 days from a run whose two security
+      # official, and both stayed downloadable for 90 days from a run whose two security
       # jobs were red.
       # There is now exactly ONE downloadable binary in this workflow: the container build published by
       # reproducible-build, after it has been tested and hashed. An artifact nobody can confuse with the
@@ -631,7 +631,7 @@ jobs:
   # was `if [ -f ... ]`, which does nothing when the file is absent. So the job went GREEN whether or
   # not a verifiable build had ever happened, and a green "reproducible-build" check is exactly the
   # kind of thing a release checklist treats as proof. It attested nothing.
-  # It is blocking now. The `gate` job is NOT a substitute and the audit was right to say so: gate
+  # It is blocking now. The `gate` job is NOT a substitute: gate
   # compares two builds produced by the SAME local toolchain, which catches a tampered artifact but
   # cannot demonstrate that an independent party reproduces the same bytes. Only solana-verify does
   # that, which is the whole reason this job exists.
@@ -667,7 +667,7 @@ jobs:
       - name: Install solana-verify
         # `--version` is pinned, and `--locked` was never a substitute for it: --locked
         # pins the DEPENDENCIES of whichever release cargo resolves, not the choice of release. The run
-        # the audit observed installed 0.5.1 because that happened to be newest that day; the next one
+        # observed here installed 0.5.1 because that happened to be newest that day; the next one
         # could resolve anything, and the tool that decides which bytes are reproducible is not a thing
         # to leave floating. Upstream recommends a tagged release for production.
         # The version lives in config/mainnet-authorities.json so the manifest and the installer cannot
@@ -732,8 +732,8 @@ jobs:
           sudo chown -R "$(id -u):$(id -g)" target
           test -r target/deploy/dominion_silver_mint.so
 
-      # TWO defects with one root cause, both found independently by two
-      # reviewers: this job ran `verify-release-artifact.sh`, whose check 3 treats a MISSING IDL as a
+      # TWO defects with one root cause: this job ran
+      # `verify-release-artifact.sh`, whose check 3 treats a MISSING IDL as a
       # failure and is NOT gated by --local-only, and it wrote `idl_sha256` into the manifest only
       # `if os.path.exists(...)`. Nothing here built an IDL: `solana-verify build` shells out to
       # cargo build-sbf, which produces `deploy/` and never `idl/` (the gate's own comment at the top
@@ -770,15 +770,14 @@ jobs:
       # THE BINARY THIS JOB PUBLISHES IS NOW THE BINARY IT TESTS.
       # The gate ran the on-chain suite against its own NATIVE build; this job built a different file in a
       # different job and ran nothing against it. There was no artifact transfer between them and no
-      # blocking comparison of the two. On the audited run the gate died before the harness and the
-      # container binary was published anyway. The auditor closed the hole by hand, downloading the .so
-      # and running the suite on it (141/141 at the time), and said plainly that an external proof is not a property
-      # of the pipeline. It is one now.
+      # blocking comparison of the two. On one run the gate died before the harness and the container
+      # binary was published anyway. Closing that by hand, outside the pipeline, proves nothing about
+      # the pipeline. The comparison is a property of it now.
       # `--no-build` is what makes this test the container bytes rather than a fresh native build.
       - name: Run the 154 on-chain tests against the CONTAINER binary (BLOCKING)
         run: bash tools/state-harness/run.sh --no-build
 
-      # NOT `verify-release-artifact.sh --local-only` here, and a reviewer was right to flag why: even
+      # NOT `verify-release-artifact.sh --local-only` here, and the reason matters: even
       # with that flag, check 1a rebuilds NATIVELY on the runner and demands byte-equality with `$SO`,
       # which in this job is the CONTAINER output. Whether those two agree is precisely the open
       # question the diagnostics step below exists to MEASURE, so asserting it as a blocking gate would

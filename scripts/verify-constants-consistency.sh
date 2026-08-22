@@ -152,17 +152,13 @@ a, p_ = consts.get("admin", {}), consts.get("public", {})
 # tree where neither app declared SILV_MINT would otherwise reach that check with the name unbound and
 # kill the gate with a NameError instead of printing a verdict.
 RETIRED_MINTS = {
-    "9jM14E8kV6asGw2FwNhKk3gXQNzGhoLrJGyFZ8U7gMoF",  # gc5TW era, program closed
-    "5i13gz6vGKTYhpWbMuQfiBAApfNHCxxJu2GtDGM1A2Li",  # AX7se era, program closed
-    "62dTkSN7FF2HH8tENWL1mXmrCm8ouqX1bditK71yfxPr",  # 6bgSnXYg era, program closed 2026-08-07
-    # Both apps still carried this on 2026-08-10, hours after T1 created the live mint on the
-    # 3ucji6 deploy. It is not from a closed program: it is a LIVE devnet mint with supply 0 whose
-    # mint authority is not this program's silv_mint_authority PDA, so every instruction the apps
-    # built against it would have been rejected. Runbook step 6c is marked BLOCKING and was
-    # skipped. The list is the only thing that makes this gate able to say so, and it did not
-    # contain the value, so the gate printed `ok` on a broken config. That is the failure mode the
-    # comment above predicts, observed.
-    "G5zez3JWETJMfG3hnCQbdPm7usXMnmKUpajdGJYB5JFF",  # pre-3ucji6 devnet mint, retired 2026-08-10
+    "9jM14E8kV6asGw2FwNhKk3gXQNzGhoLrJGyFZ8U7gMoF",
+    "5i13gz6vGKTYhpWbMuQfiBAApfNHCxxJu2GtDGM1A2Li",
+    "62dTkSN7FF2HH8tENWL1mXmrCm8ouqX1bditK71yfxPr",
+    # A mint can also belong to a LIVE program whose silv_mint_authority PDA does not match this
+    # one. Every instruction an app builds against such a mint is rejected, and only this list can
+    # say so, so a value missing from it is a gate that prints `ok` on a broken config.
+    "G5zez3JWETJMfG3hnCQbdPm7usXMnmKUpajdGJYB5JFF",
 }
 if "SILV_MINT" in a and "SILV_MINT" in p_:
     check(a["SILV_MINT"] == p_["SILV_MINT"],
@@ -210,11 +206,10 @@ def _b58_decode(s):
 
 _PIN = (_MANIFEST.get("mint_creation_ceremony") or {}).get("pregenerated_mint") if _MANIFEST else None
 # The retired PRE-GENERATED addresses, which are a different list from the retired app SILV_MINTs
-# above: this one is about mint keypairs that were generated, superseded, and kept on disk beside the
-# live one. `4vdwEdyr` is precisely the file a stale path would pick up, so re-pinning it is a mistake
-# worth naming rather than a hypothetical.
+# above: this one is about mint keypairs that were generated, superseded, and kept on disk beside
+# the live one. A superseded keypair file is exactly what a stale path picks up.
 RETIRED_PREGEN = {
-    "4vdwEdyruqd3fESSY2QYMGcyv4FAHAMyCLTQ7hKZgdb",  # pre-vanity, never announced, retired 2026-08-11
+    "4vdwEdyruqd3fESSY2QYMGcyv4FAHAMyCLTQ7hKZgdb",
 }
 if _MANIFEST:
     check(isinstance(_PIN, str) and len(_PIN) > 0,
@@ -476,7 +471,7 @@ for _u in sorted(set(_uncovered)):
     print(f"   FAIL: {_u} is declared in state/ and absent from the 4c manifest, so nothing checks it runs")
 check(
     not _absent and not _missing and not _uncovered,
-    # "lexical call present", not "called". The difference is the whole finding.
+    # "lexical call present", not "called". The difference is the whole point.
     f"all {len(_RULES)} state rules have a lexical call at each required site "
     f"({sum(len(v) for v in _RULES.values())} sites). Wiring alarm, NOT semantic proof: "
     f"the handler-level proof is tools/state-harness",
@@ -484,16 +479,14 @@ check(
 
 print("5. Retired program ids")
 # WHEN YOU RETIRE A PROGRAM ID, ADD IT HERE IN THE SAME COMMIT. The gate cannot catch what it does not
-# know, and this list has shipped one generation behind twice, each time missing the id just retired.
+# know, so an id absent from this list is an id the gate cannot protect a live path from.
 RETIRED = {
-    # Retired 2026-08-07: replaced by the full-ceremony rehearsal deploy HXaptAca..., and closed to
-    # reclaim its 9 SOL. Its initialize window was already spent, so it could not rehearse T1 again.
-    "6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh": "devnet 2026-07-26 to 2026-08-07, CLOSED on-chain",
-    "2ujQgKtxvaU9Ax3jL22374SypSyTR9J4yztqYkX23oMT": "devnet, the original Lazer deploy",
-    "gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc": "devnet 2026-07-26, CLOSED on-chain",
-    "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W": "devnet 2026-07-25, CLOSED on-chain",
-    "GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX": "devnet, pre-Lazer",
-    "J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5": "devnet, older still",
+    "6bgSnXYg11BWnGRc3R7xenDPCqt2xu2YswkzQGr4AoYh": "not for use",
+    "2ujQgKtxvaU9Ax3jL22374SypSyTR9J4yztqYkX23oMT": "not for use",
+    "gc5TWUkmKpTfoL88HwsBduxbo2rZNEzhYinW7WqYaDc": "not for use",
+    "AX7seVo6Mu1j8jgipvN4dMk4erNrwdSUXNPDACYoHw2W": "not for use",
+    "GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX": "not for use",
+    "J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5": "not for use",
 }
 LIVE_PATHS = [
     "Anchor.toml",

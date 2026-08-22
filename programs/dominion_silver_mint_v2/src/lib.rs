@@ -30,11 +30,11 @@ use instructions::*;
 // bytes are the candidate's bytes.
 // This id MUST be a fresh deploy: the ConfigAccount layout is incompatible with V1 and with the
 // pre-Lazer V2, and the "no stale state" hypothesis depends on the id being neither.
-// Retired: V1 J9cwPQ7Pp23a58wA39jfQNdnW7Nm1pXtFRe8cWM1zfd5, pre-Lazer V2
-// GDN5ktEm88MjuTXpcWStUPjSKQmbNxJiK1XknvNaWAzX.
-// SUPERSEDED but still deployed on devnet: HXaptAcaXBoEAsNuEv4ZwYrciHbMxSpip2VScRVDjo1Z, the 2026-08-07 rehearsal
-// contract. It carries three timelocked proposals and predates the remediation, so it is a
-// historical record, not a target. Close it once the rehearsal under this id has run.
+// `initialize` runs once per program id, so any ConfigAccount or GuardianAccount layout change
+// forces a fresh id rather than a migration, and the superseded id must be added to the denylist
+// in scripts/verify-constants-consistency.sh in the SAME commit.
+// Reproducing this build: `require!` expands to `error!`, which captures file!() and line!(), so
+// the line numbers in this crate are part of the compiled bytes. Shifting one changes the hash.
 declare_id!("3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ");
 
 #[program]
@@ -120,7 +120,7 @@ pub mod dominion_silver_mint {
     }
 
     // === KYC gate (DORMANT: kyc_scope_flags == 0) ===
-    // It ships now so arming it later is a config change, not a program upgrade plus a second audit. The
+    // It ships now so arming it later is a config change rather than a program upgrade. The
     // attestor key can ONLY write and revoke attestations: it cannot mint, pause, move funds or arm it.
 
     pub fn set_kyc_operator(ctx: Context<SetKycOperator>, operator: Pubkey) -> Result<()> {

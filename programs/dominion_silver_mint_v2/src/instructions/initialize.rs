@@ -476,7 +476,7 @@ pub fn handler(ctx: Context<Initialize>, args: InitializeArgs) -> Result<()> {
     // Written from the constant, NOT an InitializeArgs field: same treatment as
     // max_silv_supply, and for the same reason. An arg would put the availability floor in the hands
     // of whoever types the ceremony command, and the ceremony is exactly where a wrong number is
-    // hardest to notice. Change it here, rebuild, re-audit. The instant setter tunes it afterwards.
+    // hardest to notice. Change it here and rebuild. The instant setter tunes it afterwards.
     config.min_operation_usdc = DEFAULT_MIN_OPERATION_USDC;
     // No proposal can exist before the program does.
     config.pending_inventory_wallet_nonce = None;

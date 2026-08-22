@@ -163,7 +163,7 @@ export async function fetchConfig(
   }
 }
 
-/** This and `fetchSilvSupply` THROW on an RPC failure and never return BN(0) (audit ): zero is a
+/** This and `fetchSilvSupply` THROW on an RPC failure and never return BN(0): zero is a
  *  MEANINGFUL protocol value, so answering it for "the RPC did not answer" shows supply 0, treasury 0 and
  *  max-instant 0 behind a green status light and routes every redeem to "otc", and SWR records it as a
  *  success that is never retried. A missing ATA is a legitimate zero and stays one. */
@@ -298,7 +298,7 @@ export function computeMaxInstantRedeemableUsdc(
 /**
  * What a redemption of `grossUsdc` takes OUT of the treasury, mirroring `redeem_silv.rs`:
  *   `let fee_routed = if fee_routing_disabled { 0 } else { fee_usdc }; total_out = to_user + fee_routed;`
- * Audit : comparing the GROSS unconditionally refuses redemptions the chain would serve, and does so
+ * Comparing the GROSS unconditionally refuses redemptions the chain would serve, and does so
  * exactly while `fee_routing_disabled` is on, i.e. during the incident that switch exists for.
  */
 export function redeemOutflowForGross(
@@ -384,8 +384,8 @@ export function isBelowMinimumError(errText: string): boolean {
 }
 
 /** The program splits `LazerReplayed` (12121) from `LazerCarriedForward` (12082)
- *  precisely because the two have OPPOSITE remediations, and the UI mapped neither: both landed on
- *  the generic "Transaction reverted on-chain".
+ *  precisely because the two need OPPOSITE responses. Mapping both onto the generic
+ *  "Transaction reverted on-chain" tells the user nothing actionable.
  *  REPLAYED means another operation consumed the same signed print. Under strict anti-replay one
  *  envelope prices exactly one operation, so this is normal contention and the answer is RETRY with a
  *  fresh price. Telling the user nothing here makes a working protocol look like a broken feed.

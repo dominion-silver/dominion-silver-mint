@@ -18,7 +18,7 @@ let silvCache: { at: number; payload: unknown; feedTsUs: number } | null = null;
 // The newest `feedUpdateTimestamp` this instance has handed to a SUBMITTER.
 // made the on-chain anti-replay strict: one signed envelope prices exactly ONE operation, and the
 // loser of the race is refused AFTER paying the Lazer verify fee. `fresh: true` was introduced to stop
-// the submit path reusing a CACHED envelope, and the audit was right that this is not the same thing as
+// the submit path reusing a CACHED envelope, which is not the same thing as
 // getting a new timestamp: `latest_price` returns the same fixed print for a whole second, so two
 // submitters served two separate upstream calls inside that second still receive the same envelope.
 // So `fresh` carries an ADVISORY claim on top of the cache bypass: the first caller handed a given
@@ -107,7 +107,7 @@ export async function POST(req: NextRequest) {
   // due, whatever it asks for and however many callers ask. What `fresh` still does is what it is for:
   // it refuses to serve a print that this instance already handed to a submitter (`contended`), and it
   // waits for the in-flight refresh rather than reading an aged cache.
-  // WHAT THIS DOES NOT SOLVE, said plainly because the audit was right about it: the state is per warm
+  // WHAT THIS DOES NOT SOLVE, said plainly: the state is per warm
   // instance, so N instances still make N times the calls. Making the cadence global needs a shared
   // store (a KV, a lock, one poller) and that is infrastructure, not a code change. This bounds what one
   // instance can be made to spend from unbounded to one call per print.
@@ -133,7 +133,7 @@ export async function POST(req: NextRequest) {
   // that is the SUBMIT-time fetch).
   // and this is the bug that was here: the two cache checks inside this loop were both
   // guarded by `!fresh`, so a `fresh` waiter skipped them, fell through to `allowRequest`, and PAID A
-  // TOKEN for an upstream call it had not made. Measured by the audit: 40 concurrent `fresh` requests
+  // TOKEN for an upstream call it had not made. Measured: 40 concurrent `fresh` requests
   // produced 30 x 200, 10 x 429 and only 2 upstream calls. The comment on that line said "waiters never
   // reach this line", which was true for the cached path and false for the one the money flows through.
   // A joiner is now served or claim-refused, and never charged.
