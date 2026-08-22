@@ -490,6 +490,61 @@ export async function fetchGuardians(
     .sort((a: GuardianView, b: GuardianView) => b.addedAt.cmp(a.addedAt));
 }
 
+export type FeeExemptView = {
+  wallet: PublicKey;
+  /** Bitfield: 1 = mint, 2 = redeem, 3 = both. */
+  flags: number;
+  addedAt: BN;
+  addedBy: PublicKey;
+  expiresAt: BN;
+  /** False once `expires_at` has passed, at which point the program charges the full premium again. */
+  active: boolean;
+};
+
+/**
+ * Every fee-exemption account owned by the program, soonest to expire first.
+ *
+ * Enumerated by discriminator rather than from a list of known wallets, for the same reason as the
+ * guardian roster: nothing on chain enumerates them. The config holds no list, the accounts are PDAs
+ * of wallets the console has never been told about, and until this existed the only way to answer "who
+ * is exempt right now" was to already know the answer. That gap is how two market makers were told
+ * they were exempt while paying full premiums: there were zero accounts on chain and no surface said so.
+ *
+ * `expires_at` is mandatory on chain and capped at two years, so a row is either live or expired, never
+ * permanent. Sorting by expiry puts whatever needs attention first.
+ */
+export async function fetchFeeExempts(
+  connection: Connection,
+): Promise<FeeExemptView[]> {
+  const program = getReadOnlyProgram(connection);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const rows = await (program.account as any).feeExemptAccount.all();
+  const nowSecs = Math.floor(Date.now() / 1000);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return rows
+    .map((r: any) => {
+      const a = r.account;
+      const expiresAt = a.expiresAt as BN;
+      return {
+        wallet: a.wallet as PublicKey,
+        flags: Number(a.flags),
+        addedAt: a.addedAt as BN,
+        addedBy: a.addedBy as PublicKey,
+        expiresAt,
+        active: expiresAt.gtn(nowSecs),
+      } as FeeExemptView;
+    })
+    .sort((x: FeeExemptView, y: FeeExemptView) => x.expiresAt.cmp(y.expiresAt));
+}
+
+/** "mint only", "redeem only", "mint and redeem", or a loud label for a value the program would reject. */
+export function feeExemptScope(flags: number): string {
+  if (flags === 1) return "mint only";
+  if (flags === 2) return "redeem only";
+  if (flags === 3) return "mint and redeem";
+  return `unrecognised (${flags})`;
+}
+
 /**
  * Seconds until `ts`, or null when nothing is scheduled. Negative once elapsed.
  * this called `ts.toNumber`, which THROWS above 2^53 ("Number

@@ -7,6 +7,8 @@ import { BN } from "@coral-xyz/anchor";
 import {
   fetchDashboardSnapshot,
   fetchGuardians,
+  fetchFeeExempts,
+  feeExemptScope,
   formatUsdc,
   formatSilv,
   formatPrice,
@@ -14,6 +16,7 @@ import {
   secondsUntil,
   type DashboardSnapshot,
   type GuardianView,
+  type FeeExemptView,
 } from "../lib/anchor-client";
 import { fetchFeeVaultBalance } from "../lib/admin-actions";
 import { REFRESH_INTERVAL_MS } from "../lib/constants";
@@ -53,6 +56,20 @@ export function Dashboard() {
   // fetcher THROWS on failure rather than returning [], because an unknown roster must not render as a
   // known-empty one. This is the only surface that shows `pending_removal_at`, and 's guarantee
   // is that a TARGETED guardian can see its own notice and react inside the timelock window.
+  // Same posture as the guardian roster: the fetcher THROWS rather than returning [], because "nobody
+  // is exempt" and "the RPC did not answer" must never render the same way. Telling someone their
+  // exemption is live when it is not has already cost this protocol real money.
+  const { data: feeExempts, error: feeExemptsError } = useSWR<FeeExemptView[]>(
+    data ? "dominion-fee-exempts" : null,
+    () => fetchFeeExempts(connection),
+    {
+      refreshInterval: 30_000,
+      revalidateOnFocus: false,
+      keepPreviousData: true,
+      dedupingInterval: 15_000,
+    },
+  );
+
   const { data: guardians, error: guardiansError } = useSWR<GuardianView[]>(
     data ? "dominion-guardians" : null,
     () => fetchGuardians(connection, data?.cfg.admin),
@@ -127,6 +144,8 @@ export function Dashboard() {
           data={data}
           guardians={guardians ?? []}
           guardiansDegraded={!!guardiansError}
+          feeExempts={feeExempts ?? []}
+          feeExemptsDegraded={!!feeExemptsError}
         />
       )}
       {tab === "actions" && <AdminActions />}
@@ -409,10 +428,14 @@ function GovernanceTab({
   data,
   guardians,
   guardiansDegraded,
+  feeExempts,
+  feeExemptsDegraded,
 }: {
   data: DashboardSnapshot;
   guardians: GuardianView[];
   guardiansDegraded: boolean;
+  feeExempts: FeeExemptView[];
+  feeExemptsDegraded: boolean;
 }) {
   const { cfg } = data;
   const pendingProposals: { label: string; nonce: BN | null }[] = [
@@ -472,6 +495,8 @@ function GovernanceTab({
       </Section>
 
       <GuardianRoster guardians={guardians} degraded={guardiansDegraded} />
+
+      <FeeExemptRoster rows={feeExempts} degraded={feeExemptsDegraded} />
 
       <Section title="Price feed safety checks">
         <Metric
@@ -735,6 +760,127 @@ function GuardianRoster({
     </Section>
   );
 }
+
+/**
+ * The fee-exemption whitelist: who pays no premium, on which side, and until when.
+ *
+ * WHY THIS PANEL EXISTS. Nothing on chain enumerates exemptions, so before this the only way to answer
+ * "who is exempt right now" was to already know which wallets to look up. Two market makers were told
+ * their exemption was live while they were being charged the full premium, and nothing in this console
+ * could have shown that: the accounts simply did not exist. A whitelist you cannot read is a whitelist
+ * you cannot trust.
+ *
+ * There is no separate edit action, deliberately: `set_fee_exempt` is init_if_needed and rewrites every
+ * field, so granting again IS the edit, and it overwrites the scope and the expiry together. That also
+ * means there is no partial update and no gap where an old scope survives a change.
+ */
+function FeeExemptRoster({
+  rows,
+  degraded,
+}: {
+  rows: FeeExemptView[];
+  degraded: boolean;
+}) {
+  if (degraded && !rows.length) {
+    return (
+      <Section title="Fee exemption whitelist">
+        <p className="text-sm text-amber-400">
+          Could not read the exemption accounts (RPC error). This is NOT a
+          statement that nobody is exempt: the whitelist is unknown right now.
+          Retrying automatically.
+        </p>
+      </Section>
+    );
+  }
+  if (!rows.length) {
+    return (
+      <Section title="Fee exemption whitelist">
+        <p className="text-sm text-muted">
+          No exemption accounts exist. Every wallet pays the full mint and
+          redeem premium. Grant one from Actions, &quot;Fee exemption: grant /
+          update&quot;.
+        </p>
+      </Section>
+    );
+  }
+  const live = rows.filter((r) => r.active).length;
+  return (
+    <Section title="Fee exemption whitelist">
+      <p className="col-span-full text-sm text-muted">
+        {live} of {rows.length} live. Granting an existing wallet again
+        overwrites its scope and expiry, which is how you edit one; Actions has
+        both the grant and the remove.
+      </p>
+      <div className="col-span-full overflow-x-auto">
+        <table className="w-full min-w-[46rem] text-left text-sm">
+          <thead className="text-xs uppercase text-muted">
+            <tr>
+              <th className="py-2 pr-4">Wallet</th>
+              <th className="py-2 pr-4">Scope</th>
+              <th className="py-2 pr-4">Expires</th>
+              <th className="py-2 pr-4">Status</th>
+              <th className="py-2">Granted by</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => {
+              const until = secondsUntil(r.expiresAt);
+              const expiresOn = new Date(
+                r.expiresAt.toNumber() * 1000,
+              ).toISOString().slice(0, 10);
+              return (
+                <tr
+                  key={r.wallet.toBase58()}
+                  className="border-t border-border align-top"
+                >
+                  <td className="py-2 pr-4 font-mono text-xs">
+                    {r.wallet.toBase58()}
+                  </td>
+                  <td className="py-2 pr-4">
+                    {r.flags === 3 ? (
+                      // Loud on purpose: a both-sides exemption makes a round trip free, which is a
+                      // free option on oracle movement settled against the treasury.
+                      <span className="text-amber-400">
+                        {feeExemptScope(r.flags)}
+                      </span>
+                    ) : r.flags === 1 || r.flags === 2 ? (
+                      <span>{feeExemptScope(r.flags)}</span>
+                    ) : (
+                      <span className="text-red-400">
+                        {feeExemptScope(r.flags)}
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-4 font-mono text-xs">{expiresOn}</td>
+                  <td className="py-2 pr-4">
+                    {r.active ? (
+                      <span className="text-accent">
+                        live
+                        {until !== null && until > 0
+                          ? ` (${formatCountdown(until)})`
+                          : ""}
+                      </span>
+                    ) : (
+                      // The account stays on chain after expiry and the program charges the full
+                      // premium again, so an expired row is not a missing row.
+                      <span className="text-muted">
+                        EXPIRED, full premium charged
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-2 font-mono text-xs text-muted">
+                    {r.addedBy.toBase58().slice(0, 8)}...
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </Section>
+  );
+}
+
 
 /* ---------------- shared UI ---------------- */
 
