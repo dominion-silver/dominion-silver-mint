@@ -1,0 +1,23 @@
+# Behavioral harness for the Lazer oracle CPI path (litesvm). Detached from the
+# main workspace; built with rustc 1.89 (litesvm requires >= 1.86):
+#   cargo +1.89.0-aarch64-apple-darwin test --manifest-path tools/lazer-harness/Cargo.toml
+# Loads target/deploy/{dominion_silver_mint,mock_lazer}.so. Deliberately does NOT
+# depend on the dominion crate (its anchor/spl tree conflicts with litesvm on
+# bytemuck_derive); the ConfigAccount is crafted by hand + the constants are
+# pinned literals checked against the source.
+[package]
+name = "lazer-harness"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+litesvm = "0.7"
+solana-sdk = "2.3"
+pyth-lazer-protocol = "=0.34.0"
+byteorder = "1"
+sha2 = "0.10"
+
+[workspace]

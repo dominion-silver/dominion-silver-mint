@@ -1,0 +1,61 @@
+import { Header } from "@/components/Header";
+import { PriceBanner } from "@/components/PriceBanner";
+import { MintRedeemCard } from "@/components/MintRedeemCard";
+import { ReservesPanel } from "@/components/ReservesPanel";
+import { TransactionHistory } from "@/components/TransactionHistory";
+import { WalletAuthGate } from "@/components/WalletAuthGate";
+import { PROGRAM_ID, solscanAccount } from "@/lib/constants";
+
+export default function HomePage() {
+  return (
+    <div className="min-h-screen">
+      <Header />
+      <PriceBanner />
+      <main className="mx-auto max-w-2xl px-6 py-12">
+        <div className="mb-8 text-center">
+          <h1 className="mb-2 text-3xl">
+            Mint or redeem SILV
+          </h1>
+          <p className="text-sm text-muted">
+            1 SILV = 1 troy ounce LBMA silver, vaulted with Brink&apos;s. Priced via Pyth Lazer.
+          </p>
+        </div>
+        <WalletAuthGate>
+          <MintRedeemCard />
+        </WalletAuthGate>
+        <ReservesPanel />
+        <TransactionHistory />
+        <footer className="mt-12 text-center text-xs text-muted">
+          <p>
+            <a
+              href="https://dominion.market"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-white"
+            >
+              dominion.market
+            </a>{" "}
+            ·{" "}
+            <a
+              href="https://dominion.market/verify"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-accent underline"
+            >
+              proof of reserve
+            </a>{" "}
+            ·{" "}
+            <a
+              href={solscanAccount(PROGRAM_ID.toBase58())}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-accent underline"
+            >
+              contract on Solscan
+            </a>
+          </p>
+        </footer>
+      </main>
+    </div>
+  );
+}

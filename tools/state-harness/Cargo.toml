@@ -1,0 +1,29 @@
+# On-chain state harness (litesvm). Detached from the main workspace; built with
+# rustc 1.89 (litesvm requires >= 1.86):
+#   cargo +1.89.0-aarch64-apple-darwin test --manifest-path tools/state-harness/Cargo.toml
+# Loads target/deploy/dominion_silver_mint.so, the DEFAULT-feature artifact that
+# ships: none of these tests need probe_oracle_price. Use run.sh, which asserts
+# that artifact is probe-free and dev-hatch-free before running the suite.
+[package]
+name = "state-harness"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+
+[dev-dependencies]
+litesvm = "0.7"
+solana-sdk = "2.3"
+sha2 = "0.10"
+borsh = { version = "1", features = ["derive"] }
+# The Lazer anti-replay high-water mark is written by mint_silv and redeem_silv and by
+# NOTHING else (probe_oracle_price is read-only), so proving it persists needs a real call through a
+# Lazer program that executes. These two build the signed-envelope payload; tools/mock-lazer is the
+# program, and run.sh builds it into target/harness. Pinned to the same version as
+# tools/lazer-harness: two payload encoders that could disagree would let one harness pass on bytes
+# the other rejects.
+pyth-lazer-protocol = "=0.34.0"
+byteorder = "1"
+
+[workspace]

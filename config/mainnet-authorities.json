@@ -1,0 +1,114 @@
+{
+  "_README": [
+    "MAINNET authority assignment for Dominion SILV. This file is the published record of which",
+    "address holds which power over the protocol.",
+    "",
+    "These are PUBLIC KEYS. Publishing them is safe, they are on chain regardless, and it is the point:",
+    "anyone can check that the deployed program's authorities match what was announced. Verify with",
+    "scripts/verify-mainnet-authorities.ts. No secret material belongs in this file, ever."
+  ],
+  "cluster": "mainnet-beta",
+  "program_id": "3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ",
+  "authorities": {
+    "ops_admin": {
+      "pubkey": "65g5nNXTtqtFz3jggKAqyvS6oCoVUXuXqAU9B8jHqPPS",
+      "role": "config.admin. Day-to-day operations: premint, param setters, proposing timelocked actions.",
+      "is_a_squads_vault_pda_not_a_multisig": true,
+      "kind": "off-curve (PDA, consistent with a Squads vault)"
+    },
+    "upgrade_authority": {
+      "pubkey": "FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3",
+      "role": "BPF loader upgrade authority. Can replace the program with arbitrary code, which overrides EVERY in-program safeguard. The ultimate trust root.",
+      "kind": "off-curve (PDA, consistent with a Squads vault)"
+    },
+    "compliance": {
+      "pubkey": "FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3",
+      "role": "SILV mint freeze_authority AND Token-2022 permanent delegate. Can freeze/thaw any holder and transfer or burn any holder's tokens. Set at MINT CREATION and permanent.",
+      "kind": "off-curve (PDA, consistent with a Squads vault)"
+    },
+    "guardian": {
+      "pubkey": "FqFNXCMeEYUD64tLPhvVzBAnovfYBAGsU8d6qdLnvzZ3",
+      "role": "Guardian veto: pause, cancel_timelocked_action, cancel_admin_transfer during a delay window.",
+      "kind": "off-curve (PDA, consistent with a Squads vault)"
+    },
+    "inventory_wallet": {
+      "pubkey": "65g5nNXTtqtFz3jggKAqyvS6oCoVUXuXqAU9B8jHqPPS",
+      "role": "config.inventory_wallet. Destination of admin_premint. Holds the pre-minted SILV behind 3-of-5 before an operational tranche is moved out.",
+      "kind": "OFF-CURVE (the ops Squads vault). SAME ADDRESS AS ops_admin, deliberately."
+    },
+    "inventory_transit_wallet": {
+      "pubkey": "EkDhR65JUL8tGhxRhnueaqri6zNzxMEJ82UU35pQ7V56",
+      "role": "NOT a program field. The hot wallet that receives operational tranches out of the inventory vault and creates the LP or settles OTC. Was config.inventory_wallet until 2026-08-12.",
+      "kind": "ON-CURVE (a plain single-signer wallet)"
+    },
+    "ops_squads_multisig": {
+      "pubkey": "9BwMVmjMwjppJyBn5Kj6vTae8Rc7NUamH5H2Tq7H5VtU",
+      "role": "The Squads MULTISIG account whose vault index 0 IS ops_admin (65g5nNX...). This is the value for NEXT_PUBLIC_OPS_SQUADS. NOT interchangeable with ops_admin."
+    },
+    "upgrade_squads_multisig": {
+      "pubkey": "BjbtdEcy324Xdmt9182D8FZYGiH2nhTLFHP7EaAEXLAi",
+      "role": "The Squads MULTISIG account whose vault index 0 is the upgrade authority AND the compliance vault (FqFNX...). Value for NEXT_PUBLIC_UPGRADE_SQUADS."
+    },
+    "fee_exempt_at_launch": {
+      "pubkey": "6dJw4BELW3gqDYRoVFohivS1Fp1yZGeXwHQhMhsEAPsf",
+      "role": "To be fee-exempted on BOTH sides (flags 3 = mint + redeem) at launch, per the owner 2026-08-12."
+    },
+    "deployer": {
+      "pubkey": "2Lp91FyJUb8MQ1yteFLKh345Umb5f1RgCCwwDFNCYEcD",
+      "role": "Paid for the mainnet deploy and signed initialize. Must be the upgrade authority at initialize time, so either deploy from the upgrade vault or transfer the authority to it afterwards.",
+      "kind": "ON-CURVE (a plain single-signer wallet)"
+    }
+  },
+  "mint_creation_ceremony": {
+    "pregenerated_mint": "SiLVFMgD3eD2rgK628NbTBq9MnuJF5FW2CRaVyTB35L",
+    "decimals": 6,
+    "extensions": [
+      "MetadataPointer",
+      "TokenMetadata",
+      "PermanentDelegate"
+    ],
+    "freeze_authority": "compliance vault (FqFNX...)",
+    "permanent_delegate": "compliance vault (FqFNX...)",
+    "mint_authority": "the program's silv_mint_authority PDA (derived, never a wallet)",
+    "metadata_update_authority": "the program's silv_metadata_authority PDA",
+    "name": "Dominion Silver",
+    "symbol": "SILV",
+    "uri": "https://app.dominion.market/silv-metadata.json",
+    "uri_must_resolve_before_launch": true
+  },
+  "launch_posture": {
+    "max_silv_supply": "150000000000 atomic (150,000 oz at 6 decimals). Tighten-only: lowering it makes the lower value the new permanent ceiling.",
+    "admin_timelock_seconds": 86400,
+    "min_publishers": 2,
+    "treasury_min_float_usdc": 0,
+    "min_operation_usdc": 10000000,
+    "pyth_lazer_feed_id": 3154,
+    "max_guardian_count": 5,
+    "_source_of_truth": "Mutable settings (pause flags, premiums) live on chain and are NOT duplicated here. Read them from ConfigAccount."
+  },
+  "cluster_constants": {
+    "usdc_mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "lazer_treasury": "Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak",
+    "foreign_upgradeable_program": "pytd2yyk641x7ak7mkaasSJVXh6YYZnC7wTmtgAyxPt"
+  },
+  "release_artifact": {
+    "status": "no-candidate",
+    "toolchain": "solana-cli/SBF 3.0.0, platform-tools v1.51, SBF rustc 1.84.1, anchor-cli 0.31.1",
+    "_status_note": [
+      "status is no-candidate because the comment-only cleanup touched files in the verifier's",
+      "BUILD_INPUTS list, so this tree no longer matches the commit the fields below name. The compiled",
+      "program is unchanged (no non-comment line differs in any program file), so a reproducible-build run",
+      "on this tree is expected to reproduce the same bytes; that run is what will restore status=pinned.",
+      "The fields below describe the LAST pin and are not read while status is no-candidate."
+    ],
+    "sha256": "241e1ed558186e2056486003608c3464173e88126991dd80241686d2c60321da",
+    "normalized_sha256": "073b2e3846d5df790a2f91da15a6edaf09ea0eda575a133b80bffd6ccfdd256a",
+    "bytes": 1237704,
+    "source_commit": "6466539d84b6ed619037ef78cd0bd9cf287c92a7",
+    "ci_run_id": "31393065516",
+    "ci_repository": "dominion-silver/dominion-silver-mint",
+    "program_id": "3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ",
+    "idl_sha256": "f24cbabc180931359b64019e4c112fcd535dedf25c8aa038c6bc0decf46178d5",
+    "solana_verify_version": "0.5.1"
+  }
+}

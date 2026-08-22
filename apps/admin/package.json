@@ -1,0 +1,41 @@
+{
+  "name": "@dominion/admin-app",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack -p 3001",
+    "build": "next build",
+    "start": "next start -p 3001",
+    "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.31.1",
+    "@noble/curves": "^1.9.7",
+    "@solana/spl-token": "^0.4.6",
+    "@solana/wallet-adapter-base": "^0.9.23",
+    "@solana/wallet-adapter-coinbase": "0.1.23",
+    "@solana/wallet-adapter-ledger": "0.9.29",
+    "@solana/wallet-adapter-phantom": "0.9.29",
+    "@solana/wallet-adapter-react": "^0.15.35",
+    "@solana/wallet-adapter-react-ui": "^0.9.35",
+    "@solana/wallet-adapter-solflare": "0.6.33",
+    "@solana/web3.js": "^1.95.0",
+    "@sqds/multisig": "^2.1.0",
+    "next": "15.5.22",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "swr": "^2.2.5"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "autoprefixer": "^10.4.0",
+    "postcss": "^8.4.0",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.5.0",
+    "vitest": "^4.1.8"
+  }
+}

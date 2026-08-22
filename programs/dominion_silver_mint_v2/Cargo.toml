@@ -1,0 +1,49 @@
+[package]
+name = "dominion_silver_mint"
+version = "0.1.0"
+description = "Dominion Silver mint/redeem on Solana"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "dominion_silver_mint"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+# dev-only timelock-bypass hatches (dev_set_max_staleness /
+# dev_set_premiums) are compiled ONLY under this feature. It is NOT in
+# `default`, so the standard `cargo-build-sbf` (release/deploy) build and the
+# generated IDL do NOT contain them. Devnet testing builds with
+# `--features dev-hatch`. Release/mainnet/CI builds MUST NOT pass it.
+dev-hatch = []
+# test-harness: a single read-only `probe_oracle_price` ix for the litesvm /
+# solana-program-test behavioral harness (tools/lazer-harness). Like dev-hatch,
+# NOT in `default`, so it is absent from the deploy build + the generated IDL.
+# Release/mainnet/CI builds MUST NOT pass it.
+test-harness = []
+default = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { version = "0.31.1", features = ["init-if-needed"] }
+anchor-spl = { version = "0.31.1", features = ["token", "token_2022", "associated_token"] }
+# pyth-solana-receiver-sdk REMOVED 2026-06-10: the Pyth Lazer migration dropped
+# the Core (Pull/Hermes PriceUpdateV2) oracle entirely. No code imports it.
+spl-token-2022 = { version = "7.0", features = ["no-entrypoint"] }
+spl-token-metadata-interface = "0.6"
+# CI HARD-PIN (not used in code): `constant_time_eq` is pulled transitively
+# (blake3 -> solana-blake3-hasher -> solana-program -> anchor-lang). Its
+# 0.4.x line requires Cargo `edition2024`. The committed Cargo.lock already
+# resolves it to 0.3.1, but `anchor build`'s IDL-extraction sub-build
+# re-resolves under the Solana platform-tools cargo and was selecting
+# 0.4.2 -> "feature `edition2024` is required" CI failure (since
+# 2026-05-18 when 0.4.2 was published; independent of our code). An
+# explicit `=0.3.1` constraint in the workspace graph forbids 0.4.x on any
+# re-resolve. constant_time_eq 0.3.1 is target-agnostic (no SBF
+# compile_error, unlike cpufeatures 0.2.x), so this pin is safe regardless
+# of the platform-tools version. Remove when the CI platform-tools cargo
+# natively supports edition2024 (>= 1.85, i.e. platform-tools >= v1.52).
+constant_time_eq = "=0.3.1"

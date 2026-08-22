@@ -1,0 +1,26 @@
+# Mock Pyth Lazer program for the behavioral harness (tools/lazer-harness).
+# Implements the verify_message CPI contract the dominion lazer_cpi.rs expects:
+#   accounts: [fee_payer(signer,w), storage(r), treasury(w), system_program(r),
+#              instructions_sysvar(r)]
+#   data:     discriminator(8) + msg_len(u32) + message_data + ed_idx(u16) + sig(u8)
+# It set_return_data(VerifiedMessage = pubkey[32] + len(u32) + payload) echoing
+# message_data as the payload, and drains the fee-payer PDA's full balance to
+# the treasury (the maximum a malicious upgraded Lazer could take - which is
+# exactly the fee dominion funded; the user wallet is never in this account
+# list, so it is structurally unreachable).
+# Built to SBF via cargo-build-sbf; loaded by the harness at LAZER_PROGRAM_ID.
+[package]
+name = "mock-lazer"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+# Inherits the workspace solana-program 2.3 + its SBF-platform-tools-parseable
+# dep tree (block-buffer 0.10.4 etc.), so this mock builds to SBF without its
+# own version-pin juggling. It is a workspace member (see root Cargo.toml) but
+# NOT a deploy artifact: the program build targets programs/... explicitly.
+solana-program = "2.3"
