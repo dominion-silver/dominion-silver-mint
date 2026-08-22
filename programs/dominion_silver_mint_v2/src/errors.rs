@@ -112,7 +112,7 @@ pub enum DominionError {
     // bootstrap authority validation.
     #[msg("SILV mint authority must be the silv_mint_authority PDA")]
     SilvMintAuthorityMismatch,
-    // RETIRED, never raised: the launch design REQUIRES a freeze authority to be present and to match
+    // Never raised: the launch design REQUIRES a freeze authority to be present and to match
     // config.freeze_authority_expected (see SilvFreezeAuthorityMismatch). Kept as a reserved hole
     // because discriminants are positional, so deleting it would renumber every later variant.
     #[msg("RETIRED: no longer raised. The SILV mint freeze_authority is REQUIRED to be present and to match config.freeze_authority_expected; see SilvFreezeAuthorityMismatch")]
@@ -208,7 +208,7 @@ pub enum DominionError {
     LooseningRequiresTimelock,
     #[msg("At least one redeem-limit field must be provided")]
     RedeemLimitsAllNone,
-    // Audit remediation wave 0 (2026-07-25). APPEND ONLY - never reorder.
+    // APPEND ONLY - never reorder.
     #[msg("initialize must be signed by the program's upgrade authority")]
     DeployerNotUpgradeAuthority,
     #[msg("initialize requires an upgradeable program: initialize before revoking the upgrade authority")]

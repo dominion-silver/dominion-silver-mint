@@ -188,10 +188,10 @@ pub fn handler(
     // `silv_to_usdc_at_oracle(1) = 58` micro-USDC gross, a 1 micro-USDC fee and 57 back to the user,
     // so capturing a print cost about 1.3 micro-USDC NET, roughly thirty times cheaper than the mint
     // capture the floor was written to price out.
-    // Not exploitable at the launch posture, because `redemptions_enabled` is false. It becomes
-    // exploitable on the day redeem opens, which is a 24h config change needing no upgrade and no
-    // re-audit, and closing it THEN would need a program upgrade. That is exactly the shape of defect
-    // worth paying for now.
+    // A floor that prices out the mint side therefore does NOT price out the redeem side, and the
+    // two are not interchangeable even though one field governs both. The asymmetry is a property
+    // of the premium direction, not of the floor, so raising the floor cannot fix it on its own.
+    //
     // It is denominated in USDC, like the mint side, so one field governs both: the floor is a
     // MINIMUM OPERATION SIZE, not a minimum mint. Hence `min_operation_usdc`.
     // WHAT IT COSTS, stated rather than glossed. The round trip is not symmetric: minting exactly the

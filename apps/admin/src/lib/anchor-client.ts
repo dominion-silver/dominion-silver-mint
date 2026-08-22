@@ -35,7 +35,7 @@ export interface ConfigAccount {
   premiumBpsRedeem: number;
   // Oracle (Pyth Lazer). The Core pythFeedId[32] + pythReceiverProgram were
   // removed in the Lazer migration; these are the new fields the account
-  // actually carries (audit ).
+  // actually carries.
   pythLazerFeedId: number; // u32, 3154 = Metal.Index.SILVER/USD (pure spot)
   minPublishers: number; // u16, operating publisher floor
   lastUsedFeedUpdateTimestampUs: BN; // u64, non-decreasing high-water mark
@@ -127,7 +127,7 @@ export interface ConfigAccount {
   // Split pause flags (mint vs redeem)
   mintPaused: boolean;
   redeemPaused: boolean;
-  // Guardians currently under notice of removal (audit review of ): the
+  // Guardians currently under notice of removal: the
   // removal floor is evaluated against guardianCount - pendingRemovalCount.
   pendingRemovalCount: number;
   version: number;
@@ -355,7 +355,7 @@ export async function fetchDashboardSnapshot(
 // ---- formatting ----
 
 /** Raw u64 BN (6 decimals) -> display USD string.
- * finding this used `raw.div(1e6).toNumber`, an INTEGER division
+ * An earlier version used `raw.div(1e6).toNumber`, an INTEGER division
  * that discarded the fractional part before formatting, so every USD figure in
  * the console silently lost its cents ($1,234.56 rendered as "1,234"). The
  * `maximumFractionDigits: 2` was therefore decorative. Now the atomic amount is
@@ -390,7 +390,7 @@ export function formatSilv(raw: BN): string {
   const whole = Number(abs.div(MICRO).toString()).toLocaleString("en-US");
   const frac = abs.mod(MICRO).toNumber(); // 0..999_999
   if (frac === 0) return `${neg ? "-" : ""}${whole}`;
-  // review of (, found independently by all three reviewers): this
+  // An earlier version
   // rounded to 4 decimals with `Math.round(frac / 100)`, which can return 10000.
   // padStart(4) leaves "10000" untouched and the trailing-zero strip collapses it to
   // "1", so 1.999999 rendered as "1.1" and 0.999999 as "0.1": roughly 0.9 oz low,
@@ -420,8 +420,7 @@ export const PROGRAM_ID_STR = PROGRAM_ID.toBase58();
 
 /**
  * One guardian's on-chain state, as the console needs to display it.
- * review of (, integration reviewer): `pending_removal_at` is
- * written on-chain and was read NOWHERE in either app. 's whole security
+ * `pending_removal_at` is written on-chain, and a scheduled removal's whole security
  * property is "the targeted guardian has admin_timelock_seconds to react", and the
  * console gave that guardian no way to see that a removal had been scheduled, who is
  * targeted, or when it fires. A veto nobody can see is not a veto.

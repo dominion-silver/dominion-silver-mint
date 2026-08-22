@@ -9,9 +9,8 @@
 # THE FIX IS TO REMOVE THE STAGE, AGAIN. We fetch `solana-release-$TARGET.tar.bz2` ourselves, compare
 # its SHA-256 to a pin measured here, and only then extract. `agave-install-init` is no longer
 # downloaded or run at all: it existed to fetch this archive, and we fetch it.
-# THE PINS BELOW WERE MEASURED, not copied. An earlier draft of this work was handed three digests by
-# a reviewer; pinning a digest nobody in this repository has measured is theatre, so they were
-# re-measured by streaming each archive through shasum on 2026-08-09. The two that matter agreed.
+# THE PINS BELOW WERE MEASURED, not copied. Pinning a digest nobody in this repository has measured
+# is theatre, so each archive was streamed through shasum on 2026-08-09. The two that matter agreed.
 # x86_64-apple-darwin is DELIBERATELY ABSENT. No Intel Mac exists in this project, so a pin for it
 # would be an unmeasured constant, and the missing-entry branch below fails loudly with the command
 # to measure it. An absent pin is safer than a guessed one.

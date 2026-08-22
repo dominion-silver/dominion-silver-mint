@@ -299,7 +299,7 @@ pub struct MintPausedUntilSet {
     pub until: i64,
 }
 
-/// SC-M7: dev-only handler audit trail. Emitted on dev_set_max_staleness
+/// Dev-only handler trail. Emitted on dev_set_max_staleness
 /// and dev_set_premiums calls so devnet operators have a log of what
 /// changed and when. param: 1 = max_staleness_seconds, 2 = premiums.
 /// value_a/value_b are the new values (interpretation depends on param).

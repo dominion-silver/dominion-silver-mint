@@ -113,8 +113,7 @@ describe("proposeSetOracleGuards encoding (camelCase guard)", () => {
   });
 });
 
-// finding regression guard (, operator integrity), updated after
-// the follow-up review. The original bug was a boolean <select> that DISPLAYED
+// Regression guard for operator integrity. The original bug was a boolean <select> that DISPLAYED
 // "on / true" while the builder encoded `false`, because the render default and
 // the read default were two different things. The first fix shared one default;
 // the review showed that (a) the window.confirm summary was still a THIRD

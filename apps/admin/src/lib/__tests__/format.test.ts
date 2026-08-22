@@ -2,10 +2,10 @@ import { describe, it, expect } from "vitest";
 import BN from "bn.js";
 import { formatSilv, formatUsdc } from "../anchor-client";
 
-// review of : formatSilv had NO test coverage, and the rewrite that
-// removed one bug (BN.toNumber throwing above 2^53) introduced another (a rounding
-// carry that displayed 1.999999 as "1.1"). All three reviewers found it
-// independently. These are the cases that distinguish the two implementations.
+// formatSilv once had NO test coverage, and the rewrite that removed one bug
+// (BN.toNumber throwing above 2^53) introduced another (a rounding carry that
+// displayed 1.999999 as "1.1"). These are the cases that distinguish the two
+// implementations.
 describe("formatSilv", () => {
   const f = (raw: string) => formatSilv(new BN(raw));
 

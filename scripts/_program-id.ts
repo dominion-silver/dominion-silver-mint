@@ -1,7 +1,7 @@
 /**
  * The one place a script learns which program to talk to.
- * AUDIT review of (P2): 18 scripts each hardcoded a program id, and most held
- * an id retired one or two generations earlier (`GDN5ktEm88...`, `J9cwPQ7Pp2...`).
+ * Scripts used to hardcode a program id each, and most held an id one or two
+ * generations out of date.
  * A script pointed at a dead program does not fail in an obvious way: it fails with
  * AccountNotInitialized or "program does not exist", which reads as a broken protocol
  * rather than a stale constant. The same class already produced a false "the oracle

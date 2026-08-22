@@ -66,7 +66,7 @@ pub fn usdc_transfer_treasury_to_user<'info>(
 // CALL SITE. `usdc_transfer_user_to_treasury(...)` next to
 // `usdc_transfer_user_to_fee_vault(...)` inside mint_silv says exactly what the split does.
 // A single generic helper called twice with different account arguments would hide the one
-// thing a reviewer needs to check: that the backing leg and the revenue leg go to different
+// thing that has to be checked: that the backing leg and the revenue leg go to different
 // accounts.
 // ---------------------------------------------------------------------------
 

@@ -187,7 +187,7 @@ export interface WalletFlags {
   kyc: PublicKey | null;
   /** `Side` bitfield from the on-chain account: 1 = mint, 2 = redeem, 3 = both. */
   feeExemptFlags: number | null;
-  /** Unix seconds. Mandatory and strictly future on chain since audit */
+  /** Unix seconds. Mandatory and strictly future on chain. */
   feeExemptExpiresAt: number | null;
 }
 
@@ -266,7 +266,7 @@ export function decodeFeeExemptExpiry(data: Uint8Array | Buffer): number | null 
 }
 
 /** The premium a GIVEN wallet pays on a GIVEN side, mirroring `state/fee_exempt.rs::effective_premium_bps`.
- *  Audit : the preview, the price, the fee label and `min_out` must all use THIS number, not the global
+ *  The preview, the price, the fee label and `min_out` must all use THIS number, not the global
  *  bps. `expiresAt` of 0 counts as EXPIRED, matching `FeeExemptAccount::is_expired`: failing open would
  *  quote 0% and then charge the premium, minting less SILV than the quote promised. */
 export function effectivePremiumBps(

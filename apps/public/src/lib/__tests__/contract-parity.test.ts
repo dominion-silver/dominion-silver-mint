@@ -331,8 +331,8 @@ describe("optional-account validation (the dust-griefing P0)", () => {
 /** Independent reimplementation of `state/redeem_window.rs::roll_window`.
  *  Deliberately written from the Rust rather than from the TypeScript port, because a test that
  *  calls the code under test proves nothing. This is the guard for the drift that shipped twice:
- *  the program moved to a sliding window and the client kept a fixed one, and both reviewers found
- *  it independently because nothing mechanical could. */
+ *  the program moved to a sliding window and the client kept a fixed one, and nothing
+ *  mechanical could catch it. */
 function rustEffectiveUsed(
   now: number,
   windowStart: number,
@@ -406,7 +406,7 @@ describe("sliding window parity with the program", () => {
 });
 
 describe("the client must bound OUTFLOW, not the trade size", () => {
-  // The finding's own worked example, kept as the first case so a regression reproduces the report.
+  // The original worked example, kept as the first case so a regression reproduces it exactly.
   const base = {
     paused: false,
     redemptionsEnabled: true,

@@ -325,7 +325,7 @@ mod tests {
     #[test]
     fn the_expiry_rail_requires_a_real_future_term() {
         const NOW: i64 = 1_700_000_000;
-        // ZERO is refused: it used to be accepted and meant "forever" (audit ).
+        // ZERO is refused: it must never be read as "forever".
         assert!(validate_fee_exempt_expiry(0, NOW).is_err());
         // The past and the present instant are refused: a dead exemption would still show as active.
         assert!(validate_fee_exempt_expiry(NOW - 1, NOW).is_err());

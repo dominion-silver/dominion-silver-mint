@@ -2,7 +2,7 @@ import { PublicKey } from "@solana/web3.js";
 
 // Program ID: MAINNET deploy 2026-08-12 (tx pgWbEKnP..., slot 438841839). The same id served the
 // 2026-07-25 devnet deploy. `initialize` can only ever run once per program id, so any
-// ConfigAccount + GuardianAccount layout change forces a new id. Retired: AX7seVo6..., GDN5ktEm...
+// ConfigAccount + GuardianAccount layout change forces a new id.
 export const PROGRAM_ID = new PublicKey("3ucji6JDQsbuicvNaPfFeHh9diAjTx5kqEjEZzaZ5ZNQ");
 
 // Token programs.
@@ -18,9 +18,9 @@ export const USDC_MINT = new PublicKey("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyT
 // Devnet was CebhMovXRM5hEhFDTyq7Y1ez8h11UzFSGjELbyQeJExv.
 export const SILV_MINT = new PublicKey("SiLVFMgD3eD2rgK628NbTBq9MnuJF5FW2CRaVyTB35L");
 
-// `PYTH_XAG_USD_FEED_ID` (the retired Pyth Core XAG/USD feed) was exported here
-// with zero call sites. The program reads Pyth LAZER feed 3154 via a signed message; there is no Core
-// receiver account on `initialize` any more. A live-looking export of a retired oracle is how a future
+// `PYTH_XAG_USD_FEED_ID` (the Pyth Core XAG/USD feed) is deliberately NOT exported
+// here. The program reads Pyth LAZER feed 3154 via a signed message; there is no Core
+// receiver account on `initialize`. A live-looking export of a superseded oracle is how a future
 // change reintroduces the wrong price source, and showing a different price than the contract mints at
 // is the specific mistake the note at the top of lib/pyth.ts exists to prevent.
 

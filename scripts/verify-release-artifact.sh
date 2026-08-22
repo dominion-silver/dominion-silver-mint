@@ -49,11 +49,11 @@ set -euo pipefail
 # The second shape is the natural one, and it still read a prepared tree's manifest, lib.rs and
 # target/. Resolving BASH_SOURCE ITSELF is what closes both. `readlink -f` is not portable to older
 # macOS, and this script already depends on python3.
-# [sic, ]. Symlinks were two of THREE shapes. A HARD LINK carries no target to
+# Symlinks were two of THREE shapes. A HARD LINK carries no target to
 # resolve: the alias and the original share one inode, `realpath` returns the alias's own path, and
-# ROOT becomes the directory holding the alias. The auditor reproduced it: a hard link dropped into a
+# ROOT becomes the directory holding the alias. Reproduced: a hard link dropped into a
 # prepared tree made this script attest that tree's `.so` against that tree's manifest and print
-# ARTIFACT OK, while looking byte-identical to the audited script because it IS the same inode.
+# ARTIFACT OK, while looking byte-identical to this script because it IS the same inode.
 # `st_nlink` is what distinguishes them, and it is the only thing that does. A file reachable under
 # more than one name cannot tell you which tree it belongs to, so it must not try to guess.
 _self="$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")"
@@ -85,8 +85,8 @@ ROOT="$(cd -P "$(dirname "$_self")/.." && pwd)"
 # three ways a file can sit somewhere it does not belong: a SYMLINK is resolved by `realpath` above,
 # and a HARD LINK is refused by the `st_nlink` guard above. A COPY, or a MOVE, defeats both. It has
 # exactly one link and it resolves to itself, so the guards see nothing, and the verifier proceeds to
-# attest a foreign repository while being byte-identical to the audited script.
-# That is not a hypothetical: reviewing the FILE cannot distinguish the two, because it is the same
+# attest a foreign repository while being byte-identical to this script.
+# That is not a hypothetical: inspecting the FILE cannot distinguish the two, because it is the same
 # file. What distinguishes them is whether the checkout it sits in is the authenticated one.
 # WHAT THIS ESTABLISHES, and deliberately no more:
 #   1. ROOT is the top level of a Git working tree, and it is the SAME tree this file lives in.
@@ -166,7 +166,7 @@ BUILD_INPUTS="programs Cargo.toml Cargo.lock rust-toolchain.toml Anchor.toml scr
 #     actually RUNS the rebuild (line ~326). A hand-written list is a list someone forgets to update,
 # so `scripts/test-verifier-root-identity.sh` now DERIVES the set of repo scripts this file
 #     invokes and fails if any of them is absent from the line above. The list stays literal here
-#     because it must be readable at a glance in an audited file; the derivation is the guard.
+#     because it must be readable at a glance in this file; the derivation is the guard.
 
 # (b) HEAD IS SIGNED BY A PINNED KEY. A commit hash is public; a signing key is not. This is the only
 #     fact here an attacker cannot obtain by cloning. The allowed-signers file is written from a key
@@ -174,7 +174,7 @@ BUILD_INPUTS="programs Cargo.toml Cargo.lock rust-toolchain.toml Anchor.toml scr
 #     operator's local configuration is a check the operator can be missing without noticing, and CI
 #     runners have no such configuration at all.
 #     Caveat, per THE LIMIT above: the pinned key sits in this file, so a tree-preparer can swap it.
-# It raises the bar from "clone a public repo" to "edit the audited verifier", which is a
+# It raises the bar from "clone a public repo" to "edit this verifier", which is a
 #     detectable act. It does not make the gate unconditional.
 RELEASE_SIGNER_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKz73pnCUcRB2YNuMQFWQZb46U7PF05XEltkVkTg93mB"
 RELEASE_SIGNER_ID="toblanc34@gmail.com"
@@ -324,8 +324,8 @@ for a in "$@"; do
     *)              ARGS+=("$a") ;;
   esac
 done
-# REVIEW P1, OPEN AND DELIBERATELY NOT PATCHED AT THE END OF A SESSION.
-# The finding is real: an UNCOMMITTED config/mainnet-authorities.json can drive an exit-0
+# THE LIMIT OF WHAT THIS PROVES, stated rather than glossed.
+# An UNCOMMITTED config/mainnet-authorities.json can drive an exit-0
 # attestation, because every downstream check recomputes from this same local tree. Set sha256 to the
 # local build's hash, recompute the sizes and the IDL hash from the same files, name any ancestor as
 # source_commit and any digits as ci_run_id, and validate_pinned passes, (d) passes, and a correct

@@ -180,12 +180,10 @@ async function main() {
   console.log(
     `  recommended deployer balance (rent + headroom for fees): ~${needed.toFixed(2)} SOL`,
   );
-  // This line said the rent "is RECOVERABLE with `solana program close` if the id is ever retired".
-  // Deleted 2026-08-10, the same day the identical sentence was deleted from the runbook's funding
-  // checklist. It is true about the lamports and catastrophic as advice, and it printed directly
-  // under a red funding line, which is exactly when somebody is looking for SOL. Closing a program id
-  // destroys it FOREVER; this project has already done it once and gc5TWUkm… still answers "has been
-  // closed". Losing 3ucji6… means losing declare_id!, the IDL, every PDA and the audited surface.
+  // Deliberately NOT described as recoverable rent. That is true about the lamports and catastrophic
+  // as advice, and it would print directly under a red funding line, which is exactly when somebody
+  // is looking for SOL. Closing a program id destroys it FOREVER: losing 3ucji6… means losing
+  // declare_id!, the IDL, every PDA and the whole deployed surface.
   console.log(
     "  note: this rent is LOCKED for the life of the program. Do NOT plan to recover it:" +
       " `solana program close` destroys the program id permanently and there is no situation" +
