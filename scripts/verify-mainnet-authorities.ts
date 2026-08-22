@@ -197,16 +197,7 @@ async function main() {
   else bad("deployer is NOT funded for the deploy", `${have.toFixed(3)} SOL available`);
 
   console.log("\n6. Cluster-specific constants in the config");
-  const lp = cfg.launch_posture;
-  // RE-AUDIT P1, and this one is entirely self-inflicted. The D-01 consolidation moved the real addresses
-  // into `cluster_constants` and left PROSE POINTERS behind in `launch_posture` ("SEE
-  // cluster_constants.usdc_mint..."), so these two comparisons started measuring a sentence against a
-  // base58 address and failed unconditionally. The live run was 19 passed / 1 warning / 4 failures, of
-  // which two were pure noise, and the runbook demands zero failures: funding the deployer would have
-  // left the ceremony blocked by a broken check.
-  //
-  // Reading `cluster_constants` is also the correct fix rather than restoring the duplicate: having the
-  // same address in two places is what D-01 was about.
+  // Read from `cluster_constants`, the single source: the same address in two places is how they drift.
   const cc = cfg.cluster_constants ?? {};
   const expectedUsdc = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
   const expectedLazerTreasury = "Gx4MBPb1vqZLJajZmsKLg8fGw9ErhoKsR8LeKcCKFyak";

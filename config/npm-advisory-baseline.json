@@ -1,22 +1,8 @@
 {
-  "_note": [
-    "ROUND 6 R6-09. The baseline the npm ratchet compares against: ADVISORY IDS, not counts.",
-    "",
-    "THE DEFECT THIS REPLACES. scripts/verify-npm-audit-policy.sh compared the NUMBER of vulnerable",
-    "packages per severity plus an allowlist of package NAMES. A brand new high-severity advisory on",
-    "`next`, `ws`, `sharp` or `postcss`, all already vulnerable and already allowlisted, changes",
-    "neither the count nor the name, so the gate stayed green. Its own header claimed it 'fails on",
-    "anything worse: a new high, a new critical', and that was simply false.",
-    "",
-    "An advisory ID is an identity. A new ID means something genuinely new arrived, whatever package",
-    "it attaches to and whatever the totals do. Adding an ID here is ACCEPTING a vulnerability and",
-    "belongs in a commit that says why, with the reachability argument in the script's header.",
-    "",
-    "Measured 2026-08-08 with npm audit --omit=dev. Re-measure with scripts/verify-npm-audit-policy.sh",
-    "by re-reading the FAIL output of scripts/verify-npm-audit-policy.sh, which prints every id",
-    "it refused. An earlier note pointed at a --print-baseline flag that was never implemented."
+  "_README": [
+    "Advisory IDs per workspace, compared by scripts/verify-npm-audit-policy.sh.",
+    "An advisory ID is an identity: a new one means something new arrived, whatever the counts do."
   ],
-  "measured": "2026-08-21",
   "workspaces": {
     ".": [
       1103747,
@@ -62,24 +48,5 @@
       1139427,
       1139510
     ]
-  },
-  "_accepted_2026_08_14": [
-    "1139427 nanoid high, GHSA-2v37-7h3g-55p8, 'custom generators can loop indefinitely when",
-    "  size is zero', range <3.3.18. Transitive under `next`, which uses nanoid for build ids.",
-    "  The loop needs a CUSTOM generator called with size 0; nothing in this repo calls nanoid at",
-    "  all, so there is no call site to reach it from. Build-time, and a denial of service rather",
-    "  than a disclosure.",
-    "",
-    "1139510 postcss high, GHSA-r28c-9q8g-f849, path traversal in previous-source-map",
-    "  auto-loading via sourceMappingURL, disclosing an arbitrary .map file. Range <=8.5.17,",
-    "  transitive under `next`. postcss processes OUR OWN CSS at build time and does not ship to",
-    "  the browser, so the sourceMappingURL it would follow comes from globals.css and Tailwind",
-    "  output, both written by us. Reaching it requires control of a CSS file we compile.",
-    "",
-    "NO FIX AVAILABLE THAT IS PROPORTIONATE TODAY. `npm audit fix --omit=dev` offers nothing for",
-    "either. Both live under `next` 15.5.22, and the only route is a version bump; latest is",
-    "16.3.1, a MAJOR. Doing that hours after deploying the mainnet cutover, on launch day, to",
-    "close two build-time issues with no reachable path, is the wrong trade. Tracked as a follow-up",
-    "in private/ROADMAP_POST_LAUNCH.md rather than left implicit here."
-  ]
+  }
 }

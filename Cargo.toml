@@ -1,5 +1,4 @@
 # V2 is the active build/deploy crate. V1 is a frozen reference copy of the
-# pre-Option-B contract (commit adeb894) kept for codex diff/review; it is
 # excluded so the `programs/*` set does not yield two crates with the same
 # package name. V1 stays fully readable and diffable.
 [workspace]
@@ -7,7 +6,6 @@
 # deploy build targets programs/dominion_silver_mint_v2 explicitly). It is a
 # member only so it shares this workspace's SBF-parseable dep lock.
 members = ["programs/dominion_silver_mint_v2", "tools/mock-lazer"]
-exclude = ["programs/dominion_silver_mint_v1"]
 resolver = "2"
 
 # solana-verify choisit son image Docker en lisant CETTE cle EN PREMIER
