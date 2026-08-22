@@ -1,9 +1,6 @@
 /**
  * Strip provider credentials out of an RPC endpoint before printing it.
- * ITS OWN MODULE, and the reason is a measured mistake rather than tidiness. It lived in
- * redeem-monitor.ts, and that file runs `main` at import time: the first script to import the helper
- * silently executed a whole monitor run, polluting its own output with a redemption report and spending
- * RPC calls nobody asked for. A pure function used by more than one caller does not belong inside a
+ * ITS OWN MODULE, and the reason is a measured mistake rather than tidiness. It was extracted from a script that runs its main() at import time, so importing the helper from there executed a whole run. A pure function used by more than one caller does not belong inside a
  * script with side effects.
  * WHY IT MATTERS AT ALL. Anything that prints an endpoint is a publication channel: a webhook posts to a
  * third party, and a GitHub Actions run on a public repository puts stdout in a world-readable log.

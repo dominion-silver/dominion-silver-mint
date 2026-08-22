@@ -17,7 +17,7 @@
  * WHY STEP 3 EXISTS. `target/` is gitignored, so a plain checkout has no generated
  * IDL, and every script that imports this module dies on a message telling the reader
  * to run `anchor idl build`. That is correct advice for a developer and useless for a
- * scheduled job: the RedeemEvent monitor failed on its very first run for exactly this
+ * scheduled job: a consumer of this module failed on its very first run for exactly this
  * reason, and it is the compensating control for the redemption risk, so it would have
  * failed silently every ten minutes. Standing up a Rust and Solana toolchain to build
  * an IDL for a ten-minute cron is absurd.

@@ -1,6 +1,6 @@
 /**
  * Pins scripts/_redeem-window.ts against the behaviour of state/redeem_window.rs.
- * The port exists so the monitor measures the budget the way the PROGRAM measures it. That is only
+ * The port exists so a reader measures the budget the way the PROGRAM measures it. That is only
  * true while the two agree, and nothing but this file makes them agree. The cases below are the ones
  * the Rust's own test module covers, plus the property that actually matters operationally: the
  * sliding counter admits close to 2x the budget across one boundary, which is the real bound on a
@@ -71,7 +71,7 @@ console.log("rolling redeem window");
 // t=1 and FAILED, because at one second short of two windows a sliver of the previous bucket still
 // counts and a second FULL-budget drain is refused. The failure was correct and worth keeping in the
 // record: the 2x bound is real but it is not free, and getting it wrong in the loose direction is how
-// a monitor ends up reassuring people.
+// a reader ends up reassuring people.
 /** Replay a sequence of attempts against the rule and return what was ALLOWED out. */
 function simulate(attempts: [bigint, bigint][]): bigint {
   let start = 0n;

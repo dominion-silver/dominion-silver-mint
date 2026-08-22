@@ -55,6 +55,3 @@ ceremony-out/
 __pycache__/
 *.pyc
 
-# Monitor alert memory (scripts/_alert-state.ts). Restored by actions/cache, never committed: it is
-# per-environment runtime state, and a committed copy would be stale on every run.
-.monitor-state/
