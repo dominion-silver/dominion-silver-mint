@@ -203,11 +203,6 @@ for (const rpc of [
     "_program-id.ts",
     // Called BY t1, which guards. It resolves no cluster of its own and takes an open Connection.
     "_t1-mint-helper.ts",
-    // ROUND 8 L1-03. Read-only guardian discovery for the callers of `unpause`. It resolves no
-    // cluster, takes an open Connection, and its only RPC is getProgramAccounts. Exempt on the same
-    // terms as _t1-mint-helper: a helper that contained a send primitive would NOT belong here, and
-    // the check below verifies that claim rather than trusting this comment.
-    "_guardian.ts",
     // Telegram and heartbeat delivery for the monitors. It resolves no cluster, opens no Connection and
     // touches no Solana RPC at all: its only network calls are api.telegram.org and a ping URL. Exempt on
     // the same terms as the helpers above, and the send-primitive check below verifies that rather than
@@ -231,55 +226,17 @@ for (const rpc of [
     // Hands the program's upgrade authority to the Squads vault. One instruction, unrecoverable if the
     // destination is wrong, so it guards the cluster like every other sender.
     "transfer-upgrade-authority.ts",
-    // The initialize-only recovery path (review finding P0-5). Sends initialize against an EXISTING mint
-    // when T1 died between creating the mint and initialising. Guarded like every sender.
-    "initialize-only-recovery.ts",
-    // Creates the SILV ATA of config.inventory_wallet, the precondition admin_premint has and that
-    // nothing else in the repo satisfied on the mainnet shape. It sends, so it is a SENDER and calls
-    // assertReversible like the rest.
-    "create-inventory-silv-ata.ts",
-    // Builds a Dominion admin instruction, wraps it in a Squads v4 vault transaction on the ops
-    // multisig, and creates / approves / EXECUTES the proposal. It built the mainnet unpause and
-    // pre-mint rounds. It sends on three separate paths (vaultTransactionCreate, proposalCreate,
-    // proposalApprove, vaultTransactionExecute), so it is a SENDER, it calls
-    // requireSanctionedCluster first, and it gates --execute through assertReversible under the
-    // action's own ACTION_COST name rather than a generic one.
-    "create-ops-proposal.ts",
-    // Funds the redemption treasury through the program's own `deposit_usdc`, rather than a raw
-    // transfer, so the deposit emits TreasuryDeposit and the pinned-account constraints reject
-    // account confusion on chain. It sends, so it is a SENDER and calls requireSanctionedCluster first.
-    "deposit-treasury-usdc.ts",
-    "bump-staleness.ts",
-    "cancel-all.ts",
     "_ceremony-emit.ts",
     "ceremony-step8.ts",
-    "cancel-bad-proposal.ts",
-    "cancel-nonce-1.ts",
     "create-fee-vault.ts",
-    // Creates the USDC treasury account early so the treasury can be funded before the ceremony.
-    "create-usdc-treasury-ata.ts",
-    "dev-set-premiums.ts",
     "e2e-fixa-devnet.ts",
     // ROUND 8 L1-05. The two-phase inventory change across the real 24h timelock.
     "e2e-inventory-change-devnet.ts",
-    "e2e-guardian-devnet.ts",
-    // The live proof that the fee-exemption whitelist changes what the chain charges. Added
-    // 2026-08-11: nothing anywhere drove a completed mint_silv or redeem_silv against an exemption.
-    "e2e-fee-exempt-devnet.ts",
-    // The guardian veto, the fee sweep, the oracle anti-replay and the readiness digest, live.
-    "e2e-guardian-fees-devnet.ts",
-    // Causes a REAL redemption in order to prove the monitor decodes it and the alarm fires.
-    "test-redeem-monitor-e2e.ts",
-    "e2e-lazer-mint.ts",
-    "e2e-public-mint-devnet.ts",
     "initialize-devnet.ts",
     // The launch-supply sender. Added 2026-08-10 with the script itself; the gate caught its absence.
     "premint.ts",
     "t1-hostile-bootstrap.ts",
     "test-dominion-squads-e2e.ts",
-    "test-squads-e2e.ts",
-    "test-v2-devnet.ts",
-    "ui-scenario.ts",
     // No primitive matches it (it shells out via `sh(cmd, args)`), and it writes mainnet bytecode.
     "upgrade-program.ts",
   ]);
@@ -301,20 +258,12 @@ for (const rpc of [
   // Shell out to READ, so not required to guard. A CLAIM, checked below against the send primitives.
   const READ_ONLY_CLI = new Set([
     "verify-mainnet-authorities.ts",
-    "verify-mainnet-readiness.ts",
-    // Drives every admin-panel instruction builder and hands each one to `simulateTransaction`. It
-    // opens no keypair and calls no `sendTransaction`: simulation executes against real account state
-    // and discards the result, which is the whole reason it can exercise the timelock proposals without
-    // starting a single 24h clock.
-    "test-admin-panel-simulate.ts",
   ]);
   // Everything else. Listed by name so ADDING a script is recorded, not silently blessed by a regex.
   const NON_SENDERS = new Set([
     // Walks every program transaction since launch and reconciles it against on-chain state.
     // Read-only: it sends nothing and needs no keypair.
     "audit-since-launch.ts",
-    // Measures the fee exemption by simulating a mint twice, with and without it. Sends nothing.
-    "prove-fee-exemption.ts",
     // Read-only monitors. They query the chain and the live site and send no transaction, so they
     // must NOT be forced through the transaction guard.
     "health-monitor.ts",
@@ -336,34 +285,21 @@ for (const rpc of [
     // which is the gate working and a round-trip that did not need to happen.
     "_alert-state.ts",
     "_run-state.ts",
-    "test-security-posture-docs.ts",
     // Pure unit tests over premint.ts's two exported decisions (argv -> atomic, run record ->
     // resume plan). It imports premint.ts, which is a SENDER, but only for those two pure
     // functions: premint.ts guards its own main behind `require.main === module`, so importing it
     // opens no Connection and loads no keypair.
     "test-premint-args.ts",
-    // Generates a keypair and writes it to disk. No Connection, no cluster, no send: the address it
-    // prints exists nowhere until the ceremony creates it.
-    "pregenerate-silv-mint.ts",
-    // Fetches a signed envelope over HTTPS from Lazer. No Solana Connection, no keypair, no send.
-    "_lazer-envelope.ts",
     // Pure port of the program's rolling-window rule, plus its fixtures. No cluster, no keypair.
     "_redeem-window.ts",
     "test-redeem-window.ts",
     // READ-ONLY alarm. It builds an Anchor Program with a throwaway keypair precisely so it CANNOT
     // sign, reads the config and the logs, and sends no transaction.
     "redeem-monitor.ts",
-    "check-onchain.ts",
-    "check-onchain2.ts",
-    "check-pda.ts",
-    "check-reserve.ts",
     "premint-sizing.ts",
-    "probe-fetch.ts",
     "probe-lazer-feed.ts",
     "read-config.ts",
-    "squads-vault-pda.ts",
     "verify-client-idl-parity.ts",
-    "verify-oracle-sync.ts",
     // ROUND 6 R6-02. Imports `decideUpgradeGate` from upgrade-program.ts and calls it with literals.
     // It contains no send primitive of its own, and the module it imports now guards `main()` behind
     // `require.main === module`, so importing the decision no longer starts the upgrade script. That

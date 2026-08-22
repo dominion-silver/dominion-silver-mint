@@ -22,7 +22,6 @@ import { APP_RPC, CLUSTER, PROGRAM_ID, SILV_MINT, USDC_MINT, LAZER_SILV_FEED_ID,
  *
  * So this route makes the resolved configuration READABLE from outside, which turns a silent
  * misconfiguration into one line of curl and one mechanical check in
- * scripts/verify-mainnet-readiness.ts.
  *
  * IT IS DELIBERATELY PUBLIC (added to the middleware's PUBLIC_PATHS) and leaks nothing: every value here
  * is already inlined into the client bundle that any visitor downloads. The RPC credential is the one

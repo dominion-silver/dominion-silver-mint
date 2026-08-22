@@ -190,13 +190,13 @@ jobs:
         # The root install is what makes `npx --no-install tsc` and `npx --no-install tsx` resolve the
         # pinned compiler instead of downloading one.
         # apps/public is installed HERE, before the typecheck, and that is not incidental:
-        # scripts/e2e-lazer-mint.ts imports lazer-assembly and lazer-tx from apps/public/src/lib rather
+        # Some scripts import lazer-assembly and lazer-tx from apps/public/src/lib rather
         # than keeping a second copy of the envelope assembly that could drift from the one the frontend
         # ships. lazer-tx pulls @solana/wallet-adapter-react, an app dependency, so typechecking scripts/
         # genuinely requires the app's node_modules. Without this the gate failed with TS2307 on a module
         # that exists, and section 4b of verify-constants-consistency.sh hit the same error one step later.
         # apps/admin is here for EXACTLY the same reason, and its absence broke this job the first time
-        # CI ever ran on the round-8 branch. `scripts/test-admin-panel-simulate.ts:43` imports
+        # CI first ran on a branch that needed it. A script importing
         # `../apps/admin/src/lib/admin-actions` so that the simulator exercises the REAL builders the
         # panel ships rather than a second copy of them, and that import chain reaches
         # `apps/admin/src/lib/squads.ts`, which imports `@sqds/multisig`. Without the install, tsc aborts
