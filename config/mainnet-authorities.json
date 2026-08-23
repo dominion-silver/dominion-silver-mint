@@ -95,11 +95,17 @@
     "status": "no-candidate",
     "toolchain": "solana-cli/SBF 3.0.0, platform-tools v1.51, SBF rustc 1.84.1, anchor-cli 0.31.1",
     "_status_note": [
-      "status is no-candidate because the comment-only cleanup touched files in the verifier's",
-      "BUILD_INPUTS list, so this tree no longer matches the commit the fields below name. The compiled",
-      "program is unchanged (no non-comment line differs in any program file), so a reproducible-build run",
-      "on this tree is expected to reproduce the same bytes; that run is what will restore status=pinned.",
-      "The fields below describe the LAST pin and are not read while status is no-candidate."
+      "status is no-candidate, so this file makes no release attestation and the fields below are not",
+      "read as one. They record the last build that reproduced the deployed bytes, and it still does:",
+      "measured 2026-08-23, the program deployed at program_id hashes to the sha256 and the",
+      "normalized_sha256 below.",
+      "A reproducible-build run of the CURRENT tree produces DIFFERENT bytes, of the same length. The",
+      "difference is in embedded source locations, not in behaviour: `require!` expands to `error!`,",
+      "which captures file!() and line!(), so every line number in the crate is part of the compiled",
+      "bytes and an edit that only moves a comment still moves the hash.",
+      "The next program upgrade deploys the current tree, after which a run on it reproduces the",
+      "deployed bytes and this returns to status=pinned. Until then, treat the fields below as a",
+      "description of what is running, not as an attestation of this tree."
     ],
     "sha256": "241e1ed558186e2056486003608c3464173e88126991dd80241686d2c60321da",
     "normalized_sha256": "073b2e3846d5df790a2f91da15a6edaf09ea0eda575a133b80bffd6ccfdd256a",
